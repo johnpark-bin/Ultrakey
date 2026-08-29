@@ -50,39 +50,46 @@ impl PermissionMonitor {
 
         let thread_model = Arc::clone(&model);
         let thread_callback = Arc::clone(&on_transition);
-        let handle = thread::spawn(move || loop {
-            let trusted = ultrakey_platform::accessibility::is_process_trusted();
-            // ⚠️ 락을 놓은 뒤에 콜백을 호출한다. `on_transition` 은 결국
-            // `show_modal()` → tao `make_key_and_order_front_sync` → 메인
-            // 스레드로 동기 디스패치(블로킹)까지 이어진다. 그동안 메인
-            // 스레드가 `modal_copy` 커맨드에서 `monitor.state()` 를 불러
-            // 같은 `model` 뮤텍스를 기다리면, 폴링 스레드는 메인 스레드를
-            // 기다리고 메인 스레드는 폴링 스레드가 쥔 락을 기다리는
-            // 교착이 생긴다. 그래서 `guard` 를 블록 끝에서 드롭해 락을 놓은
-            // 뒤에 콜백을 부른다.
-            let (transition, poll_mode) = {
-                let mut guard = thread_model
-                    .lock()
-                    .expect("permission model mutex poisoned");
-                let transition = guard.observe_trusted(trusted);
-                (transition, guard.poll_mode())
-            };
-            if let Some(transition) = transition {
-                (thread_callback)(transition);
-            }
+        // ⚠️ 스레드에 이름을 준다 — 이 스레드가 어떤 콜백을 실행했는지가
+        // 진단에서 결정적일 수 있다(이슈 #10: 전이 콜백이 이 스레드에서
+        // 엔진을 시작해 IOKit 런루프 소스가 여기 걸렸다). 이름이 없으면
+        // 로그에 `ThreadId(N)` 만 남아 아무것도 알려주지 않는다.
+        let handle = thread::Builder::new()
+            .name("ultrakey-permission-poll".to_string())
+            .spawn(move || loop {
+                let trusted = ultrakey_platform::accessibility::is_process_trusted();
+                // ⚠️ 락을 놓은 뒤에 콜백을 호출한다. `on_transition` 은 결국
+                // `show_modal()` → tao `make_key_and_order_front_sync` → 메인
+                // 스레드로 동기 디스패치(블로킹)까지 이어진다. 그동안 메인
+                // 스레드가 `modal_copy` 커맨드에서 `monitor.state()` 를 불러
+                // 같은 `model` 뮤텍스를 기다리면, 폴링 스레드는 메인 스레드를
+                // 기다리고 메인 스레드는 폴링 스레드가 쥔 락을 기다리는
+                // 교착이 생긴다. 그래서 `guard` 를 블록 끝에서 드롭해 락을 놓은
+                // 뒤에 콜백을 부른다.
+                let (transition, poll_mode) = {
+                    let mut guard = thread_model
+                        .lock()
+                        .expect("permission model mutex poisoned");
+                    let transition = guard.observe_trusted(trusted);
+                    (transition, guard.poll_mode())
+                };
+                if let Some(transition) = transition {
+                    (thread_callback)(transition);
+                }
 
-            let interval_ms = match poll_mode {
-                PollMode::Onboarding => onboarding_ms,
-                PollMode::Background => background_ms,
-            };
+                let interval_ms = match poll_mode {
+                    PollMode::Onboarding => onboarding_ms,
+                    PollMode::Background => background_ms,
+                };
 
-            match stop_rx.recv_timeout(Duration::from_millis(interval_ms)) {
-                // 종료 신호를 받았거나, 송신 측(이 구조체)이 드롭돼 채널이
-                // 끊어졌다 — 두 경우 모두 루프를 빠져나간다.
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => continue,
-            }
-        });
+                match stop_rx.recv_timeout(Duration::from_millis(interval_ms)) {
+                    // 종료 신호를 받았거나, 송신 측(이 구조체)이 드롭돼 채널이
+                    // 끊어졌다 — 두 경우 모두 루프를 빠져나간다.
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                }
+            })
+            .expect("권한 폴링 스레드 생성 실패");
 
         PermissionMonitor {
             model,

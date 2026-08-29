@@ -164,7 +164,12 @@ fn fire_job(
             let debounce_ms = shared.config.load().timings.restart_debounce_ms;
             if should_skip_restart(*last_recover_fired_ms, now_ms, debounce_ms) {
                 let elapsed_ms = last_recover_fired_ms.map(|last| now_ms.saturating_sub(last));
-                tracing::debug!(
+                // ⭐ `info` 다(`debug` 아님). `manual-verification.md` 1-b #4·#5 가
+                // "디바운스로 재시작을 건너뛴 판정이 로그에 남는다" 를 **통과 근거로
+                // 요구**하는데, `debug` 면 기본 레벨에서 보이지 않아 검증자가
+                // "디바운스가 동작했다" 와 "그런 로직이 아예 없다" 를 구분할 수 없다.
+                // 빈도도 낮다 — 5초 안에 복구가 두 번 예약될 때만 찍힌다.
+                tracing::info!(
                     elapsed_ms,
                     debounce_ms,
                     "직전 복구로부터 얼마 지나지 않아 재확인을 디바운스로 건너뛴다"
@@ -192,6 +197,8 @@ impl SystemHooks {
     /// ⚠️ **호출한 스레드에서 동기적으로** 구독을 등록한다 — 이 스레드가 곧 메인
     /// 스레드여야 한다(위 모듈 문서 참고). 절대 이 함수 자체를 새 스레드에서 부르지 마라.
     pub fn start(shared: Arc<SharedState>, commands: CommandChannel) -> Self {
+        warn_if_not_main_thread();
+
         let scheduler = DelayScheduler::spawn(Arc::clone(&shared), commands);
         let sched_handle = scheduler.handle();
 
@@ -230,6 +237,36 @@ impl SystemHooks {
     pub fn shutdown(self) {
         self.scheduler.shutdown();
     }
+}
+
+/// ⭐ **스레드 친화성 전제가 깨졌는지 소리 내어 알린다**(이슈 #10).
+///
+/// 이 모듈 문서가 요구하는 "메인 스레드" 전제는 지금껏 **주석으로만** 존재했고,
+/// 앱 계층이 그것을 어겼을 때 아무 신호도 나지 않았다 — 기능(핫플러그 감지)만
+/// 조용히 죽었다. 그 침묵이 이 버그의 본질이었다.
+///
+/// ⚠️ 여기서 **패닉하지 않는다.** 이 함수가 발견하는 위반은 M1 시점에서는
+/// 치명적이지 않다(핫플러그는 [`watch_keyboards`] 가 자체 런루프 스레드를 갖도록
+/// 고쳐졌고, 나머지 두 훅은 등록 스레드와 무관하게 메인 스레드로 전달된다).
+/// 앱을 죽이는 대신 **경고 한 줄**을 남겨, 앞으로 스레드 친화적 훅이 추가될 때
+/// 그 사실이 로그에서 즉시 보이게 한다. 디버그 빌드에서는 `debug_assert!` 가
+/// 테스트·개발 중에 더 강하게 잡는다.
+fn warn_if_not_main_thread() {
+    if ultrakey_platform::runloop::is_main_thread() {
+        return;
+    }
+    let thread = std::thread::current();
+    tracing::warn!(
+        thread = thread.name().unwrap_or("<이름 없음>"),
+        thread_id = ?thread.id(),
+        "⚠️ SystemHooks::start 가 메인 스레드가 아닌 곳에서 호출됐다 — \
+         이 모듈 문서(architecture.md §2.1)가 요구하는 전제를 앱 계층이 어겼다. \
+         런루프에 직접 소스를 거는 훅이 추가되면 조용히 동작하지 않게 된다"
+    );
+    debug_assert!(
+        false,
+        "SystemHooks::start 는 메인 스레드에서 호출되어야 한다(system_hooks.rs 모듈 문서)"
+    );
 }
 
 fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {

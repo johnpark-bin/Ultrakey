@@ -123,6 +123,23 @@ mod macos_impl {
         }
     }
 
+    /// ⭐ **현재 스레드가 메인 스레드인가** — 스레드 친화성 전제를 런타임에
+    /// 확인하기 위한 최소 장치(이슈 #10).
+    ///
+    /// `NSThread` 대신 `CFRunLoop` 동일성으로 판정한다: 이 모듈이 다루는
+    /// 불변 조건 자체가 "**어느 런루프**에 소스를 거는가" 이므로, 물어야 할
+    /// 질문도 "이 스레드의 런루프가 메인 런루프와 같은 객체인가" 다.
+    /// `CFRunLoopGetMain()` 은 항상 같은 객체를 돌려주므로 포인터 동일성으로
+    /// 비교하면 된다.
+    pub fn is_main_thread() -> bool {
+        match (CFRunLoop::current(), CFRunLoop::main()) {
+            (Some(current), Some(main)) => {
+                core::ptr::eq(&*current as *const CFRunLoop, &*main as *const CFRunLoop)
+            }
+            _ => false,
+        }
+    }
+
     // ------------------------------------------------------------------
     // CommandSource / CommandSignaller
     // ------------------------------------------------------------------
@@ -221,9 +238,7 @@ mod macos_impl {
         pub fn add_to_current_runloop(&self) {
             if let Some(rl) = CFRunLoop::current() {
                 // SAFETY: 정적 심볼 읽기.
-                rl.add_source(Some(&self.inner.source.0), unsafe {
-                    kCFRunLoopCommonModes
-                });
+                rl.add_source(Some(&self.inner.source.0), unsafe { kCFRunLoopCommonModes });
                 let _ = self.inner.run_loop.set(SendSyncCf(rl));
             }
         }
@@ -326,7 +341,9 @@ mod macos_impl {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos_impl::{CommandSignaller, CommandSource, RepeatingTimer, RunLoopHandle};
+pub use macos_impl::{
+    is_main_thread, CommandSignaller, CommandSource, RepeatingTimer, RunLoopHandle,
+};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {
@@ -360,6 +377,12 @@ mod stub_impl {
         }
     }
 
+    /// macOS 가 아니면 `CFRunLoop` 자체가 없다 — 이 전제를 물을 대상이 없으므로
+    /// 항상 `false` 다(호출자는 macOS 전용 경로에서만 이 값을 쓴다).
+    pub fn is_main_thread() -> bool {
+        false
+    }
+
     #[derive(Clone)]
     pub struct CommandSignaller(());
     impl CommandSignaller {
@@ -381,4 +404,6 @@ mod stub_impl {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub use stub_impl::{CommandSignaller, CommandSource, RepeatingTimer, RunLoopHandle};
+pub use stub_impl::{
+    is_main_thread, CommandSignaller, CommandSource, RepeatingTimer, RunLoopHandle,
+};

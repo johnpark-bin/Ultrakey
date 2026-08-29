@@ -132,12 +132,20 @@ fn init_logging() {
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
     };
 
+    // ⭐ **스레드 이름을 매 줄에 남긴다**(이슈 #10). 이 저장소의 버그 하나가
+    // "어느 스레드가 시스템 훅을 등록했는가" 에 달려 있었는데, 로그에 그 정보가
+    // 없어 로그만 보고는 원인을 좁힐 수 없었다. 스레드 이름은 그 질문에
+    // 직접 답한다 — `main` / `ultrakey-tap` / `ultrakey-permission-poll` /
+    // `ultrakey-hotplug` / `ultrakey-delay-scheduler` 가 로그에 그대로 찍힌다.
     let init_result = match open_log_file() {
         Some(file) => {
-            let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+            let stderr_layer = tracing_subscriber::fmt::layer()
+                .with_thread_names(true)
+                .with_writer(std::io::stderr);
             // 파일 레이어는 ANSI 컬러 코드를 끈다 — 텍스트 에디터로 볼 로그다.
             let file_layer = tracing_subscriber::fmt::layer()
                 .with_ansi(false)
+                .with_thread_names(true)
                 .with_writer(Arc::new(file));
             tracing_subscriber::registry()
                 .with(make_filter())
@@ -146,7 +154,9 @@ fn init_logging() {
                 .try_init()
         }
         None => {
-            let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+            let stderr_layer = tracing_subscriber::fmt::layer()
+                .with_thread_names(true)
+                .with_writer(std::io::stderr);
             tracing_subscriber::registry()
                 .with(make_filter())
                 .with(stderr_layer)
@@ -221,7 +231,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state.clone())
-        .invoke_handler(tauri::generate_handler![modal_copy, open_settings, quit_app])
+        .invoke_handler(tauri::generate_handler![
+            modal_copy,
+            open_settings,
+            quit_app
+        ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
             #[cfg(target_os = "macos")]
@@ -262,11 +276,7 @@ fn main() {
 }
 
 /// 권한 상태에 따라 엔진을 켜거나 모달을 띄운다.
-fn on_permission_transition(
-    handle: &tauri::AppHandle,
-    state: &Arc<AppState>,
-    to: PermissionState,
-) {
+fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to: PermissionState) {
     tracing::info!(?to, "on_permission_transition 진입");
     match to {
         PermissionState::Granted => {
@@ -340,43 +350,71 @@ fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
     }
 }
 
-fn show_modal(handle: &tauri::AppHandle) {
-    match handle.get_webview_window("permissions") {
-        Some(w) => {
-            tracing::info!("show_modal: permissions 창을 찾았다");
-            let _ = w.show();
-            let _ = w.set_focus();
-            tracing::info!(
-                is_visible = ?w.is_visible(),
-                outer_position = ?w.outer_position(),
-                outer_size = ?w.outer_size(),
-                is_focused = ?w.is_focused(),
-                is_minimized = ?w.is_minimized(),
-                "show_modal 호출 후 창 상태"
-            );
+/// ⭐ **창 조작은 반드시 메인 스레드로 "비동기" 디스패치한다**(이슈 #10 후속).
+///
+/// ⛔ **왜 동기 호출이면 안 되는가 — 시스템 전체 입력이 멈춘다.**
+///
+/// `WebviewWindow::show()`/`set_focus()`/`is_visible()` 류는 메인 스레드가 아닌 곳에서
+/// 부르면 **메인 스레드로 동기 디스패치하고 응답을 기다린다.** 그런데 이 함수의
+/// 호출자 중 하나는 **탭 전용 스레드**다 — `Engine::start` 에 넘긴 `on_event` 콜백이
+/// `EngineEvent::NotTrusted` 를 탭 스레드에서 부르고(`ultrakey-engine` 의
+/// `handle_recreate_tap`), 그것이 여기로 이어진다.
+///
+/// 탭 스레드는 `CGEventTap` 의 mach port 를 서비스하는 **유일한** 스레드다. 그 스레드가
+/// 메인 스레드를 기다리며 블록되면 그동안 탭이 이벤트를 처리하지 못하고, 활성 탭은
+/// 모든 키·마우스 이벤트가 동기적으로 통과하는 지점이므로 **시스템 전체 입력이 멈춘다.**
+/// 실제로 Accessibility 권한을 실행 중에 회수하면 이 경로로 머신이 멈췄다(실측: 로그에
+/// 모달 표시와 탭 재활성화 사이 14초 공백).
+///
+/// ⚠️ PR #9 이 `ultrakey-permissions/monitor.rs` 에서 고친 것과 **같은 계열**이다 —
+/// 그때는 폴링 스레드가 락을 쥔 채 메인 스레드를 기다리는 교착이었고, 이번엔 탭
+/// 스레드가 메인 스레드를 기다리는 입력 정지다. 규칙은 하나로 정리된다:
+/// **백그라운드 스레드에서 메인 스레드를 동기적으로 기다리지 마라.**
+///
+/// `AppHandle::run_on_main_thread` 는 이벤트 루프에 클로저를 **큐잉만 하고 즉시
+/// 반환**한다 — 호출 스레드는 아무것도 기다리지 않으므로 위 문제가 구조적으로 사라진다.
+/// 창 상태 진단 로그(이슈 #8 이 의존한다)는 클로저 **안**으로 옮겨 메인 스레드에서
+/// 찍는다 — 그러면 그 조회들은 스레드 왕복이 아니라 지역 호출이 된다.
+fn on_main_thread(
+    handle: &tauri::AppHandle,
+    what: &'static str,
+    action: impl FnOnce(&tauri::WebviewWindow) + Send + 'static,
+) {
+    let handle_for_closure = handle.clone();
+    let dispatched = handle.run_on_main_thread(move || {
+        match handle_for_closure.get_webview_window("permissions") {
+            Some(w) => {
+                tracing::info!(what, "permissions 창을 찾았다");
+                action(&w);
+                tracing::info!(
+                    what,
+                    is_visible = ?w.is_visible(),
+                    outer_position = ?w.outer_position(),
+                    outer_size = ?w.outer_size(),
+                    is_focused = ?w.is_focused(),
+                    is_minimized = ?w.is_minimized(),
+                    "창 조작 후 상태"
+                );
+            }
+            None => {
+                tracing::error!(what, "permissions 창을 찾지 못했다");
+            }
         }
-        None => {
-            tracing::error!("show_modal: permissions 창을 찾지 못했다");
-        }
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(what, error = %e, "메인 스레드로 디스패치하지 못했다");
     }
 }
 
+fn show_modal(handle: &tauri::AppHandle) {
+    on_main_thread(handle, "show_modal", |w| {
+        let _ = w.show();
+        let _ = w.set_focus();
+    });
+}
+
 fn hide_modal(handle: &tauri::AppHandle) {
-    match handle.get_webview_window("permissions") {
-        Some(w) => {
-            tracing::info!("hide_modal: permissions 창을 찾았다");
-            let _ = w.hide();
-            tracing::info!(
-                is_visible = ?w.is_visible(),
-                outer_position = ?w.outer_position(),
-                outer_size = ?w.outer_size(),
-                is_focused = ?w.is_focused(),
-                is_minimized = ?w.is_minimized(),
-                "hide_modal 호출 후 창 상태"
-            );
-        }
-        None => {
-            tracing::info!("hide_modal: permissions 창을 찾지 못했다");
-        }
-    }
+    on_main_thread(handle, "hide_modal", |w| {
+        let _ = w.hide();
+    });
 }
