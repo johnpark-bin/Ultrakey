@@ -7,11 +7,20 @@
 
 ## ⚠️ 먼저 — 이 문서를 쓴 세션이 검증하지 못한 것
 
-**M1 구현 세션은 아래 절차를 하나도 실행하지 못했다.** 정직하게 적는다:
+**M1 구현 세션은 아래 항목 검증을 사실상 하나도 완료하지 못했다.** 정직하게 적는다.
 
 - 이 머신에는 코드 서명 인증서가 없다 — `security find-identity -v -p codesigning` → **`0 valid identities found`**
 - 서명 인증서 생성과 키체인 "항상 신뢰" 설정은 **키체인 변경**이라 위임 범위 밖이며, 사용자가 직접 하기로 결정되었다([`code-signing.md`](code-signing.md) §2)
 - 서명되지 않은 빌드로는 TCC 권한이 재빌드마다 소실되므로([`../spec/platform-constraints.md`](../spec/platform-constraints.md) §3.2), **권한이 필요한 어떤 항목도 의미 있게 검증할 수 없다**
+
+**다만 다음 두 가지는 실제로 확인했다** — 이것까지 "못 했다"고 뭉뚱그리면 그것도 부정확하다:
+
+| 확인한 것 | 결과 |
+| :--- | :--- |
+| universal `.app` 번들이 실제로 만들어지는가 | ✅ `cargo tauri build --target universal-apple-darwin` 성공. `lipo -archs` → `x86_64 arm64`, `LSMinimumSystemVersion` → `12.0` |
+| 앱이 기동해 배선이 끝까지 이어지는가 | ✅ 카탈로그 로드 → 권한 판정 → 엔진 시작 → `CGEventTap` 생성 → `Active` 전이. 종료 후 남은 프로세스도, 경로 B 잔존 매핑도 없다 |
+
+⚠️ **그러나 그 기동 테스트는 위 "더 교묘한 함정"에 그대로 걸린 상태에서 이루어졌다** — ad-hoc 서명 바이너리를 권한 있는 터미널에서 직접 실행했고, 그래서 권한이 `Granted` 로 나왔다. **즉 증명된 것은 "배선이 끊기지 않았다"까지이고, 권한 온보딩 경로(모달 표시·폴링 자동 진행·런타임 취소 감지)는 한 번도 실행되지 않았다.**
 
 따라서 아래 절차는 **명세와 구현으로부터 도출한 것이지, 실행해 통과를 확인한 것이 아니다.**
 [`code-signing.md`](code-signing.md) 의 M0 절차를 먼저 마친 뒤 이 문서를 처음부터 수행해야 한다.
@@ -28,11 +37,25 @@ security find-identity -v -p codesigning
 ./scripts/build-signed.sh
 ./scripts/verify-signature.sh <출력된 경로>/Ultrakey.app
 
-# 3) 로그를 켠 채 실행 — 모든 절차가 이 로그를 근거로 판정한다
-ULTRAKEY_LOG=debug <경로>/Ultrakey.app/Contents/MacOS/ultrakey-app
+# 3) ⭐ 반드시 `open` 으로 실행한다 (아래 함정 참조)
+open <경로>/Ultrakey.app
+
+# 4) 로그는 Console 로 따로 본다
+log stream --predicate 'process == "ultrakey-app"' --level debug
 ```
 
-> ⚠️ **`cargo tauri dev` 를 쓰지 마라.** TCC 가 부모 프로세스(터미널)의 권한으로 판정하므로 결과가 전부 무의미해진다([`../spec/platform-constraints.md`](../spec/platform-constraints.md) §3.4). 앱은 이 상태를 감지하면 `dev.not_app_bundle` 경고를 띄운다 — 그 경고가 보이면 검증을 중단하고 서명된 빌드로 다시 시작한다.
+> ⚠️ **`cargo tauri dev` 를 쓰지 마라.** TCC 가 부모 프로세스(터미널)의 권한으로 판정하므로 결과가 전부 무의미해진다([`../spec/platform-constraints.md`](../spec/platform-constraints.md) §3.4). 앱은 이 상태를 감지하면 `dev.not_app_bundle` 경고를 로그에 남긴다 — 그 경고가 보이면 검증을 중단하고 서명된 빌드로 다시 시작한다.
+
+> ⛔ **더 교묘한 함정 — `.app` 을 빌드했어도 터미널에서 바이너리를 직접 실행하면 안 된다.**
+> ```sh
+> # ⛔ 이렇게 하지 마라
+> ULTRAKEY_LOG=debug <경로>/Ultrakey.app/Contents/MacOS/ultrakey-app
+> ```
+> **M1 구현 세션이 실제로 이것을 관찰했다**: 정상적으로 빌드한 `.app` 의 바이너리를 Accessibility 권한이 있는 터미널에서 직접 실행했더니, `AXIsProcessTrusted()` 가 **`true` 를 반환**하고 이벤트 탭이 `Active` 까지 도달했다 — 앱 자신에게는 권한이 없는데도 그랬다. TCC 가 **책임 프로세스(responsible process)** 인 부모 터미널의 권한으로 판정하기 때문이다.
+>
+> 이것은 `tauri dev` 함정(§3.4)과 원인은 같지만, "`.app` 을 빌드했으니 괜찮다"고 생각하는 순간을 노린다는 점에서 더 위험하다. **반드시 `open <경로>/Ultrakey.app` 으로 실행하라** — 그래야 `launchd` 가 부모가 되어 TCC 가 앱 자신의 서명으로 판정한다.
+>
+> 판별법: 권한을 부여하지 않은 상태에서 실행했는데 **온보딩 모달이 뜨지 않고 곧바로 탭이 `Active` 가 되면**, 부모 권한을 물려받은 것이다.
 
 ### 관찰 도구 — 전부 macOS 기본 제공, 추가 설치 불필요
 
