@@ -143,6 +143,19 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 - *체감 지연을 최소화하는 설계*: 다만 이 보류는 "매번 `Quick press duration`(실측: 최소 250ms·최대 2000ms·현재값 1000ms, §4)을 전체 다 기다린다"는 뜻이 아니다. 상태표에서 보듯 판정은 **모호성이 해소되는 즉시** 끝난다 — (1) 다른 키가 눌리는 순간(hyper 조합의 일반적 사용 패턴, 보통 수십 ms 이내에 해소), (2) keyUp 이 오는 순간(quick press 그 자체 — 사용자가 키를 뗀 시점과 판정 시점이 사실상 동일해 체감 지연이 없다), (3) 타이머 만료(소스 키를 홀로 오래 누르고 있는 경우로, 이 경우는 정의상 "아직 아무 것도 할 필요가 없는" 대기 상태이므로 지연으로 느껴지지 않는다). 실제로 전체 `Quick press duration` 만큼 지연이 체감되는 경우는 "소스 키만 누르고 다른 키도 안 누르고 떼지도 않은 채 가만히 있는" 드문 상황뿐이며, 이 상황에서는 지연을 느낄 만한 출력 자체가 없다.
 - 이 결정은 Karabiner-Elements/QMK 류의 tap-hold 알고리즘(“permissive hold”)과 원리가 같다 — 이미 검증된 패턴을 채택한다.
 
+⭐ **F-05 §3.2 와의 충돌 해소 — 보류를 건너뛰는 조건 (2026-08-30, M1 구현 / 이슈 #5).**
+
+`hyperkey.md` §3.2 의 상태 전이표는 "소스 키 physical keyDown → 곧바로 합성 `flagsChanged` 를 낸다"고 쓰여 있다. 반면 이 문서 §3-b 계층 2 의 조건은 "quick press 상태 머신이 그 키를 **`HoldConfirmed` 로 판정한 상태**" 이고, 위 표는 `Idle` → `PendingDown` 에서 원본 keyDown 을 **보류**한다. **두 서술은 충돌한다.**
+
+**F-07 이 정본이다** — F-05 §1 이 "이 기능은 이벤트를 가로채고 재주입하는 메커니즘을 스스로 갖지 않으며, 그 메커니즘은 F-07 이 제공한다"고 이미 위임했다. 그 위에 다음 규칙을 추가해 충돌을 해소한다.
+
+> **소스 키에 quick press 액션이 등록되어 있지 않으면, keyDown 즉시 `HoldConfirmed` 로 전이한다(보류하지 않는다).**
+
+- *근거*: 보류는 **모호성을 해소하기 위한 비용**이다(하단 "보류 vs 낙관적 통과" 결정). 그 키에 quick press 액션이 아예 없으면 "탭인가 홀드인가"라는 질문 자체가 성립하지 않으므로, 기다릴 이유가 없다. 이 최적화 없이 구현하면 hyper 소스 키를 누를 때마다 최대 `Quick press duration`(기본 1000ms) 동안 modifier 가 나타나지 않아 기능이 사실상 쓸 수 없게 된다.
+- *결과*: **M1 에서 hyper/meh/bleh 는 이 경로를 탄다.** hyper quick press(`quickHyperKeycode`/`executeQuickHyperKey`)는 존재가 확정됐을 뿐 노출 경로가 `(미확정)` 이라(§9 #5) M1 에서 액션을 등록하지 않기 때문이다. 따라서 M1 의 관측 가능한 동작은 F-05 §3.2 표의 서술과 정확히 일치한다.
+- *caps lock 처럼 quick press 액션이 실제로 등록된 소스 키*(F-08/M2)에서는 보류 경로가 그대로 적용되며, 체감 지연은 하단 "체감 지연을 최소화하는 설계" 3개 항목이 흡수한다.
+- *기각한 대안* — ① 항상 낙관적으로 통과시키고 나중에 보정: 하단 기각 사유(되돌릴 수 없는 부작용)가 그대로 적용된다. ② F-05 §3.2 를 정본으로 삼아 항상 즉시 합성: caps lock 이 hyper 소스이면서 동시에 quick press 대상인 구성(v1.20/v1.62 가 실제로 깨졌던 바로 그 구성)에서 quick press 가 영영 발동하지 않는다.
+
 **Double tap 은 별도 차원.** `Double tap shift = caps lock` 은 단일 눌림의 지속 시간이 아니라 **연속된 두 번의 탭 사이 간격**을 판정해야 하므로, 위 표의 `WaitingSecondTap` 이라는 별도 상태와 별도 임계값(§4, 내부 상수로 추정)을 필요로 한다. `Quick press duration` 슬라이더와는 다른 값이며, AX 트리 실측으로도(4개 탭 전체 확인) 이 값을 조절하는 UI 컨트롤은 확인되지 않았다(§4, §9).
 
 ⭐ **quick press 판정 결과는 키 합성만이 아니다 — Seek 세션 열기로도 분기한다(실측: AX).** `Quick press caps lock to execute:` 팝업의 첫 항목이 `Seek` 다. 즉 이 상태 머신이 `QuickPressEmitted`/`DoubleTapConfirmed` 로 방출하는 "액션"은 키 이벤트 합성에 한정되지 않고, F-01 의 Seek 세션을 여는 신호일 수도 있다. 이는 F-01(`seek-activation-and-session.md`)이 정의하는 두 활성화 경로(전역 단축키 토글, 키 리매핑 hold 트리거)에 더해 **세 번째 활성화 경로**다 — F-01 은 이 상태 머신이 방출하는 "Seek 열기" 액션도 자신의 상태 머신 진입점으로 받아들여야 한다.
@@ -252,7 +265,17 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 | `IOHIDEventSystemClientCreateSimpleClient` | HID 이벤트 시스템 클라이언트 생성 — 대상 서비스 열거의 전제 |
 | `IOHIDServiceClientConformsTo` | 대상 HID 서비스(키보드) 판별 |
 | `hidutil property -g/-set UserKeyMapping`(서브프로세스 실행, FFI 아님) | 경로 B 의 대체/병행 경로(§3-d, §7) — `Tools_Tools.bundle` 의 셸 실행 오류 문자열이 이 경로를 뒷받침 |
-| `IOHIDManagerRegisterDeviceMatchingCallback` / `RegisterDeviceRemovalCallback` / `SetDeviceMatching` / `ScheduleWithRunLoop` | 키보드 핫플러그 감지 → 경로 B 재적용(§3-a, §5 엣지 케이스 10) |
+| ~~`IOHIDManagerRegisterDeviceMatchingCallback` / `RegisterDeviceRemovalCallback` / `SetDeviceMatching` / `ScheduleWithRunLoop`~~ | ~~키보드 핫플러그 감지 → 경로 B 재적용(§3-a, §5 엣지 케이스 10)~~ — ⭐ **대체됨, 아래 참조** |
+| ⭐ `IOServiceAddMatchingNotification`(`kIOMatchedNotification` / `kIOTerminatedNotification`) + `IOServiceMatching(kIOHIDDeviceKey)` | **키보드 핫플러그 감지의 채택 수단**(§3-a, §5 엣지 케이스 10). 아래 판정 참조 |
+
+⭐ **핫플러그 감지 수단 변경 (2026-08-30, M1 구현 / 이슈 #5).** 원본이 `IOHIDManager*` 계열을 링크한다는 실측(§3-a)은 그대로 유효하지만, **클론은 `IOServiceAddMatchingNotification` 을 쓴다.** 근거:
+
+- `IOHIDManager` 계열은 **감지만 하려 해도 `IOHIDManagerOpen` 이 필요하고, 그것이 곧 Input Monitoring(TCC) 권한 요구**다. 그런데 이 문서와 F-11 이 함께 확정한 사실은 "원본은 Input Monitoring 을 명시적으로 확인하지 않고 `IOHIDManagerOpen` 실패를 재시도로 흡수한다"(§6 권한 표, F-11 §3.1)이다. 즉 명세대로 구현하면 **핫플러그 감지 하나를 위해 권한이 끝내 없을 때 영영 동작하지 않는 경로**를 만들게 되고, 그 사실이 사용자에게 보이지도 않는다.
+- `IOServiceAddMatchingNotification` 은 **TCC 권한을 요구하지 않으면서** 같은 정보(키보드 HID 장치의 등장·소멸)를 준다. 매칭 딕셔너리는 `IOServiceMatching(kIOHIDDeviceKey)` 에 `kIOHIDDeviceUsagePageKey = 1`(GenericDesktop) · `kIOHIDDeviceUsageKey = 6`(Keyboard) 를 더해 좁힌다.
+- **바뀌지 않는 것**: 감지 *이후*의 동작(경로 B 재적용, `keyboardConnectionDelay` 지연, 재시작 디바운스)은 §3-a·§5 #10 그대로다. 바뀌는 것은 감지 수단 하나뿐이다.
+- ⚠️ 구현 함정: `IOServiceAddMatchingNotification` 은 첫 등록 시 **기존 장치 전부에 대해 즉시 콜백이 온다**. 반환된 이터레이터를 끝까지 비워야 이후 알림이 도착한다.
+
+**기각한 대안** — `IOHIDManagerOpen` 을 재시도 루프로 흡수하며 명세대로 구현: 권한이 없으면 감지가 조용히 죽고, 그 상태가 관측되지 않는다. 상세는 `docs/dev/architecture.md` §3 "결정 2".
 
 ### 경로 C — HID 잠금 상태
 
@@ -320,7 +343,17 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 
 - **FFI 직접 호출** — `IOHIDServiceClientSetProperty` / `IOHIDEventSystemClientCreateSimpleClient` / `IOHIDServiceClientConformsTo` / `IOHIDManagerRegisterDeviceMatchingCallback` 류는 C ABI 함수이며 `IOKit.framework` 에 링크해 `extern "C"` 선언(또는 `objc2-io-kit` 류 바인딩, 전용 크레이트 존재 여부는 별도 확인 필요)으로 호출 가능하다 → **분류 B(Rust 바인딩)**.
 - **`hidutil` 서브프로세스 실행** — ⭐ **판정: 이것은 FFI 가 아니라 프로세스 실행이며, README.md 의 3분류 어디에도 자리가 없다.** 3분류는 "Rust 에서 네이티브 API 를 어떻게 호출하는가"(라이브러리 호출의 안전성 정도)를 축으로 하는 분류다. `std::process::Command` 로 `hidutil` 을 실행하고 stdout/plist 를 파싱하는 것은 `unsafe` FFI 도, 별도로 빌드하는 네이티브 shim 도 필요 없다는 점에서 표면적으로는 순수 Rust 에 가장 가깝다. 그러나 "라이브러리를 안전하게 감싸 호출한다"는 3분류의 전제 자체가 성립하지 않는다 — 대신 **외부 실행 파일의 존재·경로·버전·출력 형식에 의존**하는 별개의 리스크(macOS 버전 간 `hidutil` 동작 차이, 셸 인용·파싱 오류, 서브프로세스 실행 자체의 권한/샌드박스 제약)를 진다. `Tools_Tools.bundle` 의 `bash command error: %@` / `Error parsing plist response` 문자열이 원본에서도 이 리스크가 실제로 존재해 에러 핸들링을 별도로 두었음을 보여준다. 이 문서의 판정: **프로세스 실행은 3분류 바깥의 별도 범주로 다루고, 클론 설계는 README.md 3분류표에 이를 각주로 남길 것을 제안한다**(§9).
-- **원본이 왜 `hidutil` 서브프로세스를 병용하는가는 `(미확정)`.** 가능성: FFI 경로가 macOS 버전마다 불안정해 Apple 이 유지보수하는 CLI 를 폴백으로 쓰거나, 반대로 `hidutil` 이 1차 경로이고 FFI 는 상태 조회·확인용일 수 있다. 클론 설계는 **FFI 직접 호출을 1차로 채택**하되(에러 처리·테스트가 프로세스 실행보다 결정론적이다), `hidutil` 서브프로세스를 진단·폴백 경로로 남겨두는 것을 권장한다.
+- **원본이 왜 `hidutil` 서브프로세스를 병용하는가는 `(미확정)`.** 가능성: FFI 경로가 macOS 버전마다 불안정해 Apple 이 유지보수하는 CLI 를 폴백으로 쓰거나, 반대로 `hidutil` 이 1차 경로이고 FFI 는 상태 조회·확인용일 수 있다. ~~클론 설계는 **FFI 직접 호출을 1차로 채택**하되(에러 처리·테스트가 프로세스 실행보다 결정론적이다), `hidutil` 서브프로세스를 진단·폴백 경로로 남겨두는 것을 권장한다.~~
+
+⭐ **판정 반전 (2026-08-30, M1 구현 / 이슈 #5).** 위 "FFI 1차" 권장을 **뒤집어 `hidutil` 서브프로세스를 1차 경로로 채택한다.** 근거:
+
+1. **시그니처를 검증할 수 없다.** `IOHIDEventSystemClientCreateSimpleClient` 와 `IOHIDServiceClientSetProperty` 는 macOS SDK 의 **공개 헤더에 없는 심볼**이다(SDK 헤더 검색으로 확인). `platform-constraints.md` P6 이 `MultitouchSupport` 에 대해 남긴 경고 — "**시그니처를 추측으로 쓰지 말 것**" — 이 그대로 적용된다. 잘못된 시그니처의 `extern "C"` 호출은 컴파일과 테스트를 통과한 뒤 임의 시점에 UB 를 낸다.
+2. **원래 판정의 근거가 조건부였다.** "FFI 가 더 결정론적" 이라는 선호는 **시그니처가 확정된 경우에만** 성립한다. 그리고 §9 #15 가 확정하듯 이 문서는 원본이 어느 쪽을 1차로 쓰는지 알지 못한다 — 즉 "FFI 1차"는 실측이 아니라 설계 선호였다.
+3. **전환 비용이 지금 가장 싸다.** M1 에는 경로 B 로 배정된 규칙이 0 개다(개별 배정은 F-08/M2 소관, §3-d). 인터페이스(`HidMappingBackend` 트레이트)만 고정해 두면, 시그니처를 오픈소스 구현체로 대조 검증한 뒤 M2 에서 구현체만 갈아끼울 수 있다.
+
+**기각한 대안** — ① 추측 시그니처로 FFI 를 지금 구현: 위 근거 1. ② 경로 B 자체를 M2 로 미룸: **정리(cleanup)와 잔존 매핑 감지는 앱이 처음 출하되는 순간부터 있어야 한다**(§3-a2, §5 #15). M2 에서 처음 켜면 그 전 버전이 남긴 시스템 전역 매핑을 아무도 치우지 않는다.
+
+**완화 조치**: 셸을 거치지 않고 `Command::new("hidutil")` 로 인자를 직접 넘겨 원본이 겪은 셸 인용 오류(`bash command error: %@`)를 구조적으로 배제한다. 반전의 상세 근거는 `docs/dev/architecture.md` §3 "결정 1" 에 있다.
 
 ### 경로 C — HID 잠금 상태 직접 조작: Rust 바인딩
 
@@ -379,4 +412,7 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 | 12 | `IsSecureEventInputEnabled()` 를 매 콜백마다 확인할지, 별도 주기로 폴링할지 | 이 문서는 매 콜백 확인을 전제로 서술(오버헤드가 작은 syscall 이라는 가정) | 실측으로 오버헤드 확인, 필요 시 캐시+주기 폴링으로 전환 |
 | 13 | 외장(비-Apple) 키보드에서 caps lock 등 주요 소스 키의 물리 keycode 가 Apple 내장 키보드와 다를 가능성 | 엣지 케이스 10 에서 미해결로 남김. 핫플러그 시 경로 B 재적용 로직 자체는 이번에 확정됨(§3-a) | 실제 외장 키보드 다수로 keycode 로그 비교 |
 | 14 | 콜백이 강제 종료되기까지의 정확한 타임아웃 값(Apple 비공개) | §3-a 에서 "경험적으로 수백 ms 수준"으로만 서술 | 실측(의도적으로 콜백을 지연시켜 타임아웃 발생 시점 측정) |
-| 15 | `hidutil` 서브프로세스 실행과 `IOHIDServiceClientSetProperty` FFI 직접 호출 중 원본이 실제로 어느 쪽을 1차 경로로 쓰는가 | `(미확정)`. §7 은 두 경로가 공존한다는 사실만 확정했다 | 동적 트레이싱, 또는 `hidutil` 프로세스 스폰 여부를 로그로 관찰 |
+| 15 | `hidutil` 서브프로세스 실행과 `IOHIDServiceClientSetProperty` FFI 직접 호출 중 **원본이** 실제로 어느 쪽을 1차 경로로 쓰는가 | `(미확정)` — 원본에 대한 질문으로는 그대로 남는다. ⭐ **다만 클론의 선택은 확정됐다**: `hidutil` 1차(§7 판정 반전). 원본이 무엇을 쓰는지와 무관하게 클론은 검증 가능한 경로를 택했다 | 동적 트레이싱, 또는 `hidutil` 프로세스 스폰 여부를 로그로 관찰 |
+| 16 ⭐ | `IOHIDEventSystemClientCreateSimpleClient` / `IOHIDServiceClientSetProperty` 의 **정확한 시그니처** | `(미확정)`. macOS SDK 공개 헤더에 없다 — 이것이 §7 판정 반전의 직접 근거다. 클론은 시그니처를 추측해 선언하지 않았다 | 오픈소스 구현체(예: `hidutil` 을 대체하는 공개 프로젝트) 대조. `platform-constraints.md` P6 과 같은 방법론이며, **확인 전까지 선언하지 않는다** |
+| 17 ⭐ | `IOServiceAddMatchingNotification` 기반 핫플러그 감지가 `IOHIDManager` 계열과 **동등한 이벤트를 주는가** | 클론이 §6 에서 채택한 대체 수단. 원리상 같은 IOKit 레지스트리 이벤트이지만, 외장 키보드·블루투스·KVM 스위치 등에서 실제로 동일하게 발화하는지는 미검증 | 실제 외장 키보드(USB·Bluetooth)를 연결·해제하며 콜백 발화 로그 비교 |
+| 18 ⭐ | 절전/세션/키보드연결 지연값과 재시작 디바운스 임계값의 **실제 적정치** | #7 이 "원본의 값"을 묻는 반면 이것은 "우리 값이 맞는가"를 묻는다. M1 은 설계 판단으로 2000/1000/1500/5000 ms 를 채택했다(`docs/dev/architecture.md` §4) — **실측이 아니다** | 절전 복귀·잠금 해제·핫플러그 직후 리매핑 동작 여부를 지연값을 바꿔가며 관찰 |
