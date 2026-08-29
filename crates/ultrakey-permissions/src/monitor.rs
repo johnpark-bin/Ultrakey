@@ -52,15 +52,24 @@ impl PermissionMonitor {
         let thread_callback = Arc::clone(&on_transition);
         let handle = thread::spawn(move || loop {
             let trusted = ultrakey_platform::accessibility::is_process_trusted();
-            let poll_mode = {
+            // ⚠️ 락을 놓은 뒤에 콜백을 호출한다. `on_transition` 은 결국
+            // `show_modal()` → tao `make_key_and_order_front_sync` → 메인
+            // 스레드로 동기 디스패치(블로킹)까지 이어진다. 그동안 메인
+            // 스레드가 `modal_copy` 커맨드에서 `monitor.state()` 를 불러
+            // 같은 `model` 뮤텍스를 기다리면, 폴링 스레드는 메인 스레드를
+            // 기다리고 메인 스레드는 폴링 스레드가 쥔 락을 기다리는
+            // 교착이 생긴다. 그래서 `guard` 를 블록 끝에서 드롭해 락을 놓은
+            // 뒤에 콜백을 부른다.
+            let (transition, poll_mode) = {
                 let mut guard = thread_model
                     .lock()
                     .expect("permission model mutex poisoned");
-                if let Some(transition) = guard.observe_trusted(trusted) {
-                    (thread_callback)(transition);
-                }
-                guard.poll_mode()
+                let transition = guard.observe_trusted(trusted);
+                (transition, guard.poll_mode())
             };
+            if let Some(transition) = transition {
+                (thread_callback)(transition);
+            }
 
             let interval_ms = match poll_mode {
                 PollMode::Onboarding => onboarding_ms,
@@ -92,26 +101,42 @@ impl PermissionMonitor {
 
     /// ⭐ 즉시 1회 확인(§3.4 "보조 트리거": 앱이 포그라운드로 돌아올 때, F-07 이
     /// 탭 설치를 시도하기 직전).
+    ///
+    /// ⚠️ 폴링 루프와 같은 이유로, 락을 놓은 뒤에 콜백을 호출한다 —
+    /// `on_transition` 이 메인 스레드로 동기 디스패치되므로 락을 들고 있으면
+    /// 교착으로 이어질 수 있다.
     pub fn check_now(&self) -> PermissionState {
         let trusted = ultrakey_platform::accessibility::is_process_trusted();
-        let mut guard = self.model.lock().expect("permission model mutex poisoned");
-        if let Some(transition) = guard.observe_trusted(trusted) {
+        let (transition, state) = {
+            let mut guard = self.model.lock().expect("permission model mutex poisoned");
+            let transition = guard.observe_trusted(trusted);
+            (transition, guard.state())
+        };
+        if let Some(transition) = transition {
             (self.on_transition)(transition);
         }
-        guard.state()
+        state
     }
 
+    /// ⚠️ 락을 놓은 뒤에 콜백을 호출한다(위 `check_now` 와 동일한 이유).
     pub fn report_tap_create_failed(&self) {
         let trusted = ultrakey_platform::accessibility::is_process_trusted();
-        let mut guard = self.model.lock().expect("permission model mutex poisoned");
-        if let Some(transition) = guard.observe_tap_create_failed(trusted) {
+        let transition = {
+            let mut guard = self.model.lock().expect("permission model mutex poisoned");
+            guard.observe_tap_create_failed(trusted)
+        };
+        if let Some(transition) = transition {
             (self.on_transition)(transition);
         }
     }
 
+    /// ⚠️ 락을 놓은 뒤에 콜백을 호출한다(위 `check_now` 와 동일한 이유).
     pub fn report_tap_created(&self) {
-        let mut guard = self.model.lock().expect("permission model mutex poisoned");
-        if let Some(transition) = guard.observe_tap_created() {
+        let transition = {
+            let mut guard = self.model.lock().expect("permission model mutex poisoned");
+            guard.observe_tap_created()
+        };
+        if let Some(transition) = transition {
             (self.on_transition)(transition);
         }
     }
