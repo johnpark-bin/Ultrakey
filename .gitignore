@@ -1,0 +1,14 @@
+# 에이전트 하네스 설정은 이 저장소의 산출물이므로 반드시 추적한다.
+# 많은 개발자가 전역 gitignore(`core.excludesFile`)에서 `.claude/` 와 `.opencode/` 를
+# 통째로 제외해 두는데, 저장소 레벨 .gitignore 가 전역 설정보다 우선하므로 여기서 되돌린다.
+# 규약과 모델 라우팅 근거는 AGENTS.md §2 참조.
+!.claude/
+!.codex/
+!.opencode/
+
+# 단, 개인 로컬 설정은 계속 제외한다.
+.claude/settings.local.json
+.codex/*.local.toml
+
+# macOS
+.DS_Store
