@@ -1,8 +1,8 @@
 # F-14 · 현지화와 키보드 입력 소스 독립성
 
-> 한 줄 요약: (A) 앱이 번들하는 8개 로케일(영어 포함, 그중 3개 RTL)의 문자열 카탈로그·런타임 로케일 결정·RTL 레이아웃 규칙을 정의하고, (B) 모든 키 입력 판정을 물리 키코드 기준으로 통일해 QWERTZ·AZERTY·Dvorak·CJK 입력기에서도 깨지지 않도록 하는 원칙을 정의한다. 둘 다 나중에 손대면 UI·판정 로직을 전면 재작성해야 하는 횡단 관심사라 명세 단계에서 확정한다.
+> 한 줄 요약: ⭐ **정정**: 이전 판이 "앱이 8개 로케일(영어 포함, 그중 3개 RTL)을 번들한다"고 판정한 것은 간접 증거를 직접 증거로 오독한 것이었다(§1). 실측 결과 SuperKey v1.66 의 UI 는 **영어 단일**이며 현지화 기능이 없다. 따라서 (A) 는 이제 "원본을 따라가는 명세"가 아니라 **클론이 채택할지 말지를 스스로 결정해야 하는 선택지**이며, 채택할 경우를 대비한 문자열 카탈로그·런타임 로케일 결정·RTL 레이아웃 규칙의 설계 원칙만 정의한다. (B) 모든 키 입력 판정을 물리 키코드 기준으로 통일해 QWERTZ·AZERTY·Dvorak·CJK 입력기에서도 깨지지 않도록 하는 원칙은 원본의 실제 회귀 이력(v1.51/v1.52)과 이번 실측(Carbon 심볼 확정)으로 뒷받침되며 그대로 유효하다. 둘 다 나중에 손대면 UI·판정 로직을 전면 재작성해야 하는 횡단 관심사라 명세 단계에서 미리 설계해 둔다.
 > 의존성: `F-07`(`key-remapping-engine.md`) — event tap 설치·중재·quick press 판정 메커니즘 자체. 본 문서는 그 엔진이 **무엇을 기준으로 판정해야 하는가**의 원칙만 제공한다. `F-09`(환경설정 창의 컨트롤 구조) — 본 문서가 정의하는 문자열·RTL 규칙이 실제로 배치되는 대상.
-> 관련 명세: `F-08`(`presets.md`, 개별 프리셋의 동작 정의 — `home row`/`symbol row` 등 레이아웃 의존 프리셋의 **개별 동작**은 F-08 소관, 본 문서는 그 프리셋이 비-QWERTY 에서 "무엇을 의미하는가"의 판정 원칙만 제공) · `F-05`(`hyperkey.md`, modifier 합성 — 본 문서 §3.2 의 키코드 기반 판정 원칙을 그대로 따르는 선행 사례)
+> 관련 명세: `F-08`(`power-user-presets.md`, 개별 프리셋의 동작 정의 — `home row`/`symbol row` 등 레이아웃 의존 프리셋의 **개별 동작**은 F-08 소관, 본 문서는 그 프리셋이 비-QWERTY 에서 "무엇을 의미하는가"의 판정 원칙만 제공. `Caps lock + W A S D`/`[H J K L]` 의 Colemak/Dvorak 변형 자동 적용 여부는 §3.2.7, F-08 §3.2·§9 항목 3 과 상호 참조) · `F-05`(`hyperkey.md`, modifier 합성 — 본 문서 §3.2 의 키코드 기반 판정 원칙을 그대로 따르는 선행 사례)
 
 ---
 
@@ -10,11 +10,19 @@
 
 이 문서는 서로 다른 두 문제를 다루지만, 둘 다 같은 성격의 리스크를 공유한다 — **초기 설계에서 놓치면 나중에 UI·판정 로직을 전면 재작성해야 한다**는 점이다.
 
-**(A) 현지화.** 조사(`superkey-inventory.md` §2.3)는 Sparkle 델타 appcast 의 `sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk"` 속성에서 앱이 번들하는 로케일을 확정했다. 즉 **de·he·ar·el·ja·fa·uk + en, 총 8개**이며, 이 중 **he·ar·fa 3개가 RTL** 이다. 이는 원본 앱이 "언젠가 다국어를 지원하겠다"가 아니라 **이미 8개 로케일로 배포 중인 실제 기능**이라는 뜻이다. 클론이 처음부터 문자열을 하드코딩하고 레이아웃을 LTR 전제로 짜면, RTL 3개 로케일 추가 시점에 오버레이·환경설정 창의 레이아웃 로직을 다시 설계해야 한다.
+**(A) 현지화 — ⭐⭐ 이전 판의 가장 큰 오기 정정.** 이전 판은 Sparkle 델타 appcast 의 `sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk"` 속성(`superkey-inventory.md` §2.3)에서 "앱이 de·he·ar·el·ja·fa·uk + en, 총 8개 로케일을 번들하며 그중 3개가 RTL"이라고 판정했다. **이것은 오독이었다.** 실측(app-bundle-analysis.md §5.1)은 다음을 확정한다:
 
-**(B) 키보드 입력 소스 독립성.** 조사(`superkey-inventory.md` §2.1, §6 관찰 3)는 원본이 **v1.51/v1.52 에서 세 건**을 "regardless of keyboard layout" 으로 수정한 이력을 확정했다 — 괄호 quick press, Seek 세미콜론, paste w/o formatting 리매핑. 세 건 모두 원인이 같다: **문자 기반 판정이 QWERTY 이외 레이아웃에서 깨진다.** 이는 F-07 이 구현할 이벤트 판정 엔진 전체에 적용되어야 하는 원칙이므로, 개별 프리셋(F-08)이나 엔진 자체(F-07)에 흩어 두지 않고 여기서 한 번에 못박는다.
+- 앱 본체 `Contents/Resources/` 에는 `Base.lproj` 하나뿐이다.
+- Info.plist 에 `CFBundleLocalizations` 키가 **없다**.
+- appcast 속성이 나열한 `de` `he` `ar` `el` `ja` `fa` `uk` 는 SuperKey 자신의 로케일이 아니라, 번들에 동봉된 **`Sparkle.framework` 가 자체적으로 갖는 45개 로케일 중 이번 델타 업데이트가 건드린 파일 목록**이다 — 목록 7개가 전부 Sparkle 의 45개 안에 들어 있다는 사실이 이를 뒷받침한다. `Paddle.framework` 도 12개, `KeyboardShortcuts` 리소스 번들도 15개를 별도로 갖지만 이 역시 SuperKey 자신의 UI 로케일과 무관하다.
 
-두 주제를 하나의 문서로 묶은 이유는 조사 브리프가 명시한 대로 **"나중에 하면 전부 다시 만들어야 하는" 성격**을 공유하기 때문이다 — (A)는 UI 레이아웃 전면 재작업, (B)는 판정 로직 전면 재작업이라는 형태로 나타난다.
+⭐ **결론: SuperKey v1.66 의 UI 는 영어 단일이고, 현지화 기능이 존재하지 않는다. RTL 대응도 없다.**
+
+이 정정이 "클론도 현지화를 포기해야 한다"는 뜻은 아니다. **원본에 없는 기능을 클론이 가질지는 별개의 제품 결정이다.** 그래서 이 문서의 (A) 는 이제 "원본이 이미 하는 것을 따라가는 명세"가 아니라 **"클론 고유의 선택지"**로 성격이 바뀐다 — 채택 여부는 열어 두되, 채택하기로 결정했을 때 나중에 손대면 비싼 부분(문자열 카탈로그 구조, RTL 레이아웃 미러링, 단일 소스 결정)만 미리 설계해 둔다는 논리는 원본이 실제로 그렇게 했든 아니든 그대로 유효하다 — 로케일·RTL 대응은 UI 전반에 걸친 횡단 관심사이므로, 문자열을 하드코딩하고 레이아웃을 LTR 전제로 짜 둔 뒤 나중에 채택을 결정하면 오버레이·환경설정 창의 레이아웃 로직을 전면 재설계해야 하기 때문이다. **다만 구체적인 로케일 목록(몇 개, 어떤 언어)은 근거를 잃었으므로 확정 사실로 쓰지 않는다** — 어떤 로케일을 실제로 지원할지는 이 문서가 정할 문제가 아니라 클론이 별도로 정할 제품 결정 사항으로 되돌린다(§3.1.1, §8, §9).
+
+**(B) 키보드 입력 소스 독립성.** 조사(`superkey-inventory.md` §2.1, §6 관찰 3)는 원본이 **v1.51/v1.52 에서 세 건**을 "regardless of keyboard layout" 으로 수정한 이력을 확정했다 — 괄호 quick press, Seek 세미콜론, paste w/o formatting 리매핑. 세 건 모두 원인이 같다: **문자 기반 판정이 QWERTY 이외 레이아웃에서 깨진다.** 이는 F-07 이 구현할 이벤트 판정 엔진 전체에 적용되어야 하는 원칙이므로, 개별 프리셋(F-08)이나 엔진 자체(F-07)에 흩어 두지 않고 여기서 한 번에 못박는다. 이번 실측(app-bundle-analysis.md §3.1)으로 `TISCopyCurrentKeyboardInputSource`·`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`·`TISGetInputSourceProperty`·`UCKeyTranslate`·`LMGetKbdType` 심볼과 Carbon 링크가 확정되어, 이전 판이 "(추정)"으로 남겼던 CJK 입력기 대응(§3.2.6)의 근거가 크게 보강됐다.
+
+두 주제를 하나의 문서로 묶은 이유는 조사 브리프가 명시한 대로 **"나중에 하면 전부 다시 만들어야 하는" 성격**을 공유하기 때문이다 — (A)는 채택 시 UI 레이아웃 전면 재작업, (B)는 판정 로직 전면 재작업이라는 형태로 나타난다.
 
 **범위 밖**: 개별 프리셋의 동작 정의(`F-08`), event tap·중재·quick press 판정 메커니즘 자체(`F-07` — 본 문서는 그 엔진이 따라야 할 판정 원칙만 제공), 환경설정 창의 컨트롤 구조(`F-09`).
 
@@ -22,11 +30,13 @@
 
 ## 2. 사용자 시나리오
 
+⚠️ 시나리오 1~3 은 **클론이 현지화를 채택하기로 결정했다는 가정 위의 시나리오**다(§1). SuperKey 원본에는 대응하는 실제 동작이 없으므로 "원본이 이렇게 동작한다"는 근거가 아니라 "채택한다면 이렇게 설계한다"는 예시로 읽어야 한다. 시나리오 4~7 은 (B) 입력 소스 독립성 원칙에 속하며, 원본의 실제 회귀 이력과 이번 실측으로 뒷받침된다.
+
 1. **독일어 macOS 사용자** — 시스템 언어가 독일어인 사용자가 Superkey 를 처음 실행하면, 환경설정 창·메뉴바 메뉴·시스템 알림이 모두 독일어로 표시된다. 키 이름(`Caps Lock`, `Befehlstaste` 등)은 macOS 시스템 관례를 따르지만 modifier 기호(`⌃⌥⌘⇧`)는 번역되지 않고 그대로 표기된다.
 2. **히브리어 사용자가 Seek 를 사용** — RTL 로케일에서 Seek 오버레이의 Spotlight 유사 검색 바가 우측 정렬로 표시되고, 검색 바에서 선택된 매치까지 잇는 연결선의 시작점도 그에 맞게 조정된다.
 3. **아랍어 사용자가 환경설정 창을 연다** — `Presets` 탭의 좌측 키캡 일러스트(`caps lock`/`shift`/`delete`)와 우측 체크박스 목록의 좌우 배치가 미러링되어, 사이드바가 우측에, 컨트롤이 좌측에 온다.
 4. **AZERTY 프랑스어 키보드 사용자** — `Quick press left or right shift to input corresponding: ( )` 을 사용할 때, 물리적으로 `Shift` 키 위치를 판정하는 로직은 keycode 기준이라 레이아웃과 무관하게 동작하고, 출력되는 문자 `(`/`)` 는 현재 AZERTY 입력 소스에서 실제로 그 문자를 낼 수 있는 조합을 찾아 합성한다.
-5. **Dvorak 사용자** — `Caps lock + W A S D = ▲◀▼▶` 프리셋을 사용할 때, 판정은 물리적으로 QWERTY 배열의 W/A/S/D 위치에 해당하는 keycode(`kVK_ANSI_W` 등)를 기준으로 하므로, Dvorak 배열에서 그 물리 위치에 있는 실제 문자(`,`/`a`/`o`/`e` 등)와 무관하게 항상 같은 물리 키 4개가 방향키로 동작한다.
+5. **Dvorak 사용자** — `Caps lock + W A S D = ▲◀▼▶` 프리셋을 사용할 때, 판정은 물리적으로 QWERTY 배열의 W/A/S/D 위치에 해당하는 keycode(`kVK_ANSI_W` 등)를 기준으로 하므로, Dvorak 배열에서 그 물리 위치에 있는 실제 문자(`,`/`a`/`o`/`e` 등)와 무관하게 항상 같은 물리 키 4개가 방향키로 동작한다. ⭐ **주의**: 이 시나리오가 전제하는 "항상 같은 물리 키 4개 고정" 은 §3.2.7 의 실측(실행 파일에 `wasdArrowDvorak` 등 레이아웃별 별도 키 집합이 존재)으로 재검토가 필요하다 — SuperKey 는 이 프리셋에 한해 레이아웃마다 **다른** keycode 집합을 쓰는 것으로 보인다(§3.2.7 참조).
 6. **한글 입력기로 문서를 작성하던 중** — 한글 조합이 진행 중(예: "ㄱ" 입력 후 조합 대기)인 상태에서 quick press caps lock 이 트리거되면, 조합 중인 텍스트가 깨지지 않도록 리매핑 개입이 유예된다(§3.2, 정책은 `(추정)`).
 7. **세션 도중 입력 소스를 전환** — 사용자가 `⌘+Space`(또는 메뉴바)로 미국 영어 입력 소스에서 프랑스어(AZERTY) 입력 소스로 전환하면, 앱은 `kTISNotifySelectedKeyboardInputSourceChanged` 를 받아 캐시된 keycode↔문자 매핑을 즉시 무효화하고, 이후 발생하는 quick press 출력은 새 입력 소스 기준으로 재계산된다.
 
@@ -36,27 +46,26 @@
 
 ### 3.1 (A) 로케일
 
-#### 3.1.1 로케일 표
+#### 3.1.1 로케일 목록 — ⭐ 확정된 목록 없음, 클론이 정할 문제
 
-| 코드 | 언어 | 방향 | 출처 |
-| :--- | :--- | :--- | :--- |
-| `en` | 영어 | LTR | 기본 로케일 — 번들의 기준(base) 로케일이며 `sparkle:deltaFromSparkleLocales` 목록에는 나타나지 않는다(그 속성은 en 을 기준으로 한 **차이** 로케일만 나열하므로) |
-| `de` | 독일어(Deutsch) | LTR | `superkey-inventory.md` §2.3, `sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk"` |
-| `he` | 히브리어(עברית) | **RTL** | 상동 |
-| `ar` | 아랍어(العربية) | **RTL** | 상동 |
-| `el` | 그리스어(Ελληνικά) | LTR | 상동 |
-| `ja` | 일본어(日本語) | LTR | 상동 |
-| `fa` | 페르시아어(فارسی) | **RTL** | 상동 |
-| `uk` | 우크라이나어(Українська) | LTR | 상동 |
+이전 판은 여기에 "8개 로케일 표"(en/de/he/ar/el/ja/fa/uk, RTL 3종)를 확정 사실로 적었다. §1 에서 정정했듯 이 목록은 SuperKey 자신의 로케일이 아니라 Sparkle 프레임워크의 로케일을 오독한 것이었으므로, **이 문서는 더 이상 구체적 로케일 목록을 확정 사실로 제시하지 않는다.**
+
+클론이 실제로 어떤 로케일을 지원할지는 이 문서의 범위 밖 제품 결정이다. 이 문서가 대신 제공하는 것은 **어떤 로케일 집합을 고르든 적용할 수 있는 설계 원칙**뿐이다:
+
+- 로케일은 `en`(기본) + 클론이 선택한 로케일 코드 N개로 구성된다.
+- 각 로케일은 LTR/RTL 둘 중 하나로 분류되며(macOS `NSLocale.characterDirection(forLanguage:)` 로 판정), RTL 로 분류된 로케일에는 §3.1.4 의 미러링 규칙이 적용된다.
+- 로케일 코드 집합 자체는 Info.plist 의 `CFBundleLocalizations` 키에 선언한다(§3.1.2).
+
+번들에 동봉된 서드파티 프레임워크(Sparkle 45개, Paddle 12개, KeyboardShortcuts 15개)의 로케일 개수는 SuperKey 자신의 UI 로케일 지원 범위를 **전혀 보장하지 않는다** — 이번 오독이 정확히 그 착각에서 비롯됐다. 클론이 이 서드파티 프레임워크들과 동등한 것(예: 자동 업데이트 UI, 라이선싱 UI, 단축키 레코더)을 채택하더라도, 그 구성요소가 갖는 로케일 개수를 클론 자신의 지원 로케일 목록과 혼동하지 않아야 한다.
 
 #### 3.1.2 로케일 결정 순서
 
-1. macOS 는 앱 번들의 `CFBundleLocalizations`(Info.plist 에 위 8개 코드를 선언)와 시스템 설정(`시스템 설정 > 일반 > 언어 및 지역`, 앱별 언어 재정의 포함)의 사용자 선호 언어 목록을 대조해 최적 로케일을 결정한다.
+1. macOS 는 앱 번들의 `CFBundleLocalizations`(Info.plist 에 클론이 지원하기로 결정한 로케일 코드를 선언)와 시스템 설정(`시스템 설정 > 일반 > 언어 및 지역`, 앱별 언어 재정의 포함)의 사용자 선호 언어 목록을 대조해 최적 로케일을 결정한다.
 2. 네이티브 측은 이 결정 결과를 `NSBundle`/`NSLocale` 계열 API 로 읽어(§6) 문자열 카탈로그의 로케일 키를 선택한다.
 3. 정확히 일치하는 지역 변형이 없으면(예: 시스템이 `de-CH`) 언어 코드만으로 폴백한다(`de`).
-4. 번들 로케일 8종 어디에도 해당하지 않으면 `en` 으로 폴백한다.
-5. 앱 내에 시스템 설정을 오버라이드하는 언어 선택 UI가 있는지는 조사로 확정되지 않았다 — §4, §9.
-6. `(추정)` 로케일 값은 앱 시작 시 1회 결정되며, 실행 중 시스템 언어를 바꿔도 재시작 전까지 UI 에 반영되지 않을 가능성이 있다. 이는 macOS 네이티브 앱의 일반적 관례이나 조사 자료에 직접 근거는 없다 — §9.
+4. 클론이 지원하기로 선언한 로케일 어디에도 해당하지 않으면 `en` 으로 폴백한다.
+5. 앱 내에 시스템 설정을 오버라이드하는 언어 선택 UI가 있는지는 원본 기준으로 **실측 확정됐다 — 없다**(app-bundle-analysis.md §6.4, `General` 탭에 언어 선택 항목이 없음). 클론이 이런 UI 를 별도로 둘지는 제품 결정 — §4, §9.
+6. `(추정)` 로케일 값은 앱 시작 시 1회 결정되며, 실행 중 시스템 언어를 바꿔도 재시작 전까지 UI 에 반영되지 않을 가능성이 있다. 이는 macOS 네이티브 앱의 일반적 관례이나 원본에 현지화 기능 자체가 없어 직접 근거는 없다 — §9.
 
 #### 3.1.3 번역 대상 / 비대상 분류
 
@@ -72,7 +81,7 @@
 
 #### 3.1.4 RTL 레이아웃 미러링 규칙
 
-RTL 로케일(`he`/`ar`/`fa`) 활성 시:
+⚠️ 아래 규칙은 클론이 RTL 로 분류되는 로케일을 채택하기로 결정한 경우에 적용되는 **설계 원칙**이다(§3.1.1). 어떤 로케일이 실제로 RTL 목록에 들어갈지는 클론의 제품 결정이며, 여기서는 임의의 RTL 로케일이 활성화됐을 때를 가정한다:
 
 - **환경설정 창**: 좌측 사이드바(탭 4개) ↔ 우측 패널 배치가 좌우 반전된다. 각 패널 내 "체크박스 + 팝업" 행의 좌우 순서도 반전되어, 라벨 텍스트가 우측 정렬로 시작한다.
 - **`Presets` 탭 키캡 일러스트**: `caps lock`/`shift`/`delete` 그룹 구분용 일러스트의 화면상 위치가 미러링된다. 단, modifier 기호 표기 순서(`⌃⌥⌘⇧`)는 §3.1.3 에 따라 언어·방향과 무관하게 macOS 표준 순서를 유지한다 — 아이콘의 **배치**는 미러링하되 기호 **조합 표기 순서**는 고정한다.
@@ -83,7 +92,7 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 
 원본 조사에는 없는 이 클론 고유의 아키텍처 문제다. Superkey 클론은 환경설정 창·Seek 오버레이를 Tauri(WKWebView)로 그리고, 메뉴바 메뉴·시스템 알림은 네이티브(AppKit) API 로 그린다. 두 렌더링 경로가 각자 별도의 문자열 카탈로그(예: 네이티브는 `.strings`, 웹 쪽은 JS i18n JSON)를 가지면, 로케일 하나에 대해 어느 한쪽에만 문자열이 추가되는 **분기(drift)**가 발생하기 쉽다 — 특히 §3.1의 번역 범위 자체가 확정되지 않은 상태(§9)에서는 이 위험이 더 크다.
 
-**결정: 단일 로케일별 문자열 카탈로그 파일(로케일 코드 8개 × 파일 1개, 키-값 형식)을 앱 리소스로 하나만 두고, 네이티브 Rust 코드와 WebView 양쪽이 같은 파일을 읽는다.**
+**결정: 단일 로케일별 문자열 카탈로그 파일(클론이 지원하기로 결정한 로케일 코드 수만큼 × 파일 1개, 키-값 형식)을 앱 리소스로 하나만 두고, 네이티브 Rust 코드와 WebView 양쪽이 같은 파일을 읽는다.**
 
 - 네이티브 측(트레이 메뉴, 알림): Rust 백엔드가 앱 시작 시 해당 로케일 파일을 표준 직렬화 방식으로 파싱해 메모리에 올리고, 메뉴 아이템·알림 문자열 생성 시 조회한다. 이는 플랫폼 API 호출이 아니라 순수 파일 I/O + 파싱이므로 §6/§7 의 3분류 판정 대상이 아니다.
 - WebView 측: Tauri 의 정적 리소스 서빙(또는 IPC 커맨드)으로 같은 파일을 JS 에서 `fetch` 해 동일한 키로 조회한다.
@@ -116,7 +125,7 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 | quick press shift → 괄호 실행(`( )`) | `kVK_Shift`(좌 0x38 / 우 0x3C) + quick press 판정(F-07 소관, 지속시간은 `Quick press duration` 값) | 예 — `(` 또는 `)` | §3.2.2 (i) 채택, 실패 시 (ii) 폴백. `UCKeyTranslate` + `TISCopyCurrentKeyboardInputSource` | 조사 v1.51 "input the correct character, regardless of keyboard layout" |
 | quick press caps lock → `/` 실행(v1.62 추가) | `kVK_CapsLock`(0x39) + quick press 판정 | 예 — `/` | §3.2.2 (i) 채택, 실패 시 (ii) 폴백 | appcast v1.62 "can now execute a slash keypress" |
 | remap paste → paste w/o formatting(`⌘⌥⇧V`) | `⌘`(Command) + `kVK_ANSI_V`(0x09) 조합의 keyDown | 아니오 — 단축키 합성. 동일 keycode `V` 에 modifier 비트만 추가 | `CGEventSetFlags` 로 Option+Shift 비트를 추가해 동일 keycode 로 재주입(`F-05` 패턴과 동일) | 조사 v1.52 "regardless of keyboard layout". 단축키는 keycode+flags 로 인식되므로 (ii) Unicode 직접 주입은 부적합(§3.2.2) |
-| `Caps lock + W A S D = ▲◀▼▶` | `kVK_ANSI_W`/`A`/`S`/`D`(물리 키보드의 고정된 4개 위치, US 배열 기준 keycode 값 자체를 물리 위치 식별자로 사용) | 아니오 — 방향키(`kVK_UpArrow` 등) 합성 | `CGEventGetIntegerValueField` 판정 + `CGEventCreateKeyboardEvent` 로 방향키 keycode 합성 | F-08 소관(개별 동작)이나 판정 원칙은 본 문서 소관. Dvorak 등에서 "W/A/S/D 문자"가 아니라 "그 물리 위치"가 방향키가 됨(§2 시나리오 5) |
+| `Caps lock + W A S D = ▲◀▼▶` | ⭐ **정정(§3.2.7)**: `kVK_ANSI_W`/`A`/`S`/`D` 고정이 아니라, 감지된 키보드 레이아웃(QWERTY/Colemak/Dvorak)에 따라 **레이아웃별로 다른 keycode 집합**을 쓰는 것으로 보인다 `(미확정 — 팝업 부재로부터의 해석, §3.2.7)` | 아니오 — 방향키(`kVK_UpArrow` 등) 합성 | `CGEventGetIntegerValueField` 판정 + `CGEventCreateKeyboardEvent` 로 방향키 keycode 합성 | F-08 소관(개별 동작)이나 판정 원칙은 본 문서 소관. §3.2.7 참조 — "물리 키코드 고정" 원칙만으로는 이 프리셋의 실제 동작을 설명하지 못한다 |
 | `Caps lock + home row = symbol row (A = !)` | home row 물리 keycode 집합(`kVK_ANSI_A/S/D/F/G/H/J/K/L/Semicolon` 등, US 배열 기준 물리 위치) | 예 — 현재 입력 소스에서 대응 심볼 산출 | `UCKeyTranslate` 로 "숫자 줄 + shift" 에 해당하는 문자를 **현재 레이아웃 기준으로** 조회 (`A = !` 는 US-QWERTY 한정 예시) | F-08 소관(개별 매핑표)이나, 비-QWERTY 에서 "symbol row" 자체가 무엇을 의미하는지는 §3.2.4 |
 
 #### 3.2.4 `home row`/`symbol row` 프리셋의 레이아웃 의존성
@@ -135,14 +144,35 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 4. 재구축이 완료되기 전에 §3.2.3 표의 문자 출력이 필요한 이벤트가 도착하면, 재구축 완료까지 대기하거나(짧은 지연 허용) 해당 1회는 무시한다 — 어느 쪽을 택할지는 §9 미해결 질문.
 5. CJK 계열 "입력 방식(input method)" 로케일(한글·日本語·中文 등)로 전환된 경우, §3.2.6 의 조합 중 정책이 함께 활성화된다.
 
-#### 3.2.6 CJK 입력기 활성 중의 동작 `(추정)`
+#### 3.2.6 CJK 입력기 활성 중의 동작 — ⭐ 실측으로 API 확정, 정책은 정정
 
-조사 자료에는 이 상황에 대한 직접 근거가 없다. 한글/일본어/중국어 입력기가 조합 중(marked text 존재)일 때 리매핑이 개입하면 조합이 깨진다는 것은 일반적으로 알려진 문제이나(예: 세미콜론이 특정 IME 의 조합 키로 쓰이는 경우, 그 키를 Seek 판정이 먼저 가로채면 조합이 끊긴다), 정확한 감지 방법과 정책은 실측이 필요하다.
+이전 판은 이 상황을 통째로 `(추정)`으로 남겼다. 한글/일본어/중국어 입력기가 조합 중(marked text 존재)일 때 리매핑이 개입하면 조합이 깨진다는 것은 일반적으로 알려진 문제이며, "marked text 감지 → 문자 출력형 리매핑 pass-through" 라는 정책을 가설로 제시했었다. 이번 실측(app-bundle-analysis.md §3.1, `nm -u`)으로 실행 파일이 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 를 링크하는 것이 확정되어, 정책의 근거가 바뀐다.
 
-**채택 정책(추정)**: 현재 입력 소스가 "키보드 입력 방식(Input Method)" 범주(한글 2벌식/3벌식, 日本語 かな入力/ローマ字入力, 中文 拼音 등)이고 **marked text(조합 중 미확정 텍스트)가 존재하는 것으로 판단되면**, 문자를 새로 산출·출력해야 하는 리매핑(quick press 괄호/슬래시 실행, `symbol row` 등)은 해당 keyDown 을 소비하지 않고 원본 그대로 통과시킨다. 반대로 문자를 산출하지 않는 리매핑(Hyperkey modifier 합성, Seek 활성화 자체, 방향키 프리셋)은 조합 여부와 무관하게 계속 동작한다 — 이들은 IME 의 조합 버퍼에 개입하지 않기 때문이다.
+⭐ **`TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 는 macOS 의 표준 기법이다** — 현재 활성 입력 소스가 한글/日本語/中文 같은 비-ASCII 입력 방식(IME)일 때, keycode→문자 해석을 그 IME 로 하지 않고 **사용자가 최근에 선택했던 "ASCII 가능(ASCII-capable)" 키보드 레이아웃으로 폴백**해 수행하는 API 다. 물리 키 기반 단축키 판정을 CJK IME 활성 중에도 깨지지 않게 하려는 목적으로 널리 쓰이는 패턴이다.
 
-- 감지 방법은 미정 `(추정)`. 후보: 텍스트 서비스 관리(TSM) 계열 API 로 활성 문서의 조합 상태를 조회하거나, 포커스된 요소의 Accessibility 속성(`kAXSelectedTextRangeAttribute` 등 marked text 관련)을 확인하는 방식이 있으나, 조사 노트(`rust-macos-capability-notes.md`)에는 이 용도의 크레이트나 API 목록이 없다.
-- 이 정책은 §9 미해결 질문으로 승계하며, 실제 구현 전 앱 설치 후 한글 입력기로 실측 검증이 필요하다.
+**정정된 이해**: SuperKey 는 marked text(조합 중 텍스트) 상태를 직접 감지해 개입을 유예하는 방식이 아니라, **애초에 문자 출력이 필요한 리매핑(quick press 괄호/슬래시 실행, `symbol row` 등)의 keycode→문자 해석 단계에서 이 API 로 얻은 ASCII 가능 레이아웃을 조회 기준으로 쓰는 것으로 보인다** `(미확정 — 심볼 링크는 확정, 정확한 호출 지점과 실제 동작은 미관찰)`. 이 방식이 맞다면, §3.2.1 의 물리 키코드 판정 원칙과 문자 출력 계산이 IME 조합 상태와 무관하게 항상 같은 절차로 동작하므로, marked text 감지·조합 상태 판별이라는 별도 메커니즘 자체가 필요 없어진다.
+
+- **실측 확정**: 심볼 링크(`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`), 그 API 의 표준 용도(ASCII 폴백 keycode 해석).
+- **`(미확정)`으로 남는 것**: 이 API 를 정확히 어느 리매핑 경로에 쓰는지(quick press 전용인지, 모든 문자 출력형 리매핑에 공통인지), 실제로 한글 입력기 조합 중 이 폴백이 부작용 없이 동작하는지(실측 시 Screen Recording 권한·조합 방해 부작용을 감수해야 해 이번 조사에서는 검증하지 않았다), 그리고 조합 버퍼 자체를 건드리지 않는 리매핑(Hyperkey modifier 합성, Seek 활성화, 방향키 프리셋)이 여전히 조합 여부와 무관하게 동작하는지.
+- 이 정책은 §9 미해결 질문으로 승계하며, 실제 구현 전 한글/일본어 입력기로 실측 검증이 필요하다.
+
+#### 3.2.7 ⭐ 신규 — 레이아웃별 프리셋 변형이 실재한다
+
+실행 파일 문자열(실측: 번들 문자열)에서 다음 키가 확인된다:
+
+```
+hjklArrow / hjklArrowColemak / hjklArrowDvorak
+ijklArrow / ijklArrowColemak / ijklArrowDvorak
+wasdArrow / wasdArrowColemak / wasdArrowDvorak
+```
+
+그런데 실측(AX 트리, app-bundle-analysis.md §6.3)에서 `Caps lock + [ ]` 팝업의 선택지는 **`H J K L` 과 `I J K L` 두 개뿐**이고 Colemak/Dvorak 변형은 팝업에 없다. `Caps lock + W A S D` 항목에는 애초에 팝업이 없다(체크박스뿐).
+
+→ **레이아웃 변형은 사용자가 팝업에서 고르는 것이 아니라, 감지된 키보드 레이아웃에 따라 자동 적용되는 것으로 보인다** `(미확정 — 팝업 부재로부터의 해석)`. `power-user-presets.md`(F-08) §3.2 F-08.5·F-08.6, §9 항목 3 과 상호 참조.
+
+⭐ **이 발견이 중요한 이유**: §3.2.1 의 "물리 키코드로 판정한다" 원칙은 대부분의 리매핑(quick press 문자 출력, semicolon, paste 등)에는 충분하지만, **이 프리셋 계열(방향키 매핑)에는 그것만으로 부족하다는 증거다.** Colemak/Dvorak 에서는 QWERTY 기준 물리 키코드(`kVK_ANSI_W`/`A`/`S`/`D` 등)가 여전히 존재하지만, 그 물리 위치에 손가락을 놓았을 때의 **인체공학적 의미(어느 손가락이 어디에 있는가)** 가 달라진다. "WASD 로 위/왼쪽/아래/오른쪽을 이동한다"는 프리셋의 의도가 QWERTY 사용자에게는 자연스러운 손가락 배치를 전제하므로, Dvorak/Colemak 에서 그 의도를 그대로 유지하려면 **레이아웃마다 다른 keycode 집합**(그 레이아웃에서 인체공학적으로 동등한 위치의 키)을 써야 한다는 것이 `wasdArrowColemak`/`wasdArrowDvorak` 등 별도 키가 존재하는 이유로 보인다.
+
+**§3.2.1 원칙의 보강**: "입력 판정은 물리 키코드로 한다" 는 원칙은 유지하되, 이 프리셋 계열에서는 **"어떤 물리 키코드 집합을 쓸지 자체가 감지된 레이아웃에 따라 달라진다"** 는 예외를 명시해야 한다. §2 시나리오 5, §3.2.3 WASD 행, §5 엣지 케이스 4 는 이전 판이 "항상 같은 물리 키 4개 고정" 이라고 서술했던 부분이며, 이 실측으로 재검토가 필요하다는 점을 표기해 두었다.
 
 ---
 
@@ -150,29 +180,31 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 
 | # | 항목 | 존재 여부 | 비고 |
 | :--- | :--- | :--- | :--- |
-| 1 | 앱 내 언어 선택(시스템 설정을 오버라이드) | **미확정** `(추정 — 없을 가능성이 높음)` | 조사된 `General` 탭 스크린샷이 공개되지 않아(`superkey-inventory.md` §3.4, Q2) 확정 불가. 동종 macOS 유틸리티 관례상 시스템 언어를 그대로 따르고 별도 언어 선택 UI를 두지 않는 경우가 흔하다는 것이 추정 근거이나 직접 증거는 없다 → §9 |
+| 1 | 앱 내 언어 선택(시스템 설정을 오버라이드) | ⭐ **없음 — 실측 확정으로 승격** | 이전 판은 `(추정 — 없을 가능성이 높음)` 이었다. 실측(app-bundle-analysis.md §6.4)으로 확정됨: `General` 탭에 언어 선택 항목이 **없다**. SuperKey 원본은 애초에 현지화 기능이 없으므로(§1) 이 UI 도 없는 것이 당연하다. 클론이 §3.1.1 대로 현지화를 채택하기로 하면, 이런 UI 를 새로 둘지는 별도 결정 사항 |
 | 2 | 입력 소스 변경에 대한 사용자 노출 설정(알림·로그 등) | **없음** `(추정)` | §3.2.5 절차는 백그라운드에서 투명하게 동작하는 것으로 설계한다. 조사 자료에 이런 설정 항목의 근거가 없다 |
 | 3 | RTL 강제/해제 토글(시스템 로케일 방향과 무관하게) | **없음** `(추정)` | RTL 여부는 §3.1.2 로케일 결정 결과에 종속되며, 별도 스위치가 있다는 근거가 없다 |
-| 4 | `Caps lock + home row = symbol row` 인라인 팝업의 대안 목록 | **일부만 확인** | `symbol row (A = !)` 외 대안 존재 여부는 조사 Q7 로 미확정 |
-| 5 | `Quick press left or right shift` 출력 후보 전체 | **일부만 확인** | `( )` 외 `[ ]`, `{ }` 등 존재 여부는 조사 Q8 로 미확정 |
+| 4 | `Caps lock + home row = ` [팝업] 의 대안 목록 | ⭐ **2종 확정 — 해소** | 실측(AX 트리, app-bundle-analysis.md §6.3): `symbol row (A = !)` · `function row (A = F1)`. 이전 판이 미확정으로 남겼던 것이 해소됨. 개별 프리셋 동작은 `power-user-presets.md`(F-08) §3.2 F-08.7 참조 |
+| 5 | `Quick press left or right shift` 출력 후보 전체 | ⭐ **4종 확정 — 해소** | 실측(AX 트리, app-bundle-analysis.md §6.3): `( )` · `[ ]` · `{ }` · `< >`. 이전 판이 미확정으로 남겼던 것이 해소됨. 개별 프리셋 동작은 `power-user-presets.md`(F-08) §3.2 F-08.11 참조 |
 
 ---
 
 ## 5. 엣지 케이스와 실패 모드
 
-1. **RTL 에서 Seek 오버레이 연결선 방향** — 검색 바가 화면 우측에 미러링 배치된 상태에서, 검색 바 → 매치 하이라이트로 잇는 연결선의 시작점 계산이 LTR 전제로 하드코딩되어 있으면 엉뚱한 방향에서 선이 시작된다.
-2. **RTL 에서 키캡 일러스트 좌우 배치** — `Presets`/`Hyperkey` 탭의 키캡 일러스트가 미러링 대상인지, 아니면 물리 키보드 그림이라 항상 고정(물리 키보드 자체는 RTL 이 아니므로) 이어야 하는지 상충하는 두 직관이 있다 — §3.1.4 는 배치는 미러링, 기호 순서는 고정으로 정했으나 일러스트 자체의 좌우 반전 여부는 실제 그래픽 자산 기준으로 재확인 필요.
-3. **긴 독일어 라벨로 인한 레이아웃 파손** — `Only show while the remapped key is held` 류의 문장형 라벨이 독일어에서 원문보다 길어지면, 체크박스와 팝업 버튼이 같은 행에 있는 UI(조사 §3.1)에서 줄바꿈되거나 팝업이 화면 밖으로 밀릴 수 있다.
-4. **Dvorak 에서 `WASD` 프리셋** — §3.2.3 판정대로 물리 위치 기준이면 Dvorak 사용자에게는 그 4개 키가 `,`/`a`/`o`/`e` 로 보여 "W/A/S/D" 라는 라벨과 실제 키가 불일치한다. 라벨을 현재 레이아웃에 맞춰 동적으로 다시 표기해야 하는지는 UI(F-09) 결정 사항.
+⚠️ 1~3, 11, 13 은 **클론이 현지화(및 그중에서도 RTL 로케일)를 채택할 경우 대비해야 하는 과제**다 — SuperKey 원본에는 해당 기능 자체가 없으므로 실제로 관찰된 결함이 아니라, 채택 시 미리 대비해 두지 않으면 겪게 될 것으로 예상되는 실패 모드다.
+
+1. **RTL 채택 시 — Seek 오버레이 연결선 방향** — 검색 바가 화면 우측에 미러링 배치된 상태에서, 검색 바 → 매치 하이라이트로 잇는 연결선의 시작점 계산이 LTR 전제로 하드코딩되어 있으면 엉뚱한 방향에서 선이 시작된다.
+2. **RTL 채택 시 — 키캡 일러스트 좌우 배치** — `Presets`/`Hyperkey` 탭의 키캡 일러스트가 미러링 대상인지, 아니면 물리 키보드 그림이라 항상 고정(물리 키보드 자체는 RTL 이 아니므로) 이어야 하는지 상충하는 두 직관이 있다 — §3.1.4 는 배치는 미러링, 기호 순서는 고정으로 정했으나 일러스트 자체의 좌우 반전 여부는 실제 그래픽 자산 기준으로 재확인 필요.
+3. **현지화 채택 시 — 긴 번역 라벨로 인한 레이아웃 파손** — `Only show while the remapped key is held` 류의 문장형 라벨이 특정 언어(예: 독일어)에서 원문보다 길어지면, 체크박스와 팝업 버튼이 같은 행에 있는 UI(`superkey-inventory.md` §3.1)에서 줄바꿈되거나 팝업이 화면 밖으로 밀릴 수 있다.
+4. **Dvorak/Colemak 에서 `WASD`/`HJKL` 프리셋** — ⭐ **정정(§3.2.7)**: 이전 판은 "물리 위치 고정이라 라벨과 실제 키가 불일치한다"고 서술했으나, 실행 파일에 `wasdArrowDvorak` 등 레이아웃별 별도 keycode 집합이 존재하는 것으로 보아 SuperKey 는 애초에 **레이아웃마다 다른 물리 키 집합**을 써서 인체공학적 의미를 보존하려는 것으로 보인다 `(미확정)`. 이 해석이 맞다면 라벨-실제 키 불일치 문제 자체가 원본에서는 발생하지 않을 수 있다 — 다만 자동 감지가 정확히 언제·어떻게 트리거되는지는 미확정이므로, 감지 실패 시(예: 레이아웃 전환 미인식) 여전히 불일치가 남을 수 있다는 점은 과제로 남는다.
 5. **AZERTY 에서 `symbol row` 프리셋** — §3.2.4 에서 다룬 대로, US 하드코딩 심볼 표(`A = !`)를 그대로 쓰면 AZERTY 의 실제 숫자/기호 배치(Shift 관계가 반전됨)와 맞지 않아 엉뚱한 문자가 출력된다.
-6. **한글 입력기 조합 중** — §3.2.6 정책이 없으면 조합 중인 텍스트가 리매핑 개입으로 깨진다.
+6. **한글 입력기 조합 중** — §3.2.6 정정된 이해(ASCII 가능 레이아웃 폴백)가 실제로 조합을 깨뜨리지 않는지는 실측 검증이 필요하다.
 7. **일본어 IME 변환 확정 대기 중** — 변환 후보가 표시된 상태에서 quick press 가 개입하면 변환이 취소되거나 의도치 않은 후보가 확정될 수 있다. §3.2.6 과 동일 계열이나 IME 종류별 조합 상태 판별 방식이 다를 수 있다.
 8. **세션 중 입력 소스 전환** — §3.2.5 절차가 없으면, US 배열로 캐싱된 역방향 매핑 테이블을 그대로 쓴 채 AZERTY 로 전환된 상태에서 quick press 를 실행해 잘못된 문자가 출력된다.
 9. **외장 키보드가 다른 물리 레이아웃(JIS 외장 키보드 + ANSI 시스템 설정 등)** — keycode 자체가 물리적으로 다른 배열을 가리킬 수 있어, "물리 위치 기준 판정"이라는 원칙이 흔들릴 수 있는 유일한 경우다. macOS 가 이를 어떻게 정규화하는지는 조사 범위 밖.
 10. **`symbol row` 개념이 없는 레이아웃** — 완성형 CJK 입력 방식처럼 "숫자 줄 + Shift = 기호"라는 US 관례 자체가 성립하지 않는 입력 소스에서, 이 프리셋 UI 를 그대로 노출할지 숨길지 미정.
-11. **번역 누락 시 폴백** — 특정 로케일의 문자열 카탈로그에 일부 키가 비어 있으면(§9, 번역 범위 미확정) `en` 문자열로 개별 폴백되어, 한 화면 안에 두 언어가 섞여 보이는 상태가 될 수 있다.
+11. **현지화 채택 시 — 번역 누락 시 폴백** — 특정 로케일의 문자열 카탈로그에 일부 키가 비어 있으면(§9, 번역 범위 미확정) `en` 문자열로 개별 폴백되어, 한 화면 안에 두 언어가 섞여 보이는 상태가 될 수 있다.
 12. **`UCKeyTranslate` 역방향 탐색 실패** — 현재 레이아웃에 목표 문자(`(` 등)를 낼 수 있는 keycode+modifier 조합이 전혀 없는 경우, §3.2.2 의 (ii) 폴백이 필요하다. 이 폴백이 없으면 quick press 자체가 조용히 무동작한다.
-13. **RTL 로케일에서 숫자·단위 표기의 bidi 혼합** — `1000 ms` 같은 LTR 숫자+단위 문자열이 RTL 문장 흐름 안에 놓이면, 양방향(bidi) 알고리즘이 순서를 뒤섞을 수 있어 격리 처리(예: bidi isolate 문자)가 필요할 수 있다.
+13. **RTL 채택 시 — 숫자·단위 표기의 bidi 혼합** — `1000 ms` 같은 LTR 숫자+단위 문자열이 RTL 문장 흐름 안에 놓이면, 양방향(bidi) 알고리즘이 순서를 뒤섞을 수 있어 격리 처리(예: bidi isolate 문자)가 필요할 수 있다.
 
 ---
 
@@ -182,16 +214,18 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 
 | API | 용도 | 비고 |
 | :--- | :--- | :--- |
-| `TISCopyCurrentKeyboardInputSource` | 현재 활성 입력 소스 조회 | Carbon `HIToolbox` 소속 |
-| `TISGetInputSourceProperty`(`kTISPropertyUnicodeKeyLayoutData`, `kTISPropertyInputSourceID`, `kTISPropertyInputSourceType`) | 레이아웃 데이터 및 입력 소스 종류(키보드 배열 vs 입력 방식/IME) 조회 | 상동. §3.2.6 CJK IME 판별에도 사용 |
+| `TISCopyCurrentKeyboardInputSource` | 현재 활성 입력 소스 조회 | Carbon `HIToolbox` 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) |
+| ⭐ `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` | 비-ASCII 입력 방식(CJK IME 등) 활성 시 ASCII 가능 레이아웃으로 폴백해 keycode→문자 해석. §3.2.6 정정된 이해의 핵심 근거 | Carbon `HIToolbox` 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) — 이전 판에는 없던 행 |
+| `TISGetInputSourceProperty`(`kTISPropertyUnicodeKeyLayoutData`, `kTISPropertyInputSourceID`, `kTISPropertyInputSourceType`) | 레이아웃 데이터 및 입력 소스 종류(키보드 배열 vs 입력 방식/IME) 조회 | 상동. **실측: 번들 심볼** |
 | `kTISNotifySelectedKeyboardInputSourceChanged` | 입력 소스 변경 알림 | `CFNotificationCenterGetDistributedCenter()` 에 옵저버 등록 |
-| `UCKeyTranslate` | keycode+modifier → 문자 정방향 변환. §3.2.2 (i) 의 역방향 탐색 테이블을 만드는 기반 | Carbon `HIToolbox` 소속 |
+| `UCKeyTranslate` | keycode+modifier → 문자 정방향 변환. §3.2.2 (i) 의 역방향 탐색 테이블을 만드는 기반 | Carbon `HIToolbox` 소속. **실측: 번들 심볼** |
+| `LMGetKbdType` | 현재 키보드 하드웨어 타입 조회 | Carbon 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) — 이전 판에는 없던 행 |
 | `CGEventGetIntegerValueField`(`kCGKeyboardEventKeycode`) | 물리 keycode 판정(§3.2 원칙의 핵심) | Core Graphics — F-07 이 이미 설치한 event tap 콜백 안에서 호출 |
 | `CGEventCreateKeyboardEvent` / `CGEventSetFlags` | 합성 keyDown/keyUp 이벤트 생성, modifier 비트 추가(§3.2.3 paste 사례) | Core Graphics |
 | `CGEventKeyboardSetUnicodeString` | §3.2.2 (ii) — 레이아웃 독립 문자 직접 주입(폴백 경로) | Core Graphics |
-| `NSBundle`/`NSLocale`(`preferredLocalizations`, `CFBundleLocalizations`) | §3.1.2 로케일 결정 | Foundation |
-| `NSApplication.userInterfaceLayoutDirection` / `NSLocale.characterDirection(forLanguage:)` | RTL 여부 판정(§3.1.4) | AppKit / Foundation |
-| CJK 조합 상태(marked text) 조회 | §3.2.6 정책의 감지 메커니즘 | 조사 노트에 대응 크레이트·API 목록 없음. 후보만 있고 확정 API 미상 — §9 |
+| `NSBundle`/`NSLocale`(`preferredLocalizations`, `CFBundleLocalizations`) | §3.1.2 로케일 결정 — **클론이 현지화를 채택하기로 결정한 경우에만 필요** | Foundation |
+| `NSApplication.userInterfaceLayoutDirection` / `NSLocale.characterDirection(forLanguage:)` | RTL 여부 판정(§3.1.4) — **클론이 RTL 로케일을 채택하기로 결정한 경우에만 필요** | AppKit / Foundation |
+| CJK 조합 상태(marked text) 조회 | ⭐ **판정 변경**: §3.2.6 이 marked text 직접 감지 대신 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 폴백을 쓰는 것으로 보인다는 실측이 나오면서, 이 행의 필요성 자체가 낮아졌다. 다만 그 해석이 틀렸을 경우를 대비해 후보로만 남긴다 `(미확정)` | 조사 노트에 대응 크레이트·API 목록 없음 — §9 |
 
 ---
 
@@ -203,7 +237,7 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 - **Rust 바인딩** — `unsafe` FFI 직접 호출이 필요하다. `objc2-*` 계열 헤더 자동생성 바인딩을 직접 호출하거나, 대응 크레이트가 없으면 `extern "C"` 선언을 손으로 작성해 프레임워크에 직접 링크한다. 어느 쪽이든 Swift/Objective-C 로 별도 컴파일 산출물(shim 바이너리)을 두지는 않는다
 - **네이티브 shim 불가피** — Rust 에서 호출할 방법이 없어 Swift/Objective-C 소스를 별도 컴파일해 링크해야 함
 
-### (A) 현지화 — 판정: **Rust 바인딩**
+### (A) 현지화 — 판정: **Rust 바인딩** (클론이 채택하기로 결정한 경우)
 
 - 로케일 결정(§3.1.2)과 RTL 판정(§3.1.4)에 필요한 `NSBundle`/`NSLocale`/`NSApplication.userInterfaceLayoutDirection` 은 `objc2-foundation` 0.3.2, `objc2-app-kit` 0.3.2 로 노출된다(`rust-macos-capability-notes.md` §1.1). 다만 이 크레이트들은 "헤더 자동생성 바인딩이며 안전한 상위 래퍼는 없고 호출부는 `unsafe`"라고 조사 노트 §1.1 이 명시하므로 `순수 Rust` 가 아니라 `Rust 바인딩` 이다.
 - 문자열 카탈로그 자체(§3.1.5 의 파일 파싱·조회)는 플랫폼 API 호출이 아니라 순수 Rust 로직(직렬화 포맷 파싱)이라 3분류 판정 대상 밖이다.
@@ -212,8 +246,8 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 ### (B) 키보드 입력 소스 독립성 — 판정: **Rust 바인딩**
 
 - `CGEventTap`·`CGEventGetIntegerValueField`·`CGEventSetFlags`·`CGEventCreateKeyboardEvent`·`CGEventKeyboardSetUnicodeString` 은 `core-graphics` 0.25.0(안전 래퍼) 또는 `objc2-core-graphics` 0.3.2(헤더 자동생성)로 커버된다(조사 노트 §1.1, §1.2, §2.1). `core-graphics` 가 `CGEventTap` 안전 래퍼를 이미 제공한다는 점에서 이 부분만 보면 `순수 Rust` 에 가깝지만, `CGEventKeyboardSetUnicodeString` 처럼 조사 노트가 명시적으로 나열하지 않은 개별 함수는 `objc2-core-graphics` 의 헤더 자동생성 경로(`unsafe` 수준)로 보완해야 할 가능성이 있어, 전체를 `Rust 바인딩` 으로 판정한다.
-- ⭐ **`TISCopyCurrentKeyboardInputSource`/`TISGetInputSourceProperty`/`kTISNotifySelectedKeyboardInputSourceChanged`/`UCKeyTranslate` 는 Carbon `HIToolbox` 소속이며, `rust-macos-capability-notes.md` 의 크레이트 표(§1.1, §1.2) 어디에도 `HIToolbox`/`Carbon`/`TIS`/`UCKeyTranslate` 를 다루는 크레이트가 등장하지 않는다.** 정직하게 말하면: **전용 크레이트 미확인, `extern "C"` 직접 선언 필요 `(추정)`.** `Carbon.framework`(또는 그 하위 `HIToolbox.framework`)에 `#[link(name = "Carbon", kind = "framework")]` 로 직접 링크하고, 필요한 함수 시그니처를 손으로 선언하는 접근이 될 것으로 본다. 이는 여전히 "Swift/ObjC shim 바이너리"가 아니라 Rust 안에서의 `unsafe extern` 선언이므로 `Rust 바인딩` 으로 분류하되, 같은 분류 안에서도 "크레이트가 있어 감싸기만 하면 되는 경우"보다 비용이 크다는 점을 §9 에 남긴다.
-- §3.2.6 의 CJK 조합 상태 조회 API 는 조사 노트에 아예 언급이 없어 이 판정 자체를 내릴 수 없다 — §9 미해결 질문.
+- ⭐ **`TISCopyCurrentKeyboardInputSource`/`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`/`TISGetInputSourceProperty`/`kTISNotifySelectedKeyboardInputSourceChanged`/`UCKeyTranslate`/`LMGetKbdType` 는 Carbon `HIToolbox` 소속이며, `rust-macos-capability-notes.md` 의 크레이트 표(§1.1, §1.2) 어디에도 `HIToolbox`/`Carbon`/`TIS`/`UCKeyTranslate` 를 다루는 크레이트가 등장하지 않는다.** 정직하게 말하면: **전용 크레이트 미확인, `extern "C"` 직접 선언 필요 `(추정)`.** `Carbon.framework`(또는 그 하위 `HIToolbox.framework`)에 `#[link(name = "Carbon", kind = "framework")]` 로 직접 링크하고, 필요한 함수 시그니처를 손으로 선언하는 접근이 될 것으로 본다. 이는 여전히 "Swift/ObjC shim 바이너리"가 아니라 Rust 안에서의 `unsafe extern` 선언이므로 `Rust 바인딩` 으로 분류하되, 같은 분류 안에서도 "크레이트가 있어 감싸기만 하면 되는 경우"보다 비용이 크다는 점을 §9 에 남긴다. ⭐ **정정**: 이전 판은 이 목록에 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource`·`LMGetKbdType` 이 빠져 있었다 — 실측(app-bundle-analysis.md §3.1)으로 추가됐다. 이 API 들도 같은 Carbon `HIToolbox` 소속이라 판정은 바뀌지 않는다.
+- §3.2.6 의 CJK 대응 판정에서 `(추정)` 을 지운다: 이전 판은 "CJK 조합 상태 조회 API 가 조사 노트에 아예 언급이 없어 판정을 내릴 수 없다"고 했으나, 실측으로 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 링크가 확정되어 위 Carbon `HIToolbox` 그룹과 동일하게 `Rust 바인딩`(수기 `extern "C"` 선언)으로 판정한다. marked text 를 별도로 조회하는 API 는 이 해석이 맞다면 애초에 필요 없다(§3.2.6).
 - 기각한 대안:
   - **`rdev` 0.5.3** — 조사 노트가 "3년간 릴리스 없음, 이벤트 소비 제어 제한적"으로 명시(§1.2). §3.2.3 의 정밀한 이벤트 소비·치환·flag 조작 요구를 충족하지 못한다.
   - **문자 기반 판정으로 되돌아가기(비교 대안)** — 구현이 단순해 보이지만, 조사에서 확정된 v1.51/v1.52 세 건의 회귀를 그대로 재현하는 접근이라 원천적으로 기각. §3.2.1 원칙과 정면으로 배치된다.
@@ -223,31 +257,49 @@ RTL 로케일(`he`/`ar`/`fa`) 활성 시:
 
 ## 8. 수용 기준
 
-- [ ] 앱이 시스템 언어를 8개 번들 로케일(`en`, `de`, `he`, `ar`, `el`, `ja`, `fa`, `uk`) 중 하나로 정확히 매핑해 실행하며, 번들에 없는 언어는 `en` 으로 폴백한다.
-- [ ] `he`/`ar`/`fa` 로케일에서 환경설정 창의 사이드바·패널 좌우 배치가 미러링되고, modifier 기호(`⌃⌥⌘⇧`) 표기 순서는 로케일과 무관하게 고정된다.
-- [ ] Seek 오버레이 검색 바가 RTL 로케일에서 우측 정렬로 표시되며, 검색 바 → 매치 연결선은 화면 절대 좌표 기준으로 정확히 그려진다.
-- [ ] 메뉴바 메뉴와 시스템 알림, 환경설정 창(WebView)의 문자열이 동일한 로케일 카탈로그 파일 하나에서 나오며, 두 경로 사이에 번역 키 누락 차이가 없다.
+### (A) 현지화 — ⚠️ 클론이 현지화를 채택하기로 결정한 경우에만 적용
+
+⭐ **정정**: 이전 판은 "8개 번들 로케일"을 확정 사실로 전제한 기준을 실었다. 이는 오독에 근거한 것이었으므로(§1) 삭제하고, 로케일 집합을 클론이 정하는 것으로 되돌린 아래 조건부 기준으로 대체한다.
+
+- [ ] (채택 시) 앱이 시스템 언어를 클론이 지원하기로 선언한 로케일 집합 중 하나로 정확히 매핑해 실행하며, 지원하지 않는 언어는 `en` 으로 폴백한다.
+- [ ] (채택 시, RTL 로케일 포함) RTL 로 분류된 로케일에서 환경설정 창의 사이드바·패널 좌우 배치가 미러링되고, modifier 기호(`⌃⌥⌘⇧`) 표기 순서는 로케일과 무관하게 고정된다.
+- [ ] (채택 시, RTL 로케일 포함) Seek 오버레이 검색 바가 RTL 로케일에서 우측 정렬로 표시되며, 검색 바 → 매치 연결선은 화면 절대 좌표 기준으로 정확히 그려진다.
+- [ ] (채택 시) 메뉴바 메뉴와 시스템 알림, 환경설정 창(WebView)의 문자열이 동일한 로케일 카탈로그 파일 하나에서 나오며, 두 경로 사이에 번역 키 누락 차이가 없다.
+- [ ] (미채택 시) `General` 탭 등 어디에도 언어 선택 UI 가 없다 — 실측 확정 사실이므로(§4 항목 1) 클론이 현지화를 채택하지 않기로 했다면 이 상태를 그대로 유지한다.
+
+### (B) 키보드 입력 소스 독립성 — 상시 적용
+
 - [ ] `Quick press left or right shift to input corresponding: ( )` 이 AZERTY·Dvorak·QWERTZ 각 입력 소스에서 물리 keycode 기준으로 동일하게 트리거되고, 출력 문자는 각 입력 소스에서 실제로 `(`/`)` 로 나타난다.
 - [ ] Seek 에서 세미콜론으로 다음 매치를 선택하는 동작이 물리 `kVK_ANSI_Semicolon` keycode 기준으로 판정되어, 해당 위치에 다른 문자가 배정된 레이아웃(AZERTY 등)에서도 동일한 물리 키로 트리거된다.
 - [ ] `Remap paste to paste w/o formatting` 이 keycode+modifier 조합(`⌘V` 감지, `⌘⌥⇧V` 합성)으로 구현되어 있으며, 이 합성 이벤트가 대상 앱에서 실제 단축키로 인식된다(`CGEventKeyboardSetUnicodeString` 을 쓰지 않는다).
 - [ ] `UCKeyTranslate` 역방향 탐색으로 목표 문자를 낼 수 없는 레이아웃에서, quick press 출력이 조용히 무동작하지 않고 `CGEventKeyboardSetUnicodeString` 폴백으로 대체된다.
 - [ ] `kTISNotifySelectedKeyboardInputSourceChanged` 수신 시 캐시된 keycode↔문자 매핑이 즉시 무효화·재구축되며, 재구축 완료 전 도착한 quick press 이벤트가 stale 매핑으로 잘못된 문자를 출력하지 않는다.
-- [ ] `Caps lock + W A S D = ▲◀▼▶` 프리셋이 Dvorak 배열에서도 물리적으로 같은 4개 키 위치에서 트리거된다.
 - [ ] `home row = symbol row` 프리셋이 산출하는 실제 심볼이 US-QWERTY 하드코딩 표가 아니라 현재 입력 소스 기준으로 계산된다.
-- [ ] 한글 또는 일본어 입력기 조합 중(marked text 존재) 상태에서 문자 출력형 리매핑이 개입해 조합을 깨뜨리지 않는다(§3.2.6 정책 검증).
+- [ ] ⭐ **신규**: `Caps lock + W A S D`/`[H J K L]` 방향키 프리셋이 감지된 키보드 레이아웃(QWERTY/Colemak/Dvorak)에 따라 인체공학적으로 동등한 물리 키 집합에서 트리거된다(§3.2.7) — 단, 자동 감지가 실패하는 경우의 폴백 동작은 실측이 더 필요하다(§9).
+- [ ] 한글 또는 일본어 입력기 활성 중 문자 출력형 리매핑이 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 폴백으로 정상 동작하고 조합을 깨뜨리지 않는다(§3.2.6 검증).
 
 ---
 
 ## 9. 미해결 질문
 
-1. **번역 범위** — 로케일 목록(8개)은 확정이지만, 각 로케일에서 전체 UI 가 번역되는지 일부만 번역되는지는 조사로 확인 불가. §3.1.3 의 대상/비대상 분류는 이 문서의 정책 제안이며 실제 번역 완성도와 다를 수 있다.
-2. **키 이름 번역 정책의 근거 보강** — §3.1.3 에서 "물리 키 이름을 번역한다"고 정책 결정했으나, macOS 가 실제로 로케일별 어떤 문자열을 쓰는지(예: 독일어 키 이름의 정확한 표기)는 조사 자료에 근거가 없는 `(추정)`이다. 앱 설치 후 macOS 시스템 설정의 실제 로케일별 문자열을 확인해 보강 필요.
-3. **앱 내 언어 선택 UI 존재 여부** — `General` 탭 스크린샷 미공개로 확정 불가(조사 Q2). 있다면 §3.1.2 로케일 결정 순서에 최우선 단계로 추가되어야 한다.
-4. **로케일 변경의 실행 중 반영 여부** — 시스템 언어를 실행 중 바꿨을 때 재시작 없이 UI 에 반영되는지 `(추정)` 상태이며 확정 필요.
-5. **CJK 조합 상태 감지 API** — §3.2.6 정책의 감지 메커니즘(TSM 계열 API 인지, Accessibility 속성 조회인지)이 조사 노트에 전혀 언급되지 않아 확정 불가. 앱 설치 후 한글/일본어 입력기로 실측 검증 필요.
+### 9.1 이번 실측으로 해소됨
+
+1. ~~로케일 목록(8개, RTL 3개)~~ — **해소가 아니라 오독 정정**: 원본은 현지화 기능이 없다(§1). 이전 판이 "번들 로케일 8개" 를 확정 사실로 다뤘던 것 자체가 잘못이었다.
+2. ~~앱 내 언어 선택 UI 존재 여부~~ — **해소**: 실측으로 **없음**이 확정됐다(app-bundle-analysis.md §6.4, `General` 탭).
+3. ~~`home row`/`symbol row` 팝업의 전체 대안 목록~~ — **해소**: `symbol row (A = !)` · `function row (A = F1)` 2종 확정(§4 항목 4).
+4. ~~`Quick press left or right shift` 출력 후보 전체~~ — **해소**: `( )` · `[ ]` · `{ }` · `< >` 4종 확정(§4 항목 5).
+5. ~~CJK 대응의 API 근거~~ — **부분 해소**: 이전 판은 "조사 노트에 대응 API 가 전혀 언급되지 않는다"고 했으나, 실측으로 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 심볼 링크가 확정됐다(§3.2.6). 다만 이 API 의 정확한 호출 지점과 실제 동작(한글 입력기로 실측 검증)은 여전히 미확정이므로 §9.2 로 승계한다.
+
+⭐ **이번 조사에서 얻은 교훈 — 왜 로케일 오독이 생겼는가**: 이전 판은 Sparkle 델타 appcast 의 `sparkle:deltaFromSparkleLocales` 속성(업데이트 인프라가 건드린 파일 목록이라는 **간접 증거**)을 앱 자신의 UI 로케일 지원(**직접 증거**가 필요한 주장)의 근거로 삼았다. 간접 증거는 그것이 무엇을 직접 가리키는지(이 경우 "Sparkle 프레임워크의 로케일 파일") 검증하지 않으면 엉뚱한 결론(이 경우 "SuperKey 자신의 로케일")으로 이어질 수 있다는 것이 이번 사례의 교훈이다. 앞으로 번들 구조·프레임워크 경계를 넘나드는 간접 증거를 쓸 때는, 그 증거가 정확히 어느 컴포넌트에 속하는지(`Contents/Resources/` 인지 `Contents/Frameworks/*/Resources/` 인지 등, app-bundle-analysis.md §5.1 의 구분)를 먼저 확인해야 한다.
+
+### 9.2 남은 질문
+
+1. **클론이 현지화를 채택할지의 제품 결정** — §1·§3.1.1 에서 이 문서가 설계만 열어 두고 확정하지 않은 사항. 채택한다면 어떤 로케일을, 몇 개를 지원할지도 함께 결정해야 한다.
+2. **키 이름 번역 정책의 근거 보강** — §3.1.3 에서 "물리 키 이름을 번역한다"고 정책 결정했으나, macOS 가 실제로 로케일별 어떤 문자열을 쓰는지(예: 독일어 키 이름의 정확한 표기)는 근거가 없는 `(추정)`이다. 현지화 채택이 확정되면 macOS 시스템 설정의 실제 로케일별 문자열을 확인해 보강 필요.
+3. **로케일 변경의 실행 중 반영 여부** — (현지화 채택 시) 시스템 언어를 실행 중 바꿨을 때 재시작 없이 UI 에 반영되는지 `(추정)` 상태이며 확정 필요.
+4. **레이아웃 변형(Colemak/Dvorak)의 자동 적용 여부와 감지 시점** — §3.2.7 에서 새로 발견된 `wasdArrowColemak` 등 내부 키가 실제로 언제·어떻게 감지된 레이아웃에 자동 적용되는지는 팝업 부재로부터의 해석일 뿐이다. Colemak/Dvorak 입력 소스로 전환 후 실동작 비교가 필요하다. `power-user-presets.md`(F-08) §9 항목 3 과 동일 질문.
+5. **CJK 조합 상태와 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 폴백의 실제 동작** — 심볼 링크는 확정됐으나(§3.2.6), 정확한 호출 지점과 한글/일본어 입력기 조합 중 실제 동작은 실측 검증이 필요하다(Screen Recording 권한·조합 방해 부작용 때문에 이번 조사에서는 하지 않았다).
 6. **`Apply modifiers`류 이벤트와 IME 상호작용** — CJK 입력기 활성 중 `F-05` 의 Hyperkey modifier 합성이 IME 자체의 단축키(예: 한글/영어 전환 키)와 충돌하는지는 조사 범위 밖.
 7. **`UCKeyTranslate`/`TIS*` 의 Rust FFI 세부** — 전용 크레이트가 없다는 것은 확정이나(§7), `Carbon.framework` 링크가 Tauri 빌드 파이프라인(코드 서명·번들링)과 충돌 없이 동작하는지는 실측 필요.
-8. **`home row`/`symbol row` 팝업의 전체 대안 목록** — 조사 Q7 로 미확정. `A = !` 외 다른 프리셋 변형이 있는지 앱 설치 후 확인 필요.
-9. **`Quick press left or right shift` 출력 후보 전체** — 조사 Q8 로 미확정. `( )` 외 `[ ]`/`{ }` 등이 있다면 §3.2.3 표에 행을 추가해야 한다.
-10. **입력 소스 재구축 대기 중 이벤트 처리 정책** — §3.2.5의 4번 항목, 재구축 완료까지 대기할지 해당 1회를 무시할지 미결정.
-11. **RTL 키캡 일러스트의 실제 그래픽 자산 미러링 여부** — §3.1.4/§5 의 상충하는 직관을 실제 디자인 자산 확보 후 재확인 필요.
+8. **입력 소스 재구축 대기 중 이벤트 처리 정책** — §3.2.5의 4번 항목, 재구축 완료까지 대기할지 해당 1회를 무시할지 미결정.
+9. **RTL 키캡 일러스트의 실제 그래픽 자산 미러링 여부** — (현지화·RTL 채택 시) §3.1.4/§5 의 상충하는 직관을 실제 디자인 자산 확보 후 재확인 필요.

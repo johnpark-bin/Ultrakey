@@ -8,13 +8,13 @@
 
 ## 1. 개요
 
-Superkey 는 20일 무료 체험 후 유료 전환하는 모델이며(`superkey-inventory.md` §1.5: "Free for 20 days, purchase for ..."), 라이선스 1개는 **동시에 3대**까지 활성화할 수 있다("One license can be active on 3 devices at a time"). 결제와 Merchant of Record 는 Paddle 이 맡고("The order process is conducted by an online reseller, Paddle.com, the Merchant of Record for all our orders."), 사이트에 임베드된 `https://cdn.paddle.com/paddle/paddle.js` 로 보아 **Paddle Classic** 계열 SDK 다. 환불은 구매 후 14일이며 이메일로 접수한다("a refund can be issued within 14 days of purchase. Send an email to superkey@ryanhanson.dev.").
+Superkey 는 20일 무료 체험 후 유료 전환하는 모델이며(`superkey-inventory.md` §1.5: "Free for 20 days, purchase for ..."), 라이선스 1개는 **동시에 3대**까지 활성화할 수 있다("One license can be active on 3 devices at a time"). 결제와 Merchant of Record 는 Paddle 이 맡고("The order process is conducted by an online reseller, Paddle.com, the Merchant of Record for all our orders."), **Paddle Classic** 계열 SDK 임이 이제 번들 실측으로 확정되었다 — `Contents/Frameworks/Paddle.framework`(v1.0.0)이 실재하고 메인 바이너리가 `@rpath` 로 링크하며, nib 이름이 `PADActivateWindow.nib` · `PADCheckoutWindow.nib` · `PADProductWindow.nib` · `PADProductNoTrialWindow.nib` 다(실측: 번들 심볼). 이전에는 웹사이트에 임베드된 `https://cdn.paddle.com/paddle/paddle.js` 로부터의 방증(`[3차]` 수준)에 불과했던 것이 여기서 `(추정)` → 확정으로 승격된다. **제품 ID 는 `750314`** 로 확정된다 — defaults 키 `Paddle-Superkey-750314-SD`, 라이선스 캐시 파일 `~/Library/Application Support/Superkey/750314.padl` · `750314.spadl`(둘 다 실측: defaults). 환불은 구매 후 14일이며 이메일로 접수한다("a refund can be issued within 14 days of purchase. Send an email to superkey@ryanhanson.dev.").
 
 F-12 는 이 상업적 제약들을 **기술 명세**로 옮기는 문서다. 다루는 것은 (1) 체험 기간의 경과를 어떻게 판정하고 어디에 저장하는가, (2) 키 활성화·비활성화·재검증이 앱 내부에서 어떤 요청/응답 계약을 갖는가, (3) 오프라인일 때 무엇을 신뢰하는가, (4) 검증 요청이 서버에 무엇을 보내는가(개인정보 경계), (5) 이 모든 것을 클론 프로젝트에서 실제로 Paddle 로 구현할지 아니면 껍데기만 만들어 둘지에 대한 제품 결정이다.
 
 **금액에 의존하지 않는다.** 정적 HTML 에는 가격 문자열이 없고 Paddle JS 가 런타임에 주입한다(`superkey-inventory.md` §4.4, Q14). 제3자 집계의 `$15.99` 는 `[3차]` 출처이므로 본 명세의 어떤 동작도 특정 금액을 전제하지 않는다.
 
-**라이선스 키 포맷, 활성화/비활성화 API 의 실제 사양, 오프라인 유예 정책의 실제 값, 체험 기산점과 만료 후 동작의 실제 사양**은 모두 조사에서 확정되지 않았다(Q11, Q12). 이 문서는 그 공백을 **추상 인터페이스 + 합리적 기본값 + `(추정)` 표기**로 메우고, 실제 사양이 아닌 것을 사실인 것처럼 쓰지 않는다.
+**라이선스 키 포맷, 활성화/비활성화 API 의 정확한 필드·엔드포인트, 오프라인 유예 정책의 실제 값, 체험 기산점과 만료 후 동작의 실제 사양, 활성화 대수 제한(3대)의 실측 재확인**은 여전히 조사에서 확정되지 않았다(§9). 반면 이번 실측(번들 심볼·문자열·defaults, `app-bundle-analysis.md`)으로 **Paddle Classic 사용 자체와 그 버전(1.0.0)·제품 ID(`750314`)·내부 델리게이트 타입(§3.3.1)·`Remove Oldest Activation` 의 실제 동작 방식(§3.3.2)·기기 식별에 MAC 주소가 쓰인다는 사실(§3.6, §3.9)·자체 코드 서명 검증의 존재(§3.9)·구매 전 온라인 연결 판정의 존재(§3.8)·이메일 기반 키 복구 흐름의 존재(§3.3.4)**가 새로 확정되었다. 이 문서는 남은 공백을 **추상 인터페이스 + 합리적 기본값 + `(추정)` 표기**로 메우고, 실제 사양이 아닌 것을 사실인 것처럼 쓰지 않는다.
 
 ## 2. 사용자 시나리오
 
@@ -31,6 +31,7 @@ F-12 는 이 상업적 제약들을 **기술 명세**로 옮기는 문서다. �
 2. 앱은 §3.3 의 활성화 요청을 서버(또는 F-12 §7 의 결정에 따라 로컬 스텁)로 보낸다.
 3. 요청이 성공하면 이 기기가 활성화 슬롯 하나를 점유하고, 앱은 응답을 로컬 캐시에 저장한 뒤 상태를 **라이선스 활성**으로 전이한다.
 4. 이후 재실행 시에는 캐시가 유효한 동안 네트워크 없이도 **라이선스 활성** 상태를 유지한다(§3.5 오프라인 유예).
+5. 키를 분실한 사용자는 Paddle 이 제공하는 이메일 기반 복구 흐름("Recover your %@ license" 등, §3.3.4)으로 구매 시 사용한 이메일을 입력해 등록된 키를 다시 확인할 수 있다 — 이는 F-12 의 §3.3 활성화 흐름과 별도로 Paddle 이 통째로 제공하는 경로다.
 
 ### 시나리오 C — 기기 교체로 인한 슬롯 소진과 비활성화
 
@@ -38,6 +39,8 @@ F-12 는 이 상업적 제약들을 **기술 명세**로 옮기는 문서다. �
 2. 오래된 맥북을 처분하기 전에 그 기기에서 앱을 열어 "이 기기 비활성화"를 누른다(§4). 앱은 §3.4 의 비활성화 요청을 보내고, 성공하면 슬롯 하나를 반납한다.
 3. 새 기기에서 같은 키를 입력해 활성화하면 반납된 슬롯을 점유해 정상적으로 활성화된다.
 4. 만약 2단계를 건너뛰고 기기를 처분했다면(비활성화를 못 한 경우), 4번째 기기에서의 활성화는 §3.2 "슬롯 초과" 실패로 거부된다 — `superkey-inventory.md` §4.3 이 실제로 보고하는 "used up activations" 문제가 이것이다. Superkey 원본은 이 상황을 앱 내 비활성화가 아니라 **새 라이선스 재발급**(Hyperkey 마이그레이션 경로)으로 우회했던 것으로 보이며, F-12 는 이를 재현하지 않고 **앱 내 비활성화 경로를 1급 기능으로 설계**해 근본 원인을 해소한다(§7, §4).
+
+**실측 정정**: 원본 SuperKey 의 실제 메커니즘은 위 2단계가 묘사하는 "이 기기를 골라 비활성화"가 아니다. `General` 탭의 라이선스 관련 버튼은 `Remove Oldest Activation` 하나뿐이고(실측: AX 트리, §4.1), 누르면 확인 대화상자("Are you sure you want to remove this device from your activations?")를 거쳐 **라이선스 키를 다시 입력**하도록 요구한다("Enter your license key for deactivation.") — 활성화 목록을 조회해 특정 기기를 고르는 것이 아니라, **키를 넣으면 Paddle 서버가 가장 오래된 활성화를 회수**하는 방식이다(SuperKey 원문, 실측: 번들 문자열). F-12 는 이 방식을 그대로 재현하지 않고 §3.3.2·§4.2 에서 **기기 단위 비활성화**를 1급 기능으로 의도적으로 재설계한다 — 원본의 "어떤 기기가 해제될지 알 수 없는" 불투명함을 근본적으로 해소하기 위해서다. 이 차이는 §3.3.2 에서 다시 짚는다.
 
 ### 시나리오 D — 환불
 
@@ -64,6 +67,8 @@ F-12 는 이 상업적 제약들을 **기술 명세**로 옮기는 문서다. �
 | **라이선스 활성** | 활성화 요청(§3.3.1) 성공, 또는 재실행 시 로컬 캐시가 유효(§3.5) | 모든 기능 정상 동작. 체험 상태와 무관하게 최우선으로 적용된다. |
 | **라이선스 무효/취소** | 검증 요청(§3.3.3)이 명시적으로 무효(환불됨·해지됨·키 오류)를 응답, 또는 오프라인 유예가 만료됐는데도 재검증에 계속 실패 | 사용자에게 사유를 노출한 뒤(§5), 다음 판정 사이클에서 **체험 만료**로 전이한다(§3.1 "체험은 되돌아가지 않는다"). |
 
+**실측: 남은 일수 표기의 복수형 처리.** Paddle 프레임워크 원문에 단수/복수 두 버전의 카운트다운 문자열이 있다 — `You have %d day remaining of your trial period.` / `You have %d days remaining of your trial period.`(Paddle 제공, SuperKey 자체 문구가 아니다). "체험 중" 상태의 "남은 일수 표시" (`(추정, §4)`)를 클론이 자체 UI 문구로 만들 때도, 1일 남았을 때와 2일 이상 남았을 때를 구분하는 복수형 처리가 필요하다는 것이 이 실측의 함의다.
+
 전이는 앱 실행 시점과 §3.3.3 의 주기적 재검증 시점 두 군데에서만 평가한다. 실행 도중 자정을 넘기는 것과 같은 실시간 카운트다운은 요구되지 않는다 `(추정)` — 체험 배너의 "남은 일수"가 실시간으로 줄어들 필요는 없고, 다음 실행 시 다시 계산되면 충분하다.
 
 ### 3.3 활성화 / 비활성화 / 검증 — 추상 인터페이스
@@ -83,7 +88,9 @@ Paddle Classic 의 실제 라이선스 API 사양은 조사로 확인되지 않�
 | `cache_token` | 응답 | 오프라인 재실행 시 재검증 없이 신뢰할 서명된 캐시 값(§3.5). |
 | `cache_issued_at` | 응답 | 캐시 발급 시각. 오프라인 유예 계산의 기준점. |
 
-**Paddle 매핑 `(추정)`**: Paddle Classic 계열의 라이선스 API 는 통상 `product_id` + `license_code`(≈ `license_key`) + 클라이언트가 생성한 기기 문자열 조합으로 activate/validate/deactivate 세 엔드포인트를 제공하고, 응답에 활성화된 기기 수를 포함하는 패턴이 알려져 있다. 그러나 Superkey 가 실제로 이 패턴을 쓰는지, 필드명이 무엇인지는 이번 조사로 확인하지 못했다 — 위 표의 필드명은 SuperKey/Paddle 의 실제 필드명이 아니라 **F-12 가 정의하는 자체 계약**이다.
+**실측: Paddle 내부 타입(번들 심볼).** SuperKey 가 구현하는 `PaddleDelegate` 관련 표면에서 다음 이름이 확인된다: `PaddleDisplay` · `paddleProduct` · `paddleDisplayed` · `productActivated` · `productDeactivated` · `destroyActivation` · `purchaseCallback` · `trialDaysRemaining` · `expirationTimestamp` · `purgeRestrictionExpirationTimestamp` · `appGroupForSharedLicense`. 이들은 **API 필드명이 아니라 Paddle.framework 가 앱에 노출하는 델리게이트 메서드/프로퍼티명**이다 — 위 표의 `status`/`activations_used` 같은 필드명과 직접 대응하지 않는다. 다만 `trialDaysRemaining` · `expirationTimestamp` 의 존재는 §3.2 상태 머신이 참조하는 "남은 일수"·"만료 시각" 개념이 Paddle 쪽에도 대칭적으로 존재함을 뒷받침하고, `appGroupForSharedLicense` 는 App Group 을 통해 라이선스를 공유하는 경로가 있음을 시사한다(용도 `(미확정)` — 다른 앱과의 공유인지 단일 앱 내부 구조인지 확인되지 않았다. §9).
+
+**Paddle 매핑 — SDK 정체는 실측으로 승격, 와이어 필드는 여전히 `(추정)`**: Paddle Classic 이 이 제품(`product_id = 750314`)의 라이선스 SDK 라는 사실 자체는 이제 번들 실측으로 확정됐다(§1). Paddle Classic 계열의 라이선스 API 는 통상 `product_id` + `license_code`(≈ `license_key`) + 클라이언트가 생성한 기기 문자열 조합으로 activate/validate/deactivate 세 엔드포인트를 제공하고, 응답에 활성화된 기기 수를 포함하는 패턴이 알려져 있다. 그러나 이 패턴의 **정확한 필드명·엔드포인트 URL** 은 이번 실측으로도 확인하지 못했다 — 위 표의 필드명은 SuperKey/Paddle 의 실제 필드명이 아니라 **F-12 가 정의하는 자체 계약**이다. 승격된 것은 "Paddle Classic 을 쓴다"는 사실이지, "필드명이 이렇다"는 사실이 아니다.
 
 #### 3.3.2 비활성화 요청
 
@@ -93,6 +100,8 @@ Paddle Classic 의 실제 라이선스 API 사양은 조사로 확인되지 않�
 | `device_id` | 요청 | 해제할 기기(보통 "이 기기" 자기 자신, §4). |
 | `status` | 응답 | `deactivated` \| `not_found`(이미 해제됨) \| `network_error` |
 | `activations_used` | 응답 | 갱신된 슬롯 사용량. UI 에 즉시 반영한다. |
+
+**실측: 원본의 실제 흐름은 다르다.** `General` 탭의 `Remove Oldest Activation` 버튼(실측: AX 트리, `removeOldestActivationButton`)을 누르면 확인 대화상자 "Are you sure you want to remove this device from your activations?" 가 먼저 뜨고, 이어서 라이선스 키 재입력을 요구한다 — 안내 문구는 "If your license activations have all been utilized, you can remove the oldest. Enter your license key for deactivation." 이며, 성공하면 "Oldest license activation removed", 실패하면 "License activation not found" / "Unable to deactivate license" 를 보여준다("You can reactivate with your license key at any time." 도 함께 확인된다. SuperKey 원문, 실측: 번들 문자열). 즉 **자체 UI 로 활성화 목록을 조회해 특정 기기를 고르는 구조가 아니라, Paddle 의 비활성화 API 를 "키 재입력" 하나로 호출해 서버가 가장 오래된 활성화를 회수하게 하는 구조**다. 아래 표처럼 `device_id` 로 "이 기기"를 특정해 해제하는 인터페이스는 **F-12 가 의도적으로 다시 설계한 것**이며 원본 그대로의 재현이 아니다 — 근거는 시나리오 C 의 정정 노트와 §7 을 참조.
 
 비활성화는 시나리오 C 가 보여주듯 **3대 한도 때문에 반드시 필요**하다(`superkey-inventory.md` §4.3). 서버가 다운돼 있으면 로컬에서 "비활성화됨"으로 낙관적으로 처리하지 않는다 — 슬롯 반납은 서버가 확정해야 진실이다(§5 "서버 다운 중 비활성화 시도").
 
@@ -107,6 +116,24 @@ Paddle Classic 의 실제 라이선스 API 사양은 조사로 확인되지 않�
 | `cache_token` / `cache_issued_at` | 응답 | 갱신된 캐시(§3.5). |
 
 재검증은 앱 실행 시 1회, 그리고 §3.5 의 오프라인 유예 창이 임박했을 때 백그라운드로 시도한다 `(추정)` — 정확한 주기는 조사로 확인되지 않았다(Q11, 자동 업데이트의 확인 주기와 유사하게 Q13 도 미확인이다).
+
+#### 3.3.4 ⭐ 라이선스 키 복구(이메일) — Paddle 제공, 명세에 신규 반영
+
+번들 문자열에서 이메일 기반 키 복구 흐름이 확인된다(Paddle 프레임워크 원문 — SuperKey 자체 문구가 아니다. 실측: 번들 문자열):
+
+```
+Recover your %@ license
+Recovering your %@ license
+Recover
+Forgotten your license key?
+Please enter the email address used to purchase your license.
+A valid license code is required. Please try again.
+License code has already been utilized
+```
+
+사용자가 구매에 쓴 이메일 주소를 입력하면 Paddle 서버가 등록된 라이선스 키를 재발급/재안내하는 흐름으로 보인다 — 정확한 응답 형태(이메일 발송인지 화면 표시인지)는 확인되지 않았다 `(미확정)` → §9.
+
+이는 §3.3 의 활성화/비활성화/검증 인터페이스에는 없던 **4번째 동작(키 복구)** 이며, 이전 명세에 전혀 없던 기능이다. 이는 전적으로 **Paddle 이 자체 제공하는 기능**이다 — F-12 는 §7 의 결정(현재 Paddle 을 실제로 붙이지 않는다)에 따라, 이번 범위에서는 `LicenseProvider` 인터페이스에 대응하는 메서드를 추가하지 않는다. 무동작(no-op) 구현체 아래에서는 애초에 "잊어버린 키"라는 상황 자체가 없다(라이선스 검증이 항상 통과하므로). 실제 Paddle 연동 시점에는 Paddle Classic 이 제공하는 복구 UI(`PADActivateWindow` 계열로 추정)를 그대로 띄우는 것이 가장 저비용이며, F-12 가 이 흐름을 자체 UI 로 재구현할 이유는 없다고 판단한다 — 클론이 이메일 발송 인프라를 직접 운영하지 않는 한, 이 기능은 Paddle 위임이 유일하게 현실적인 경로다.
 
 ### 3.4 오프라인 유예 규칙
 
@@ -142,6 +169,11 @@ Paddle Classic 의 실제 라이선스 API 사양은 조사로 확인되지 않�
 - `IOPlatformUUID` 는 시리얼 번호나 MAC 주소 같은 더 민감한 식별자가 아니라 **불투명한 UUID 하나**라는 점에서, "no telemetry or tracking" 약속과 최소 식별자 원칙(§3.7)에 부합한다.
 - **기각한 대안 — 앱 생성 랜덤 ID(Keychain 저장)**: 위 이유로 마이그레이션에 의해 사실상 영구적인 ID 가 되어 "3대 한도"를 무력화할 소지가 있다. 다만 이 ID 는 온전히 로컬 생성이라 하드웨어 정보를 서버에 전혀 보내지 않는다는 장점은 있었다 — 프라이버시만 보면 더 낫지만, 라이선스 모델의 정합성(하드웨어 교체 = 새 기기)을 깨므로 채택하지 않는다.
 
+**⭐ 실측 정정 — 원본은 실제로 MAC 주소를 쓴다.** 번들 심볼에 `cannotGetMacAddress` 오류 키와 `IOPlatformExpertDevice`(IOKit) 조회가 확인된다(§3.9). 즉 **원본 SuperKey/Paddle 은 이 문서가 채택한 `IOPlatformUUID` 가 아니라 하드웨어 MAC 주소를 기기 지문으로 쓴다.** 이 사실이 새로 확인되었다고 해서 F-12 의 선택을 바꾸지는 않는다:
+  - MAC 주소는 네트워크 인터페이스에 직접 결부된 값으로, UUID 보다 식별력이 강하고 다른 목적(네트워크 추적)에도 재사용 가능하다 — §3.7 최소 식별자 원칙에 명백히 어긋난다.
+  - 원본이 더 강한 식별자를 쓴다는 사실이 "원본을 따라야 한다"는 근거가 되지는 않는다 — 오히려 원본의 프라이버시 기준이 스스로 표방하는 "no telemetry or tracking"(`superkey-inventory.md` §1.3, §4.1)과 정확히 일치하지는 않는다는 뜻이므로, 클론이 원본보다 더 낮은 식별력의 값을 선택할 근거가 된다.
+  - **기각한 대안(신규) — 원본처럼 MAC 주소 채택**: 위 이유로 기각한다. MAC 주소는 macOS 상에서 `en0` 등 특정 인터페이스에 묶이며 인터페이스 교체(예: USB-이더넷 동글 변경)로도 값이 바뀔 수 있어 `IOPlatformUUID` 보다 안정성 면에서도 우월하지 않다.
+
 ### 3.7 개인정보 경계와 최소 식별자 원칙
 
 원본은 "No user data is gathered by Superkey"(`superkey-inventory.md` §4.1)와 "none of my apps use any kind of telemetry or tracking"(§1.3)를 명시적으로 약속한다. F-12 는 라이선스 검증이라는, 원본 스스로 인정하는 유일한 예외적 네트워크 용도 안에서도 이 약속을 최대한 지킨다.
@@ -151,21 +183,55 @@ Paddle Classic 의 실제 라이선스 API 사양은 조사로 확인되지 않�
 - **`device_id` 는 하드웨어 UUID 하나로 충분하다**(§3.6). MAC 주소, 시리얼 번호, 사용자 계정명처럼 더 식별력이 강하거나 여러 목적에 재사용 가능한 값은 쓰지 않는다 — 라이선스 슬롯을 구분하는 데 필요한 최소한의 불투명 식별자만 보낸다.
 - 이 원칙은 §3.3 의 요청/응답 표 자체를 필드 수준에서 최소화하는 설계 근거이며, §8 수용 기준의 마지막 항목("§3.7 최소 식별자 원칙")으로 검증한다.
 
+### 3.8 ⭐ 온라인 연결 판정 — 구매 시작 전 확인 (실측: 번들 심볼·번들 문자열)
+
+원본은 `SystemConfiguration.framework` 를 링크하고 `SCNetworkReachability` API(`NetworkStatus`, `ReachabilityChangedNotification`, `reachableViaWiFi`, `reachableViaWWAN`, `notReachable`, `allowsCellularConnection`, `whenReachable`/`whenUnreachable`)를 쓴다. 관련 SuperKey 원문 문자열: "Unable to determine if an internet connection is present." · "Unable to initiate purchase without internet connection."
+
+**구매(`Purchase` 버튼)를 시작하기 전에 네트워크 연결 여부를 확인하고, 연결이 없으면 구매 자체를 거부한다.** 이는 §3.4 의 오프라인 유예 규칙(이미 활성화된 라이선스를 오프라인에서도 신뢰하는 정책)과는 **다른 층위**다 — §3.4 는 "이미 검증된 라이선스를 오프라인에서 얼마나 봐줄 것인가"를 다루고, 이 §3.8 은 "애초에 구매/활성화를 시작할 수 있는가"를 다룬다. 둘을 혼동하지 않는다. §3.4 의 유예 일수 자체는 이 실측으로도 확정되지 않았으므로 `(미확정)` 을 유지한다.
+
+F-12 는 §7 의 결정에 따라 지금 Paddle 을 실제로 붙이지 않으므로, 구매·활성화 요청을 실제로 보내는 코드 자체가 없다 — 이 연결 사전 확인은 **Paddle 연동 시점에 §3.3.1 활성화 요청과 실제 구매 흐름 앞에 반드시 두어야 할 요구사항**으로 §7 에 명시적 결정 사항으로 남긴다.
+
+### 3.9 ⭐ 자체 코드 서명 검증 — 변조 탐지 (실측: 번들 심볼)
+
+원본은 `Security.framework` 를 링크하고 다음 심볼을 쓴다: `SecStaticCodeCreateWithPath` · `SecCodeCopySelf` · `SecCodeCopyStaticCode` · `SecCodeCopySigningInformation` · `SecCodeCopyGuestWithAttributes` · `SecCertificate`. 내부 타입은 `CodeSignChecker` · `CodeSignCheckerError` · `CodeSignValidation` 이고, 오류 키 클러스터는 `bundleSignatureCheckFailed` · `cannotCreateRequirement` · `cannotCreateStaticCode` · `cannotGetSignerStatus` · `noValidSigner` · `noSignersFound` · `receiptHashCheckFailed` · `receiptBundleIdentifierDoesNotMatch` · `receiptMissingBundleIdentifier` · `receiptMissingAppVersion` · `cannotGetMacAddress` · `Validation failed` · `anchor apple generic` 다.
+
+**앱이 자기 자신의 코드 서명을 검증해 변조(리패키징·크랙)를 탐지한다.** `anchor apple generic` 요구사항 문자열과 `SecStaticCodeCreateWithPath`/`SecCodeCopySigningInformation` 조합은 전형적인 자체 서명 검증(self code-sign check) 패턴이다. `receiptHashCheckFailed` · `receiptBundleIdentifierDoesNotMatch` · `receiptMissingBundleIdentifier` · `receiptMissingAppVersion` 은 Paddle 라이선스 영수증(receipt)이 이 번들 식별자·버전에 실제로 발급된 것인지 대조하는 로직으로 보인다.
+
+**기기 식별에 MAC 주소를 쓴다** — `cannotGetMacAddress` 오류 키와 `IOPlatformExpertDevice`(IOKit) 조회로 확인된다. 요지는: **원본은 F-12 §3.6 이 채택한 `IOPlatformUUID` 가 아니라 MAC 주소를 쓴다.** F-12 는 이 실측에도 불구하고 §3.6 의 선택(UUID)을 바꾸지 않는다 — 근거는 §3.6 의 정정 노트를 참조.
+
+**클론이 이 보호를 재현할 것인가 — 판단: 재현하지 않는다, 지금은.** 이유는 §7 의 Paddle 미연동 결정과 동일한 논리다: 자체 코드 서명 검증은 Paddle 라이선스 영수증의 진위를 검사하는 로직이므로, 실제 Paddle 영수증 포맷 없이는 검증 대상 자체가 없다. 다만 이 실측은 **F-12 의 무동작(no-op) 구현체가 실제 Paddle 연동으로 교체될 때 반드시 함께 들어와야 할 보호 계층**이라는 점을 §7 에 명시적 결정 사항으로 남긴다 — 그렇지 않으면 클론은 원본보다 크랙에 더 취약한 상태로 "Paddle 만 붙인" 반쪽짜리 보호를 갖게 된다.
+
 ## 4. 설정 항목
 
-Superkey 의 `General` 탭 내용은 공개 스크린샷이 없어 확인되지 않았다(`superkey-inventory.md` §3.4, §7 Q2). 아래 항목은 모두 F-12 의 기능 요구사항으로부터 추론한 것이며, 실제 위치·문구는 확정이 아니다 `(추정)`.
+### 4.1 ⭐ 실측: `General` 탭의 라이선스 관련 UI 전량
 
-| 이름(추정 라벨) | 타입 | 기본값 | 비고 |
+`General` 탭을 AX 트리로 전수 조사한 결과(실측: AX 트리, `app-bundle-analysis.md` §6.4), 라이선스 관련 컨트롤은 **버튼 2개와 버전 표시 버튼 1개**뿐이다.
+
+| 컨트롤 | 라벨 (SuperKey 원문) | 비고 |
+| :--- | :--- | :--- |
+| 버튼 | `v1.66 (66)` | 정적 텍스트가 아니라 버튼이다. About 창을 여는 것으로 추정 `(미확정)` |
+| 버튼 | `Remove Oldest Activation` | §3.3.2 실측 노트 참조. 클릭 시 확인 대화상자 → 라이선스 키 재입력 흐름 |
+| 버튼(강조색) | `Purchase` | 누르지 않았다 — 이후 화면은 관찰하지 못했다(문서 상단 공통 규칙 참조) |
+
+⭐ **다음은 이전 버전 §4 가 `(추정)` 으로 나열했던 항목이며, 이번 실측으로 `General` 탭에는 전부 부재함이 확인되었다**: 라이선스 상태 표시(정적 텍스트) · 라이선스 키 입력란 + 활성화 버튼 · "이 기기 비활성화" 버튼(정확히는 `Remove Oldest Activation` 이 그 역할의 실체다, §3.3.2) · 활성화된 기기 목록. **"확인 결과 `General` 탭에는 부재, Paddle 별도 창 소관"** 으로 정정한다 — 이 UI 들은 Paddle Classic 이 띄우는 별도 창(`PADActivateWindow.nib` · `PADCheckoutWindow.nib` · `PADProductWindow.nib` · `PADProductNoTrialWindow.nib`, 실측: 번들 심볼)에 있는 것으로 추정되나, `Purchase` / `Remove Oldest Activation` 버튼을 누르지 않았으므로 그 창의 실제 레이아웃은 관찰하지 못했다 `(미확정)`.
+
+### 4.2 F-12 설계 제안 — 클론의 `General` 탭 UI (원본 재현이 아니라 의도적 설계)
+
+아래 표는 원본을 다시 발견한 것이 아니라, **F-12 가 §3.3 인터페이스를 노출하기 위해 의도적으로 다시 설계한 UI** 다. 원본이 상태·키 입력·기기 목록을 별도의 Paddle 창에 위임한 것과 달리, 클론은 이를 `General` 탭에 인라인으로 노출하기로 결정한다 — 근거: (1) 원본의 "키를 다시 입력해야 가장 오래된 활성화가 풀린다"는 흐름은 사용자가 어떤 기기가 해제될지 알 수 없어 불투명하다(§3.3.2 실측 노트), (2) 별도 창 의존은 Paddle 이라는 특정 벤더 SDK 에 UI 까지 결합시켜, §7 의 "라이선스 계층 추상화" 원칙과 어긋난다.
+
+| 이름(설계 라벨) | 타입 | 기본값 | 비고 |
 | :--- | :--- | :--- | :--- |
-| 라이선스 상태 표시 | 정적 텍스트 | 상태에 따라 "체험판 — N일 남음" / "체험판 만료됨" / "라이선스 등록됨 (M/3 기기)" / "라이선스 문제 있음" | §3.2 상태 머신의 값을 그대로 노출 `(추정)` |
-| 라이선스 키 입력란 | 텍스트 필드 + "활성화" 버튼 | 빈 값 | §3.3.1 활성화 요청 트리거 |
-| "이 기기 비활성화" | 버튼 | — | §3.3.2 비활성화 요청 트리거. **비활성 상태에서는 회색 처리**(활성 라이선스가 없으면 해제할 것도 없음) `(추정)` |
-| "라이선스 구매" | 버튼/링크 | — | 브라우저로 결제 페이지(§7 결정에 따라 Paddle 체크아웃 또는 자리표시 URL)를 연다 |
-| 활성화된 기기 목록 | 읽기 전용 목록(선택) | — | 서버가 `device_label` 을 포함해 응답한다면 표시 가능. 목록에서 원격으로 다른 기기를 해제하는 기능은 조사에 근거가 없어 범위에서 제외한다 `(추정)` — §4.3 시나리오는 "이 기기"만 해제하는 최소 기능으로 한정 |
+| 라이선스 상태 표시 | 정적 텍스트 | 상태에 따라 "체험판 — N일 남음" / "체험판 만료됨" / "라이선스 등록됨 (M/3 기기)" / "라이선스 문제 있음" | §3.2 상태 머신의 값을 그대로 노출 `(추정)`. 원본에는 대응 UI 없음(§4.1) |
+| 라이선스 키 입력란 | 텍스트 필드 + "활성화" 버튼 | 빈 값 | §3.3.1 활성화 요청 트리거. 원본에는 `General` 탭에 없음(§4.1) — Paddle 별도 창으로 추정 |
+| "이 기기 비활성화" | 버튼 | — | §3.3.2 비활성화 요청 트리거. **비활성 상태에서는 회색 처리**(활성 라이선스가 없으면 해제할 것도 없음) `(추정)`. 원본의 `Remove Oldest Activation`(§3.3.2 실측 노트)과 의도적으로 다른, 기기 단위 모델 |
+| "라이선스 구매" | 버튼/링크 | — | 브라우저로 결제 페이지(§7 결정에 따라 Paddle 체크아웃 또는 자리표시 URL)를 연다. 원본의 `Purchase` 버튼과 같은 역할 |
+| 활성화된 기기 목록 | 읽기 전용 목록(선택) | — | 서버가 `device_label` 을 포함해 응답한다면 표시 가능. 목록에서 원격으로 다른 기기를 해제하는 기능은 조사에 근거가 없어 범위에서 제외한다 `(추정)` — §4.3 시나리오는 "이 기기"만 해제하는 최소 기능으로 한정. 원본에는 대응 UI 없음(§4.1) |
+
+이 표는 §8 수용 기준과 §9 미해결 질문에서 "F-12 자체 설계"로 명시적으로 취급된다 — 원본 재현 항목이 아니므로 실측으로 반증되어도 F-12 의 판정이 틀린 것이 아니다.
 
 ## 5. 엣지 케이스와 실패 모드
 
-1. **오프라인 최초 활성화.** 인터넷이 없는 상태에서 처음으로 키를 입력하고 "활성화"를 누르면, §3.3.1 요청 자체가 실패(`network_error`)한다. 활성화되지 않은 것으로 명확히 표시하고, 키 입력값은 보존해 네트워크가 돌아오면 재시도 버튼 한 번으로 다시 시도할 수 있게 한다 `(추정)` — 오프라인 유예(§3.4)는 "이미 성공적으로 캐시된 활성화"에만 적용되고 최초 활성화에는 적용되지 않는다.
+1. **오프라인 최초 활성화.** 인터넷이 없는 상태에서 처음으로 키를 입력하고 "활성화"를 누르면, §3.3.1 요청 자체가 실패(`network_error`)한다. 활성화되지 않은 것으로 명확히 표시하고, 키 입력값은 보존해 네트워크가 돌아오면 재시도 버튼 한 번으로 다시 시도할 수 있게 한다 `(추정)` — 오프라인 유예(§3.4)는 "이미 성공적으로 캐시된 활성화"에만 적용되고 최초 활성화에는 적용되지 않는다. 원본은 이보다 한 걸음 더 나아가 **구매 자체를 시작하기 전에 연결을 판정해 거부**한다 — SuperKey 원문 오류 메시지 "Unable to initiate purchase without internet connection."(실측: 번들 문자열, §3.8). 클론도 활성화뿐 아니라 §3.8 의 구매 사전 확인을 §7 Paddle 연동 시점에 동일하게 적용해야 한다.
 2. **유예 만료.** §3.4 의 유예 창을 넘긴 채 계속 오프라인이면, 짧은 추가 유예 후에도 재검증에 실패하면 **라이선스 무효/취소**로 전이하고 곧 **체험 만료**와 동일한 제약이 걸린다. 사용자에게는 "네트워크에 연결해 라이선스를 재확인하세요" 류의 메시지를 보여준다.
 3. **슬롯 3/3 소진.** 4번째 기기에서 활성화를 시도하면 서버가 `limit_reached` 를 응답한다(§3.3.1). UI 는 단순 실패가 아니라 "이 라이선스는 이미 3대에서 사용 중입니다 — 다른 기기에서 비활성화해 주세요"처럼 원인과 해법(§4 의 비활성화 버튼)을 함께 안내한다.
 4. **환불된 키.** §3.3.3 검증이 `refunded` 를 응답하면 유예 없이 즉시 **라이선스 무효/취소**로 전이한다(§3.4). 이미 로컬 캐시가 남아 있어도 서버의 명시적 무효 응답이 우선한다.
@@ -176,12 +242,16 @@ Superkey 의 `General` 탭 내용은 공개 스크린샷이 없어 확인되지 
 9. **응답 위조.** 로컬 캐시(`cache_token`)나 검증 응답이 프록시·로컬 조작으로 위조될 가능성에 대해, 조사 자료는 서명 방식을 확인해 주지 않는다(Q11). F-13(자동 업데이트)이 EdDSA 서명 appcast 를 쓴다는 사실(`superkey-inventory.md` §2.3)에 비추어, 라이선스 응답에도 유사하게 **서버 측 서명 + 클라이언트 측 공개키 검증**을 캐시 토큰에 적용하는 것을 권고 설계로 제안하나, Paddle Classic 이 실제로 이런 서명을 제공하는지는 확인되지 않았다 `(추정)` → §9.
 10. **체험 상태 파일 삭제.** §3.5 의 결정(Keychain 채택)에 따라, `~/Library/Application Support` 삭제나 앱 재설치는 체험을 리셋하지 못한다. 다만 Keychain 항목 자체를 `security delete-generic-password` 로 지우거나 macOS 를 클린 설치하면 리셋된다 — 이는 받아들이는 잔여 위험이다(§3.5).
 11. **마이그레이션 쿠폰.** 구 Hyperkey 구매자가 이메일 주소를 쿠폰 코드로 사용해 100% 할인 구매를 완료하는 경로다(`superkey-inventory.md` §4.3). 이 흐름은 §3.3 의 활성화 계약 바깥에서 일어나는 **결제 단계의 쿠폰 적용**(Paddle 체크아웃의 몫)이며, 발급된 결과는 통상적인 새 `license_key` 로 이어져 이후에는 §3.3 의 일반 활성화 흐름과 동일하게 처리된다. 키가 "사전 발급 풀에서 꺼내지는" 방식이라는 것은 개발자 발언("I'm not generating new license keys on the fly")에서 나온 추정이며(§4.3), 클론 프로젝트가 이 쿠폰 메커니즘 자체를 구현할지는 §7 의 결정에 종속된다.
+12. **⭐ 자체 코드 서명 검증 실패(변조 탐지).** §3.9 의 `CodeSignChecker` 가 실행 중 자기 자신의 서명을 재검증해 실패하면(예: 재서명된 크랙 버전), 원본은 라이선스를 무효로 처리하는 것으로 보인다 — 실패 시 사용자에게 노출되는 정확한 문구는 확인하지 못했다 `(미확정)`. 클론은 §3.9 의 판단에 따라 이 보호를 지금 구현하지 않으므로 이 실패 모드는 현재 범위에서 해당 사항 없음(N/A)이다 — Paddle 실연동 시점에 §3.9 의 결정에 따라 재도입한다.
+13. **⭐ 비활성화 확인 대화상자를 건너뛸 수 없음.** 원본의 `Remove Oldest Activation` 은 확인 대화상자("Are you sure you want to remove this device from your activations?")를 거친 뒤에만 키 입력 단계로 진행한다(실측: 번들 문자열, §3.3.2). 클론의 "이 기기 비활성화" 버튼(§4.2)도 되돌릴 수 없는 조작이므로, 실행 전 확인 대화상자를 선행 단계로 둔다 `(추정, 원본 패턴을 따름)`.
 
 ## 6. 필요한 플랫폼 API
 
 - **HTTPS 클라이언트** — §3.3 의 세 요청을 보내는 데 필요. `rust-macos-capability-notes.md` 에는 HTTP 클라이언트 크레이트가 조사되어 있지 않다. 일반적으로 Rust 생태계에서 이 역할은 `reqwest` 가 맡지만, 이 크레이트는 조사 노트에 없으므로 이름만 표기하고 버전은 지어내지 않는다 `(추정, 조사 노트에 없음)`.
 - **Keychain — `Security.framework`** — §3.5 의 트라이얼 기산점·`last_seen_at`·라이선스 캐시 저장. `rust-macos-capability-notes.md` 에는 Keychain 전용 크레이트가 조사되어 있지 않다. §2.5 가 `IOHIDCheckAccess`/`IOHIDRequestAccess` 에 대해 보여준 것과 같은 패턴("전용 크레이트가 없어 프레임워크를 직접 링크")을 따라, `Security.framework` 를 직접 링크(`#[link(name="Security", kind="framework")]`)하고 `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete` 를 `extern "C"` 로 손수 선언하는 것을 기본 경로로 제안한다. 커뮤니티에 `security-framework` 라는 이름의 크레이트가 존재한다고 알려져 있으나 이 역시 조사 노트에는 없으므로 이름만 표기한다 `(추정, 조사 노트에 없음, 버전 미기재)`.
 - **기기 식별자 취득 — `IOPlatformUUID`(IOKit)** — §3.6. `rust-macos-capability-notes.md` 에 전용 크레이트가 없다. §2.5 와 동일한 패턴으로 `IOKit.framework` 를 직접 링크하고 `IOServiceGetMatchingService`/`IORegistryEntryCreateCFProperty` 를 `extern "C"` 로 선언해 `kIOPlatformUUIDKey` 값을 읽는다 `(추정)`.
+- **코드 서명 자기 검증 — `Security.framework`(`SecStaticCodeCreateWithPath` 계열)** — §3.9. 원본이 이 API 를 쓰는 것은 실측으로 확인되었으나(`app-bundle-analysis.md` §3.1), F-12 는 §3.9 의 판단에 따라 **지금은 구현하지 않는다** — Paddle 실연동 시점에 함께 도입해야 할 항목으로 §7 에 명시해 둔다. 조사 노트에 전용 크레이트가 없으므로, 도입 시에는 `Security.framework` 를 직접 링크하는 동일 패턴을 제안한다 `(추정)`.
+- **네트워크 연결 판정 — `SystemConfiguration.framework`(`SCNetworkReachability`)** — §3.8. 구매 시작 전 연결 확인용. §7 Paddle 미연동 결정에 따라 지금은 해당 코드 경로 자체가 없다 — 실연동 시점에 필요.
 - 참고로 `objc2-foundation`/`objc2-core-foundation`(둘 다 조사 노트 §1.1 에서 버전 확인됨: 0.3.2)는 `CFString`/`NSDate` 등 위 FFI 호출의 타입 변환에 보조적으로 쓰일 수 있으나 F-12 의 핵심 API 는 아니다.
 
 ## 7. 구현 접근
@@ -210,6 +280,12 @@ F-01(Seek 활성화)이나 F-03(오버레이) 같은 명세는 로직의 상당 
 - **대안 2 — 다른 결제 백엔드(Stripe, Gumroad 등)로 대체한다.** 기각 — 원본과의 기능 동등성이라는 클론의 목적에서 벗어나고, API 사양 미확인 문제를 다른 벤더로 옮길 뿐 해결하지 못한다.
 - **대안 3 — 라이선싱 자체를 아예 구현하지 않는다(게이팅 없음).** 기각 — F-10(앱 상태 머신)이나 F-09(환경설정)가 참조할 "라이선스 상태" 값 자체가 없어지면 그 명세들에서 이 기능을 다시 설계해야 한다. 상태 머신과 UI 는 실제 결제 연동과 독립적으로 지금 만들 수 있는 가치이므로, 없음보다 무동작 구현체가 낫다.
 
+### 7.1 ⭐ 이번 실측이 바꾸는 것 — 그리고 바꾸지 않는 것
+
+Paddle Classic 사용·제품 ID(`750314`)·내부 델리게이트 타입(§3.3.1)·`Remove Oldest Activation` 의 실제 동작(§3.3.2)·자체 코드 서명 검증의 존재(§3.9)·MAC 기반 기기 식별(§3.6, §3.9)이 모두 실측으로 확정되었다. 그러나 위 "붙이지 않는다" 결정은 **바뀌지 않는다** — 이유는 결정을 뒷받침한 근거 1, 2 가 이번 실측으로 해소되지 않았기 때문이다: 활성화/비활성화/검증의 **와이어 프로토콜(정확한 필드명·엔드포인트 URL)** 은 여전히 확인되지 않았고(§3.3.1), 판매자 계정·세금·가격이라는 사업적 전제도 여전히 클론 프로젝트 범위 밖이다.
+
+바뀌는 것은 **불확실성의 성격**이다. 이전에는 "Paddle 을 쓰는지조차" 방증 수준이었지만, 이제는 "Paddle Classic 의 어떤 버전(1.0.0)을, 어떤 제품 ID(750314)로, 어떤 SDK 창 이름으로" 쓰는지까지 안다 — 실제 연동을 시작할 실무자가 Paddle Classic 대시보드에서 무엇을 찾아야 하는지가 훨씬 분명해졌다. 또한 이번 실측은 **원본이 F-12 보다 더 많은 보호 계층(자체 코드 서명 검증 §3.9, 구매 전 연결 판정 §3.8)을 갖고 있다는 것**을 보여준다 — F-12 의 무동작(no-op) 구현체는 이 계층들도 함께 비워 두고 있으므로, §3.8·§3.9 가 각각 "Paddle 실연동 시점에 재도입" 으로 명시한 항목들은 `docs/spec/README.md` 의 제품 결정 **D2**("라이선싱을 실제로 구현할 것인가")가 다뤄야 할 범위에 **코드 서명 자기 검증**과 **구매 전 연결 판정**을 명시적으로 포함시켜야 한다는 함의를 준다 — 이 둘을 빠뜨리면 클론은 "라이선스는 있지만 원본보다 크랙에 약한" 상태로 출하될 위험이 있다. (README 자체의 수정은 F-12 담당이 아니므로, 이 문단은 README 편집자에게 남기는 근거다.)
+
 ## 8. 수용 기준
 
 - [ ] 체험 기산점이 없는 최초 실행 시, 같은 실행 내에서 기산점이 Keychain 에 기록되고 상태가 **체험 중**으로 전이한다.
@@ -224,18 +300,25 @@ F-01(Seek 활성화)이나 F-03(오버레이) 같은 명세는 로직의 상당 
 - [ ] 시스템 시계를 과거로 되돌린 뒤 재실행해도, 표시되는 남은 체험 일수가 이전 실행보다 늘어나지 않는다(§3.5, §5-5).
 - [ ] 검증 요청 하나의 페이로드에 라이선스 키, 기기 식별자(`IOPlatformUUID`), 앱 버전 외의 필드(사용자 이름·이메일·사용 통계 등)가 포함되지 않는다(§3.7 최소 식별자 원칙).
 - [ ] 서버가 다운되어 있는 동안 비활성화를 시도하면, 로컬 상태가 낙관적으로 "비활성화됨"으로 바뀌지 않고 실패로 표시된다(§5-8).
+- [ ] "이 기기 비활성화" 실행 전 확인 대화상자가 표시되며, 사용자가 확인해야만 요청이 전송된다(§3.3.2 실측 노트, §5-13).
 
 ## 9. 미해결 질문
+
+### 9.0 ⭐ 이번 실측으로 해소된 질문
+
+`app-bundle-analysis.md` 실측(번들 심볼·문자열·defaults·AX 트리)으로 다음이 해소되어 아래 표에서 제외했다: **Paddle 사용 자체와 그 정체**(Paddle Classic, v1.0.0, §1) · **제품 ID**(`750314`, §1) · **`Remove Oldest Activation` 의 실제 동작 방식**(키 재입력 → 서버가 가장 오래된 활성화 회수, §3.3.2) · **라이선스 UI 의 소재**(`General` 탭이 아니라 Paddle 별도 창, §4.1) · **기기 식별에 쓰이는 실제 값의 성격**(원본은 MAC 주소, 클론은 여전히 UUID 채택, §3.6·§3.9) · **자체 코드 서명 검증의 존재**(§3.9) · **구매 전 온라인 연결 판정의 존재**(§3.8) · **이메일 기반 키 복구 흐름의 존재**(§3.3.4). 아래 표는 **여전히 남은** 질문만 추린다.
 
 | # | 질문 | 조사 문서 연결 | 확인 방법 |
 | :--- | :--- | :--- | :--- |
 | 1 | 라이선스 키의 실제 포맷 | `superkey-inventory.md` §7 Q11 | Paddle Classic 판매자 대시보드 또는 실제 구매 후 발급된 키 확인 |
-| 2 | 활성화·비활성화·검증 API 의 실제 엔드포인트와 필드명(§3.3 은 F-12 자체 정의 추상 계약이지 실제 사양이 아니다) | `superkey-inventory.md` §7 Q11, `rust-macos-capability-notes.md` §4 P5 | Paddle Classic License API 공식 문서(현재 Paddle Billing 위주로 이전되어 있어 archived 문서 탐색 필요), 또는 실제 앱의 네트워크 트래픽 캡처 |
-| 3 | 오프라인 유예의 실제 일수, 재검증 실패 시 추가 유예 정책 | `superkey-inventory.md` §7 Q11 | 위와 동일. 앱 설치 후 네트워크 차단 상태에서 실측 |
+| 2 | 활성화·비활성화·검증 API 의 실제 엔드포인트와 필드명(Paddle Classic·제품 ID 는 실측으로 확정되었으나 와이어 프로토콜은 여전히 미확인, §3.3.1) | `app-bundle-analysis.md` §3.1(번들 심볼), `superkey-inventory.md` §7 Q11, `rust-macos-capability-notes.md` §4 P5 | Paddle Classic License API 공식 문서(현재 Paddle Billing 위주로 이전되어 있어 archived 문서 탐색 필요), 또는 실제 앱의 네트워크 트래픽 캡처 |
+| 3 | 오프라인 유예의 실제 일수, 재검증 실패 시 추가 유예 정책 | `superkey-inventory.md` §7 Q11 | 앱 설치 후 네트워크 차단 상태에서 실측(구매/활성화 버튼을 실제로 눌러야 해 이번 조사 범위 밖) |
 | 4 | 체험 20일의 정확한 기산점(설치 시각 vs 최초 실행 시각) — 본 명세는 최초 실행을 기준으로 §3.2 를 설계했다 | `superkey-inventory.md` §7 Q12 | 앱 설치 후 실행 지연 시나리오로 실측, 또는 개발자 문의 |
 | 5 | 체험 만료 후 정확한 동작(전면 차단 vs 기능 제한) — 본 명세는 §3.2 에서 판정을 보류하고 §5 에서 별도 UI 안내만 제안했다 | `superkey-inventory.md` §7 Q12 | 앱 설치 후 체험 만료 상태 재현, 또는 개발자 문의 |
 | 6 | 검증 재시도 주기(백그라운드 재검증 빈도) | `superkey-inventory.md` §7 Q13(업데이트 확인 주기와 유사 성격의 미확인) | 앱의 네트워크 트래픽 실측 |
-| 7 | 검증·활성화 응답의 서명·위조 방지 메커니즘 존재 여부(§5-9 에서 EdDSA 유추만 제시) | 조사 자료에 직접 근거 없음 | Paddle Classic 문서 확인, 또는 실제 응답 페이로드 분석 |
+| 7 | 검증·활성화 응답의 **서버 측** 서명·위조 방지 메커니즘 존재 여부 — **로컬 측** 자체 코드 서명·영수증 검증(§3.9, `receiptHashCheckFailed` 등)의 존재는 실측으로 확인됐으나, 서버가 응답 자체에 서명하는지는 여전히 미확인 | `app-bundle-analysis.md` §3.1(번들 심볼) | Paddle Classic 문서 확인, 또는 실제 응답 페이로드 분석 |
 | 8 | 마이그레이션 쿠폰 풀의 실제 발급·소진 메커니즘("사전 발급 풀" 은 개발자 발언에서 나온 추정) | `superkey-inventory.md` §4.3 | 개발자 문의 또는 Paddle 쿠폰 시스템 문서 |
-| 9 | `General` 탭에서 라이선스 UI 의 실제 위치·문구(§4 전체가 추정) | `superkey-inventory.md` §7 Q2 | 앱 설치 후 확인 |
-| 10 | 가격 — 명세 자체는 금액에 의존하지 않도록 작성했으나, §7 의 Paddle 연동을 실제로 진행할 시점에는 필요 | `superkey-inventory.md` §4.4 Q14 | 실제 Paddle 체크아웃 화면 확인 |
+| 9 | 활성화 대수 제한이 실제로 3대인지의 재확인 — `superkey-inventory.md` 의 "3대" 서술은 이번 번들 실측 범위(`Purchase`/`Remove Oldest Activation` 버튼을 누르지 않음)에서 재확인되지 않았다 | `superkey-inventory.md` §1.5 | 실제 구매 후 4번째 기기에서 활성화 시도 |
+| 10 | 실제 구매·활성화 화면(Paddle `PADActivateWindow`/`PADCheckoutWindow`/`PADProductWindow`/`PADProductNoTrialWindow`)의 레이아웃과 문구 — `Purchase`·`Remove Oldest Activation` 버튼을 누르지 않아 관찰하지 못했다(문서 상단 공통 규칙) | `app-bundle-analysis.md` §8(조사의 한계), 본 문서 §4.1 | 실제 버튼 클릭 관찰(결제가 발생할 수 있어 신중한 재현 필요) |
+| 11 | 가격 — 명세 자체는 금액에 의존하지 않도록 작성했으나, §7 의 Paddle 연동을 실제로 진행할 시점에는 필요 | `superkey-inventory.md` §4.4 Q14 | 실제 Paddle 체크아웃 화면 확인 |
+| 12 | 이메일 키 복구(§3.3.4)의 정확한 응답 형태(이메일 발송 vs 화면 표시), `appGroupForSharedLicense`(§3.3.1)의 실제 용도 | `app-bundle-analysis.md` §4.8(번들 문자열), 본 문서 §3.3.1 | Paddle Classic 문서 확인 또는 실제 복구 흐름 관찰 |
