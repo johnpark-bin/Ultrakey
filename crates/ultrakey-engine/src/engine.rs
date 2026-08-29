@@ -41,6 +41,23 @@ use crate::system_hooks::SystemHooks;
 use crate::watchdog::Watchdog;
 
 /// 앱(호출자)에게 알리는 엔진 사건.
+///
+/// ⛔ **이 사건들을 받는 `on_event` 콜백은 대부분 `ultrakey-tap` 전용 스레드에서
+/// 호출된다 — 그 안에서 절대 블록하지 마라.**
+///
+/// 탭 스레드는 `CGEventTap` 의 mach port 를 서비스하는 **유일한** 스레드다. 활성
+/// 탭은 시스템의 모든 키·마우스 이벤트가 동기적으로 통과하는 지점이므로, 이
+/// 콜백이 늦어지면 **그 지연이 곧 시스템 전체의 입력 지연**이 된다. 특히 금지:
+///
+/// - 메인 스레드로의 **동기** 디스패치(Tauri `WebviewWindow::show`/`set_focus`/
+///   `is_visible` 등은 메인 스레드 밖에서 부르면 전부 여기 해당한다). 대신
+///   `AppHandle::run_on_main_thread` 로 큐잉만 하고 즉시 반환하라
+/// - 다른 스레드가 오래 쥘 수 있는 `Mutex` 획득
+/// - 네트워크·프로세스 실행 같은 무제한 대기
+///
+/// ⚠️ 실측 회귀: 앱이 `NotTrusted` 를 받아 탭 스레드에서 Tauri 창을 동기 조작하자
+/// **머신 전체 입력이 멈췄다**(이슈 #10 후속). `apps/ultrakey-app` 의
+/// `on_main_thread` 헬퍼가 이 계약을 지키는 방식이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineEvent {
     TapStateChanged(TapState),
@@ -90,7 +107,10 @@ pub struct Engine {
 impl Engine {
     /// ⚠️ **호출한 스레드에서 `SystemHooks::start` 를 동기적으로 실행한다** — 그 스레드가
     /// 곧 메인 스레드(Tauri/`NSApplication` 런루프 소유자)여야 한다(`system_hooks.rs`
-    /// 모듈 문서 참고).
+    /// 모듈 문서 참고). 어기면 경고 로그가 남는다(`warn_if_not_main_thread`).
+    ///
+    /// ⛔ `on_event` 는 **탭 전용 스레드에서** 불린다 — [`EngineEvent`] 문서의 "블록하지
+    /// 마라" 계약을 반드시 읽어라. 이 계약을 어기면 시스템 전체 입력이 멈춘다.
     pub fn start(
         config: EngineConfig,
         gate: Arc<AtomicAppGate>,
@@ -374,6 +394,28 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Command
     // 시도 횟수를 로깅하려면 `record_reenable_result` 가 카운터를 리셋하기 *전* 값을
     // 잡아 둬야 한다(에스컬레이션 시 0으로 리셋된다) — `docs/dev/manual-verification.md`
     // 가 "재활성화 성공/실패, 시도 횟수" 로그를 근거로 판정한다.
+    // ⛔ **권한이 이미 사라졌으면 재활성화하지 않는다.**
+    //
+    // 권한을 잃은 탭은 `CGEventTapEnable(true)` 를 불러도 macOS 가 곧바로 다시
+    // 끄고 비활성화 통지를 또 보낸다. 그 통지가 다시 `RecoverTap` 을 만들면
+    // "재활성화 → 즉시 비활성화 → 통지 → 재활성화" 가 끝없이 돈다. 게다가
+    // `tap.is_enabled()` 는 방금 `enable(true)` 한 직후라 **`true` 를 돌려주므로**
+    // 실패 카운터가 매번 리셋되어 재생성 에스컬레이션에도 영원히 도달하지 못한다.
+    //
+    // ⚠️ 이 루프는 탭 스레드의 런루프를 포화시켜 **시스템 전체 입력을 멈춘다**
+    // (실측 회귀 — `event_tap.rs` 트램폴린의 차단기 주석 참고). 여기서 권한을
+    // 먼저 확인하고, 없으면 재활성화 대신 재생성 경로로 보낸다 —
+    // `handle_recreate_tap` 은 탭을 놓은 뒤 `NotTrusted` 를 올려 F-11 온보딩이
+    // 이어받게 한다(§3-a: 권한이 없어 실패하는 것은 정상 경로다).
+    if !ultrakey_platform::accessibility::is_process_trusted() {
+        tracing::warn!(
+            "Accessibility 권한이 없는 상태에서 탭 재활성화 요청이 왔다 — 재활성화하지 않고 \
+             탭을 놓는다(재활성화 폭주 방지)"
+        );
+        handle_recreate_tap(cell, commands);
+        return;
+    }
+
     let outcome = {
         let mut st = cell.borrow_mut();
         if st.fatal {

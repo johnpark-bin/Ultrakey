@@ -48,21 +48,23 @@ pub enum TapAction {
 /// 물리 키/마우스 이벤트가 도착할 때마다 호출되는 콜백.
 ///
 /// 콜백은 절대 블로킹하면 안 된다(`key-remapping-engine.md` §3-a "콜백 금지 사항").
-pub type TapCallback =
-    Box<dyn FnMut(TapProxy, EventKind, &mut CgEventRef) -> TapAction + Send>;
+pub type TapCallback = Box<dyn FnMut(TapProxy, EventKind, &mut CgEventRef) -> TapAction + Send>;
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use super::{TapAction, TapCallback, TapCreateError};
     use crate::event::{CgEventRef, ULTRAKEY_MAGIC};
-    use core::cell::RefCell;
+    use core::cell::{Cell, RefCell};
     use core::ffi::c_void;
     use core::ptr::NonNull;
-    use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource};
+    use objc2_core_foundation::{
+        kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource,
+    };
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventTapProxy, CGEventType,
     };
+    use std::time::{Duration, Instant};
     use ultrakey_core::event::EventKind;
 
     /// 콜백 하나가 호출될 때마다 주어지는, 탭 자신을 가리키는 불투명 핸들.
@@ -81,7 +83,20 @@ mod macos_impl {
     struct CallbackContext {
         callback: TapCallback,
         mach_port: RefCell<Option<CFRetained<CFMachPort>>>,
+        /// ⭐ 즉시 재활성화 **차단기**(circuit breaker) 상태 — 아래
+        /// [`trampoline`] 의 "재활성화 폭주" 주석 참고. 트램폴린은 항상 같은
+        /// 탭 스레드에서 직렬로만 실행되므로 `Cell` 로 충분하다.
+        reenable_window_start: Cell<Option<Instant>>,
+        reenable_count: Cell<u32>,
     }
+
+    /// 차단기 창 길이와 그 안에서 허용할 즉시 재활성화 횟수.
+    ///
+    /// 정상적인 `kCGEventTapDisabledByTimeout` 은 아주 드물게 한 번씩 온다 —
+    /// 1초에 몇 번씩 연속으로 오는 것은 "재활성화해도 즉시 다시 꺼진다"는
+    /// 뜻이고, 그 상황에서 계속 재활성화하면 아래 주석의 폭주가 된다.
+    const REENABLE_WINDOW: Duration = Duration::from_secs(1);
+    const REENABLE_MAX_PER_WINDOW: u32 = 5;
 
     fn build_event_mask() -> u64 {
         // keyDown/keyUp/flagsChanged 는 항상 필요하다(§3-b 전 계층의 입력).
@@ -109,7 +124,9 @@ mod macos_impl {
             // Scroll
             CGEventType::ScrollWheel,
         ];
-        types.iter().fold(0u64, |mask, t| mask | (1u64 << (t.0 as u64)))
+        types
+            .iter()
+            .fold(0u64, |mask, t| mask | (1u64 << (t.0 as u64)))
     }
 
     /// `CGEventType` → `ultrakey_core::event::EventKind` 변환. 실제
@@ -161,8 +178,37 @@ mod macos_impl {
         if event_type == CGEventType::TapDisabledByTimeout
             || event_type == CGEventType::TapDisabledByUserInput
         {
-            if let Some(port) = ctx.mach_port.borrow().as_ref() {
-                CGEvent::tap_enable(port, true);
+            // ⛔ **무조건 재활성화하면 시스템 전체 입력이 멈춘다** — 실측 회귀.
+            //
+            // Accessibility 권한을 실행 중에 회수하면 macOS 가 탭을 끈다. 여기서
+            // 조건 없이 `CGEventTapEnable(true)` 를 부르면 macOS 가 곧바로 다시
+            // 끄고 또 통지를 보낸다 — 재활성화⇄비활성화가 mach 메시지 속도로
+            // 무한 반복된다. 그동안 이 스레드의 런루프는 그 통지만 처리하느라
+            // **탭 자신의 실제 이벤트도, 커맨드 소스(`drain_commands`)도** 서비스하지
+            // 못한다. 결과: 키 입력과 클릭이 전부 죽고(탭을 통과하지 못한다),
+            // 커서만 움직이며(WindowServer 가 직접 그린다), **로그는 한 줄도 남지
+            // 않는다**(커맨드 소스가 굶어서). 실측 증상이 정확히 이것이었다.
+            //
+            // ⚠️ 그래서 §8 수용 기준("예외 없이 재활성화를 시도한다")은 **창 안에서만**
+            // 지킨다. 정상적인 `TapDisabledByTimeout` 은 드물게 한 번씩 오므로 이
+            // 상한에 걸리지 않는다. 상한을 넘으면 재활성화를 멈추고 엔진 FSM 에
+            // 맡긴다 — 꺼진 탭은 이벤트를 막지 않으므로 **그 순간 시스템 입력이
+            // 즉시 정상으로 돌아온다**. 이후 복구는 `RecoverTap`/`RecreateTap` 이
+            // 권한을 확인해 가며 처리한다.
+            let now = Instant::now();
+            let window_expired = match ctx.reenable_window_start.get() {
+                Some(started) => now.duration_since(started) > REENABLE_WINDOW,
+                None => true,
+            };
+            if window_expired {
+                ctx.reenable_window_start.set(Some(now));
+                ctx.reenable_count.set(0);
+            }
+            ctx.reenable_count.set(ctx.reenable_count.get() + 1);
+            if ctx.reenable_count.get() <= REENABLE_MAX_PER_WINDOW {
+                if let Some(port) = ctx.mach_port.borrow().as_ref() {
+                    CGEvent::tap_enable(port, true);
+                }
             }
             if let Some(kind) = map_event_kind(event_type) {
                 // SAFETY: `event` 는 이 콜백 호출 동안에만 유효하다는 계약을
@@ -217,6 +263,8 @@ mod macos_impl {
             let boxed = Box::new(CallbackContext {
                 callback,
                 mach_port: RefCell::new(None),
+                reenable_window_start: Cell::new(None),
+                reenable_count: Cell::new(0),
             });
             let ctx_ptr = Box::into_raw(boxed);
 
