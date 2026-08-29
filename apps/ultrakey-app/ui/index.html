@@ -10,7 +10,13 @@
     margin: 0;
     padding: 28px 32px;
     font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-    background: transparent;
+    /* ⭐ 불투명 배경 — `transparent` 는 tauri.conf.json 의 창 설정에
+       `transparent: true` 가 없는 한 아무 효과가 없고(창 자체가 불투명하게
+       합성된다), 렌더가 실패했을 때 창이 "텅 비어 보이는" 실패 모드를 더
+       나쁘게 만들 뿐이다. 시스템 색을 써서 라이트/다크를 `color-scheme`
+       설정에 맞춰 자동으로 따라가게 한다. */
+    background: Canvas;
+    color: CanvasText;
   }
   h1 { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
   p { margin: 0 0 14px; }
@@ -68,39 +74,84 @@
   </div>
 
 <script type="module">
-const { invoke } = window.__TAURI__.core;
-
+// ⭐ 방어적 부트스트랩. 이 파일이 백지로 뜬 실제 사고 원인은
+// `window.__TAURI__` 가 주입되지 않아(tauri.conf.json 에 `withGlobalTauri`
+// 가 없었다) 모듈 평가 시점에 TypeError 가 나서 render() 가 한 번도 실행되지
+// 못한 것이었다 — 실패가 화면에 전혀 드러나지 않았다. 이번 수정의 요지는
+// "실패해도 창이 눈에 보이게" 이다: __TAURI__ 부재, render() 예외,
+// 리스너 등록 실패, focus 재렌더 예외를 전부 잡아 화면에 진단 문구를 낸다.
+//
+// 아래 영어 하드코딩 문구는 D4("문자열은 전부 카탈로그에서")와 충돌하지
+// 않는다 — 이것은 제품 문구가 아니라 오류 경로다. modal_copy 커맨드가
+// 돌려주는 카탈로그 문구 자체를 가져오는 경로가 죽었을 때 쓰는 최후
+// 수단이므로, 카탈로그에 기댈 수 없다.
 const $ = (id) => document.getElementById(id);
 
-async function render() {
-  const c = await invoke("modal_copy");
-
-  $("title").textContent = c.title;
-  $("body").textContent = c.body;
-
-  const onboarding = c.kind === "onboarding";
-  $("onboarding").hidden = !onboarding;
-  $("out-of-sync").hidden = onboarding;
-
-  if (onboarding) {
-    $("path").textContent = c.path;
-    $("checkbox-hint").textContent = c.checkbox_hint;
-    $("locked-hint").textContent = c.locked_hint;
-    $("open").textContent = c.open_button;
-  } else {
-    $("manual-steps").textContent = c.manual_steps;
-    $("quit").textContent = c.quit;
-  }
+function showDiagnostic(reason) {
+  const title = $("title");
+  const body = $("body");
+  if (title) title.textContent = "Ultrakey";
+  if (body) body.textContent = reason;
+  const onboarding = $("onboarding");
+  const outOfSync = $("out-of-sync");
+  if (onboarding) onboarding.hidden = true;
+  if (outOfSync) outOfSync.hidden = true;
 }
 
-$("open").addEventListener("click", () => invoke("open_settings"));
-$("quit").addEventListener("click", () => invoke("quit_app"));
+const tauri = window.__TAURI__;
+if (!tauri || !tauri.core) {
+  showDiagnostic("Failed to load: window.__TAURI__ is unavailable (check withGlobalTauri in tauri.conf.json).");
+} else {
+  const { invoke } = tauri.core;
 
-// 사용자가 시스템 설정에서 돌아왔을 때 문구가 최신 상태를 반영하도록 다시 그린다.
-// (권한 부여 자체는 Rust 쪽 폴링이 감지해 이 창을 숨긴다 — F-11 §8:
-//  "별도의 확인 버튼 클릭 없이 폴링만으로 자동 진행된다")
-window.addEventListener("focus", render);
-render();
+  async function render() {
+    try {
+      const c = await invoke("modal_copy");
+
+      $("title").textContent = c.title;
+      $("body").textContent = c.body;
+
+      const onboarding = c.kind === "onboarding";
+      $("onboarding").hidden = !onboarding;
+      $("out-of-sync").hidden = onboarding;
+
+      if (onboarding) {
+        $("path").textContent = c.path;
+        $("checkbox-hint").textContent = c.checkbox_hint;
+        $("locked-hint").textContent = c.locked_hint;
+        $("open").textContent = c.open_button;
+      } else {
+        $("manual-steps").textContent = c.manual_steps;
+        $("quit").textContent = c.quit;
+      }
+    } catch (err) {
+      showDiagnostic("Failed to render: " + String(err));
+    }
+  }
+
+  try {
+    const openBtn = $("open");
+    if (openBtn) openBtn.addEventListener("click", () => invoke("open_settings"));
+    const quitBtn = $("quit");
+    if (quitBtn) quitBtn.addEventListener("click", () => invoke("quit_app"));
+  } catch (err) {
+    showDiagnostic("Failed to wire buttons: " + String(err));
+  }
+
+  // 사용자가 시스템 설정에서 돌아왔을 때 문구가 최신 상태를 반영하도록 다시 그린다.
+  // (권한 부여 자체는 Rust 쪽 폴링이 감지해 이 창을 숨긴다 — F-11 §8:
+  //  "별도의 확인 버튼 클릭 없이 폴링만으로 자동 진행된다")
+  // render() 자체가 이미 자기 예외를 잡으므로, 여기서는 예외가 focus 리스너
+  // 밖으로 새어나가 이후 render 호출 전부를 막는 일이 없게만 감싼다.
+  window.addEventListener("focus", () => {
+    try {
+      render();
+    } catch (err) {
+      showDiagnostic("Failed to render: " + String(err));
+    }
+  });
+  render();
+}
 </script>
 </body>
 </html>

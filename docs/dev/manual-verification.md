@@ -27,6 +27,29 @@
 
 ---
 
+### 📌 갱신 (2026-08-30, 이슈 #8) — 항목 1-a 는 이제 실제로 통과했다
+
+M0 서명 절차가 끝나(`Ultrakey Dev` 인증서 확인됨) 위 전제가 해소됐고, **항목 1-a #1~#4 를
+실제로 수행해 통과시켰다**([결과](#-실제-통과-결과-2026-08-30-이슈-8--pr-fixonboarding-modal-not-shown)).
+
+그 과정에서 이슈 #8 이 드러났다 — **권한 미부여 상태에서 온보딩 모달이 "안 보였다."**
+실제로는 창이 정상적으로 최상단·포커스 상태로 떠 있었고, **웹뷰 내용만 완전히 백지**였다.
+`tauri.conf.json` 에 `app.withGlobalTauri` 가 없어(기본값 `false`) Tauri v2 가
+`window.__TAURI__` 를 주입하지 않았고, `ui/index.html` 의 모듈 첫 줄
+`const { invoke } = window.__TAURI__.core;` 가 `TypeError` 를 던져 렌더 함수가 한 번도
+실행되지 못한 것이 원인이다.
+
+⭐ **이 버그의 진짜 비용은 버그 자체가 아니라 "진단할 수 없었다"는 것이었다.**
+`open` 으로 띄운 앱의 로그를 볼 방법이 없어(§0 에 적혀 있던 `log stream` 명령이 동작하지 않았다)
+TCC 데이터베이스와 AppleScript AX 트리를 뒤져야 했다. 그래서 **로그를 파일로도 남기도록
+먼저 고친 뒤**(§0) 원인을 찾았다 — 파일 로그를 확보하자마자 `modal_copy 커맨드 호출됨` 이
+한 줄도 없다는 사실이 즉시 원인을 가리켰다. **앞으로도 이 순서를 지켜라: 관찰 수단을
+먼저 확보하고, 그다음에 원인을 찾는다.**
+
+아래 "검증하지 못한 것" 서술은 **항목 1-b 이후에 대해서는 여전히 유효하다.**
+
+---
+
 ## 0. 사전 준비
 
 ```sh
@@ -40,9 +63,44 @@ security find-identity -v -p codesigning
 # 3) ⭐ 반드시 `open` 으로 실행한다 (아래 함정 참조)
 open <경로>/Ultrakey.app
 
-# 4) 로그는 Console 로 따로 본다
-log stream --predicate 'process == "ultrakey-app"' --level debug
+# 4) ⭐ 앱 로그는 파일로 남는다 — `open` 으로 띄워도 볼 수 있다
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+
+# 5) 더 자세히 보려면 — `open --env` 로 로그 레벨을 넘긴다
+open --env ULTRAKEY_LOG=debug <경로>/Ultrakey.app
 ```
+
+> ⭐ **로그 확인 명령은 이슈 #8 에서 정정됐다.** 이전 판에 적혀 있던
+> `log stream --predicate 'process == "ultrakey-app"'` 은 **동작하지 않는다** —
+> 앱의 `tracing` 로그는 macOS 통합 로그(`OSLog`)가 아니라 stderr 로 나가므로, 그 명령으로는
+> 시스템 프레임워크가 대신 남긴 로그만 보이고 앱 자신의 로그는 한 줄도 나오지 않는다.
+> 게다가 `open` 으로 띄우면 stderr 자체가 사라져 **아무 데서도 로그를 볼 수 없었다.**
+> 이것이 이슈 #8 의 진단을 크게 지연시킨 원인이었으므로,
+> 앱이 stderr 와 **파일** 양쪽에 로그를 남기도록 바꿨다(`main.rs` 의 `init_logging`).
+>
+> | 경로 | 내용 |
+> | :--- | :--- |
+> | `~/Library/Logs/Ultrakey/ultrakey.log` | ⭐ 항상 기록된다. `open` 실행 시 유일하게 볼 수 있는 곳 |
+> | `~/Library/Logs/Ultrakey/ultrakey.log.1` | 직전 세대. 파일이 2 MiB 를 넘으면 한 번 롤오버된다 |
+> | stderr | 터미널에서 직접 실행했을 때만. `open --stderr <경로>` 로 파일에 받을 수도 있다 |
+>
+> 로그는 **append** 되므로 실행마다 `=== Ultrakey 기동 ===` 구분선(pid·실행 파일 경로 포함)이 찍힌다.
+> 한 번의 실행만 보려면 그 구분선부터 읽으면 된다.
+>
+> ⚠️ `--env` 를 붙여도 TCC 판정 주체는 바뀌지 않는다(여전히 `launchd` 가 부모다) —
+> 이슈 #8 검증에서 `open --env ULTRAKEY_LOG=debug` 로 띄운 앱이 정상적으로
+> `PermissionTransition { from: Unknown, to: Denied }` 를 기록하는 것을 실측으로 확인했다.
+
+**최소한 이것들이 로그에 보여야 한다** — 안 보이면 그 자체가 진단 신호다.
+
+| 로그 줄 | 무엇을 확인해 주는가 |
+| :--- | :--- |
+| `=== Ultrakey 기동 ===` | 프로세스가 실제로 떴고, 어떤 실행 파일인지(`.app` 안인지) |
+| `권한 상태 전이 transition=...` | 권한 판정과 이후 전이 |
+| `on_permission_transition 진입 to=...` | 어느 분기를 탔는지 |
+| `show_modal 호출 후 창 상태 is_visible=... is_focused=...` | 창이 실제로 떴는지 |
+| ⭐ `modal_copy 커맨드 호출됨 kind=...` | **웹뷰가 살아서 Rust 를 호출했는지.** 이 줄이 없으면 창은 떠 있어도 내용이 백지다 — 이슈 #8 이 정확히 그 상태였다 |
+| `엔진 시작됨 state=...` · `탭 상태 변경 state=...` | 엔진 상태 전이 |
 
 > ⚠️ **`cargo tauri dev` 를 쓰지 마라.** TCC 가 부모 프로세스(터미널)의 권한으로 판정하므로 결과가 전부 무의미해진다([`../spec/platform-constraints.md`](../spec/platform-constraints.md) §3.4). 앱은 이 상태를 감지하면 `dev.not_app_bundle` 경고를 로그에 남긴다 — 그 경고가 보이면 검증을 중단하고 서명된 빌드로 다시 시작한다.
 
@@ -64,7 +122,48 @@ log stream --predicate 'process == "ultrakey-app"' --level debug
 | **키보드 뷰어(Keyboard Viewer)** | 시스템 설정 → 키보드 → 입력 소스 → "메뉴 막대에 입력 메뉴 표시" 켜기 → 메뉴 막대 입력 메뉴 → "키보드 뷰어 보기" | ⭐ **현재 눌린 것으로 인식되는 modifier 를 실시간으로 강조 표시한다.** 항목 2·3·5 의 1차 관찰 수단 |
 | `ioreg` | `ioreg -l -w 0 \| grep -i SecureInput` | Secure Input 을 켠 프로세스의 PID. 항목 5 |
 | `hidutil` | `hidutil property --get UserKeyMapping` | 경로 B 의 커널 매핑 잔존 여부 |
-| `log stream` | `log stream --predicate 'process == "ultrakey-app"' --level debug` | 앱 로그를 Console 로도 볼 수 있다 |
+| **앱 로그 파일** | `tail -f ~/Library/Logs/Ultrakey/ultrakey.log` | ⭐ 앱 자신의 `tracing` 로그. `open` 으로 띄웠을 때 유일하게 볼 수 있는 곳(§0) |
+
+---
+
+## 0-ter. 재발 방지 — 이슈 #8 이 남긴 것
+
+이슈 #8(온보딩 모달 백지)은 **컴파일러도 기존 테스트도 아무 말을 하지 않았다.** `tauri.conf.json`
+과 `ui/index.html` 은 서로 다른 파일이고 둘 사이에 타입 관계가 없어서, 어긋나도 빌드가 통과한다.
+그래서 그 어긋남을 정적으로 잡는 테스트를 추가했다.
+
+### 자동화한 것 — `apps/ultrakey-app/tests/frontend_wiring.rs` (`cargo test` 에 포함)
+
+| 테스트 | 무엇을 막는가 |
+| :--- | :--- |
+| `index_html_이_tauri_전역을_쓰면_with_global_tauri_가_켜져_있어야_한다` | ⭐ **이슈 #8 그 자체.** `ui/index.html` 이 `window.__TAURI__` 를 참조하는데 `app.withGlobalTauri` 가 `true` 가 아니면 실패한다 |
+| `tauri_conf_에_permissions_라벨_창이_있어야_한다` | 창 라벨이 바뀌면 `show_modal()`/`hide_modal()` 이 조용히 아무 일도 하지 않는다 |
+| `index_html_의_body_는_transparent_배경을_쓰지_않는다` | 창 설정에 `transparent: true` 가 없는데 body 를 투명하게 두는 조합(백지 실패 모드를 악화시킨다) |
+
+### ⛔ 자동화하지 못한 것과 그 이유
+
+**"모달이 실제로 눈에 보이고 문구가 그려졌는가"는 자동 테스트로 옮기지 못했다.** 이유:
+
+1. **웹뷰 렌더 결과를 확인하려면 앱을 실제로 띄워야 한다.** 그런데 `cargo test` 가 띄운
+   프로세스는 부모(터미널)의 TCC 권한을 물려받으므로(§0 의 두 함정), 애초에 온보딩 경로를
+   타지 않는다 — 테스트가 통과해도 검증한 것이 없다.
+2. **모달이 뜨는 조건 자체가 "Accessibility 미부여"** 다. 이를 자동으로 만들려면 테스트가
+   시스템 TCC 데이터베이스를 조작해야 하는데, 그것은 사용자의 시스템 보안 상태를 CI 나
+   `cargo test` 가 건드린다는 뜻이라 받아들일 수 없다.
+3. **"백지인가 아닌가"의 판정에는 화면 캡처나 AX 트리 조회가 필요하고**, 둘 다 각각
+   Screen Recording · Accessibility 권한을 **테스트 러너에게** 요구한다. 검증하려는 바로 그
+   권한 체계에 의존하는 테스트다.
+
+따라서 이 부분은 **항목 1-a #1 의 수동 확인이 계속 소유한다.** 대신 수동 확인의 비용을
+낮추도록, 아래 두 가지를 로그로 판정할 수 있게 만들어 뒀다(§0).
+
+| 로그 | 판정 |
+| :--- | :--- |
+| `show_modal 호출 후 창 상태 is_visible=Ok(true)` | 창이 떴는가 |
+| ⭐ `modal_copy 커맨드 호출됨 kind="onboarding"` | **웹뷰가 살아서 문구를 가져갔는가.** 이 줄이 없는데 위 줄만 있으면 = 이슈 #8 재발이다 |
+
+⭐ **이 두 줄의 조합이 사실상의 회귀 탐지기다.** 다음에 "모달이 안 보인다"는 보고가 오면,
+TCC 데이터베이스를 뒤지기 전에 `~/Library/Logs/Ultrakey/ultrakey.log` 에서 이 두 줄부터 확인하라.
 
 ---
 
@@ -104,6 +203,39 @@ cargo test --workspace
 | 4 | 앱 종료 후 재실행 | 온보딩 모달이 **다시 나타나지 않는다** |
 | 5 | 실행 중에 시스템 설정에서 Accessibility 를 **끈다** | 배경 폴링 주기(기본 5초) 이내에 앱이 감지한다. 로그에 권한 상실 전이가 남는다 |
 | 6 | macOS 12 환경이 있다면 거기서도 실행 | 안내 문구가 "시스템 환경설정" 어휘로 바뀐다(F-11 §3.2, `get_os_variant`) |
+
+#### ✅ 실제 통과 결과 (2026-08-30, 이슈 #8 / PR `fix/onboarding-modal-not-shown`)
+
+**#1~#4 를 실제로 수행해 통과시켰다.** 환경: macOS 26.5.2, 3840×1600 + 2560×1440 듀얼,
+`./scripts/build-signed.sh` 로 만든 서명된 universal `.app` 을 `open --env ULTRAKEY_LOG=debug` 로 실행.
+권한은 매 시행 전에 `tccutil reset Accessibility app.ultrakey.Ultrakey` 로 미부여 상태로 되돌렸다.
+
+| # | 결과 | 근거 |
+| :--- | :---: | :--- |
+| 1 | ✅ | 로그 `권한 상태 전이 transition=PermissionTransition { from: Unknown, to: Denied }` → `show_modal 호출 후 창 상태 is_visible=Ok(true) ... is_focused=Ok(true)` → `modal_copy 커맨드 호출됨 kind="onboarding"`. **스크린샷으로 모달 본문 전체를 눈으로 확인**했고, AX 트리에 제목·본문·경로·힌트·버튼 텍스트가 전부 노출된다. macOS 표준 프롬프트는 뜨지 않았다 |
+| 2 | ✅ | 모달의 `Open System Settings` 버튼을 AX 로 눌렀더니 System Settings 가 최전면이 되고 **창 제목이 `Accessibility`** — 손쉬운 사용 패널이 직접 열렸다. 목록에 `Ultrakey.app` 항목이 보인다 |
+| 3 | ✅ | 모달이 떠 있는 상태에서 목록의 체크박스를 켜자, **아무 버튼도 누르지 않았는데** 온보딩 폴링 주기 안에 `PermissionTransition { from: Denied, to: Granted }` → `hide_modal 호출 후 창 상태 is_visible=Ok(false)` → `엔진 시작됨 state=Active` 가 이어졌다. ⭐ 애초에 모달에 "확인" 버튼이 **존재하지 않는다**(버튼은 `Open System Settings` 하나뿐) — 폴링 자동 진행이 구조적으로 강제된다 |
+| 4 | ✅ | 권한이 켜진 상태로 종료 후 재실행 → `PermissionTransition { from: Unknown, to: Granted }` → `hide_modal` → `엔진 시작됨 state=Active`. **AX 로 창 개수를 세면 `0`** — 모달이 뜨지 않았다 |
+
+**증거 스크린샷**
+
+| 파일 | 무엇 |
+| :--- | :--- |
+| [`screenshots/issue-8-before-blank-modal.png`](screenshots/issue-8-before-blank-modal.png) | ⛔ 수정 전 — 창은 떠 있으나 **완전한 백지**. 이슈 #8 의 증상 그 자체 |
+| [`screenshots/issue-8-after-onboarding-modal.png`](screenshots/issue-8-after-onboarding-modal.png) | ✅ 수정 후 — 제목·본문·경로·체크박스 힌트·잠금 힌트·`Open System Settings` 버튼이 전부 그려진다(#1) |
+| [`screenshots/issue-8-accessibility-pane.png`](screenshots/issue-8-accessibility-pane.png) | ✅ 버튼을 눌러 열린 손쉬운 사용 패널. 목록에 `Ultrakey.app` 이 보인다(#2) |
+
+⚠️ **#5·#6 은 이번에도 수행하지 않았다.** #5(실행 중 권한 회수 감지)는 이번 범위 밖이고,
+#6 은 macOS 12 환경이 없다. 통과했다고 적지 않는다.
+
+⚠️ **검증을 위해 Accessibility 를 켰다가 되돌렸다.** 시작 상태는 `app.ultrakey.Ultrakey|0`(항목은
+있으나 미부여)이었고, 종료 상태는 `tccutil reset Accessibility app.ultrakey.Ultrakey` 로
+**항목 자체가 없는** 상태다. 둘 다 앱 입장에서는 `AXIsProcessTrusted() == false` — 동일하게
+`Denied` 로 판정된다. 다른 앱 41개의 Accessibility 항목은 건드리지 않았다(리셋 대상을
+`app.ultrakey.Ultrakey` 하나로 한정했다).
+
+⛔ **앱 자신은 `tccutil` 을 호출하지 않는다** — 위 리셋은 검증자가 손으로 돌린 것이다.
+자동 TCC 리셋을 제품 기능으로 넣지 않는다는 판정은 그대로다(F-11 §3.3·§7).
 
 ⚠️ **`AXIsProcessTrusted() == true` 인데 탭 생성이 실패하는 out-of-sync 상황(F-11 §3.3)은 의도적으로 재현하기 어렵다.** 재현되면 진단 화면이 뜨고 **수동 절차만** 안내해야 한다 — ⛔ 자동 TCC 리셋 버튼이 있으면 실패다(명세가 채택하지 않기로 판정했다).
 
