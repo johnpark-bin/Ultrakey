@@ -1,0 +1,19 @@
+[package]
+name = "ultrakey-engine"
+description = "F-07 인프라 — 탭 생명주기 · 워치독 · 절전/깨어남 · 핫플러그 · 경로 B/C"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+ultrakey-platform = { workspace = true }
+ultrakey-layout = { workspace = true }
+arc-swap = { workspace = true }
+crossbeam-channel = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+plist = { workspace = true }

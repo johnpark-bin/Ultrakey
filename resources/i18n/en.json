@@ -1,0 +1,32 @@
+{
+  "app.name": "Ultrakey",
+  "common.ok": "OK",
+  "common.cancel": "Cancel",
+  "common.quit": "Quit",
+
+  "permissions.accessibility.title": "Enable Accessibility for Ultrakey",
+  "permissions.accessibility.body": "Ultrakey remaps your keyboard by watching input events system-wide. Turn on Accessibility access so it's allowed to do that.",
+  "permissions.accessibility.path": "Open System Settings → Privacy & Security → Accessibility",
+  "permissions.accessibility.path.legacy": "Open System Preferences → Security & Privacy → Accessibility",
+  "permissions.accessibility.open_settings": "Open System Settings",
+  "permissions.accessibility.open_settings.legacy": "Open System Preferences",
+  "permissions.accessibility.checkbox_hint": "Find Ultrakey in the list and turn on its checkbox.",
+  "permissions.accessibility.locked_hint": "If the checkbox is grayed out, click the lock icon and enter your password first.",
+  "permissions.accessibility.granted": "Accessibility access is granted.",
+  "permissions.accessibility.revoked": "Accessibility access was turned off.",
+
+  "permissions.out_of_sync.title": "Ultrakey's permissions look out of sync",
+  "permissions.out_of_sync.body": "macOS still shows Accessibility as enabled, but Ultrakey isn't actually receiving input events. Removing and re-adding the app in System Settings usually clears this up.",
+  "permissions.out_of_sync.manual_steps": "1. Remove {0} from the Accessibility list.\n2. Relaunch {0}.\n3. When {0} reappears in the list, check its box again.",
+  "permissions.out_of_sync.quit": "Quit Ultrakey",
+
+  "engine.fatal.tap_create_failed.title": "Ultrakey couldn't start listening to your keyboard",
+  "engine.fatal.tap_create_failed.body": "Creating the system event tap failed even though permission is granted. Ultrakey will close now — please follow the recovery steps before reopening it.",
+
+  "dev.not_app_bundle.title": "Running outside an app bundle",
+  "dev.not_app_bundle.body": "This build was launched with `tauri dev`, so macOS grants permissions to its parent process rather than Ultrakey. Permission-related features can't be verified this way — build and sign a `.app` bundle with `tauri build` instead.",
+
+  "menu.ignore_app": "Ignore {0}",
+  "menu.unauthorized.title": "Ultrakey Needs Accessibility Access",
+  "menu.unauthorized.authorize": "Grant Access…"
+}

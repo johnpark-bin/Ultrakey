@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ultrakey</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    padding: 28px 32px;
+    font: 13px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: transparent;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+  p { margin: 0 0 14px; }
+  .path {
+    font-weight: 500;
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  .hint { opacity: .65; font-size: 12px; }
+  pre.steps {
+    white-space: pre-wrap;
+    font: inherit;
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  .row { display: flex; gap: 8px; margin-top: 18px; }
+  button {
+    font: inherit;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
+    color: inherit;
+    cursor: pointer;
+  }
+  button.primary { font-weight: 500; }
+  button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <h1 id="title"></h1>
+  <p id="body"></p>
+
+  <!-- 온보딩 경로 -->
+  <div id="onboarding" hidden>
+    <p class="path" id="path"></p>
+    <p id="checkbox-hint"></p>
+    <p class="hint" id="locked-hint"></p>
+    <div class="row">
+      <button class="primary" id="open">…</button>
+    </div>
+  </div>
+
+  <!-- ⭐ 권한 어긋남(out of sync) 경로. 수동 절차만 안내한다 —
+       자동 TCC 리셋은 permissions-onboarding.md §3.3·§7 이 채택하지 않기로 판정했다. -->
+  <div id="out-of-sync" hidden>
+    <pre class="steps" id="manual-steps"></pre>
+    <div class="row">
+      <button id="quit">…</button>
+    </div>
+  </div>
+
+<script type="module">
+const { invoke } = window.__TAURI__.core;
+
+const $ = (id) => document.getElementById(id);
+
+async function render() {
+  const c = await invoke("modal_copy");
+
+  $("title").textContent = c.title;
+  $("body").textContent = c.body;
+
+  const onboarding = c.kind === "onboarding";
+  $("onboarding").hidden = !onboarding;
+  $("out-of-sync").hidden = onboarding;
+
+  if (onboarding) {
+    $("path").textContent = c.path;
+    $("checkbox-hint").textContent = c.checkbox_hint;
+    $("locked-hint").textContent = c.locked_hint;
+    $("open").textContent = c.open_button;
+  } else {
+    $("manual-steps").textContent = c.manual_steps;
+    $("quit").textContent = c.quit;
+  }
+}
+
+$("open").addEventListener("click", () => invoke("open_settings"));
+$("quit").addEventListener("click", () => invoke("quit_app"));
+
+// 사용자가 시스템 설정에서 돌아왔을 때 문구가 최신 상태를 반영하도록 다시 그린다.
+// (권한 부여 자체는 Rust 쪽 폴링이 감지해 이 창을 숨긴다 — F-11 §8:
+//  "별도의 확인 버튼 클릭 없이 폴링만으로 자동 진행된다")
+window.addEventListener("focus", render);
+render();
+</script>
+</body>
+</html>

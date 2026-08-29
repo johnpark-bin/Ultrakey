@@ -1,0 +1,64 @@
+//! 스레드 간 공유 상태 — `docs/dev/architecture.md` §2.2 "락을 쓰지 않는 세 가지 장치".
+//!
+//! ⛔ **이 구조체는 원자값과 `ArcSwap` 만 담는다. `Mutex`/`RwLock` 을 넣지 마라** —
+//! [`SharedState`] 는 탭 스레드의 `CGEventTap` 콜백이 매 이벤트마다 읽는다. 콜백 안에서
+//! 락 획득 가능성이 있는 자료구조에 접근하는 것은 `docs/dev/architecture.md` §2.2 의
+//! "콜백 안에서 절대 하지 않는 것"을 정면으로 어기는 것이다.
+
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+
+use ultrakey_core::gate::AtomicAppGate;
+use ultrakey_core::settings::EngineConfig;
+use ultrakey_layout::LayoutResolver;
+
+/// 탭 스레드와 메인(호출) 스레드가 공유하는 상태.
+///
+/// - `config` — 설정·규칙 테이블. 메인이 드물게 쓰고(`Engine::reconfigure`) 콜백이 매
+///   이벤트 읽는다 → `ArcSwap`(대기 없는 읽기, 원자적 포인터 교체 쓰기).
+/// - `gate` — F-10 앱별 비활성화 게이트. 판정은 메인이 미리 계산해 `AtomicBool` 로
+///   게시한다(§3-f 계층 0). 콜백은 이 부울만 읽는다.
+/// - `seek_session_active` — F-01 Seek 세션 활성 여부(§3-b 계층 1). M1 에서는 이 값을
+///   갱신하는 곳이 없어 항상 `false` 다 — M3(F-01)가 이 자리를 채운다.
+/// - `layout` — F-14(B) 레이아웃 테이블. 콜백이 임계 경로에서 읽어야 할 때를 대비해
+///   `LayoutResolver` 자체가 이미 무잠금 `ArcSwap` 을 내부에 두고 있다(`ultrakey-layout`).
+pub struct SharedState {
+    pub config: ArcSwap<EngineConfig>,
+    pub gate: Arc<AtomicAppGate>,
+    pub seek_session_active: AtomicBool,
+    pub layout: Arc<LayoutResolver>,
+}
+
+impl SharedState {
+    pub fn new(config: EngineConfig, gate: Arc<AtomicAppGate>) -> Arc<Self> {
+        Arc::new(SharedState {
+            config: ArcSwap::from_pointee(config),
+            gate,
+            seek_session_active: AtomicBool::new(false),
+            layout: Arc::new(LayoutResolver::new()),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_starts_with_seek_inactive_and_given_config() {
+        let gate = Arc::new(AtomicAppGate::new());
+        let cfg = EngineConfig::default();
+        let shared = SharedState::new(cfg.clone(), gate);
+
+        assert!(!shared
+            .seek_session_active
+            .load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(
+            shared.config.load().timings.quick_press_duration_ms,
+            cfg.timings.quick_press_duration_ms
+        );
+        assert!(shared.layout.current().is_empty());
+    }
+}

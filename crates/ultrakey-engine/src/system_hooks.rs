@@ -1,0 +1,309 @@
+//! 절전 · 깨어남 · 세션전환 · 화면 잠금 · 핫플러그 · 입력 소스 변경 훅.
+//! `key-remapping-engine.md` §3-a, §5#3~#5, #10, #11.
+//!
+//! ⚠️ 이 모듈의 구독 등록(`observe_system_events`/`watch_keyboards`/
+//! `observe_input_source_changes`)은 **호출한 스레드의 `CFRunLoop`** 에 걸린다
+//! (`ultrakey-platform` 각 모듈 문서 참고). `docs/dev/architecture.md` §2.1 배치상 이
+//! 스레드는 Tauri/`NSApplication` 이 소유한 **메인 스레드**여야 한다 — [`SystemHooks::start`]
+//! 는 `Engine::start` 를 호출한 바로 그 스레드에서(탭 전용 스레드를 새로 만들지 않고)
+//! 동기적으로 실행되어야 이 전제가 성립한다.
+//!
+//! ⚠️ **지연은 스레드를 새로 띄우지 않는다.** 지연 전용 스레드 하나
+//! ([`DelayScheduler`])가 `crossbeam_channel::recv_timeout` 으로 예약된 작업의 마감을
+//! 관리한다 — 이벤트마다 `thread::spawn` 하지 않는다.
+
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+
+use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, KeyboardHotplugWatcher};
+use ultrakey_platform::text_input_source::{observe_input_source_changes, InputSourceObserver};
+use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
+
+use crate::command::{CommandChannel, EngineCommand};
+use crate::lifecycle::should_skip_restart;
+use crate::state::SharedState;
+
+/// 지연 스케줄러에 예약하는 작업 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelayedJob {
+    /// 절전 복귀·세션 활성화·화면 잠금 해제 → 지연 뒤 `RecoverTap`. ⭐ 재시작
+    /// 디바운스가 적용된다(§3-a).
+    Recover,
+    /// 키보드 핫플러그 → 지연 뒤 `ReapplyHidMapping`. 경로 B 는 경로 A 와 다른 자원이라
+    /// 디바운스를 공유하지 않는다.
+    ReapplyHidMapping,
+}
+
+enum SchedulerMsg {
+    Schedule { after_ms: u64, job: DelayedJob },
+    Shutdown,
+}
+
+/// [`DelayScheduler`] 로 작업을 예약하고, 탭 스레드로 즉시 명령을 보낼 수 있는 손잡이.
+/// `Clone` 이 가능해 시스템 이벤트 콜백마다 자유롭게 복제해 캡처할 수 있다.
+#[derive(Clone)]
+pub struct DelaySchedulerHandle {
+    sender: Sender<SchedulerMsg>,
+    commands: CommandChannel,
+    shared: Arc<SharedState>,
+}
+
+impl DelaySchedulerHandle {
+    pub fn commands(&self) -> &CommandChannel {
+        &self.commands
+    }
+
+    pub fn shared(&self) -> &Arc<SharedState> {
+        &self.shared
+    }
+
+    fn schedule(&self, after_ms: u64, job: DelayedJob) {
+        let _ = self.sender.send(SchedulerMsg::Schedule { after_ms, job });
+    }
+}
+
+/// 지연 전용 스레드 하나 — 절전/세션/핫플러그 복구를 `recv_timeout` 기반으로 예약한다.
+pub struct DelayScheduler {
+    thread: Option<JoinHandle<()>>,
+    handle: DelaySchedulerHandle,
+}
+
+impl DelayScheduler {
+    pub fn spawn(shared: Arc<SharedState>, commands: CommandChannel) -> Self {
+        let (tx, rx) = unbounded::<SchedulerMsg>();
+        let handle = DelaySchedulerHandle {
+            sender: tx,
+            commands: commands.clone(),
+            shared: Arc::clone(&shared),
+        };
+        let thread = thread::Builder::new()
+            .name("ultrakey-delay-scheduler".to_string())
+            .spawn(move || scheduler_loop(rx, shared, commands))
+            .expect("지연 스케줄러 스레드 생성 실패");
+        DelayScheduler {
+            thread: Some(thread),
+            handle,
+        }
+    }
+
+    pub fn handle(&self) -> DelaySchedulerHandle {
+        self.handle.clone()
+    }
+
+    pub fn shutdown(mut self) {
+        let _ = self.handle.sender.send(SchedulerMsg::Shutdown);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+struct PendingJob {
+    fire_at: Instant,
+    job: DelayedJob,
+}
+
+fn scheduler_loop(rx: Receiver<SchedulerMsg>, shared: Arc<SharedState>, commands: CommandChannel) {
+    let clock_start = Instant::now();
+    let mut pending: Vec<PendingJob> = Vec::new();
+    let mut last_recover_fired_ms: Option<u64> = None;
+
+    loop {
+        let timeout = pending
+            .iter()
+            .map(|p| p.fire_at)
+            .min()
+            .map(|t| t.saturating_duration_since(Instant::now()))
+            .unwrap_or(Duration::from_secs(3600));
+
+        match rx.recv_timeout(timeout) {
+            Ok(SchedulerMsg::Schedule { after_ms, job }) => {
+                pending.push(PendingJob {
+                    fire_at: Instant::now() + Duration::from_millis(after_ms),
+                    job,
+                });
+                continue; // 새 마감이 생겼으니 다음 timeout 을 다시 계산한다.
+            }
+            Ok(SchedulerMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+
+        let now = Instant::now();
+        let now_ms = now.duration_since(clock_start).as_millis() as u64;
+        let mut i = 0;
+        while i < pending.len() {
+            if pending[i].fire_at <= now {
+                let p = pending.remove(i);
+                fire_job(
+                    p.job,
+                    &shared,
+                    &commands,
+                    &mut last_recover_fired_ms,
+                    now_ms,
+                );
+            } else {
+                i += 1;
+            }
+        }
+    }
+    tracing::debug!("지연 스케줄러 스레드 종료");
+}
+
+fn fire_job(
+    job: DelayedJob,
+    shared: &Arc<SharedState>,
+    commands: &CommandChannel,
+    last_recover_fired_ms: &mut Option<u64>,
+    now_ms: u64,
+) {
+    match job {
+        DelayedJob::Recover => {
+            let debounce_ms = shared.config.load().timings.restart_debounce_ms;
+            if should_skip_restart(*last_recover_fired_ms, now_ms, debounce_ms) {
+                let elapsed_ms = last_recover_fired_ms.map(|last| now_ms.saturating_sub(last));
+                tracing::debug!(
+                    elapsed_ms,
+                    debounce_ms,
+                    "직전 복구로부터 얼마 지나지 않아 재확인을 디바운스로 건너뛴다"
+                );
+                return;
+            }
+            *last_recover_fired_ms = Some(now_ms);
+            commands.send(EngineCommand::RecoverTap);
+        }
+        DelayedJob::ReapplyHidMapping => {
+            commands.send(EngineCommand::ReapplyHidMapping);
+        }
+    }
+}
+
+/// 시스템 훅 전체 — 옵저버 3종 + 지연 스케줄러를 묶어 생애주기를 관리한다.
+pub struct SystemHooks {
+    _system_observer: SystemEventObserver,
+    _hotplug_watcher: Option<KeyboardHotplugWatcher>,
+    _input_source_observer: InputSourceObserver,
+    scheduler: DelayScheduler,
+}
+
+impl SystemHooks {
+    /// ⚠️ **호출한 스레드에서 동기적으로** 구독을 등록한다 — 이 스레드가 곧 메인
+    /// 스레드여야 한다(위 모듈 문서 참고). 절대 이 함수 자체를 새 스레드에서 부르지 마라.
+    pub fn start(shared: Arc<SharedState>, commands: CommandChannel) -> Self {
+        let scheduler = DelayScheduler::spawn(Arc::clone(&shared), commands);
+        let sched_handle = scheduler.handle();
+
+        let sched_for_events = sched_handle.clone();
+        let observer = observe_system_events(Box::new(move |ev| {
+            handle_system_event(ev, &sched_for_events);
+        }));
+
+        let sched_for_hotplug = sched_handle.clone();
+        let hotplug = watch_keyboards(Box::new(move |ev| {
+            handle_hotplug_event(ev, &sched_for_hotplug);
+        }));
+
+        let shared_for_layout = Arc::clone(&shared);
+        let input_observer = observe_input_source_changes(Box::new(move || {
+            let rebuilt = shared_for_layout.layout.rebuild();
+            let table = shared_for_layout.layout.current();
+            tracing::info!(
+                rebuilt,
+                used_ascii_fallback = table.used_ascii_fallback(),
+                source_id = table.source_id(),
+                "입력 소스 변경 감지 — 레이아웃 테이블 재구축"
+            );
+        }));
+
+        SystemHooks {
+            _system_observer: observer,
+            _hotplug_watcher: hotplug,
+            _input_source_observer: input_observer,
+            scheduler,
+        }
+    }
+
+    /// ⚠️ 스레드를 누수시키지 않는다 — 지연 스케줄러 스레드를 정리한다. 옵저버 3종은 이
+    /// 구조체가 드롭되며 각자의 `Drop` 이 구독을 해지한다.
+    pub fn shutdown(self) {
+        self.scheduler.shutdown();
+    }
+}
+
+fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
+    match ev {
+        // ⭐ 즉시 ForceResetState — stuck modifier 방지(§5#9). 탭 자체는 유지한다.
+        SystemEvent::WillSleep => {
+            tracing::info!("절전 진입 알림 수신 — 즉시 상태를 강제 리셋한다");
+            sched.commands().send(EngineCommand::ForceResetState);
+        }
+        SystemEvent::ScreenLocked => {
+            tracing::info!("화면 잠금 알림 수신 — 즉시 상태를 강제 리셋한다");
+            sched.commands().send(EngineCommand::ForceResetState);
+        }
+        SystemEvent::SessionDidResignActive => {
+            tracing::info!("세션 비활성화 알림 수신 — 즉시 상태를 강제 리셋한다");
+            sched.commands().send(EngineCommand::ForceResetState);
+        }
+        // ⭐ 즉시 재확인하지 않는다 — 지연 뒤 RecoverTap(§3-a).
+        SystemEvent::DidWake => {
+            let delay = sched.shared().config.load().timings.wake_delay_ms;
+            tracing::info!(
+                delay_ms = delay,
+                "절전 복귀 알림 수신 — 지연 후 탭 재확인을 예약한다"
+            );
+            sched.schedule(delay, DelayedJob::Recover);
+        }
+        SystemEvent::ScreenUnlocked => {
+            let delay = sched.shared().config.load().timings.session_delay_ms;
+            tracing::info!(
+                delay_ms = delay,
+                "화면 잠금 해제 알림 수신 — 지연 후 탭 재확인을 예약한다"
+            );
+            sched.schedule(delay, DelayedJob::Recover);
+        }
+        SystemEvent::SessionDidBecomeActive => {
+            let delay = sched.shared().config.load().timings.session_delay_ms;
+            tracing::info!(
+                delay_ms = delay,
+                "세션 활성화 알림 수신 — 지연 후 탭 재확인을 예약한다"
+            );
+            sched.schedule(delay, DelayedJob::Recover);
+        }
+        SystemEvent::FrontAppChanged(ident) => {
+            // ⚠️ `AppGateController::set_front_app` 호출은 F-10 이 소유한 컨트롤러가
+            // 필요하다. `Engine::start` 는 읽기 전용 `Arc<AtomicAppGate>` 만 받으므로
+            // (설계 §2.3), 이 엔진 크레이트는 그 컨트롤러에 접근할 수 없다 — 최전면 앱
+            // 변경을 게이트에 실제로 반영하는 배선은 F-10/앱 계층이 별도로
+            // `NSWorkspaceDidActivateApplicationNotification` 을 구독해 자신의
+            // `AppGateController::set_front_app` 을 호출하는 방식으로 이루어져야 한다.
+            // 여기서는 관측 로그만 남긴다(§3-f 판정 로직 자체는 core::gate 가 갖고 있다).
+            let bundle_id = ident.map(|a| a.bundle_id).unwrap_or_default();
+            tracing::debug!(
+                bundle_id,
+                "최전면 앱 변경 감지(관측만 — 게이트 갱신은 F-10 소관)"
+            );
+        }
+    }
+}
+
+fn handle_hotplug_event(ev: HotplugEvent, sched: &DelaySchedulerHandle) {
+    let delay = sched
+        .shared()
+        .config
+        .load()
+        .timings
+        .keyboard_connect_delay_ms;
+    let label = match ev {
+        HotplugEvent::Attached => "연결",
+        HotplugEvent::Detached => "해제",
+    };
+    tracing::info!(
+        delay_ms = delay,
+        "외장 키보드 {} 감지 — 지연 후 경로 B 재적용을 예약한다",
+        label
+    );
+    sched.schedule(delay, DelayedJob::ReapplyHidMapping);
+}

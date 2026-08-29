@@ -1,0 +1,17 @@
+[package]
+name = "ultrakey-permissions"
+description = "F-11 권한 온보딩과 복구 — AXIsProcessTrusted 폴링 · out-of-sync 진단"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-platform = { workspace = true }
+ultrakey-i18n = { workspace = true }
+arc-swap = { workspace = true }
+crossbeam-channel = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
