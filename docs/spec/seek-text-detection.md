@@ -1,8 +1,9 @@
 # F-02 · Seek — 텍스트 후보 검출
 
-> **한 줄 요약**: 화면 캡처에 대한 Vision OCR과, 활성 앱의 Accessibility 트리 파싱이라는 두 개의 독립 소스에서 "클릭 가능한 텍스트 후보" 목록을 만들고 하나로 병합한다.
+> **한 줄 요약**: 화면 캡처에 대한 Vision OCR(항상 켜지는 기본 소스)과, 최전면 창에 한해 후보를 보강하는 Accessibility 트리 파싱이라는 두 소스에서 "클릭 가능한 텍스트 후보" 목록을 만들고, 중복 시 OCR 을 우선해 병합한다. ⭐ 화면 캡처는 **ScreenCaptureKit 이 아니라 `CGDisplayCreateImage` 계열**이다(실측: 번들 심볼).
 > **의존성**: 후보 검출을 *언제* 시작하는지는 `F-01`(`seek-activation-and-session.md`)이 결정한다. 이 문서는 세션이 열려 질의 문자열이 주어진 상태에서 "화면 텍스트 후보 목록 + 질의 매칭 결과"를 산출하는 것까지만 다룬다. 소스 A(OCR)는 Screen Recording 권한에, 소스 B(AX)는 Accessibility 권한에 의존한다 — 권한 획득 절차 자체는 `F-11`(`permissions-onboarding.md`) 참조.
-> **관련 명세**: 후보를 화면에 그리는 방법 → `F-03`(`seek-overlay-ui.md`). 선택된 후보를 클릭하는 방법 → `F-04`(`seek-click-execution.md`). 권한 획득 UX → `F-11`(`permissions-onboarding.md`). 플랫폼 역량 종합 판정 → `docs/spec/platform-constraints.md`(별도 문서, 이 문서 범위 밖).
+> **관련 명세**: 후보를 화면에 그리는 방법 → `F-03`(`seek-overlay-ui.md`, AX 매치의 "요소 전체 하이라이트"는 여기서 다룬다). 선택된 후보를 클릭하는 방법 → `F-04`(`seek-click-execution.md`). 권한 획득 UX → `F-11`(`permissions-onboarding.md`). 플랫폼 역량 종합 판정 → `docs/spec/platform-constraints.md`(별도 문서, 이 문서 범위 밖).
+> **1차 근거**: `docs/research/app-bundle-analysis.md`(실측: AX 트리·`defaults`·번들 심볼·번들 문자열). 근거 표기 정의는 그 문서 §0.
 
 ---
 
@@ -12,10 +13,10 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
 
 검출은 두 개의 독립 소스를 병행한다.
 
-- **소스 A (주 경로) — Vision OCR**: 화면을 스크린샷으로 캡처해 Apple Vision 프레임워크로 문자를 인식한다. 항상 켜져 있으며 끌 수 없다 `(추정 — 조사 자료에 "OCR 끄기" 옵션이 없다. §9 참조)`.
-- **소스 B (보조 경로) — Accessibility 파싱**: `Seek using macOS accessibility` 체크박스로 켜는 선택 기능이다. 대상 앱이 `AXUIElement` 트리로 노출하는 텍스트 요소를 직접 읽는다. v1.18 에서 "initial cut" 으로 추가됐으며 OCR 이 놓치는 후보를 보강하는 역할이다.
+- **소스 A (항상 켜지는 기본 소스) — Vision OCR**: 화면을 스크린샷으로 캡처해 Apple Vision 프레임워크로 문자를 인식한다. ⭐ **끌 수 있는 UI 컨트롤이 없다는 사실이 확정**됐다 — `Seek using macOS accessibility` 옆 ⓘ 팝오버 원문(§3.1)이 AX 를 "잠재적으로 더 많은 텍스트 항목을 찾게 해주는" 보강 소스로 서술하는 반면 OCR 을 끄는 스위치는 어디에도 없다(실측: AX 트리 — Seek 탭 8개 컨트롤 전수 확인, app-bundle-analysis.md §6.1).
+- **소스 B (최전면 창 한정 보강 경로) — Accessibility 파싱**: `Seek using macOS accessibility` 체크박스로 켜는 선택 기능이다. 대상 앱이 `AXUIElement` 트리로 노출하는 텍스트 요소를 직접 읽는다. v1.18 에서 "initial cut" 으로 추가됐으며 OCR 이 놓치는 후보를 보강하는 역할이다. ⭐ **AX 소스는 이 체크박스와 무관하게 애초에 최전면 창으로 범위가 고정된다** — ⓘ 팝오버 원문이 "in the frontmost window" 라고 명시한다(§3.1, §3.3.2).
 
-두 소스의 산출물은 **동일한 자료형(텍스트 + 전역 화면 좌표)** 으로 정규화된 뒤 병합되어 하나의 후보 목록이 된다.
+두 소스의 산출물은 **동일한 자료형(텍스트 + 전역 화면 좌표)** 으로 정규화된 뒤 병합되어 하나의 후보 목록이 된다. ⭐ **AX·OCR 은 배타적이지 않다.** 둘 다 동시에 후보를 낼 수 있고, 겹치는 경우 **OCR 매치가 AX 매치를 대체**한다(우선순위 확정, §3.4).
 
 ---
 
@@ -39,14 +40,15 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
                          └─────────────┬────────────┘
                      ┌─────────────────┴─────────────────┐
                      ▼                                     ▼
-        [소스 A: Vision OCR]                    [소스 B: Accessibility] (설정 켜짐 시)
-       A1 화면 캡처                                B1 AX 루트 획득
-       A2 VNRecognizeTextRequest 실행              B2 트리 순회 + 텍스트 요소 수집
-       A3 좌표 변환 (정규화·좌하단→전역·좌상단)      B3 범위 필터 적용
-       A4 TextCandidate 목록 A                     B4 TextCandidate 목록 B
+        [소스 A: Vision OCR, 항상 동작]              [소스 B: Accessibility, 항상 최전면 창 한정]
+       A1 화면 캡처 (CGDisplayCreateImage 계열)       (설정 켜짐 시에만 동작)
+       A1.5 캡처 이미지 전처리 (CoreImage, ⭐ 신규)     B1 AX 루트 획득 (항상 최전면 창)
+       A2 VNRecognizeTextRequest 실행                 B2 트리 순회 + 텍스트 요소 수집
+       A3 좌표 변환 (정규화·좌하단→전역·좌상단)         B3 범위 필터 적용 (minAxCharCount)
+       A4 TextCandidate 목록 A                        B4 TextCandidate 목록 B (요소 전체 하이라이트)
                      └─────────────────┬─────────────────┘
                                         ▼
-                              M. 병합 (M1~M3)
+                        M. 병합 — 중복 시 OCR 이 AX 를 대체 (M1~M3)
                                         ▼
                          전역 후보 목록 CandidateSet
                                         ▼
@@ -55,16 +57,33 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
                          F-03(오버레이) / F-04(클릭) 로 전달
 ```
 
+⭐ **소스 B 의 범위는 `Only Seek in the frontmost window` 설정과 무관하게 항상 최전면 창으로 고정된다.** 그 설정은 소스 A(OCR/캡처)의 범위만 좁힌다. 두 설정의 역할 분리는 §3.3.2 참조.
+
 ### 3.2 소스 A — Vision OCR
+
+⭐⭐ **화면 캡처 API 정정 — ScreenCaptureKit 이 아니다.** 실측(`nm -u`): 링크된 심볼은 **`CGDisplayCreateImage`** · **`CGDisplayCreateImageForRect`** · `CGWindowListCopyWindowInfo` · `CGWindowListCreateDescriptionFromArray` 이고, `SCStream`·`SCContentFilter`·`SCShareableContent` 등 ScreenCaptureKit 심볼은 **전무**하다(app-bundle-analysis.md §3.1). `LSMinimumSystemVersion = 12.0` 과 정합한다 — 원본은 macOS 12.0 을 유지한 채 `CGDisplayCreateImage` 계열 레거시 API 로 출하 중이다. `CGWindowListCopyWindowInfo` 는 `Only Seek in the frontmost window` 와 창 범위 판정에 쓰이는 것으로 보인다 `(미확정 — 용도는 해석, 실측: 번들 심볼)`.
 
 | 단계 | 입력 | 처리 | 출력 |
 | :--- | :--- | :--- | :--- |
-| A1. 화면 캡처 | (트리거 신호) | 디스플레이별로 `CGImage` 캡처 | `[(displayID, CGImage, imgW, imgH, backingScaleFactor)]` |
-| A2. OCR 실행 | 디스플레이별 `CGImage` | `VNImageRequestHandler(cgImage:)` 생성 → `VNRecognizeTextRequest` 실행 | `[VNRecognizedTextObservation]` (디스플레이별) |
-| A3. 좌표 변환 | `VNRecognizedTextObservation.boundingBox`(정규화, 좌하단 원점) | §3.2.2 수식 적용 | 전역 화면 좌표 `CGRect`(포인트 단위, 좌상단 원점) |
+| A1. 화면 캡처 | (트리거 신호) | 디스플레이별로 `CGDisplayCreateImage(displayID)` 또는 특정 영역만 `CGDisplayCreateImageForRect(displayID, rect)` 캡처(실측: 번들 심볼) | `[(displayID, CGImage, imgW, imgH, backingScaleFactor)]` |
+| A1.5. ⭐ 전처리 (신규) | 디스플레이별 `CGImage` | §3.2.1 의 CoreImage 필터 파이프라인 적용 | 전처리된 `CGImage` |
+| A2. OCR 실행 | 전처리된 `CGImage` | `VNImageRequestHandler(cgImage:)` 생성 → `VNRecognizeTextRequest` 실행 | `[VNRecognizedTextObservation]` (디스플레이별) |
+| A3. 좌표 변환 | `VNRecognizedTextObservation.boundingBox`(정규화, 좌하단 원점) | §3.2.3 수식 적용. `VNImageRectForNormalizedRect` 심볼의 존재가 이 정규화 좌표 → 화면 좌표 변환 단계 자체가 필요함을 확정한다(실측: 번들 심볼) | 전역 화면 좌표 `CGRect`(포인트 단위, 좌상단 원점) |
 | A4. 후보 생성 | 변환된 좌표 + `topCandidates(1)` 문자열 | `TextCandidate { text, frame, source: OCR, confidence }` 구성 | `[TextCandidate]` (목록 A) |
 
-#### 3.2.1 인식 파라미터와 트레이드오프
+#### 3.2.1 ⭐ 캡처 이미지 전처리 파이프라인 (신규 확정)
+
+기존 명세에 전혀 없던 단계다. CoreImage 가 링크되어 있고 다음 필터 이름이 실행 파일에 있다(실측: 번들 심볼, app-bundle-analysis.md §3.1, §4.7):
+
+- **`CILanczosScaleTransform`** — 스케일 변환. 캡처 이미지를 OCR 에 유리한 해상도로 정규화하는 용도로 추정된다.
+- **`CIPhotoEffectMono`** / **`CIPhotoEffectNoir`** — 흑백 변환. 대비를 강화해 저대비 텍스트(§4.5 확인된 실패 사례)의 인식률을 높이는 용도로 추정된다.
+- **`CIMaximumComponent`** / **`CIMinimumComponent`** — RGB 성분 중 최대/최소값 추출. 특정 색상 채널의 텍스트(예: 검정 배경 위 특정 파란색, §5 #12)를 두드러지게 하는 용도로 추정된다.
+
+내부 타입 `CaptureFiltering` · `CaptureFilterType` · `FilterFactory` 계열(`CompareFilter` · `MessageFilterFactory` · `PathFilterFactory`)이 이 필터들을 선택·적용하는 구조로 보인다.
+
+⭐ **어떤 조건에서 어떤 필터를 고르는지는 `(미확정)`이다** — 화면 콘텐츠(밝기·대비)에 따라 동적으로 고르는 적응형 파이프라인인지, 항상 고정된 순서로 전부 적용하는지 조사 자료로 확정되지 않았다. §9 미해결 질문으로 승계한다.
+
+#### 3.2.2 인식 파라미터와 트레이드오프
 
 | 파라미터 | 선택 | 근거·트레이드오프 |
 | :--- | :--- | :--- |
@@ -73,7 +92,7 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
 | `recognitionLanguages` | 시스템 로케일 + 영어를 기본으로, 사용자가 늘릴 수 있게 `(추정)` | 조사에서 앱이 en 외 7개 로케일(de, he, ar, el, ja, fa, uk)을 번들함이 appcast 에서 확인됐다(`superkey-inventory.md` §2.3). UI 로케일과 OCR 인식 언어가 반드시 같을 필요는 없으므로 별도 설정일 가능성이 있으나 조사 자료로 확정되지 않는다. |
 | `minimumTextHeight` | 명시적으로 낮게 설정하거나 미설정(기본값) `(추정)` | "extra small text" 가 확인된 실패 사례이므로, 이 파라미터를 부주의하게 높게 두면 그 실패를 자초하게 된다. 구체적 수치는 조사 자료에 없다. |
 
-#### 3.2.2 좌표 변환 (수식)
+#### 3.2.3 좌표 변환 (수식)
 
 `VNRecognizedTextObservation.boundingBox` 는 **해당 디스플레이의 캡처 이미지 기준으로 정규화된 좌표**이며 **원점이 좌하단**이다. 이를 AX 좌표(§3.3)와 같은 좌표계, 즉 **전역 화면 좌표(포인트 단위, 원점 좌상단, Quartz/CoreGraphics 관례)** 로 변환해야 두 소스를 병합할 수 있다.
 
@@ -117,22 +136,45 @@ gh = qh
 
 ### 3.3 소스 B — Accessibility 파싱
 
+⭐⭐ **가장 중요한 정정 — AX 는 언제나 최전면 창 하나로 한정된다.** `Seek using macOS accessibility` 옆 ⓘ 팝오버 원문(SuperKey 원문, 실측: AX 트리 + nib, `SeekAccessibilityViewController`):
+> "Seek using macOS Accessibility"
+> "Enable this to let Seek potentially find more text items in the frontmost window."
+> "It's not possible to determine precise locations of text within an Accessibility element, so the entire element will be highlighted by Seek."
+> "Seek matches using Optical Character Recognition (OCR) will display in place of duplicate matches from Accessibility."
+> "Sometimes text found in an accessibility element can be obscured, so you might get matches even if you can't see the text in the element."
+
+이 원문으로 확정되는 것:
+- AX 는 **최전면 창에 한해서만** 후보를 추가하는 보강 소스다 — `Only Seek in the frontmost window` 설정과 무관하게 원래부터 최전면 창으로 범위가 고정되어 있다(끄고 켜는 것은 AX 자체일 뿐 순회 범위가 아니다).
+- AX 매치는 **텍스트의 정확한 위치를 알 수 없어 요소 전체가 하이라이트**된다 — OCR 매치(문자 단위로 정밀한 `boundingBox`)와 하이라이트 형태가 다르다(`F-03` 소관).
+- **중복 시 OCR 매치가 AX 매치를 대체**한다(우선순위 확정, §3.4 M3).
+- AX 매치는 **가려진(obscured) 텍스트도 잡힐 수 있다** — 사용자 눈에 보이지 않는 텍스트가 매치되는 알려진 한계다(§5). 관련 타입 `UnobscuredWindowElement` 가 실재한다(실측: 번들 심볼).
+
 | 단계 | 입력 | 처리 | 출력 |
 | :--- | :--- | :--- | :--- |
-| B1. 루트 획득 | (설정: `Only Seek in the frontmost window`) | 꺼짐 → `AXUIElementCreateSystemWide()` 또는 화면상 보이는 모든 앱의 `AXUIElementCreateApplication(pid)` 순회. 켜짐 → 최전면 앱의 `kAXFocusedWindowAttribute` 로 얻은 창 하나만 루트로 사용 | AX 루트 요소 1개 이상 |
+| B1. 루트 획득 | (항상 최전면 창) | `kAXFocusedWindowAttribute` 로 얻은 최전면 창 하나만 루트로 사용 — `Only Seek in the frontmost window` 와 무관 | AX 루트 요소 1개 |
 | B2. 트리 순회 | AX 루트 | 깊이 제한을 두고 `kAXChildrenAttribute` 로 재귀 순회. 각 요소에서 `kAXValueAttribute`/`kAXTitleAttribute`/`kAXDescriptionAttribute` 중 텍스트가 있는 것과, `kAXPositionAttribute`/`kAXSizeAttribute`(둘 다 `AXValue` → `CGPoint`/`CGSize` 로 언패킹) 를 읽는다 | `[(text, frame)]` 원시 목록 |
-| B3. 범위 필터 | 원시 목록 + (설정: `Match on more than one character`) | 켜짐 → `text.count >= 2` 인 요소만 통과 | 필터링된 목록 |
-| B4. 후보 생성 | 필터링된 목록 | `TextCandidate { text, frame, source: AX, confidence: None }` 구성 | `[TextCandidate]` (목록 B) |
+| B3. 범위 필터 | 원시 목록 + `minAxCharCount`(정수, §3.3.1) | `text.count >= minAxCharCount` 인 요소만 통과 | 필터링된 목록 |
+| B4. 후보 생성 | 필터링된 목록 | `TextCandidate { text, frame(요소 전체), source: AX, confidence: None }` 구성 | `[TextCandidate]` (목록 B) |
 
 `kAXPositionAttribute`/`kAXSizeAttribute` 는 이미 **전역 화면 좌표, 좌상단 원점, 포인트 단위**로 반환되므로(CoreGraphics 관례), 소스 A 와 달리 추가 좌표 변환이 필요 없다.
 
-#### 3.3.1 `Match on more than one character` 의 의미 `(추정)`
+#### 3.3.1 ⭐ `Match on more than one character` — 숨겨진 것이지 삭제된 것이 아니고, 불리언이 아니다
 
-이 체크박스는 AX 매칭을 2글자 이상인 요소로 제한한다. 이유는 조사 자료에 직접 서술되어 있지 않으나 다음 근거로 추정한다: OCR 은 화면에 보이는 "덩어리 텍스트"만 관측하므로 1글자 후보가 드물게만 나오는 반면, AX 트리는 버튼 아이콘의 accessibility label, 구분자, 단축키 힌트 등 **화면에 시각적으로 드러나지 않는 1글자 텍스트 요소**까지 그대로 노출한다. 이런 요소를 그대로 후보에 포함시키면 사용자가 한 글자만 입력해도 후보가 폭증해 목록이 사실상 무의미해진다. 그래서 AX 소스에만 적용되는 노이즈 억제 스위치로 별도 존재한다고 본다. OCR 소스에는 이런 옵션이 없다 — OCR 은 애초에 시각적으로 존재하는 텍스트만 잡으므로 1글자 노이즈 문제가 AX 만큼 심하지 않기 때문으로 추정한다.
+기존 명세는 이 항목의 의미를 추정으로만 서술했다. 실측으로 다음이 확정된다(app-bundle-analysis.md §6.1, §2.1):
 
-#### 3.3.2 `Only Seek in the frontmost window` 의 순회 범위 축소
+- **v1.66 스크린샷에 이 항목이 안 보이는 이유는 삭제가 아니라 숨김이다.** `Seek using macOS accessibility` 가 꺼져 있으면 이 체크박스는 AX 트리에서 완전히 사라진다(dimmed 가 아니라 hidden). AX 로 상위 체크박스를 켜자 나타났고, 끄자 다시 사라졌다(실측: AX 트리).
+- **상위를 켰을 때의 기본값은 ☑ 다**(실측: AX 트리).
+- **저장 형태가 불리언이 아니다.** `defaults` 에 **`minAxCharCount = 2`** 라는 **정수**로 저장된다(실측: `defaults`). 즉 "1글자 초과" 라는 이진 스위치가 아니라 **AX 요소 텍스트의 최소 글자 수 파라미터**이며, 체크박스는 이 정수를 2 와 1 사이에서 토글하는 UI 로 보인다 `(미확정 — 정수를 2/1 외의 값으로 설정하는 경로는 찾지 못했다. §9)`.
+- ⭐ `minAxCharCount` 는 **아무 설정도 건드리지 않은 plist 에 이미 존재하는 단 두 개의 키 중 하나**다(다른 하나는 `NSWindow Frame EntryBarWindow`, app-bundle-analysis.md §2.1). 즉 앱이 첫 실행 시 이 값을 `2` 로 시딩(seed)해 두는 것으로 보인다 — 다른 Seek 설정들이 "값이 없으면 곧 기본값"인 것과 달리 이 키는 예외적으로 항상 존재한다.
 
-이 설정은 스크린샷상 `Seek using macOS accessibility` 의 하위 체크박스가 아니라 **독립된 상위 체크박스**로 배치되어 있다(`superkey-inventory.md` §3.1). 따라서 이 설정은 소스 B(AX 순회 루트)뿐 아니라 소스 A(화면 캡처 범위)에도 함께 적용되는 것이 자연스럽다 `(추정)`: 꺼짐 상태에서는 전체 화면(모든 디스플레이)을 캡처·순회하고, 켜짐 상태에서는 최전면 창의 프레임으로 캡처 영역을 잘라내고(A1) AX 순회 루트도 그 창으로 제한한다(B1). 조사 자료는 이 설정이 "Seek" 전체에 적용된다고만 말할 뿐 소스별로 분리해 서술하지 않으므로, 두 소스에 동일하게 적용하는 쪽을 채택하고 §9 에 확인 필요 항목으로 남긴다.
+이유(왜 최소 글자 수를 두는가)는 조사 자료에 직접 서술되어 있지 않으나 다음 근거로 여전히 추정한다: OCR 은 화면에 보이는 "덩어리 텍스트"만 관측하므로 1글자 후보가 드물게만 나오는 반면, AX 트리는 버튼 아이콘의 accessibility label, 구분자, 단축키 힌트 등 **화면에 시각적으로 드러나지 않는 1글자 텍스트 요소**까지 그대로 노출한다. 이런 요소를 그대로 후보에 포함시키면 사용자가 한 글자만 입력해도 후보가 폭증해 목록이 사실상 무의미해진다.
+
+#### 3.3.2 ⭐ `Only Seek in the frontmost window` 은 OCR(소스 A) 범위만 좁힌다 — AX 범위와는 별개
+
+기존 명세는 이 설정이 두 소스 모두에 적용된다고 추정했으나, §3.3 도입부에 인용한 AX ⓘ 팝오버 원문("in the frontmost window")으로 **AX 는 이 설정과 무관하게 원래부터 최전면 창 하나로 고정**됨이 확정됐다. 따라서 두 설정의 역할은 다음과 같이 분리된다:
+
+- **AX(소스 B)**: 항상 최전면 창 한정. `Only Seek in the frontmost window` 를 꺼도 AX 의 순회 루트는 넓어지지 않는다.
+- **`Only Seek in the frontmost window`**: OCR(소스 A) 의 캡처/인식 범위를 좁힌다 — 꺼짐이면 전체 화면(모든 디스플레이)을 캡처, 켜짐이면 최전면 창 프레임으로 캡처 영역을 잘라낸다(A1). 이 범위 축소 자체의 구체적 구현(창 프레임을 어떻게 얻는지 — `CGWindowListCopyWindowInfo` 로 추정, app-bundle-analysis.md §3.2)은 여전히 `(미확정)`이다.
 
 #### 3.3.3 성능·블로킹 위험
 
@@ -146,16 +188,24 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 
 ### 3.4 병합 계층
 
-두 목록을 하나의 `CandidateSet` 으로 합친다. 전제: 3.2.2/3.3 절에서 이미 동일 좌표계(전역, 좌상단 원점, 포인트)로 정규화되어 있다.
+두 목록을 하나의 `CandidateSet` 으로 합친다. 전제: 3.2.3/3.3 절에서 이미 동일 좌표계(전역, 좌상단 원점, 포인트)로 정규화되어 있다. 단, AX 매치는 요소 전체가 `frame` 이므로(§3.3) OCR 매치보다 넓은 사각형인 경우가 흔하다.
 
 | 단계 | 규칙 | 근거 / 상태 |
 | :--- | :--- | :--- |
-| M1. 합치기 | 목록 A ∪ 목록 B | 사실 — 두 소스가 병행 동작하고 결과가 하나의 목록으로 사용자에게 보인다는 점은 벤더 FAQ("also parse accessibility information ... Enable this by checking a box")에서 확정. |
+| M1. 합치기 | 목록 A ∪ 목록 B | 사실 — 두 소스가 병행 동작하고 결과가 하나의 목록으로 사용자에게 보인다는 점은 벤더 FAQ 와 ⓘ 팝오버 원문(§3.3) 양쪽에서 확정. |
 | M2. 중복 판정 | 두 후보의 `frame` 이 겹치고(예: IoU 임계값 초과, 또는 중심점 간 거리가 임계값 이하) 텍스트가 대소문자 무시 후 동일/포함 관계이면 같은 실체로 판정 | `(추정)` — 정확한 임계값과 텍스트 비교 방식은 조사 자료에 없다. |
-| M3. 충돌 시 우선순위 | 겹치는 한 쌍에서 **AX 쪽 `frame`을 채택**하고, 텍스트는 더 긴/완전한 쪽(대개 AX의 `kAXValueAttribute` 전체 문자열)을 채택한다 | `(추정)` — 근거: AX 프레임은 앱이 직접 보고하는 값이라 OCR 의 이미지 인식 오차(줄 경계 오분할, 안티앨리어싱 등)가 없다. 다만 제품이 "OCR 이 주, AX 가 부" 라는 서술과 이 규칙이 상충하지 않는지는 확정되지 않았다 — §9. |
+| M3. ⭐ 충돌 시 우선순위 — 정정(승격) | 겹치는 한 쌍에서 **OCR 쪽이 AX 쪽을 대체**한다 | **확정** — `Seek using macOS accessibility` ⓘ 팝오버 원문(§3.3): "Seek matches using Optical Character Recognition (OCR) will display in place of duplicate matches from Accessibility." 기존 명세가 "AX 프레임을 채택한다"고 추정했던 것은 **정반대로 틀렸다.** OCR 이 항상 켜지는 기본 소스이고 AX 는 보강 소스라는 §1 의 구도와도 정합한다. |
 | 정렬 순서 | 읽기 순서(화면 좌표 `y` 오름차순, 동률이면 `x` 오름차순)를 기본으로 제안 | `(추정)` — 개발자 포스트는 "up/down arrows or tab/shift+tab 로 후보 순환"만 언급하고 순서 기준은 밝히지 않는다. 커서 거리 기준일 가능성도 배제할 수 없다 — §9. |
 
-### 3.5 질의 매칭 규칙
+### 3.5 ⭐ 다중 디스플레이·Stage Manager (신규)
+
+내부 타입 `ScreenDetection` · `ScreenSettler` · 저장 키 `screenMatches` · `screenObservations`, 그리고 심볼 `SDySo8NSScreenCSaySo27VNRecognizedTextObservationCGGG`(Swift 맹글드 이름 = `[NSScreen: [VNRecognizedTextObservation]]`, 즉 **화면(`NSScreen`)을 키로 한 OCR 결과 딕셔너리**)가 실측된다(실측: 번들 심볼, app-bundle-analysis.md §4.7·§3.1). → **OCR 결과를 화면별로 따로 보관한다.** §3.2.3 의 디스플레이별 독립 좌표 변환과 정합하는 구조다.
+
+⭐ `StageWindowAccessibilityElement` — **Stage Manager 전용 AX 처리**가 별도로 존재한다(실측: 번들 심볼). 기존 명세는 Stage Manager 를 다루지 않았다. Stage Manager 에서는 창이 그룹으로 축소·전환되는 방식이 일반 창과 달라 AX 트리 접근 경로가 특수 취급될 수 있다는 정도만 확정되고, 구체적으로 무엇이 다른지는 `(미확정)` — §9.
+
+`WindowObservation` · `frontWindowObservations` · `closedWindows` · `cachedWindowId` · `cachedChildren` → **창 상태를 관찰·캐시**하는 구조가 있다. AX 트리 재탐색 비용을 줄이기 위한 것으로 보인다 `(미확정)`.
+
+### 3.6 질의 매칭 규칙
 
 질의 문자열이 주어지면 `CandidateSet` 에서 일치하는 항목만 남긴다.
 
@@ -172,13 +222,15 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 
 ## 4. 설정 항목
 
-| 이름 (원문) | 타입 | 기본값 | 유효 범위 | 출처 |
-| :--- | :--- | :--- | :--- | :--- |
-| `Seek using macOS accessibility` | 체크박스 (bool) | ☑ (스크린샷 기준) `(추정 — 출고 기본값 미확정, Q3)` | on/off | `superkey-inventory.md` §3.1 (스크린샷), v1.18 appcast 도입 노트(§2.2) |
-| ↳ `Match on more than one character` | 체크박스 (bool), `Seek using macOS accessibility` 켜짐일 때만 유효 | ☑ (스크린샷 기준) `(추정 — 출고 기본값 미확정, Q3)` | on/off | `superkey-inventory.md` §3.1 (스크린샷) |
-| `Only Seek in the frontmost window` | 체크박스 (bool) | ☐ (스크린샷 기준) `(추정 — 출고 기본값 미확정, Q3)` | on/off | `superkey-inventory.md` §3.1 (스크린샷) |
+⭐ **오기 정정.** 기존 명세는 세 항목 모두를 스크린샷(홍보용 구성) 값 그대로 `(추정)`으로 표시했다. 실측(AX 트리 + `defaults`)으로 아래처럼 확정된다. 판정 논리는 F-01 문서와 동일 — plist 에 키가 없으면 그 항목의 기본값은 OFF/미설정이다(`Match on more than one character` 는 예외적으로 plist 에 항상 존재하는 시딩 값, 아래 참조).
 
-> 세 항목 모두 스크린샷에서 판독한 값이며, 조사 문서는 "스크린샷의 체크 상태는 홍보용 구성이지 출고 기본값이라는 보장은 없다"고 명시적으로 유보한다(`superkey-inventory.md` Q3). 클론 구현 시 실제 출고 기본값은 별도 확인이 필요하다.
+| 이름 (원문) | 타입 | 기본값 (실측) | 표시/활성화 조건 | 저장 키 | 출처 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `Seek using macOS accessibility` | 체크박스 (bool) | **☐** (실측: AX 트리 + `defaults` 부재) | 항상 표시 | `seekOptions` 비트(추정) | app-bundle-analysis.md §6.1, §2.2 |
+| ↳ `Match on more than one character` | 체크박스 UI, 저장은 **정수**(§3.3.1) | **상위 켰을 때 기본 ☑**(정수값 `2`) (실측: AX 트리 + `defaults`) | ⭐ **`Seek using macOS accessibility` 가 ☑ 일 때만 존재 — ☐ 이면 dimmed 가 아니라 완전히 숨겨진다**(hidden, 실측: AX 트리) | `minAxCharCount`(정수, `2`/`1`) — ⭐ 아무 설정도 안 건드린 plist 에 이미 존재하는 두 키 중 하나(시딩값) | app-bundle-analysis.md §6.1, §2.1 |
+| `Only Seek in the frontmost window` | 체크박스 (bool) | **☐** (실측: AX 트리) — 기존 명세와 값 일치, 실측으로 확인 완료 | 항상 표시. ⭐ AX(소스 B)의 범위와는 무관 — OCR(소스 A)의 캡처 범위만 좁힌다(§3.3.2) | `seekFrontmostOnly` | app-bundle-analysis.md §6.1, §2.2 |
+
+> `Match on more than one character` 를 제외한 나머지는 사용자가 건드리지 않는 한 plist 에 키 자체가 없다 — "부재 = 기본값" 판정 논리(app-bundle-analysis.md §2.1)를 그대로 따른다.
 
 ---
 
@@ -186,94 +238,104 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 
 | # | 케이스 | 기대 동작 |
 | :--- | :--- | :--- |
-| 1 | Screen Recording 권한 거부/미부여 | 소스 A 전체가 죽는다(캡처 자체가 실패). 소스 B 가 켜져 있으면 그 결과만으로 세션이 계속된다. 권한 유도 UX 자체는 `F-11`. |
+| 1 | Screen Recording 권한 거부/미부여 | 소스 A 전체가 죽는다(캡처 자체가 실패). 소스 B 가 켜져 있으면 그 결과만으로 세션이 계속된다. ⭐ 원본은 이 권한을 명시적으로 preflight/request 하지 않는다 — `CGDisplayCreateImage` 호출 시 OS 가 암묵적으로 요구·프롬프트한다(§6, §8). 권한 유도 UX 자체는 `F-11`. |
 | 2 | OCR 이 후보 0개 반환(예: 화면이 전부 이미지/영상이거나 텍스트가 없음) | 소스 A 목록이 빈 배열. 소스 B 결과와 병합해 그대로 진행. 둘 다 0개면 세션은 열려 있되 후보 없음 상태. |
-| 3 | 다중 디스플레이, 해상도·배율이 서로 다름 | §3.2.2 의 디스플레이별 독립 변환(`originX/Y`, `scale` 을 디스플레이마다 별도 적용)이 정확히 이뤄져야 함. v1.55 에서 실제로 깨졌던 영역이므로 회귀 테스트 필수. |
-| 4 | Retina 배율(`backingScaleFactor` = 2.0 등) | §3.2.2 3단계의 픽셀→포인트 나눗셈을 누락하면 후보 프레임이 실제 텍스트보다 커 보이거나 좌표가 밀린다. |
+| 3 | 다중 디스플레이, 해상도·배율이 서로 다름 | §3.2.3 의 디스플레이별 독립 변환(`originX/Y`, `scale` 을 디스플레이마다 별도 적용)이 정확히 이뤄져야 함. v1.55 에서 실제로 깨졌던 영역이므로 회귀 테스트 필수. §3.5 의 `[NSScreen: [VNRecognizedTextObservation]]` 화면별 저장 구조와 정합해야 한다. |
+| 4 | Retina 배율(`backingScaleFactor` = 2.0 등) | §3.2.3 3단계의 픽셀→포인트 나눗셈을 누락하면 후보 프레임이 실제 텍스트보다 커 보이거나 좌표가 밀린다. |
 | 5 | 대상 창이 전체화면(Full Screen) 스페이스에 있음 | 전체화면 앱은 별도 Space 에서 렌더링되며 창 레벨 취급이 다르다. 캡처 대상에 포함되는지, 오버레이가 그 위에 뜨는지는 `F-03`/캡처 API 선택에 좌우된다. `platform-constraints.md` 의 오버레이 창 레벨 판정과 함께 검증 필요. |
 | 6 | 대상 앱이 Accessibility 를 지원하지 않음(예: 일부 게임, 커스텀 렌더링 엔진 앱) | 소스 B 에서 해당 앱은 요소 0개. 소스 A(OCR)만으로 그 앱 위의 텍스트를 커버해야 한다 — 이것이 AX 를 보조로 두는 이유이기도 하다. |
 | 7 | 대상 앱이 AX 요청에 응답하지 않음(행업, 정지) | §3.3.3 의 `AXUIElementSetMessagingTimeout` + 깊이 제한이 없으면 Seek 전체가 블로킹된다. 타임아웃 초과 시 해당 앱은 건너뛰고 나머지 소스로 계속 진행. |
-| 8 | 매우 큰 화면(고해상도 단일 또는 다중 디스플레이 합산)에서 OCR 지연 | `.accurate` 레벨의 비용이 화면 크기에 비례해 커진다. 세션 열림 → 후보 표시까지의 지연 예산 초과 위험(`platform-constraints.md` P3). 디스플레이별 병렬 처리로 완화 가능. |
+| 8 | 매우 큰 화면(고해상도 단일 또는 다중 디스플레이 합산)에서 OCR 지연 | `.accurate` 레벨의 비용이 화면 크기에 비례해 커진다. 세션 열림 → 후보 표시까지의 지연 예산 초과 위험(`platform-constraints.md` P3). 디스플레이별 병렬 처리로 완화 가능. §3.2.1 의 전처리(스케일 변환 등)도 이 지연 예산에 포함된다. 실측(지연 실제 측정)은 아직 하지 않았다 — §9. |
 | 9 | 세션이 열린 채로 화면 내용이 바뀜(애니메이션, 스크롤, 알림 팝업 등) | 검출은 세션 열림 시점의 단일 스냅샷을 기준으로 하는지, 주기적으로 재검출하는지가 조사 자료로 확정되지 않음 `❓미확인`. 재검출하지 않는다면 화면과 후보 위치가 어긋날 수 있다. |
-| 10 | RTL 텍스트(아랍어/히브리어/페르시아어 — 번들 로케일에 포함) | OCR `recognitionLanguages` 에 해당 언어가 없으면 인식 자체가 실패한다. 인식되더라도 §3.4 의 "읽기 순서" 정렬이 LTR 전제라면 RTL 언어에서 순서가 부자연스러울 수 있다. |
+| 10 | RTL 텍스트(아랍어/히브리어/페르시아어) | ⭐ 정정 — 기존 명세가 근거로 든 "번들이 8개 로케일을 지원한다"(appcast `deltaFromSparkleLocales`)는 오독이었다 — 그 속성은 Sparkle 프레임워크 자신의 로케일 파일 목록일 뿐, SuperKey UI/OCR 언어와 무관하다(app-bundle-analysis.md §5.1, §7 D1 참조). SuperKey 본체(`Base.lproj`)는 영어 단일이다. OCR `recognitionLanguages` 에 해당 언어가 없으면 인식 자체가 실패한다는 일반론과, 인식되더라도 §3.4 의 "읽기 순서" 정렬이 LTR 전제라면 RTL 언어에서 순서가 부자연스러울 수 있다는 우려는 여전히 유효하되, 그 필요성의 실측 근거는 없다. |
 | 11 | 회전된 텍스트(세로쓰기, 기울어진 UI 요소) | `VNRecognizedTextObservation.boundingBox` 는 기본적으로 축 정렬(axis-aligned) 사각형을 전제한다. 회전된 텍스트는 인식률이 낮거나 프레임이 실제 텍스트를 느슨하게만 감싼다. |
-| 12 | 극소 텍스트 / 특정 색상 대비(검정 배경 위 특정 파란색) / 인접 줄과 너무 가까운 텍스트 | 개발자 본인이 명시한 확인된 OCR 실패 사례 3종(§4.5 인용). v1.19 에서 "font colors/backgrounds" 처리가 개선됐으나 완전히 해소됐다는 근거는 없다. |
-| 13 | 최소 지원 OS(12.0)와 ScreenCaptureKit 요구 버전(12.3+)의 간극 | §7 에서 최소 버전을 12.3 으로 상향하는 결정을 내린다. 12.0–12.2 사용자는 애초에 이 기능(및 앱 전체)을 설치할 수 없게 된다 — 근거는 §7. |
+| 12 | 극소 텍스트 / 특정 색상 대비(검정 배경 위 특정 파란색) / 인접 줄과 너무 가까운 텍스트 | 개발자 본인이 명시한 확인된 OCR 실패 사례 3종(§4.5 인용). v1.19 에서 "font colors/backgrounds" 처리가 개선됐으나 완전히 해소됐다는 근거는 없다. §3.2.1 의 전처리 필터(흑백·성분 추출)가 이 사례들을 겨냥한 것으로 추정된다. |
+| 13 | ⭐ 정정 — 최소 지원 OS 와 캡처 API 요구 버전의 "간극"은 애초에 존재하지 않는다 | 기존 명세는 ScreenCaptureKit(12.3+) 전제로 12.0–12.2 사용자를 배제하는 결정을 내렸으나, 원본은 ScreenCaptureKit 을 쓰지 않는다(§3.2). `LSMinimumSystemVersion = 12.0` 과 실제 사용 API(`CGDisplayCreateImage`)가 정합하므로 이 간극 자체가 근거를 잃는다 — §7 D1 재검토 참조. |
+| 14 | ⭐ (신규) AX 매치가 가려진(obscured) 텍스트를 잡는 경우 | AX ⓘ 팝오버 원문(§3.3)이 명시하는 알려진 한계다: "you might get matches even if you can't see the text in the element." 사용자에게는 화면에 없는 텍스트가 매치로 뜨는 것처럼 보일 수 있다. 관련 타입 `UnobscuredWindowElement`. F-03 은 이런 매치도 정상적으로 하이라이트(요소 전체)해야 한다. |
+| 15 | ⭐ (신규) Stage Manager 에서 창을 순회 | `StageWindowAccessibilityElement` 가 별도로 존재하는 것으로 보아 Stage Manager 의 AX 트리 접근이 일반 창과 다르게 취급될 가능성이 있다(§3.5). 구체적으로 무엇이 다른지는 `(미확정)` — §9. |
 
 ---
 
 ## 6. 필요한 플랫폼 API
 
-**소스 A (OCR·캡처)**
+**소스 A (OCR·캡처)** — ⭐ 아래 캡처 API 목록은 ScreenCaptureKit 을 전제한 기존 명세를 정정한 것이다.
 - `CGImage` — 캡처 결과 프레임 표현
-- ScreenCaptureKit: macOS 14+ 는 `SCScreenshotManager`(단발 캡처), 12.3–13.x 는 `SCStream` 기반 델리게이트 캡처에서 1프레임만 취함
-- `VNImageRequestHandler(cgImage:)`, `VNRecognizeTextRequest`, `VNRecognizedTextObservation`(`boundingBox`, `topCandidates(_:)`)
+- ⭐ **`CGDisplayCreateImage(displayID)`** / **`CGDisplayCreateImageForRect(displayID, rect)`** — 화면 캡처 본체(실측: 번들 심볼, `nm -u`). `CGWindowListCopyWindowInfo` / `CGWindowListCreateDescriptionFromArray` 도 링크되어 있으며 `Only Seek in the frontmost window` 의 창 범위 판정에 쓰이는 것으로 보인다 `(미확정 — 용도는 해석)`.
+- **CoreImage** — `CILanczosScaleTransform`(스케일) · `CIPhotoEffectMono` / `CIPhotoEffectNoir`(흑백) · `CIMaximumComponent` / `CIMinimumComponent`(성분 추출) — §3.2.1 의 전처리 파이프라인(실측: 번들 심볼)
+- **Vision — 실측 확정**(승격, `(추정)` 아님): `VNImageRequestHandler(cgImage:)` · `VNRecognizeTextRequest` · `VNRecognizedTextObservation`(`boundingBox`, `topCandidates(_:)`) · `VNRecognizedText` · `VNImageRectForNormalizedRect`(정규화 좌표 → 화면 좌표 변환, §3.2.3). Swift 래퍼 `libswiftVision.dylib`. 내부 타입 `VisionManager` · `TextRecognition` · `TextRecognitionDelegate` · `RecognitionResult`(실측: 번들 심볼)
 - `CGDisplayBounds(_:)` / `NSScreen.screens` — 디스플레이별 전역 원점, `backingScaleFactor`
-- (권한 확인만, 상세는 `F-11`) `CGPreflightScreenCaptureAccess()`
+- ⭐ **Screen Recording 권한을 명시적으로 확인하는 심볼이 없다.** `CGPreflightScreenCaptureAccess()` / `CGRequestScreenCaptureAccess()` 는 실측(`nm -u`)에서 **발견되지 않았다** — `CGDisplayCreateImage` 호출 시 OS 가 암묵적으로 요구·프롬프트하는 방식에 의존한다. 상세는 `F-11` 참조.
 
 **소스 B (AX)**
 - `AXUIElementCreateSystemWide()`, `AXUIElementCreateApplication(pid:)`
-- `AXUIElementCopyAttributeValue` — `kAXRoleAttribute`, `kAXValueAttribute`, `kAXTitleAttribute`, `kAXDescriptionAttribute`, `kAXChildrenAttribute`, `kAXPositionAttribute`, `kAXSizeAttribute`, `kAXFocusedWindowAttribute`(최전면 창 판정용)
+- `AXUIElementCopyAttributeValue` — `kAXRoleAttribute`, `kAXValueAttribute`, `kAXTitleAttribute`, `kAXDescriptionAttribute`, `kAXChildrenAttribute`, `kAXPositionAttribute`, `kAXSizeAttribute`, `kAXFocusedWindowAttribute`(최전면 창 판정용 — §3.3 확정에 따라 AX 는 이 속성으로 얻은 창 하나로 항상 고정)
 - `AXValueGetValue` — `AXValue` → `CGPoint`/`CGSize` 언패킹
 - `AXUIElementSetMessagingTimeout` — 블로킹 방지
-- (권한 확인만, 상세는 `F-11`) `AXIsProcessTrusted()`
+- (권한 확인만, 상세는 `F-11`) `AXIsProcessTrusted()` — 실측으로 확인된 유일한 명시적 권한 확인 심볼(app-bundle-analysis.md §3.3)
 
 ---
 
 ## 7. 구현 접근
 
-### 소스 A — Vision OCR: **Rust 바인딩**
+### ⭐⭐ 화면 캡처 API 정정 — ScreenCaptureKit 전제가 사라졌다
 
-`objc2-vision`(0.3.2)이 `VNImageRequestHandler`/`VNRecognizeTextRequest`/`VNRecognizedTextObservation` 을 헤더 자동 생성 바인딩으로 그대로 노출하며, `screencapturekit`(8.0.1, 고수준) 또는 `objc2-screen-capture-kit`(0.3.2, 원시)으로 캡처가 가능하다(`rust-macos-capability-notes.md` §1.1, §2.3, §2.4). `CGImage` ↔ Vision 연결과 좌표 변환(§3.2.2)은 순수 Rust 로직으로 작성 가능하다. 별도의 Swift/Objective-C 브리징 코드(네이티브 shim)를 새로 작성할 필요는 없다 — 다만 호출부 전체가 `unsafe` FFI 라는 점에서 "순수 Rust" 는 아니다. ScreenCaptureKit 의 비동기 델리게이트 기반 API 를 "단발 캡처" 용도로 다루는 것은 다소 번거롭지만(`platform-constraints.md` P3 참조), 이는 구현 난이도 문제이지 언어·바인딩 가능성 문제는 아니다.
+기존 명세는 소스 A 의 캡처 계층을 ScreenCaptureKit 기반으로 설계했다. 실측(§3.2)으로 **원본은 ScreenCaptureKit 을 전혀 쓰지 않고 `CGDisplayCreateImage`/`CGDisplayCreateImageForRect` 만 쓴다**는 것이 확정됐다. 이것이 바꾸는 것:
 
-### 소스 B — Accessibility 파싱: **Rust 바인딩**
+- **소스 A — Vision OCR**: `objc2-vision`(0.3.2)이 `VNImageRequestHandler`/`VNRecognizeTextRequest`/`VNRecognizedTextObservation` 을 헤더 자동 생성 바인딩으로 그대로 노출한다(`rust-macos-capability-notes.md` §1.1, §2.4) — 이 부분은 캡처 API 선택과 무관하므로 그대로 유효하다. 캡처 자체는 더 이상 ScreenCaptureKit(`screencapturekit`/`objc2-screen-capture-kit`)이 아니라 **`CGDisplayCreateImage` 계열**을 바인딩해야 한다 — `core-graphics` 크레이트가 `CGDisplayCreateImage` 를 노출하는지, 노출하지 않는다면 `core-graphics-sys`/원시 FFI 로 직접 선언해야 하는지는 이 조사(app-bundle-analysis.md, rust-macos-capability-notes.md 모두)가 검증하지 않은 **새로운 커버리지 공백**이다 `(미확정)` → §9. `CGImage` ↔ Vision 연결과 좌표 변환(§3.2.3)은 여전히 순수 Rust 로직으로 작성 가능하고, 네이티브 shim 은 필요 없다는 결론 자체는 유지된다.
+- **소스 B — Accessibility 파싱**: 이 절은 캡처 API 선택과 무관하므로 정정 대상이 아니다. `axuielement`(0.9.1, "현재 가장 활발")가 `AXUIElement`/`AXValue`/`AXAttribute`/`ProcessTrust` 를 안전한 고수준 API 로 감싼다(`rust-macos-capability-notes.md` §1.2, §2.2). 필요한 속성(`kAXPositionAttribute` 등) 조회와 `AXUIElementPerformAction` 은 커버된다. 단, `AXUIElementSetMessagingTimeout` 이 `axuielement` 크레이트에 노출되는지는 조사에서 확인되지 않았다 `❓미확인`(§9) — 노출되지 않는다면 `accessibility-sys`(0.2.0, 원시 FFI)로 그 한 호출만 직접 선언해도 여전히 "Rust 바인딩" 범주다.
+- **⭐ 신규: 캡처 이미지 전처리(CoreImage)** — §3.2.1 의 `CILanczosScaleTransform`/`CIPhotoEffectMono`/`CIPhotoEffectNoir`/`CIMaximumComponent`/`CIMinimumComponent` 는 모두 시스템 프레임워크 CoreImage 의 표준 필터라 Rust 바인딩(`core-image`/`objc2` 계열 또는 원시 FFI)으로 커버 가능할 것으로 보이나, 구체적 크레이트 조사는 이번 범위 밖이다 `(미확정)` → §9.
 
-`axuielement`(0.9.1, "현재 가장 활발")가 `AXUIElement`/`AXValue`/`AXAttribute`/`ProcessTrust` 를 안전한 고수준 API 로 감싼다(`rust-macos-capability-notes.md` §1.2, §2.2). 필요한 속성(`kAXPositionAttribute` 등) 조회와 `AXUIElementPerformAction` 은 커버된다. 단, `AXUIElementSetMessagingTimeout` 이 `axuielement` 크레이트에 노출되는지는 조사에서 확인되지 않았다 `❓미확인`(§9) — 노출되지 않는다면 `accessibility-sys`(0.2.0, 원시 FFI)로 그 한 호출만 직접 선언해도 여전히 "Rust 바인딩" 범주이며 네이티브 shim 은 필요 없다.
+### ⭐⭐ 최소 macOS 버전 결정(D1) — 근거가 사라졌다, 재검토 필요
 
-### ⭐ 최소 macOS 버전 결정: **12.3 으로 상향**
+기존 명세(§7 구판)는 "제품 공식 최소 버전은 12.0 이지만 채택한 캡처 API(ScreenCaptureKit)는 12.3+ 에서만 동작한다"는 간극을 근거로 **최소 버전을 12.3 으로 상향**하기로 결정했고, 이 결정은 `docs/spec/README.md` 의 제품 결정 **D1** 으로 기록되어 있다.
 
-조사에서 확인된 간극: 제품 공식 최소 버전은 **macOS 12.0** 이지만, 채택한 캡처 API 인 **ScreenCaptureKit 은 macOS 12.3+** 에서만 동작한다(`rust-macos-capability-notes.md` §2.3, P2). 대안은 두 가지였다.
+⭐ **이 간극 자체가 존재하지 않는다.** 원본이 실제로 쓰는 API 는 `CGDisplayCreateImage` 계열이고, `LSMinimumSystemVersion = 12.0` 과 정확히 정합한다(app-bundle-analysis.md §1, §3). 즉 **D1 이 상정한 전제(ScreenCaptureKit 필요 → 12.3 상향 불가피)가 사실이 아니었다.** D1 은 근거를 잃는다 — README 자체의 수정은 다른 담당 소관이지만, 이 사실은 여기 명시한다.
 
-1. **폴백**: 12.0–12.2 에서는 `CGWindowListCreateImage` 로 캡처.
-2. **최소 버전 상향**: 지원 최소 버전을 12.3 으로 올리고 폴백 경로 자체를 두지 않는다.
+**트레이드오프 재평가 — 클론이 어떻게 볼 것인가.** 확인된 사실:
+- `CGDisplayCreateImage` 는 **macOS 14 에서 deprecated** 다(Apple 공식 문서 기준, 이 조사가 직접 실측한 것은 아니고 일반적으로 알려진 사실).
+- 그럼에도 **v1.66(2026-06 빌드, SDK macosx26.5 로 빌드)이 지금도 이 API 를 그대로 쓰고 있다** — 즉 벤더 자신이 최신 SDK 로 빌드하면서도 deprecated API 교체를 미루고 있다(실측: 번들 심볼).
 
-**2안(상향)을 채택한다.** 근거:
-- `CGWindowListCreateImage` 는 macOS 14 에서 **deprecated** 이며 향후 제거 위험이 있는 API 에 신규로 의존하는 것은 유지보수 부채다.
-- 소스 A 전체(캡처+변환 경로)를 이중으로 유지하는 비용이, 12.0–12.2 라는 매우 좁은 패치 버전 구간의 지원 이득보다 크다고 판단한다.
-- 12.0(2021 출시)은 이 조사 시점(2026)에서 이미 노후 OS 이며, 12.0–12.2 로 좁혀지는 실사용자 비율은 극히 작을 것으로 추정된다 `(추정 — 실측 데이터 없음)`.
+이 사실로부터 두 갈래 판단이 가능하다:
+1. **원본과 동일하게 `CGDisplayCreateImage` 를 채택하고 최소 버전을 12.0 으로 유지한다.** 근거: 벤더가 실제로 이 API 로 5년 가까이(v1.66 은 2026년 빌드) 문제없이 배포해왔다는 것 자체가 "deprecated 여도 당장 제거되지는 않는다"는 실증이다. 클론의 목표가 원본과의 행동 동등성이라면, 굳이 더 넓은 OS 지원 범위(12.0)를 포기하면서까지 더 복잡한 API(ScreenCaptureKit, 비동기 델리게이트 기반)로 미리 옮겨갈 이유가 약하다.
+2. **ScreenCaptureKit 으로 미리 옮기고 최소 버전을 12.3 으로 올린다.** 근거: `CGDisplayCreateImage` 가 실제로 제거되는 시점이 오면 그때 가서 마이그레이션하는 비용이, 지금 한 번에 옮기는 비용보다 클 수 있다. 특히 macOS 26(2026년 현재 최신 메이저)까지 나온 시점에서 12.0–12.2 사용자 비율은 극히 작을 것으로 추정된다(추정, 실측 데이터 없음).
 
-이 결정은 **명세 저자의 판단이며 제품 요구사항 확정이 아니다.** 실제 채택 여부는 §9 미해결 질문으로 다시 올린다.
+**이 문서는 1안(원본과 동일하게 `CGDisplayCreateImage` 채택, 최소 버전 12.0 유지)쪽으로 판단을 기운다** — 원본이 이미 이 트레이드오프를 감수하고 실제 배포로 검증했다는 사실이 가장 강한 근거이기 때문이다. 다만 이는 **이 명세 저자의 판단이며 제품 요구사항 확정이 아니다.** 최종 결정은 README.md D1 담당자의 재검토가 필요하다 — §9.
 
 ---
 
 ## 8. 수용 기준
 
-- [ ] Screen Recording 권한이 있을 때, 화면에 보이는 텍스트에 대해 소스 A(OCR)가 텍스트+화면 좌표 후보를 생성한다.
-- [ ] `Seek using macOS accessibility` 가 켜져 있을 때, 소스 B(AX)가 대상 앱의 텍스트 요소에서 텍스트+화면 좌표 후보를 생성한다.
-- [ ] `Seek using macOS accessibility` 가 꺼져 있을 때, 소스 B 는 후보를 생성하지 않고 소스 A 만으로 세션이 정상 동작한다.
-- [ ] 소스 A 의 `VNRecognizedTextObservation.boundingBox`(정규화, 좌하단 원점)가 §3.2.2 의 수식을 거쳐 소스 B 와 동일한 좌표계(전역, 좌상단 원점, 포인트)로 정확히 변환된다.
+- [ ] Screen Recording 권한이 있을 때, 화면에 보이는 텍스트에 대해 소스 A(OCR)가 텍스트+화면 좌표 후보를 생성한다. `Seek using macOS accessibility` 를 끄는 것과 무관하게 소스 A 는 항상 동작한다(끄는 UI 컨트롤이 없다).
+- [ ] `Seek using macOS accessibility` 가 켜져 있을 때, 소스 B(AX)가 **최전면 창의** 텍스트 요소에서 텍스트+화면 좌표(요소 전체) 후보를 생성한다. `Only Seek in the frontmost window` 값과 무관하게 이 범위는 항상 최전면 창이다.
+- [ ] `Seek using macOS accessibility` 가 꺼져 있을 때, 소스 B 는 후보를 생성하지 않고, `Match on more than one character` 체크박스도 UI 에서 완전히 사라진다(hidden).
+- [ ] 소스 A 의 `VNRecognizedTextObservation.boundingBox`(정규화, 좌하단 원점)가 §3.2.3 의 수식을 거쳐 소스 B 와 동일한 좌표계(전역, 좌상단 원점, 포인트)로 정확히 변환된다.
 - [ ] 서로 다른 해상도·배율(`backingScaleFactor`)을 가진 2개 이상의 디스플레이에서, 각 디스플레이의 후보 좌표가 올바른 전역 위치를 가리킨다(디스플레이별 원점·배율이 독립적으로 적용됨).
-- [ ] `Match on more than one character` 가 켜져 있을 때, 소스 B 의 1글자 텍스트 요소가 후보 목록에서 제외된다.
-- [ ] `Only Seek in the frontmost window` 가 켜져 있을 때, 최전면 창 밖의 텍스트는 어느 소스에서도 후보로 나타나지 않는다.
-- [ ] 소스 A 와 소스 B 가 겹치는 위치에서 동일 텍스트를 각각 검출했을 때, 병합 결과에 중복 후보가 아닌 단일 후보만 남는다(M2/M3 규칙).
+- [ ] `Match on more than one character` 가 켜져 있을 때(정수 `minAxCharCount = 2`), 소스 B 의 1글자 텍스트 요소가 후보 목록에서 제외된다.
+- [ ] `Only Seek in the frontmost window` 가 켜져 있을 때, 소스 A(OCR)의 캡처·인식 범위가 최전면 창으로 좁혀진다. 소스 B(AX)의 범위는 이 설정과 무관하게 항상 최전면 창이었으므로 변화가 없다.
+- [ ] 소스 A 와 소스 B 가 겹치는 위치에서 동일 텍스트를 각각 검출했을 때, 병합 결과에서 **OCR(소스 A) 매치가 AX(소스 B) 매치를 대체**하며 단일 후보만 남는다(M2/M3 규칙).
+- [ ] AX 전용(OCR 과 겹치지 않는) 매치는 요소 전체 사각형으로 하이라이트되고, 가려진(obscured) 텍스트라도 후보로 나타날 수 있다(§5 #14).
 - [ ] Screen Recording 권한이 없을 때 소스 A 결과가 빈 목록이 되며, 세션 자체는 크래시 없이 유지된다.
 - [ ] 응답하지 않는 앱이 대상 화면에 있을 때, 소스 B 순회가 전체 파이프라인을 무기한 블로킹하지 않고 타임아웃 후 진행된다.
 - [ ] OCR 결과가 0개인 화면(순수 이미지 등)에서도 세션이 오류 없이 후보 0개 상태를 반환한다.
-- [ ] 병합된 `CandidateSet` 에 질의 문자열을 적용했을 때, §3.5 의 매칭 규칙(대소문자 무시·부분 문자열·공백 정규화)에 따라 일치하는 후보만 남는다.
+- [ ] 병합된 `CandidateSet` 에 질의 문자열을 적용했을 때, §3.6 의 매칭 규칙(대소문자 무시·부분 문자열·공백 정규화)에 따라 일치하는 후보만 남는다.
 
 ---
 
 ## 9. 미해결 질문
 
-| # | 질문 | 왜 확정 못 했는가 | 확인 방법 |
+| # | 질문 | 상태 / 왜 확정 못 했는가 | 확인 방법 |
 | :--- | :--- | :--- | :--- |
-| Q-a | OCR(소스 A)을 사용자가 끌 수 있는가, 아니면 항상 켜져 있는가 | 스크린샷·FAQ 어디에도 "OCR 끄기" 옵션이 보이지 않는다 | 앱 설치 후 환경설정 전수 확인 |
-| Q-b | 병합 시 소스 A/B 충돌에서 실제로 어느 쪽 좌표·텍스트를 우선하는가(§3.4 M3) | 조사 자료에 병합 알고리즘 서술 없음. 본 문서의 "AX 우선" 은 추정 | 소스 코드 또는 실제 앱에서 겹치는 텍스트에 대한 관찰 실험 |
-| Q-c | 후보 정렬 순서가 읽기 순서인지 커서 거리 기준인지(§3.4) | 개발자 포스트는 순환 방향(↑↓/Tab)만 언급, 정렬 기준 언급 없음 | 실제 앱에서 다중 매치 화면 관찰 |
-| Q-d | 질의 매칭 규칙(대소문자·부분/접두사·공백) 전체(§3.5) | 조사 자료에 매칭 알고리즘 서술 없음 | 실제 앱 동작 관찰 |
-| Q-e | `Only Seek in the frontmost window` 가 소스 A(캡처 영역)까지 좁히는지, 소스 B(AX 루트)에만 적용되는지(§3.3.2) | 설정이 두 소스 중 어디에 속하는지 UI 상 명확히 구분되어 있지 않음 | 실제 앱에서 다른 창의 텍스트가 프론트모스트 창 제한 시 캡처/AX 각각에서 사라지는지 관찰 |
+| ~~Q-a~~ | ~~OCR 을 사용자가 끌 수 있는가~~ — ⭐ **해소**. 끌 수 있는 UI 컨트롤이 없다(실측: AX 트리, §1·§3.1) | app-bundle-analysis.md §6.1 | 해소됨 |
+| ~~Q-b~~ | ~~병합 충돌 시 우선순위~~ — ⭐ **해소**. **OCR 이 AX 를 대체**한다(ⓘ 팝오버 원문, §3.3·§3.4 M3). 기존의 "AX 우선" 추정은 정반대로 틀렸었다 | app-bundle-analysis.md §5.2 | 해소됨 |
+| Q-c | 후보 정렬 순서가 읽기 순서인지 커서 거리 기준인지(§3.4) | 개발자 포스트는 순환 방향(↑↓/Tab)만 언급, 정렬 기준 언급 없음. AX/OCR 관계와 달리 이 부분은 이번 실측 대상이 아니었다 | 실제 앱에서 다중 매치 화면 관찰 |
+| Q-d | 질의 매칭 규칙(대소문자·부분/접두사·공백) 전체(§3.6) | 조사 자료에 매칭 알고리즘 서술 없음 | 실제 앱 동작 관찰 |
+| ~~Q-e~~ | ~~`Only Seek in the frontmost window` 의 적용 범위~~ — ⭐ **해소**. AX(소스 B)는 이 설정과 무관하게 항상 최전면 창 한정, 이 설정은 OCR(소스 A)의 캡처 범위만 좁힌다(ⓘ 팝오버 원문, §3.3.2) | app-bundle-analysis.md §5.2 | 해소됨 |
 | Q-f | `AXUIElementSetMessagingTimeout` 이 `axuielement` 0.9.1 크레이트에 노출되는가 | 크레이트 문서를 정밀 대조하지 않음(조사 범위 밖) | 크레이트 API 문서·소스 확인 |
 | Q-g | 세션이 열려 있는 동안 화면 변화에 대해 재검출을 수행하는가, 최초 스냅샷 고정인가(§5 #9) | 조사 자료에 언급 없음 | 실제 앱에서 세션 도중 화면 변화 관찰 |
-| Q-h | `usesLanguageCorrection`, `recognitionLanguages`, `minimumTextHeight` 의 실제 값 | Vision 파라미터 선택은 벤더가 공개하지 않음 | 소스 코드 확인 또는 실측(스캔 텍스트 조합 테스트) |
-| Q-i | 최소 macOS 버전을 12.3 으로 상향하는 §7 의 결정에 대한 제품 승인 | 이 문서 저자의 기술적 판단이며 비즈니스 결정(구버전 OS 사용자 배제)은 별도 승인 필요 | 제품 오너 확인 |
-| Q-j | 번들 로케일(de/he/ar/el/ja/fa/uk)과 `recognitionLanguages` 매핑 여부, RTL 언어에서의 후보 정렬 | 조사 자료는 UI 로케일 번들만 확인, OCR 인식 언어와의 연결 여부는 불명 | 소스 코드 확인 또는 다국어 화면 실측 |
+| Q-h | `usesLanguageCorrection`, `recognitionLanguages`, `minimumTextHeight` 의 실제 값 | Vision 파라미터 선택은 벤더가 공개하지 않음 — 심볼 존재는 확정됐으나(§3.2.2, §6) 구체적 값은 여전히 확인 못함 | 소스 코드 확인 또는 실측(스캔 텍스트 조합 테스트) |
+| Q-i | ⭐ 정정된 형태로 재상정 — **최소 macOS 버전을 12.0 으로 유지할지 12.3 으로 올릴지**, README.md D1 의 재검토 | 기존 D1 의 전제(ScreenCaptureKit 필요)가 근거를 잃었다(§7). 이 문서는 12.0 유지(원본과 동일 API 채택) 쪽으로 판단을 기울였으나 최종 결정은 아니다 | README.md D1 담당자 재검토 |
+| Q-j | 번들 로케일과 `recognitionLanguages` 매핑 여부, RTL 언어에서의 후보 정렬 | ⭐ 정정 — "번들이 8개 로케일을 지원한다"는 기존 근거(appcast `deltaFromSparkleLocales`)는 오독이었다(§5 #10, app-bundle-analysis.md §5.1). SuperKey 본체는 영어 단일이므로 애초에 UI 로케일과 OCR 인식 언어를 연결할 근거가 사라졌다 — OCR 인식 언어 자체를 별도로 어떻게 정하는지는 여전히 `(미확정)` | 소스 코드 확인 또는 다국어 화면 실측 |
+| Q-k | ⭐ (신규) §3.2.1 전처리 파이프라인(CoreImage 필터)의 선택 조건 — 화면 콘텐츠에 따라 동적으로 고르는가, 고정 순서로 전부 적용하는가 | 필터 이름과 내부 타입(`CaptureFiltering`, `CaptureFilterType`, `FilterFactory` 계열)만 실측, 선택 로직은 확인 못함 | 소스 코드 확인 또는 다양한 배경색·대비의 텍스트로 실측 비교 |
+| Q-l | ⭐ (신규) `minAxCharCount` 를 `2`/`1` 외의 값으로 설정하는 경로가 있는가 (§3.3.1) | UI 는 체크박스 하나뿐이라 두 값만 관찰됐고, 다른 값을 만드는 경로(설정 파일 직접 편집 외)를 찾지 못했다 | 소스 코드 확인, 또는 `defaults write` 로 임의 값을 넣었을 때의 UI/동작 관찰 |
+| Q-m | ⭐ (신규) 전체 화면 OCR 지연의 실측치 (§5 #8) | 이번 조사에서 Seek 을 실제로 발동시키지 않아 지연을 측정하지 못했다(app-bundle-analysis.md §8 #3) — 여전히 미실측 | 실제로 세션을 열어 캡처→후보 표시까지의 시간을 측정(다양한 해상도·디스플레이 수) |
+| Q-n | ⭐ (신규) Stage Manager 에서 `StageWindowAccessibilityElement` 가 일반 AX 처리와 정확히 무엇이 다른가 (§3.5, §5 #15) | 타입 이름만 실측, 동작 상세는 확인 못함 | Stage Manager 를 켠 상태에서 실제 앱 동작 관찰, 또는 소스 코드 확인 |
