@@ -1,0 +1,18 @@
+# Ultrakey — Codex 프로젝트 설정
+#
+# Codex CLI 는 신뢰된 저장소에서 프로젝트 레벨 `.codex/config.toml` 을 읽는다.
+# (`codex` 0.151.0 내장 문서: "Project `.codex/config.toml`: settings for a trusted
+#  repository, including sandbox, MCP, hooks, model, and reasoning defaults.")
+# 사용자 전역 설정은 `~/.codex/config.toml` 이며, 프로젝트 설정이 그 위에 얹힌다.
+#
+# 역할별 모델 라우팅은 AGENTS.md §2 를 따른다.
+# 각 에이전트의 실제 정의는 `.codex/agents/*.toml` 에 있고, 아래에서 등록한다.
+
+[agents.ultrakey-plan]
+config_file = "./agents/ultrakey-plan.toml"
+
+[agents.ultrakey-implement]
+config_file = "./agents/ultrakey-implement.toml"
+
+[agents.ultrakey-explore]
+config_file = "./agents/ultrakey-explore.toml"
