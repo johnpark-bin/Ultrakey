@@ -1,0 +1,13 @@
+[package]
+name = "ultrakey-core"
+description = "F-07 판정 로직 · F-10 게이트 상태 — macOS 비의존 순수 크레이트"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arc-swap = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

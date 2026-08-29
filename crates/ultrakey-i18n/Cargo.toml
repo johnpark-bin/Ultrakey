@@ -1,0 +1,13 @@
+[package]
+name = "ultrakey-i18n"
+description = "F-14(A) 문자열 카탈로그 — 제품 결정 D4 (한국어 + 영어)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

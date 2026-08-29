@@ -1,0 +1,25 @@
+[package]
+name = "ultrakey-app"
+description = "Ultrakey — Tauri 앱 껍데기. M1 에서는 권한 안내 모달과 배선만."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+ultrakey-platform = { workspace = true }
+ultrakey-engine = { workspace = true }
+ultrakey-hyperkey = { workspace = true }
+ultrakey-permissions = { workspace = true }
+ultrakey-i18n = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+
+[build-dependencies]
+tauri-build = { workspace = true }

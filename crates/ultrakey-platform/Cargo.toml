@@ -1,0 +1,21 @@
+[package]
+name = "ultrakey-platform"
+description = "macOS FFI 경계 — 이 저장소의 모든 unsafe 가 여기에만 있다"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-graphics = { workspace = true }
+block2 = { workspace = true }

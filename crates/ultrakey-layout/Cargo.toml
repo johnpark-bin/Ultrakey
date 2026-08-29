@@ -1,0 +1,15 @@
+[package]
+name = "ultrakey-layout"
+description = "F-14(B) 입력 소스 독립성 — ASCII 폴백 · 정/역방향 레이아웃 테이블"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+ultrakey-platform = { workspace = true }
+arc-swap = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

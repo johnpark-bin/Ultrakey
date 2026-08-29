@@ -52,11 +52,15 @@ hyper/meh/bleh 는 각각 독립적인 상태 기계를 갖되 형태는 동일�
 
 | 현재 상태 | 이벤트 | 동작 | 다음 상태 |
 | :--- | :--- | :--- | :--- |
-| Idle | 소스 키 physical keyDown | 합성 `flagsChanged` 이벤트를 발생시켜 해당 조합의 modifier 비트를 ON 으로 내보낸다. 원본 keyDown 은 소비(억제)한다 | Active |
+| Idle | 소스 키 physical keyDown | 합성 `flagsChanged` 이벤트를 발생시켜 해당 조합의 modifier 비트를 ON 으로 내보낸다. 원본 keyDown 은 소비(억제)한다. ⭐ **단, F-07 §3-c 가 정본이다 — 아래 주석 참조** | Active |
 | Active | 다른 키의 physical keyDown/keyUp | 그 키 이벤트에 현재 조합의 modifier flag 를 OR 하여 그대로 전달 | Active (유지) |
 | Active | (`Apply modifiers to ...`) 해당 종류가 ☑ 인 마우스 이벤트 | 그 마우스 이벤트에 현재 조합의 modifier flag 를 OR 하여 전달 | Active (유지) |
 | Active | 소스 키 physical keyUp | 합성 `flagsChanged` 이벤트를 발생시켜 modifier 비트를 OFF 로 내보낸다. 원본 keyUp 은 소비 | Idle |
 | Active | event tap 비활성화(`kCGEventTapDisabledByTimeout`/`UserInput`, F-07 소관) | F-07 이 탭을 재활성화할 때까지 이 상태 기계는 입력을 받지 못한다. 재활성화 시점에 소스 키가 여전히 물리적으로 눌려 있다면 **keyUp 을 못 받은 채 남을 위험**이 있다(§5 엣지 케이스 4) | (불확정 — F-07 재활성화 절차에 의존) |
+
+⭐ **위 `Idle` 행과 F-07 §3-b 계층 2 의 충돌, 그리고 그 해소 (2026-08-30, M1 구현 / 이슈 #5).** 위 표는 "소스 키 keyDown 즉시 합성"이라고 쓰고 있으나, `key-remapping-engine.md` §3-b 계층 2 의 조건은 "quick press 상태 머신이 `HoldConfirmed` 로 판정한 상태"이고 §3-c 는 `Idle` → `PendingDown` 에서 원본 keyDown 을 **보류**한다. **F-07 이 정본이다** — §1 이 이미 "메커니즘은 F-07 이 제공한다"고 위임했다.
+
+해소 규칙(F-07 §3-c 에 신설): **소스 키에 quick press 액션이 등록되어 있지 않으면 keyDown 즉시 `HoldConfirmed` 로 전이한다(보류하지 않는다).** 모호성이 없으면 기다릴 이유가 없기 때문이다. **M1 에서 hyper/meh/bleh 는 quick press 액션이 등록되지 않으므로 이 경로를 타며, 따라서 관측 가능한 동작은 위 표 그대로다.** hyper quick press(§9 #1, `quickHyperKeycode` 계열)의 노출 경로가 확정되어 실제 액션이 등록되는 날부터는 보류 경로가 적용된다. 상세 근거는 `key-remapping-engine.md` §3-c 참조.
 
 **단독으로 눌렀다 뗀 경우(quick press)의 의미는 UI 로는 여전히 확정되지 않지만, 메커니즘 존재 자체는 실측으로 확인되었다(실측: 번들 문자열, app-bundle-analysis.md §2.3).** 실행 파일 문자열에 `quickHyperKeycode` · `executeQuickHyperKey` · `hyperDownTime` 키가 존재한다 — 이름 구성(`quick` + `Hyper`)으로 볼 때 **hyper 소스 키에도 `Presets` 탭의 `Quick press caps lock to execute` 와 유사한 quick press 개념이 적용된다**는 근거다. 다만 이 값들에 대응하는 UI 컨트롤은 Seek·Hyperkey·Presets·General 4개 탭 어디에도 관찰되지 않았다(실측: AX 트리) — 즉 **메커니즘 존재는 확정, 노출 경로(어느 탭의 어느 조건에서 나타나는가)와 정확한 의미(quick press 시 무엇을 실행하는가)는 여전히 `(미확정)`**이다. 이는 `Presets` 탭의 `Quick press caps lock to execute` 와는 별개의 메커니즘일 가능성이 높지만(그 항목은 caps lock 전용이고 Hyperkey 탭에는 quick press 라벨이 없음), caps lock 을 hyper 소스로 동시에 배정한 경우 두 규칙이 같은 물리 키 위에서 경쟁하게 된다는 점은 조사 §6 관찰 2("Hyperkey 와 Presets 는 동일한 물리 키를 두고 경쟁한다")로 확정된 사실이다. 이 경쟁의 중재는 F-07/F-08 소관이다.
 
@@ -198,6 +202,7 @@ hyper/meh/bleh 는 각각 독립적인 상태 기계를 갖되 형태는 동일�
 
 1. **quick press 의미론(부분 해소)** — `quickHyperKeycode`/`executeQuickHyperKey`/`hyperDownTime` 키의 존재로 **메커니즘 자체는 확정**되었다(실측: 번들 문자열, §2.3). 그러나 이 메커니즘이 노출되는 UI 경로(어느 탭·어느 조건)와 정확한 의미(무엇을 실행하는가, `Presets` 탭의 `Quick press caps lock to execute` 와 같은 메커니즘인지 별개인지)는 여전히 `(미확정)` — §3.2.
 2. **여러 조합을 동시에 활성화했을 때의 상호작용** — hyper 와 meh 를 서로 다른 소스 키에 각각 배정해 두고 두 키를 동시에 누르면, modifier 가 합산되는지(`⌃⌥⌘⇧` ∪ `⌃⌥⇧` = `⌃⌥⌘⇧`) 아니면 나중에 눌린 쪽이 이전 것을 덮어쓰는지 불명확. 저장이 단일 비트마스크(§3.1)라는 사실은 이 질문의 답을 함의하지 않는다 — 비트마스크는 "정의"의 저장 형태일 뿐 "동시 활성 시 병합 규칙"과는 별개다.
+   ⭐ **원본의 동작은 여전히 `(미확정)` 이나, 클론의 선택은 확정했다 (2026-08-30, M1 구현): OR 합산.** 근거 — ① 각 소스 키의 down/up 이 독립적이므로, 덮어쓰기를 택하면 "먼저 뗀 쪽이 나중 것까지 지우는가"라는 질문이 곧바로 따라붙고 어느 답도 자연스럽지 않다. ② OR 합산은 물리 modifier 키를 여러 개 동시에 누른 것과 동일한 의미론이라 사용자 직관과 맞는다. ③ 비트마스크 표현(§3.1)과 연산이 일치해 각 소스 키가 자기 마스크를 독립적으로 set/clear 하면 된다. **기각한 대안** — 나중에 눌린 쪽이 덮어씀: 해제 순서에 따라 결과가 달라져 비결정적이 된다. 원본과 다를 수 있으므로 실측 기회가 생기면 재확인 대상이다.
 3. **globe/fn 키의 이벤트 경로** — `globe` 이 팝업에 정식 항목으로 실재함은 확정됐지만(§5 항목 7), `fn`/globe 키가 표준 `flagsChanged` 와 다른 이벤트 체계(NX 이벤트 등)를 타는지, 그로 인해 hyper 소스로서 별도 처리가 필요한지는 여전히 `(미확정)`이며 v1.60 수정 커밋의 정확한 원인도 확인 불가.
 4. **`Apply modifiers to ...` 4항목의 정확한 `CGEventType` 매핑(부분 해소)** — `CGEventPost`/`CGEventCreateMouseEvent` 심볼 확인으로 "마우스 이벤트 합성·재주입" 메커니즘 자체는 승격되었다(실측: 번들 심볼, §3.1). 그러나 `Click`/`Drag`/`Move`/`Scroll` 각 체크박스가 좌/우/기타 버튼(Left/Right/Other MouseDown 등)을 모두 포함하는지 등 세부 매핑은 여전히 추정이다 — §3.3, §6.
 5. **런타임 설정 변경의 즉시 반영 여부** — hyper 가 Active 상태인 도중 `Include shift in hyper key` 등을 변경했을 때 그 순간부터 반영되는지, 다음 keyDown 부터인지 불명확.

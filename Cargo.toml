@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ultrakey-core",
+    "crates/ultrakey-platform",
+    "crates/ultrakey-engine",
+    "crates/ultrakey-layout",
+    "crates/ultrakey-hyperkey",
+    "crates/ultrakey-permissions",
+    "crates/ultrakey-i18n",
+    "apps/ultrakey-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+repository = "https://github.com/johnpark-bin/Ultrakey"
+# ⭐ 최소 macOS 12.0 (제품 결정 D1). 빌드 산출물의 LSMinimumSystemVersion 은
+# apps/ultrakey-app/tauri.conf.json 의 bundle.macOS.minimumSystemVersion 이 소유한다.
+
+[workspace.dependencies]
+# 워크스페이스 내부
+ultrakey-core        = { path = "crates/ultrakey-core" }
+ultrakey-platform    = { path = "crates/ultrakey-platform" }
+ultrakey-engine      = { path = "crates/ultrakey-engine" }
+ultrakey-layout      = { path = "crates/ultrakey-layout" }
+ultrakey-hyperkey    = { path = "crates/ultrakey-hyperkey" }
+ultrakey-permissions = { path = "crates/ultrakey-permissions" }
+ultrakey-i18n        = { path = "crates/ultrakey-i18n" }
+
+# 버전은 2026-08-30 crates.io 조회로 검증됨 (docs/spec/platform-constraints.md §6 과 일치)
+objc2                   = "0.6.4"
+objc2-foundation        = "0.3.2"
+objc2-app-kit           = "0.3.2"
+objc2-core-foundation   = "0.3.2"
+objc2-core-graphics     = "0.3.2"
+objc2-io-kit            = "0.3.2"
+block2                  = "0.6.2"
+arc-swap                = "1.9.2"
+crossbeam-channel       = "0.5.16"
+serde                   = { version = "1.0.229", features = ["derive"] }
+serde_json              = "1.0.151"
+thiserror               = "2.0.20"
+tracing                 = "0.1.44"
+tracing-subscriber      = { version = "0.3.23", features = ["env-filter"] }
+plist                   = "1.10.0"
+tauri                   = "2.11.5"
+tauri-build             = "2.6.3"
+tauri-plugin-opener     = "2.5.4"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

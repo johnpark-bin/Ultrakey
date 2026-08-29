@@ -19,6 +19,9 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 | [`../research/superkey-inventory.md`](../research/superkey-inventory.md) | SuperKey 웹 조사 (출처 URL + 원문 인용). ⚠️ **v1.66 실측이 이 문서의 일부를 뒤집었다** — 충돌 시 `app-bundle-analysis.md` 가 우선한다 |
 | [`../research/rust-macos-capability-notes.md`](../research/rust-macos-capability-notes.md) | Rust/Tauri × macOS 역량 조사. 크레이트 버전은 crates.io 로 검증됨 |
 | `<기능>.md` | 기능별 명세. 아래 9개 절을 모두 갖는다 |
+| [`../dev/architecture.md`](../dev/architecture.md) | ⭐ **구현 구조** — 크레이트 경계와 F-xx 대응, `CGEventTap` 콜백의 동시성·수명 설계, 명세를 벗어난 결정과 근거, 미확정 값에 대해 고른 기본값 |
+| [`../dev/code-signing.md`](../dev/code-signing.md) | ⭐ **M0 절차** — 고정 자체 서명 인증서 생성(사용자가 직접 실행), 검증 방법, 실패 시 증상과 대처 |
+| [`../dev/manual-verification.md`](../dev/manual-verification.md) | ⭐ **자동화 불가능한 검증 절차** — "M1 완료 판정" 5개 항목을 각각 어떻게 확인하는가 |
 
 각 명세의 절 구성: **1 개요 · 2 사용자 시나리오 · 3 동작 명세 · 4 설정 항목 · 5 엣지 케이스와 실패 모드 · 6 필요한 플랫폼 API · 7 구현 접근 · 8 수용 기준 · 9 미해결 질문**
 
@@ -184,14 +187,23 @@ F-14(A) 현지화        ── 횡단. 원본에 없는 클론 고유 선택지
 
 ---
 
-## ⚠️ 착수 전에 답해야 하는 제품 결정
+## ✅ 착수 전 제품 결정 — 전부 확정됨
 
-| # | 질문 | 왜 지금 답해야 하는가 | 관련 |
-| :--- | :--- | :--- | :--- |
-| ~~D1~~ | ~~최소 macOS 버전 12.0 vs 12.3~~ | ✅ **해소.** SuperKey v1.66 이 `LSMinimumSystemVersion = 12.0` 을 유지하며 ScreenCaptureKit 없이 `CGDisplayCreateImage` 로 출하 중이다. **12.0 을 유지한다** — 12.3 상향의 유일한 근거가 사라졌다 | F-02, `platform-constraints.md` §0.2 (a) |
-| **D2** | **라이선싱을 실제로 구현할 것인가** | ⭐ 실측으로 대상이 확정되었다 — 원본은 **Paddle Classic**(제품 ID `750314`)에 자체 코드 서명 검증을 병용한다. F-12 명세는 여전히 **상태 머신과 추상 인터페이스까지만** 만들고 실제 연동은 보류하기를 제안한다. 다만 자체 서명 검증이 개발 루프를 막을 수 있으므로 우회 경로를 먼저 정해야 한다 | F-12, `platform-constraints.md` §3.6 |
-| **D3** | **F-06 트랙패드 제스처를 범위에 넣을 것인가** | ⭐ 위험이 더 선명해졌다 — `MultitouchSupport` 는 번들에서 **유일한 PrivateFramework** 이고, 부를 함수 9개는 확정됐으나 **시그니처는 여전히 비공개**다. 게다가 Magic Mouse 분기와 손바닥·엄지 거부까지 필요해 범위가 예상보다 크다. 빼도 제품은 성립한다 | F-06, `platform-constraints.md` §0.2 (b), P6 |
-| **D4** ⭐ | **현지화를 할 것인가** | **신규 결정.** 기존 명세는 "원본이 이미 8개 로케일로 배포 중" 이라는 전제 위에 서 있었으나, 실측 결과 **원본은 영어 단일이다**(`Base.lproj` 하나, `CFBundleLocalizations` 없음). 그 8개는 Sparkle 프레임워크의 로케일을 오독한 것이었다. 따라서 현지화는 **원본 추종이 아니라 클론 고유의 선택**이 되었다. 하기로 한다면 UI 가 굳기 전에 카탈로그 구조를 정해야 하고, 안 하기로 한다면 F-14(A) 를 범위에서 뺄 수 있다 | F-14, `app-bundle-analysis.md` §5.1 |
+> **상태: D1~D4 전부 확정 (2026-08-30, 이슈 #5).** 이 표는 더 이상 "답해야 하는 질문"이 아니라 **확정된 답과 그 근거**다.
+> 결정의 원문은 [이슈 #5](https://github.com/johnpark-bin/Ultrakey/issues/5) 본문 "착수 전 제품 결정 — 확정됨" 절에 있다.
+
+| # | 질문 | ✅ 확정된 답 | 근거 · 범위 영향 | 관련 |
+| :--- | :--- | :--- | :--- | :--- |
+| **D1** | 최소 macOS 버전 12.0 vs 12.3 | **12.0 을 유지한다** | 이미 해소된 것을 재확인. SuperKey v1.66 이 `LSMinimumSystemVersion = 12.0` 을 유지하며 ScreenCaptureKit 없이 `CGDisplayCreateImage` 로 출하 중이다 — 12.3 상향의 유일한 근거가 사라졌다. 구현 반영: `apps/ultrakey-app/tauri.conf.json` 의 `bundle.macOS.minimumSystemVersion` | F-02, `platform-constraints.md` §0.2 (a) |
+| **D2** | 라이선싱을 실제로 구현할 것인가 | **상태 머신 + 추상 인터페이스까지만. 실제 Paddle 연동은 보류** | F-12 명세의 제안을 그대로 채택한다. 대상 자체는 실측으로 확정되어 있다(**Paddle Classic**, 제품 ID `750314`, 자체 코드 서명 검증 병용). **M4 범위이며 M1 과 무관하다.** 다만 원본이 자기 서명을 검증하므로(`SecStaticCodeCreateWithPath`, `anchor apple generic`), 개발 중 자체 서명 인증서에서 이 검증이 실패해 **개발 루프를 막지 않도록 우회 경로를 F-12 명세에 명시해 둔다** | F-12, `platform-constraints.md` §3.6 |
+| **D3** | F-06 트랙패드 제스처를 범위에 넣을 것인가 | **범위에 두되 최후순위(M5). 실패 시 격하 가능한 선택 기능으로 설계** | 위험이 선명하다 — `MultitouchSupport` 는 번들에서 **유일한 PrivateFramework** 이고, 부를 함수 9개는 확정됐으나 **시그니처는 여전히 비공개**다(P6). Magic Mouse 분기와 손바닥·엄지 거부까지 필요해 범위도 예상보다 크다. 그러나 이것은 **hyper 활성화의 대체 경로일 뿐**이라 빠져도 제품이 성립한다 — 그래서 "빼기"가 아니라 "최후순위 + 격하 가능"으로 정했다 | F-06, `platform-constraints.md` §0.2 (b), P6 |
+| **D4** ⭐ | 현지화를 할 것인가 | **한다 — 한국어 + 영어** | ⚠️ **원본에 없는 기능이다.** 실측 결과 SuperKey 는 영어 단일이며(`Base.lproj` 하나, `CFBundleLocalizations` 없음), 기존 명세가 근거로 삼았던 "8개 로케일"은 Sparkle 프레임워크의 로케일을 오독한 것이었다. 따라서 이것은 **원본 추종이 아니라 클론 고유의 선택**이다. ⭐ **M1 에 영향이 있다** — 권한 안내 모달 등 사용자 대면 문자열이 M1 에서 이미 생기므로, UI 가 굳기 전에 **카탈로그 구조를 M1 에서 잡았다**(`ultrakey-i18n` + `resources/i18n/{en,ko}.json`, `localization-and-input-sources.md` §3.1.5 의 "단일 카탈로그" 결정을 따름). F-14(A) 의 나머지(RTL 등)는 M5 | F-14, `app-bundle-analysis.md` §5.1 |
+
+### 이 결정들이 구현 순서에 미친 영향
+
+- **D4 만 M1 을 건드렸다.** D2·D3 는 각각 M4·M5 범위라 M1 착수를 막지 않는다.
+- D4 채택으로 **로케일 목록이 확정**되었으므로, `localization-and-input-sources.md` §3.1.1 이 "클론이 정할 문제"로 되돌려 두었던 로케일 집합은 이제 **`en` + `ko` 2종**이다. 다만 §3.1.4 의 **RTL 미러링 규칙은 M1 범위 밖이다** — `ko`·`en` 둘 다 LTR 이라 M1 에서는 적용 대상이 없다. 규칙 자체는 나중에 RTL 로케일을 추가할 때를 위해 명세에 남겨 둔다.
+- D3 를 "빼기"가 아니라 "최후순위"로 정했으므로 `trackpad-hyper-gesture.md` 는 폐기하지 않는다. `hyperkey.md` §3.5 의 조건부 표시 2종(`Change menu bar icon when engaged` · `Provide haptic feedback when triggered`)도 F-05 에 그대로 남는다.
 
 ## 미해결 질문의 소재
 

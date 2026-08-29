@@ -198,6 +198,18 @@ Accessibility 만 앱이 직접 확인할 수 있는 값이고, Input Monitoring
 - **자체 TCC 리셋(§3.3의 (a) 경로)**: **채택하지 않는 것을 권장한다**(§3.3, §5 항목 9). 채택한다면 `tccutil` 셸 호출이 유력한 구현이나, 스코프가 넓어 위험하다 — 정확한 인자·확인 대화상자 설계는 별도 안전성 검토가 필요하다.
 - **결론적으로 F-11 전체에 네이티브 Swift/Objective-C shim 은 불필요하다.** Input Monitoring 의 수동 FFI 선언이 유일한 특이점이며, 여전히 "Rust 바인딩" 판정 범주 안에 있다.
 
+⭐ **M1 이 실제로 구현한 범위 (2026-08-30, 이슈 #5).** 위 "명시적 확인 API 를 쓴다"는 설계 결정은 **유효하되, M1 에서는 적용 대상이 아직 없다.**
+
+| 권한 | M1 에서의 상태 | 이유 |
+| :--- | :--- | :--- |
+| Accessibility | ✅ **구현됨** — `AXIsProcessTrusted()` 폴링(온보딩 500 ms / 배경 5000 ms), 자체 모달, 시스템 설정 딥링크, 런타임 취소 감지 | M1 의 유일한 필수 권한. `CGEventTapCreate` 의 전제 조건 |
+| Screen Recording | ❌ **구현 안 함** | M1 에 Seek(F-02)가 없어 `CGDisplayCreateImage` 를 **호출하는 코드 자체가 없다.** 확인할 것이 없으므로 확인하지 않는다. 위 설계 결정(`CGPreflightScreenCaptureAccess` 채택)은 **M3 에서 F-02 와 함께** 적용한다 |
+| Input Monitoring | ❌ **구현 안 함** | ⭐ M1 은 `IOHIDManagerOpen` 을 **호출하지 않는다.** 키보드 핫플러그 감지를 `IOHIDManager` 계열이 아니라 `IOServiceAddMatchingNotification` 으로 구현했기 때문이다(`key-remapping-engine.md` §6 판정 변경) — 그 결정 자체가 "이 권한을 요구하지 않기 위한" 것이었다. 따라서 M1 에서는 확인할 것도, 실패-재시도로 흡수할 것도 없다. 위 설계 결정(`IOHIDCheckAccess` 채택)은 **경로 B 의 FFI 구현이 들어오는 시점(M2 이후)** 에 재검토한다 |
+
+즉 **M1 의 관측 가능한 동작은 "확인하는 권한은 `AXIsProcessTrusted` 하나"** 이며, 이는 §1.1 의 실측(원본도 그렇다)과 일치한다. 원본과의 의도적 차이(§7 의 명시적 API 채택)는 **없어진 것이 아니라 아직 적용 지점이 오지 않은 것**이다 — 조용히 지우지 않고 여기에 기록해 둔다.
+
+⚠️ **자체 TCC 리셋은 구현하지 않았다.** §3.3·§5 항목 9·§7 이 "채택하지 않는 것을 권장"으로 판정한 그대로다. M1 의 out-of-sync 진단 화면은 **(b) 수동 절차 안내만** 제공한다. §8 의 "(a) 자체 리셋 경로를 클론이 구현한다면…" 수용 기준은 **구현하지 않음으로써 충족**된다.
+
 ### 개발 워크플로 요구사항 ⭐ (기존 내용 유지 — 실측으로 보강)
 
 rust-macos-capability-notes.md §3.2·§3.3 이 확정한 사실에, app-bundle-analysis.md §1.1 이 확인한 사실(entitlement 는 `com.apple.security.cs.allow-jit` 하나뿐, App Sandbox 없음, Hardened Runtime 활성)을 더해 개발 워크플로 요구사항을 명시한다.

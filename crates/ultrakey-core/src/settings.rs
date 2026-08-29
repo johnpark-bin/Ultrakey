@@ -1,0 +1,112 @@
+//! 엔진 설정 타입. 값의 근거(실측 대 설계 판단)를 각 필드 옆에 구분해 적는다
+//! (`docs/dev/architecture.md` §4 와 일치).
+
+use crate::rules::RuleTable;
+
+/// `Apply modifiers to keypress events and:` 4개 체크박스(`hyperkey.md` §3.3).
+///
+/// ⭐ 실측 기본값: `Click` 만 `true`, 나머지는 전부 `false`(app-bundle-analysis.md §6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MouseApply {
+    pub click: bool,
+    pub drag: bool,
+    pub r#move: bool,
+    pub scroll: bool,
+}
+
+impl Default for MouseApply {
+    fn default() -> Self {
+        MouseApply {
+            click: true,
+            drag: false,
+            r#move: false,
+            scroll: false,
+        }
+    }
+}
+
+/// 이 엔진이 쓰는 모든 타이밍 값. `docs/dev/architecture.md` §4 가 "실측이 아니라 이 구현의
+/// 설계 판단"이라 명시한 값들은 여기서도 동일하게 구분해 둔다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timings {
+    /// ⭐ 실측 확정(`hyperkey.md` §4, AX 트리): 최소 250ms · 최대 2000ms · 현재값(기본) 1000ms.
+    pub quick_press_duration_ms: u64,
+    /// (추정) — `key-remapping-engine.md` §4·§9 가 이미 근거 없는 추정치로 표기한 값을 그대로 쓴다.
+    pub double_tap_interval_ms: u64,
+    /// (설계 판단) — architecture.md §4: 탭이 죽은 뒤 첫 키 입력 전에 복구되길 기대하는 주기.
+    pub watchdog_poll_ms: u64,
+    /// (설계 판단) — architecture.md §4: 절전 복귀 직후 커널 HID/WindowServer 안정화 대기.
+    pub wake_delay_ms: u64,
+    /// (설계 판단) — architecture.md §4: 세션 활성화(로그인/화면 잠금 해제) 후 재확인 지연.
+    pub session_delay_ms: u64,
+    /// (설계 판단) — architecture.md §4: 외장 키보드 연결 후 장치 열거가 끝나길 기다리는 지연.
+    pub keyboard_connect_delay_ms: u64,
+    /// (설계 판단) — architecture.md §4: 절전→잠금해제→세션전환 연쇄를 한 번으로 합치는 디바운스.
+    pub restart_debounce_ms: u64,
+    /// (설계 판단) — architecture.md §4: 이 횟수를 넘으면 탭 재생성으로 에스컬레이션.
+    pub tap_reenable_max_attempts: u32,
+    /// (설계 판단) — architecture.md §4: 이 횟수를 넘으면 프로세스 재실행 신호로 에스컬레이션.
+    pub tap_recreate_max_attempts: u32,
+    /// (설계 판단) — architecture.md §4: 온보딩 중 권한 폴링 주기(짧게 — 사용자가 시스템
+    /// 설정에서 막 돌아온 직후를 기다림).
+    pub permission_poll_onboarding_ms: u64,
+    /// (설계 판단) — architecture.md §4: 배경 권한 폴링 주기(권한 회수 감지용, 길어도 무방).
+    pub permission_poll_background_ms: u64,
+}
+
+impl Default for Timings {
+    fn default() -> Self {
+        Timings {
+            quick_press_duration_ms: 1000,
+            double_tap_interval_ms: 300,
+            watchdog_poll_ms: 1000,
+            wake_delay_ms: 2000,
+            session_delay_ms: 1000,
+            keyboard_connect_delay_ms: 1500,
+            restart_debounce_ms: 5000,
+            tap_reenable_max_attempts: 5,
+            tap_recreate_max_attempts: 3,
+            permission_poll_onboarding_ms: 500,
+            permission_poll_background_ms: 5000,
+        }
+    }
+}
+
+/// 엔진 하나가 쓰는 설정 전체 — 규칙 테이블 + 마우스 적용 범위 + 타이밍.
+#[derive(Debug, Clone, Default)]
+pub struct EngineConfig {
+    pub rules: RuleTable,
+    pub mouse_apply: MouseApply,
+    pub timings: Timings,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_apply_default_is_click_only() {
+        let m = MouseApply::default();
+        assert!(m.click);
+        assert!(!m.drag);
+        assert!(!m.r#move);
+        assert!(!m.scroll);
+    }
+
+    #[test]
+    fn timings_default_matches_documented_values() {
+        let t = Timings::default();
+        assert_eq!(t.quick_press_duration_ms, 1000);
+        assert_eq!(t.double_tap_interval_ms, 300);
+        assert_eq!(t.watchdog_poll_ms, 1000);
+        assert_eq!(t.wake_delay_ms, 2000);
+        assert_eq!(t.session_delay_ms, 1000);
+        assert_eq!(t.keyboard_connect_delay_ms, 1500);
+        assert_eq!(t.restart_debounce_ms, 5000);
+        assert_eq!(t.tap_reenable_max_attempts, 5);
+        assert_eq!(t.tap_recreate_max_attempts, 3);
+        assert_eq!(t.permission_poll_onboarding_ms, 500);
+        assert_eq!(t.permission_poll_background_ms, 5000);
+    }
+}
