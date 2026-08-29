@@ -1,268 +1,350 @@
 # F-09 · 환경설정 UI
 
-> **한 줄 요약**: 좌측 사이드바(`Seek`·`Hyperkey`·`Presets`·`General` 4탭) + 우측 패널로 구성된 환경설정 창의 구조·컨트롤 종류·저장 방식·엔진으로의 즉시 반영 계약을 정의한다. 개별 설정의 의미는 다루지 않는다 — 이 문서는 "창 자체"의 명세다.
-> **의존성**: 이 문서가 정의하는 저장·즉시반영 계약은 `F-07`(key-remapping-engine — 단일 리매핑 엔진·우선순위 중재)이 소비자다. `Seek` 탭의 개별 설정은 `F-01`~`F-04`, `Hyperkey`/`Presets` 탭은 각 소유 명세(§3.1 표), `General` 탭은 `F-10`~`F-14`(전부 `(추정)`)가 소유한다. 권한 상태 표시는 `F-11`(permissions-onboarding.md)의 온보딩 흐름과 연동된다.
-> **관련 명세**: 개별 설정의 동작 의미 → 각 기능 명세(§3.1, §4 표에서 지시). 오버레이 창(Seek 검색 바) → `F-03`(seek-overlay-ui.md). 메뉴바 상주·환경설정 창을 여는 경로 → `F-10`. 리매핑 엔진 자체 → `F-07`(key-remapping-engine.md, 파일명 `(추정)`). 권한 획득·상태 표시 → `F-11`. 플랫폼 역량 종합 판정 → `platform-constraints.md`.
+> **한 줄 요약**: 좌측 사이드바(`Seek`·`Hyperkey`·`Presets`·`General` 4탭, 각각 AX 상 토글 버튼) + 우측 패널로 구성된 환경설정 창의 구조·컨트롤 종류·저장 방식·엔진으로의 즉시 반영 계약을 정의한다. 개별 설정의 의미는 다루지 않는다 — 이 문서는 "창 자체"의 명세다.
+> **의존성**: 이 문서가 정의하는 저장·즉시반영 계약은 `F-07`(key-remapping-engine — 단일 리매핑 엔진·우선순위 중재)이 소비자다. `Seek` 탭의 개별 설정은 `F-01`~`F-04`, `Hyperkey` 탭(hyper/meh/bleh + 트랙패드 제스처)은 `F-05`·`F-06`, `Presets` 탭(16종)은 `F-08`, `General` 탭은 `F-10`~`F-13`이 소유한다. 권한 상태 표시는 `F-11`(permissions-onboarding.md)의 온보딩 흐름과 연동된다. 설정 충돌 감지 대화상자·저장소 무결성의 상세 명세는 `F-15`(settings-store-and-integrity.md, 별도 담당)가 소유한다 — 이 문서는 그 대화상자가 UI 표면(4개 탭 중 어디서 뜨는지)으로서 실재한다는 사실만 다룬다.
+> **관련 명세**: 개별 설정의 동작 의미 → 각 기능 명세(§3.1, §4 표에서 지시). 오버레이 창(Seek 검색 바) → `F-03`(seek-overlay-ui.md). 메뉴바 상주·환경설정 창을 여는 경로 → `F-10`. 리매핑 엔진 자체 → `F-07`(key-remapping-engine.md). 권한 획득·상태 표시 → `F-11`. 현지화 → `F-14`(localization-and-input-sources.md). 플랫폼 역량 종합 판정 → `platform-constraints.md`.
+> **1차 근거**: [`../research/app-bundle-analysis.md`](../research/app-bundle-analysis.md) — 실제 설치된 SuperKey v1.66(66)의 번들 정적 분석 + 실행 중 AX 트리 실측. 이 문서의 `(실측: ...)` 표기 전부가 그 문서를 가리킨다(등급 정의는 그 문서 §0).
 
 ---
 
 ## 1. 개요
 
-환경설정 창은 Superkey 의 모든 설정을 담는 유일한 UI 표면이다. 조사 자료(`superkey-inventory.md` §3)가 확보한 스크린샷 3장(`seekScreenshot.png`, `hyperScreenshot.png`, `presetScreenshot.png`)은 이 창을 원본 해상도로 담고 있으며, 창은 **좌측 사이드바(탭 목록) + 우측 패널(선택된 탭의 컨트롤들)** 구조다. 탭은 `Seek` · `Hyperkey` · `Presets` · `General` 4개이고 이 순서가 스크린샷 3장 모두에서 일관되게 확인된다.
+환경설정 창은 Superkey 의 모든 설정을 담는 유일한 UI 표면이다. `NSMainStoryboardFile = Main`(`AppKit` + Storyboard, WebView 아님 — 실측: 번들 문자열, app-bundle-analysis.md §1)로 구현되어 있으며, 창은 **좌측 사이드바(탭 목록) + 우측 패널(선택된 탭의 컨트롤들)** 구조다. 탭은 `Seek` · `Hyperkey` · `Presets` · `General` 4개이고, AX 트리 상 각 탭은 **토글형 `AXCheckBox`**(체크박스가 아니라 라디오처럼 동작하는 선택 버튼)로 구현되어 있으며 이 순서가 AX 실측·스크린샷 4장 모두에서 일관되게 확인된다(실측: AX 트리, 02~05-*.png).
 
-이 문서가 다루는 것은 **창의 골격**이다 — 어떤 탭이 있고, 각 탭에 어떤 종류의 컨트롤(체크박스, 팝업, 슬라이더 등)이 등장하며, 컨트롤을 조작했을 때 값이 어디에 저장되고 언제 엔진에 반영되는가. 각 설정이 *무엇을 하는지*(예: `Match on more than one character` 가 AX 매칭을 어떻게 제한하는지)는 그 설정을 소유하는 개별 기능 명세의 몫이다.
+⭐ **창 크기는 탭마다 다르며, 탭 전환 시 창이 내용에 맞게 리사이즈된다**(실측: AX 트리) — `Seek` 555×378pt · `Hyperkey` 710×517pt · `Presets` 825×527pt · `General` 613×273pt. 고정 크기 창이 아니다. 이는 §3.3·§5·§6 전반에 영향을 준다(다중 디스플레이 위치 복원 로직이 창 크기 변화를 전제해야 한다).
+
+이 문서가 다루는 것은 **창의 골격**이다 — 어떤 탭이 있고, 각 탭에 어떤 종류의 컨트롤(체크박스, 팝업, 슬라이더 등)이 등장하며, 컨트롤을 조작했을 때 값이 어디에 저장되고 언제 엔진에 반영되는가. 각 설정이 *무엇을 하는지*는 그 설정을 소유하는 개별 기능 명세의 몫이다.
 
 개발자 본인이 명시한 설계 원칙(`superkey-inventory.md` §4.5)이 이 문서의 핵심 제약이다:
 
 > "Superkey will follow the same **simple checkbox-centered configuration**"
 > "There's definitely a tradeoff between offering complex entirely custom key remappings versus the canned presets here, but **I'll always prefer just checking a box over messing around with complicated preferences construction**"
 
-즉 환경설정 UI 는 **고정된 항목의 열거**이지, 사용자가 임의 규칙을 조합·저장하는 규칙 편집기가 아니다. `Presets` 탭이 16개의 개별 체크박스로 이루어진 것 자체가 이 원칙의 직접적 결과이며, 클론도 "새 항목을 추가하는 규칙 빌더"를 만들지 않는다.
+즉 환경설정 UI 는 **고정된 항목의 열거**이지, 사용자가 임의 규칙을 조합·저장하는 규칙 편집기가 아니다. 이번 실측(app-bundle-analysis.md §6)이 이 원칙을 정확히 확인해 준다 — `Presets` 탭 16개 항목 전부가 체크박스(+ 최대 팝업 하나)로 끝나며, 자유 텍스트 규칙 입력 필드는 어디에도 없다. 클론도 "새 항목을 추가하는 규칙 빌더"를 만들지 않는다.
 
 ## 2. 사용자 시나리오
 
 ### 시나리오 A — 환경설정을 열고 Seek 리매핑 키를 바꾼다
 
-1. 사용자가 메뉴바 아이콘(`F-10` 소유)을 클릭해 "Preferences…" 를 선택한다 `(추정 — §9)`.
-2. 환경설정 창이 열리고, 이전에 마지막으로 보고 있던 탭(예: `Seek`)이 다시 선택된 상태로 나타난다 `(추정 — §9)`.
-3. `Remap key to Seek:` 팝업 버튼을 클릭해 `caps lock` 대신 `right option` 을 선택한다.
-4. 선택 즉시(별도 "적용" 버튼 없이) 값이 저장되고, `F-07`(리매핑 엔진)에 새 매핑이 반영된다(§3.7). 이전에 `caps lock` 을 누르고 있어도 더 이상 Seek 가 열리지 않는다.
+1. 사용자가 메뉴바 아이콘(`F-10` 소유)을 클릭해 `Settings…` 를 선택한다(실측: 번들 문자열 — 메뉴바 메뉴 전량, app-bundle-analysis.md §6.5. ⭐ 항목 라벨이 `Settings…` 로 확정됐다 — 기존 명세가 `(추정)` 으로 썼던 `Preferences…` 가 아니다. `menu-bar-and-lifecycle.md`(F-10)가 별도로 갱신해야 할 대상이다).
+2. 환경설정 창이 열리고 `Seek` 탭(555×378pt)이 선택된 상태로 나타난다. 이전에 마지막으로 보고 있던 탭이 다시 열리는지는 관찰 중 항상 같은 탭이었다는 정황뿐이라 `(미확정)` → §9.
+3. `Remap key to Seek:` 팝업 버튼을 클릭해 `-`(미설정) 대신 `right option` 을 선택한다(35종 선택지 중 하나, §4.1).
+4. 선택 즉시(별도 "적용" 버튼 없이 — 실측: AX 트리, 4개 탭 어디에도 Apply/OK 버튼 없음이 확인됨, §3.7) 값이 저장되고, `F-07`(리매핑 엔진)에 새 매핑이 반영된다.
 5. 사용자가 창을 닫는다(빨간 stoplight 버튼 또는 `⌘W`). 엔진은 계속 백그라운드에서 동작한다(§5).
 
 ### 시나리오 B — 단축키 레코더에서 이미 점유된 조합을 입력한다
 
-1. `Seek` 탭에서 `Toggle Seek with shortcut:` 필드를 클릭해 레코딩을 시작한다(§3.5).
+1. `Seek` 탭에서 `Toggle Seek with shortcut:` 필드를 클릭해 레코딩을 시작한다(§3.5). 미설정 상태의 기본 표시는 `Record Shortcut`(실측: 번들 문자열 — `KeyboardShortcuts` 패키지의 표준 placeholder)이다.
 2. 사용자가 `⌘Space`(macOS 기본 Spotlight 단축키)를 누른다.
-3. 레코더가 이 조합이 시스템 단축키와 충돌함을 인지하고 경고를 표시한다(§3.5, §5) `(추정 — §9)`. 값은 저장되지 않고 이전 값(`⌥Space`)이 유지된다.
+3. 레코더가 이 조합이 시스템 단축키와 충돌함을 인지하고 경고를 표시하는지는 조사로 확인되지 않았다 `(미확정)` → §9. `KeyboardShortcuts` 패키지 자체는 시스템 예약 단축키 감지 기능을 제공하지만, SuperKey 가 이를 활성화했는지는 관찰하지 못했다(실측 부작용이 커 재현하지 않음, app-bundle-analysis.md §8 항목 7 참조).
 4. 사용자가 `Esc` 를 눌러 레코딩을 취소하거나, 다른 조합을 다시 눌러 레코딩을 이어간다.
 
 ### 시나리오 C — Presets 탭에서 서로 다른 그룹의 설정을 다수 조작한다
 
-1. 사용자가 `Presets` 탭으로 전환한다. 좌측 키캡 일러스트(`caps lock`/`shift`/`delete`)로 구분된 4개 그룹이 보인다.
-2. `Quick press duration` 슬라이더를 드래그해 값을 `1000 ms` 에서 `600 ms` 로 낮춘다. 드래그 중 값 라벨이 실시간으로 갱신된다.
-3. `Caps lock + [H J K L] = ◀▼▲▶` 체크박스를 켠다. 라벨 문장 중간의 인라인 팝업(`H J K L`)은 그대로 유지된다(별도 변경 없음).
-4. 각 변경은 개별적으로 즉시 저장·반영된다(§3.7) — 탭을 벗어나거나 창을 닫을 때 일괄 저장하는 방식이 아니다 `(추정 — §9, 근거: "적용" 버튼이 스크린샷에 없음)`.
+1. 사용자가 `Presets` 탭으로 전환한다. 창이 825×527pt 로 리사이즈된다(실측: AX 트리). 캡스락/시프트/삭제/기타 4개 그룹이 순서대로 배치되어 있다(§4.3).
+2. `Quick press duration` 슬라이더를 드래그해 값을 `1000 ms`(출고 기본값, 실측: AX 트리)에서 `600 ms` 로 낮춘다. 슬라이더 범위는 **최소 250ms · 최대 2000ms** 로 확정됐다(실측: AX 트리) — 눈금 간격(step)은 여전히 `(미확정)` → §9.
+3. `Caps lock +` [팝업: `H J K L` / `I J K L`] ` = ◀▼▲▶` 체크박스를 켠다. 팝업은 라벨 문장 중간에 삽입되어 있다(§3.8 "문장 중간 삽입" 규약).
+4. 각 변경은 개별적으로 즉시 저장·반영된다(§3.7) — 탭을 벗어나거나 창을 닫을 때 일괄 저장하는 방식이 아니다. 이는 이제 `(추정)` 이 아니라 **확인**이다: AX 트리에 Apply 류 버튼이 없고, 실측 중 개별 토글마다 plist 에 해당 키가 즉시 기록되는 것을 확인했다(실측: defaults, app-bundle-analysis.md §7.1).
+
+### 시나리오 D — 서로 충돌하는 caps lock 설정을 동시에 켠다 `(F-15 소관, 배치만 확인)`
+
+1. 사용자가 `Presets` 탭에서 `Caps lock + W A S D` 를 켠 상태에서 `Caps lock + [H J K L]` 도 켜려 한다.
+2. 대화상자 "Conflict: Caps lock arrows"·"Disable that setting and enable WASD arrows?" 류 문구가 뜬다(SuperKey 원문 — 실측: 번들 문자열, app-bundle-analysis.md §4.1). 정확한 버튼 구성·문구 전체·재현 조건은 `F-15`(settings-store-and-integrity.md) 소관이며, 이 문서는 "그런 대화상자가 실재한다"는 사실만 확인한다.
+3. 사용자가 확인하면 상대 설정이 꺼지고 새 설정이 켜진다 — 즉 원본은 **UI 레벨 하드 차단이 아니라 사용자에게 묻고 상대를 꺼주는 대화형 해소**를 택했다.
 
 ## 3. 동작 명세
 
 ### 3.1 탭 구조
 
-| 탭 | 아이콘 | 담는 설정 (개수) | 소유 명세 ID |
+| 탭 | 컨트롤 개수(§4) | 창 크기(실측: AX 트리) | 소유 명세 ID |
 | :--- | :--- | :--- | :--- |
-| `Seek` | 존재 확인, 구체적 모양은 조사 자료에 서술 없음 → ❓미확인 | 상위 컨트롤 8개 + 중첩 체크박스 1개 = 9개 항목(§4) | `F-01`·`F-02`·`F-03`·`F-04` |
-| `Hyperkey` | ❓미확인 | 6개 항목(§4) | `F-05`(추정)·`F-07`·`F-08`(추정) |
-| `Presets` | ❓미확인 | 16개 항목, 4개 그룹(caps lock / shift / delete / 기타)(§4) | `F-06`(추정)·`F-07` |
-| `General` | ❓미확인 | 패널 내용 자체가 조사에서 미확인(`superkey-inventory.md` §3.4, §7 Q2). 로그인 시 실행·자동 업데이트·라이선스·권한 상태·언어가 모일 것으로 추론(§4, 전부 `(추정)`) | `F-10`·`F-11`·`F-12`·`F-13`·`F-14`(전부 추정) |
+| `Seek` | 상위 8개 + 조건부 1개 = 9개 | 555 × 378 pt | `F-01`·`F-02`·`F-03`·`F-04` |
+| `Hyperkey` | 상위 6개 + 조건부 2개 = 8개 | 710 × 517 pt | `F-05`·`F-06` |
+| `Presets` | 16개 + 조건부 2개 = 18개 | 825 × 527 pt | `F-08` |
+| `General` | 7개 컨트롤 + 조건부 1개 | 613 × 273 pt | `F-10`·`F-11`·`F-12`·`F-13` |
 
-> `F-05`(Hyperkey 변환)·`F-06`(Presets)·`F-08`(트랙패드 원터치 제스처)의 ID 배정은 이 문서 작성 시점의 **추정**이다. `F-01`~`F-04`(Seek 4분할), `F-07`(key-remapping-engine)은 기존 명세(`seek-activation-and-session.md`, `seek-text-detection.md`)와 그 문서들의 의존성 선언에서 이미 확정되어 있다. `F-10`~`F-14` 는 이 작업 지시에서 명시적으로 배정됐다. 실제 각 명세 문서가 작성되는 시점에 번호가 확정되면 이 표를 갱신해야 한다.
+⭐ **F-05/F-06/F-08 의 소유 배정이 정정됐다.** 이전 판(이 문서의 구판)은 `Hyperkey` 탭의 `Engage hyper key using trackpad:` 를 `F-08(추정)` 으로, `Presets` 탭 전체를 `F-06(추정)` 으로 잘못 배정했다. 실제로는 `trackpad-hyper-gesture.md` 가 `F-06`, `power-user-presets.md` 가 `F-08` 로 이미 확정되어 있다(두 문서 모두 자체 헤더에서 이 ID 로 서로를 참조한다) — 이 문서의 구판에 있던 ID 혼동을 여기서 바로잡는다.
 
-패널 상단에는 탭 이름과 ⓘ 정보 버튼이 함께 표시된다 — 스크린샷에서 직접 확인된 것은 `Seek ⓘ`, `Hyperkey ⓘ` 뿐이다(`superkey-inventory.md` §3.1, §3.2). `Presets`·`General` 패널 제목에도 같은 ⓘ 버튼이 있는지는 조사 자료로 확인되지 않았다 `(추정 — 일관성상 있을 가능성이 높음, §9)`.
+각 탭 버튼은 AX 상 `AXCheckBox`(라디오 그룹처럼 동작하는 토글)이며, 탭마다 아이콘이 붙는다(실측: AX 트리 — 아이콘 존재는 확인, **구체적 모양은 확인하지 못했다** `(미확정)` → §9). 패널 상단에는 탭 이름과 ⓘ 정보 버튼이 함께 표시되는 것은 `Seek`·`Hyperkey` 뿐이다(실측: AX 트리 — `SeekInfoViewController`·`HyperkeyInfoViewController` 두 개만 패널 제목 옆에 있고, `Presets`·`General` 패널 제목에는 ⓘ 가 없다. 기존 판의 `(추정 — 일관성상 있을 가능성)` 을 정정한다).
 
 ### 3.2 컨트롤 타입 카탈로그
 
 | 타입 | 등장 위치 | 동작 규칙 |
 | :--- | :--- | :--- |
 | 체크박스 | 전 탭에 다수(§4 대부분) | 클릭 시 즉시 토글, 별도 확인 없이 §3.7 의 즉시 반영 계약을 따른다 |
-| 중첩 체크박스 | Seek: `Match on more than one character`(`Seek using macOS accessibility` 하위) | 시각적으로 들여쓰기되어 상위 체크박스에 종속됨을 표시. 상위가 꺼지면 비활성화(dimmed)되어 조작 불가하나, 저장된 값 자체는 보존된다 `(추정)` — 상위를 다시 켜면 이전 하위 값이 복원되는 편이 사용자 기대에 맞는다 |
-| 팝업 버튼(열거형 선택) | Seek: `Remap key to Seek:`; Hyperkey: 4개(소스 키 3종 + 트랙패드 영역); Presets: 다수 | 클릭 시 드롭다운이 열리고 선택 즉시 반영. 각 팝업의 **선택지 전체 목록은 대부분 미확인**이다 — 확인된 값만 스크린샷 1개 선택 상태로 노출됨(`superkey-inventory.md` §7 Q4·Q5·Q7·Q8) |
-| **단축키 레코더** | Seek: `Toggle Seek with shortcut:` | 값 `⌥Space` + 지우기 ✕ 버튼. 상세 동작은 §3.5 |
-| 슬라이더 + 값 라벨 | Presets: `Quick press duration` | 눈금 8칸, 스크린샷 값 `1000 ms`. 최소/최대/간격 미확인(§9 Q6). 드래그 중 값 라벨 실시간 갱신 |
-| 인라인 팝업(라벨 문장 중간에 삽입) | Presets: `Caps lock + [H J K L] = ◀▼▲▶`, `Caps lock + home row = [symbol row (A = !)]` | 라벨 문장 자체가 현재 선택값을 포함해 렌더링된다. **로케일 번역 시 문장 어순이 깨지지 않게 재구성해야 한다**(§5, RTL 포함) |
-| 부제/설명 텍스트 | Seek 다수 항목("Release the remapped key to click" 등), Hyperkey 트랙패드("Slide only one touch…") | 컨트롤 바로 아래 보조 텍스트(회색, 작은 글자로 추정). 상호작용 없음 |
-| 키캡 일러스트 | Hyperkey 좌측(선택된 소스 키), Presets 그룹 구분(`caps lock`/`shift`/`delete`) | 현재 선택된 물리 키를 시각적으로 표시하는 순수 표시 요소. 클릭 상호작용 없음(추정) |
-| 인라인 ⓘ 툴팁 | 패널 제목(`Seek ⓘ`, `Hyperkey ⓘ`), 일부 체크박스 라벨 옆(`Seek using macOS accessibility` ⓘ, `Change click modes with modifier keys` ⓘ) | 클릭 또는 hover 시 설명 팝오버. 내용 대부분 미공개(§9 Q10) |
+| 팝업 버튼(열거형 선택) | Seek 1개(35종); Hyperkey 4개(35종×3 + 5종×1); Presets 다수(§4.3); General 1개(2종) | 클릭 시 드롭다운이 열리고 선택 즉시 반영. **모든 팝업의 선택지 전량이 이번 실측으로 확정됐다**(app-bundle-analysis.md §6.1~§6.3, 아래 §4 에 전재) |
+| 인라인 팝업(라벨 문장 중간에 삽입) | Presets: `Caps lock +` [팝업] ` = ◀▼▲▶` | §3.8 "문장 중간 삽입" 규약 참조. `Caps lock + home row = ` [팝업] 처럼 문장 끝에 붙는 경우도 있어 삽입 위치가 항목마다 다르다 |
+| **단축키 레코더** (`AXTextField`) | Seek: `Toggle Seek with shortcut:` | Sindre Sorhus 의 오픈소스 `KeyboardShortcuts` 패키지(`RecorderCocoa`)로 구현됨이 확정됐다. 상세 동작은 §3.5 |
+| 슬라이더 + 값 라벨 | Presets: `Quick press duration` | **최소 250 ms · 최대 2000 ms**(실측: AX 트리), 기본값 1000 ms. 눈금 간격(step) `(미확정)`. 드래그 중 값 라벨 실시간 갱신(§3.7) |
+| 부제/설명 텍스트(정적) | Seek·Hyperkey·General 다수 | 컨트롤 바로 아래 보조 텍스트. 상호작용 없음. 예: `Release the remapped key to click`, `When hidden, relaunch from Finder to open.` |
+| 키캡/제스처 일러스트 | Hyperkey(선택된 소스 키, 트랙패드 영역), General(좌측 앱 로고) | 현재 선택 값을 반영하는 순수 표시 요소. 클릭 상호작용 없음 |
+| **ⓘ 정보 팝오버 버튼** | Seek 3개(제목 옆·`Seek using macOS accessibility` 옆·`Change click modes with modifier keys` 옆), Hyperkey 1개(제목 옆) | ⭐ 실재하는 UI 컴포넌트다(실측: AX 트리 + `Info.storyboardc`). 컨트롤러: `SeekInfoViewController`·`SeekAccessibilityViewController`·`ClickModesInfoViewController`·`HyperkeyInfoViewController`. **F-09 는 팝오버의 배치(어느 항목 옆에 붙는가)와 컴포넌트 종류만 소유한다. 팝오버 안의 설명 문구 자체는 각 항목을 소유하는 명세(F-01~F-04, F-05)가 소유한다** — 원문 전문은 app-bundle-analysis.md §5.2 참조 |
+| **버튼** | General: `v1.66 (66)`·`Remove Oldest Activation`·`Purchase` | ⭐ `v1.66 (66)` 은 정적 텍스트가 아니라 **버튼**임이 확정됐다(실측: AX 트리) — 클릭 시 동작은 About 창 오픈으로 추정되나 `(미확정)`. `Purchase` 는 강조색(accent color) 버튼 |
 
 ### 3.3 창 생명주기
 
-- **열기 경로**: 메뉴바 아이콘 메뉴(`F-10` 소유)에서 "Preferences…" 류 항목을 선택하는 것이 유력한 경로다 `(추정)`. 최초 실행 시 권한 온보딩(`F-11`)과 함께 자동으로 열리는지, 아니면 별도 온보딩 창이 있고 환경설정은 메뉴바 경로로만 여는지는 조사 자료로 확인되지 않았다 `(추정 — §9)`. `⌘,` 표준 단축키가 지원되는지도 미확인이다.
-- **닫기**: 표준 macOS 창 닫기(빨간 stoplight 버튼, `⌘W`)로 닫힌다고 가정한다 `(추정)`. 창을 닫아도 앱 자체는 종료되지 않는다(§5 참조) — 메뉴바 상주 앱의 표준 동작이다.
-- **재열기 시 마지막 탭 기억**: 조사 자료로 확인되지 않았다 `(추정 — §9)`. macOS 환경설정류 앱(예: System Settings)의 일반적 관례를 따라 마지막으로 본 탭을 기억하는 쪽을 기본 정책으로 제안하되, 확정되지 않았음을 명시한다.
-- **다중 인스턴스 방지**: 이미 열려 있는 상태에서 메뉴바에서 다시 "Preferences…" 를 선택하면 새 창을 열지 않고 기존 창을 최전면으로 가져온다 `(추정)` — macOS 단일 설정 창 관례.
+- **열기 경로**: 메뉴바 아이콘 메뉴에서 `Settings…` 항목을 선택하는 것이 확인된 경로다(실측: 번들 문자열, app-bundle-analysis.md §6.5). 최초 실행 시 권한 온보딩(`F-11`)과 함께 자동으로 열리는지, `⌘,` 표준 단축키가 지원되는지는 여전히 `(미확정)` → §9.
+- **탭 전환 시 리사이즈**: ⭐ 탭을 바꾸면 창이 §3.1 표의 크기로 애니메이션과 함께(또는 즉시 — 애니메이션 유무는 `(미확정)`) 리사이즈된다(실측: AX 트리). 고정 크기 창을 전제한 설계는 틀렸다.
+- **닫기**: 표준 macOS 창 닫기(빨간 stoplight 버튼, `⌘W`)로 닫힌다고 가정한다 `(추정)`. 창을 닫아도 앱 자체는 종료되지 않는다(§5) — 메뉴바 상주 앱의 표준 동작이며, 메뉴에 `Quit Superkey` 가 별도로 있다(실측: 번들 문자열).
+- **재열기 시 마지막 탭 기억**: 관찰 중 항상 `Seek` 탭으로 열렸다는 정황은 있으나, 이는 관찰 시작 시 탭을 그렇게 두고 시작했을 가능성과 구분되지 않는다 → `(미확정)` → §9.
+- **다중 인스턴스 방지**: 이미 열려 있는 상태에서 메뉴바에서 다시 `Settings…` 를 선택하면 새 창을 열지 않고 기존 창을 최전면으로 가져온다 `(추정)` — macOS 단일 설정 창 관례. 이번 실측에서 직접 검증하지 않았다.
 
 ### 3.4 접근성
 
-- **VoiceOver**: 창이 Tauri WebView(WKWebView) 기반이라면, 표준 HTML 폼 컨트롤(체크박스=`<input type="checkbox">`, 팝업=`<select>` 또는 ARIA `role="listbox"`)은 WebKit 이 기본적으로 macOS 접근성 트리에 노출한다. 다만 **비표준 커스텀 컨트롤**(단축키 레코더, 인라인 팝업이 낀 라벨 문장, 슬라이더의 눈금·값 라벨 연동)은 ARIA 속성(`aria-label`, `aria-valuenow`, `aria-live` 등)을 명시적으로 부여하지 않으면 VoiceOver 가 의미를 읽어주지 못한다. 이는 조사 자료에 근거가 없는 구현 요구사항이며 `(추정)` 표시한다.
-- **키보드 내비게이션**: 탭 사이드바는 방향키로 이동 가능해야 하고(`Seek`↔`Hyperkey`↔`Presets`↔`General`), 패널 내부는 `Tab`/`⇧Tab` 으로 컨트롤 간 이동이 가능해야 한다. 단축키 레코더가 포커스를 가진 상태에서 `Tab` 이 "다음 컨트롤로 이동"과 "레코딩 대상 키"로 이중 해석될 위험이 있다 — 레코더는 레코딩 모드가 아닐 때만 `Tab` 을 포커스 이동으로 처리해야 한다 `(추정)`.
-- **다크모드**: macOS 시스템 외관(라이트/다크)을 따라야 한다. Tauri 는 `prefers-color-scheme` CSS 미디어쿼리와 `NSApp.effectiveAppearance` 변경 이벤트 구독을 통해 자동/수동 전환 모두 지원 가능하다(§6). 조사 자료(스크린샷)는 라이트 모드로만 캡처되어 다크모드 시각 사양(대비, 아이콘 톤) 자체는 확인할 수 없다 `(추정)`.
+- **VoiceOver**: 원본은 AppKit 네이티브 창(`NSMainStoryboardFile`)이므로 표준 `NSButton`/`NSPopUpButton`/`NSSlider` 는 VoiceOver 를 "공짜로" 지원한다. 클론은 Tauri WebView 로 이 창을 구현하기로 결정했으므로(§7), 이 무료 지원은 클론에는 적용되지 않는다 — 표준 HTML 폼 컨트롤(체크박스=`<input type="checkbox">`, 팝업=`<select>`)은 WebKit 이 접근성 트리에 노출하지만, **비표준 커스텀 컨트롤**(단축키 레코더, 인라인 팝업이 낀 라벨 문장, 슬라이더-값 라벨 연동, ⓘ 팝오버)은 ARIA 속성을 명시적으로 부여해야 한다 `(추정)`.
+- **키보드 내비게이션**: 탭 사이드바는 방향키로 이동 가능해야 하고, 패널 내부는 `Tab`/`⇧Tab` 으로 컨트롤 간 이동이 가능해야 한다. 단축키 레코더가 레코딩 모드일 때만 `Tab` 을 "다음 키 조합의 일부"로 먹고, 그 외엔 포커스 이동으로 처리해야 한다 `(추정)`.
+- **다크모드**: macOS 시스템 외관을 따라야 한다. 스크린샷 5장은 전부 라이트 모드로 캡처되어(실측: 02~05-*.png) 다크모드 시각 사양 자체는 이번 조사로도 확인되지 않았다 `(추정)`.
 
 ### 3.5 단축키 레코더 동작 명세
 
-대상: `Toggle Seek with shortcut:`. 스크린샷에서 값 `⌥Space` 와 지우기 ✕ 버튼이 확인된다(`superkey-inventory.md` §3.1). 구체적 동작은 조사 자료에 근거가 없어 아래는 업계 표준(Karabiner-Elements, Alfred, Raycast 등 동종 앱의 단축키 레코더 관례)에서 채택한 합리적 기본값이며 전부 `(추정)`이다 → §9.
+대상: `Toggle Seek with shortcut:`. AX 상 역할은 `AXTextField`(검색 텍스트 필드와 동일 역할)이고, 미설정 시 표시 라벨은 `Record Shortcut` 이다(실측: AX 트리 + 번들 문자열).
 
-- **녹화 시작**: 필드를 클릭하면 레코딩 모드로 전환된다(시각적으로 필드가 강조 표시되고, placeholder 가 "키를 누르세요" 류 안내로 바뀐다).
-- **녹화 중 입력 처리**: 레코딩 모드에서는 이후 눌리는 키 이벤트(modifier 조합 포함)가 앱 전체가 아니라 이 필드로만 전달된다 — 이는 F-07 의 `CGEventTap` 이 아니라 창이 포커스를 가진 상태의 **로컬 이벤트 캡처**로 처리하는 편이 안전하다(전역 탭을 새로 여는 것은 과함).
-- **취소**: `Esc` 를 누르면 레코딩을 취소하고 이전 값으로 되돌린다. 필드 밖을 클릭(blur)해도 레코딩을 취소한다 `(추정)`.
-- **이미 점유된 조합 처리**: 같은 조합이 이미 다른 Superkey 설정(예: `Remap key to Seek:` 와 물리적으로 겹치는 단일 키, 또는 다른 전역 단축키 필드)에 쓰이고 있으면 경고를 표시한다. 저장을 막을지(하드 차단), 경고만 하고 저장을 허용할지(소프트 경고 — 나중에 F-07 의 우선순위 규칙으로 해소)는 미확정이다 `(추정)` → §9. §6.2 의 횡단 관찰("Hyperkey 와 Presets 는 동일한 물리 키를 두고 경쟁한다")을 고려하면 소프트 경고 쪽이 원본의 실제 동작(엔진이 우선순위로 해소)과 더 부합할 가능성이 있다.
-- **시스템 단축키와의 충돌 경고**: `⌘Space`(Spotlight), `⌘Tab`(App Switcher) 등 macOS 가 자체적으로 선점하는 조합을 누르면, macOS 가 그 이벤트를 애초에 서드파티 앱에 전달하지 않을 수 있다. 이 경우 레코더는 "아무 반응 없음"으로 보이거나, 별도로 알려진 위험 조합의 하드코딩 목록과 대조해 사전 경고를 표시해야 한다 `(추정)` — macOS 는 전체 시스템 단축키 표를 조회하는 공개 API 를 제공하지 않으므로(§6), 완전한 자동 감지는 불가능하고 알려진 목록 기반의 부분 대응만 가능하다.
-- **지우기**: ✕ 버튼을 누르면 값이 빈 상태로 저장되고, 해당 트리거는 비활성 상태가 된다(전역 단축키로는 Seek 를 열 수 없음 — `Remap key to Seek:` 경로는 별개로 계속 동작).
+⭐ **정체가 확정됐다.** 번들에 `KeyboardShortcuts_KeyboardShortcuts.bundle`(SPM 리소스 번들)이 있고, 실행 파일 심볼에 `KeyboardShortcuts.RecorderCocoa`·`RecorderModifierCocoa`·`RecorderForPlayback`·`CarbonKeyboardShortcuts` 가 확인된다(실측: 번들 심볼, app-bundle-analysis.md §1.2·§3.1). 이는 Sindre Sorhus 의 오픈소스 `KeyboardShortcuts` Swift 패키지다.
+
+- **클론 구현 접근에 대한 판단**: `KeyboardShortcuts` 는 **Swift 전용 패키지**이며 Rust 에서 직접 링크할 수 없다. 그러나 이 사실이 클론의 구현 접근 판정(§7, Rust 바인딩)을 바꾸지는 않는다 — 원본이 이 패키지를 쓴 것은 원본이 Swift/AppKit 네이티브 앱이기 때문일 뿐, 클론이 동일 패키지를 써야 할 이유는 없다. 클론은 이미 계획된 대로 `objc2-app-kit` 을 통한 `NSEvent.addLocalMonitorForEvents(matching:handler:)` 직접 호출(§6)로 동등한 레코딩 UX 를 구현하면 된다. 즉 **원본의 라이브러리 선택은 참고 사실일 뿐, 클론에 새 네이티브 shim 의무를 부과하지 않는다** — 이 판단이 서지 않으면 "Swift 패키지가 있으니 Swift shim 이 필요하다"는 오판으로 M0(순수 Rust/Rust 바인딩 경계 설계)가 흔들릴 위험이 있어 명시적으로 기록한다.
+- **`Record Modifiers` / `RecorderModifierCocoa`**: 실행 파일에 이 별도 레코더의 심볼이 존재한다 — **modifier 조합만 녹화하는 전용 레코더**의 존재를 뜻한다. Seek 클릭 모드 7종(§3.2, `ClickModesInfoViewController` 팝오버 내용, app-bundle-analysis.md §5.2)의 modifier 지정에 쓰이는 것으로 추정되나, **이 UI 는 4개 탭 AX 트리 어디에서도 관찰되지 않았다** `(미확정)` → §9. 별도 창이거나, 조건부로만 나타나거나, 이번 조사가 놓쳤을 가능성이 모두 남아 있다.
+- **녹화 시작·취소·지우기**: 필드를 클릭하면 레코딩 모드로 전환되고(placeholder 가 `Type Shortcut` 류로 바뀌는 것이 `KeyboardShortcuts` 패키지의 표준 동작이나 SuperKey 실제 문구는 확인하지 못했다 `(미확정)`), `Esc` 로 취소, 지우기 ✕ 버튼으로 빈 값 저장은 동종 패키지의 표준 관례를 따른다고 가정한다 `(추정)`.
+- **시스템 예약 단축키와의 충돌**: `kHISymbolicHotKeyCode`·`kHISymbolicHotKeyEnabled`·`kHISymbolicHotKeyModifiers` 심볼이 실행 파일에 확인된다(실측: 번들 심볼, app-bundle-analysis.md §3.2 항목 4) — ⭐ 이는 **시스템 예약 단축키 전체를 열거하는, 문서화되지 않은 Carbon API 경로**다. 기존 명세가 "공개 API 가 없어 부분 대응만 가능하다"고 판정한 것은 정정되어야 한다: 공개 API 는 없지만, **원본은 비공개(undocumented) Carbon 경로로 이를 우회한다.** 클론이 같은 경로를 택할지는 별도 판단이 필요하다 — §7·§9 참조.
 
 ### 3.6 설정 저장
 
-**결정: 자체 JSON 저장소(`tauri-plugin-store` 기반), `com.knollsoft.Superkey` 의 `NSUserDefaults` 도메인은 사용하지 않는다.**
+**결정: 자체 JSON 저장소(`tauri-plugin-store` 기반), `com.knollsoft.Superkey` 의 `NSUserDefaults` 도메인은 사용하지 않는다.** 이 결정 자체는 유지한다(근거는 기존 §3.6 그대로 아래에 보존).
 
-원본 Superkey 는 `defaults` 계열 `NSUserDefaults`(번들 ID `com.knollsoft.Superkey`, `macupdater.net` 교차 확인 — `superkey-inventory.md` §5)를 쓸 것으로 보인다 `(추정)` — Q3("각 설정의 출고 기본값")의 확인 방법으로 `defaults read com.knollsoft.Superkey` 가 제시된 것 자체가 이 추정의 근거다.
+⭐ **"부재 = 기본값" 규약을 명시적으로 추가한다.** 원본을 아무 설정도 바꾸지 않은 상태로 실행했을 때 `~/Library/Preferences/com.knollsoft.Superkey.plist` 에는 키가 **7개뿐**이었다(실측: defaults, app-bundle-analysis.md §2.1) — `SUEnableAutomaticChecks`·`SUHasLaunchedBefore`·`lastVersion`·창 위치·Paddle 캐시 두 건, 그리고 `hyperFlags`·`minAxCharCount` 뿐이다. `Remap key to hyper key`, 16개 프리셋 등 나머지 **모든 설정 키는 존재하지 않는다.** 즉 원본의 저장 계층은 **"키가 없으면 그 설정의 하드코딩된 기본값으로 동작한다"** 는 규약이며, 사용자가 한 번이라도 건드린 항목만 디스크에 기록된다(실측 뒷받침: 토글 후 원상복구했음에도 `capsWasdArrows`·`oneSwipeFromTop`·`seekOptions`·`seekRemapKeycode` 4개 키가 "기본값과 동등한 값"으로 새로 생겼다 — app-bundle-analysis.md §7.1).
 
-클론에서 `NSUserDefaults` 를 직접 바인딩하지 않기로 결정한 근거:
+- **클론도 같은 성질을 가져야 하는 이유**: 이 문서(F-09)와 각 소유 명세(F-01~F-08 등)가 §4 에서 못박는 "출고 기본값"은 **정의(definition)** 가 아니라 **원본을 관찰해 확정한 사실**이다. 이 사실 확정 자체가 "키 부재 = 기본값" 이라는 원본의 저장 모델을 전제로만 성립했다 — plist 에 값이 없다는 것을 "AX 로 관찰한 실제 화면 상태"와 짝지어야 비로소 기본값을 확정할 수 있었다(§2.1 의 방법론 자체가 그렇다). 클론의 `settings.json` 이 반대로 "모든 필드를 항상 명시적으로 쓴다"는 모델을 택하면, 향후 클론 자체의 출고 기본값 검증(새 버전에서 필드가 늘었을 때 "이 필드는 사용자가 안 건드렸다"를 구분하는 것)이 원본과 같은 방식으로는 불가능해진다. 따라서 클론의 `tauri-plugin-store` 스키마도 **"필드가 없으면 애플리케이션 코드의 기본값 상수를 쓴다"** 는 규약을 명시적으로 채택한다 — `settings.json` 에 모든 필드를 기본값으로 미리 채워 쓰지 않는다. 이는 §5(엣지 케이스, 스키마 마이그레이션)와도 직결된다: 새 버전에서 필드가 추가돼도 기존 JSON 파일은 그 필드가 없는 채로 유효하며, 로더가 기본값을 채워 넣는다.
 
-1. **다른 앱의 도메인을 재사용할 이유가 없다.** 클론은 별도 번들 ID를 가질 것이므로 애초에 `com.knollsoft.Superkey` 도메인과 무관하다. `NSUserDefaults` 자체를 저장 계층으로 쓰는 것과 원본의 도메인을 흉내 내는 것은 별개 문제이며, 후자는 시도할 이유가 없다.
-2. **`rust-macos-capability-notes.md` 에 `NSUserDefaults` 전용 고수준 Rust 크레이트가 없다.** `objc2-foundation` 을 통해 `NSUserDefaults` 를 다루는 것은 가능하지만(§1.1), 이는 매 설정 변경마다 `unsafe` Objective-C 호출을 거쳐야 함을 의미한다. 반면 `tauri-plugin-autostart`, `tauri-plugin-updater` 등 이 프로젝트가 이미 채택 방향으로 삼는 Tauri 공식/준공식 플러그인 생태계(§2.8, §2.9)와 궤를 같이하는 `tauri-plugin-store` 는 안전한 Rust API 로 충분하다.
-3. **스키마 마이그레이션을 직접 제어해야 한다.** `NSUserDefaults` 는 키-값 저장소일 뿐 버전 필드나 마이그레이션 개념이 없다. 어차피 자체적으로 스키마 버전 필드와 마이그레이션 로직을 얹어야 하므로(§5), `NSUserDefaults` 위에 얹으나 JSON 파일 위에 얹으나 추가 설계 비용은 동일하고, JSON 쪽이 검사·백업·디버깅이 쉽다(사람이 읽을 수 있는 파일을 직접 열어볼 수 있다).
-4. **트레이드오프를 명시한다.** 이 결정은 macOS 파워유저가 기대할 수 있는 `defaults read/write <bundle-id>` 상호운용성을 포기한다. 이는 §5 의 "General 탭 항목이 평문 JSON 에 남는 문제"와 함께 재검토 대상으로 §9 에 남긴다.
+원본 결정 근거(기존 판 보존):
 
-**저장 위치**: Tauri 앱 데이터 디렉토리(예: `~/Library/Application Support/<bundle-id>/settings.json`) `(추정 — 정확한 경로는 tauri-plugin-store 의 기본 동작에 따름)`.
+1. **다른 앱의 도메인을 재사용할 이유가 없다.** 클론은 별도 번들 ID를 가질 것이므로 애초에 `com.knollsoft.Superkey` 도메인과 무관하다.
+2. **`NSUserDefaults` 전용 고수준 Rust 크레이트가 없다.** `objc2-foundation` 으로 접근 가능하나 매 설정 변경마다 `unsafe` 호출을 거쳐야 한다. `tauri-plugin-store` 는 안전한 Rust API 로 충분하다.
+3. **스키마 마이그레이션을 직접 제어해야 한다.** `NSUserDefaults` 는 버전 필드·마이그레이션 개념이 없다. JSON 쪽이 검사·백업·디버깅이 쉽다.
+4. **트레이드오프를 명시한다.** `defaults read/write <bundle-id>` 상호운용성을 포기한다. §9 재검토 대상.
 
-**"처리 데이터"와 "설정"의 구분**: 원문 "None of the data that Superkey processes is stored on your disk"(`superkey-inventory.md` §1.3)는 Seek 가 캡처한 화면 스크린샷, OCR 결과, AX 트리에서 읽은 텍스트 등 **런타임에 처리되는 데이터**를 말하는 것이지, 환경설정 자체를 말하는 것이 아니다. 설정값은 재실행 후에도 유지되어야 하므로 **반드시 디스크에 저장된다** — 이 문서가 정의하는 `settings.json`(또는 등가물)이 그 저장소다. 이 구분을 명시하지 않으면 "디스크에 아무것도 저장하지 않는다"는 원문을 오독해 설정 영속성 요구사항을 놓칠 위험이 있다.
+**저장 위치**: Tauri 앱 데이터 디렉토리(예: `~/Library/Application Support/<bundle-id>/settings.json`) `(추정)`. 참고로 원본은 `~/Library/Preferences/com.knollsoft.Superkey.plist`(`NSUserDefaults`) + `~/Library/Application Support/Superkey/750314.padl`(Paddle 라이선스 캐시, 바이너리 plist)를 쓴다(실측: defaults).
+
+**"처리 데이터"와 "설정"의 구분**: 기존 판의 서술을 유지한다 — "None of the data that Superkey processes is stored on your disk" 는 런타임 캡처 데이터를 말하는 것이지 설정 자체를 말하는 것이 아니다. 설정값은 반드시 디스크에 저장된다.
+
+**iCloud 설정 동기화(범위 밖)**: 실행 파일 문자열에 iCloud 설정 동기화 기능이 실재함이 확인됐다("Do you want to import your existing iCloud configuration?" 등, 실측: 번들 문자열, app-bundle-analysis.md §4.3). 저장소는 `NSUbiquitousKeyValueStore` 로 추정되나 심볼로 확인되지 않았다 `(미확정)`. 이 기능을 클론 범위에 넣을지는 이 문서가 결정할 사안이 아니며, 넣는다면 `F-15`(settings-store-and-integrity.md) 나 별도 명세가 다뤄야 한다 — 여기서는 존재만 기록한다.
 
 ### 3.7 설정 변경의 즉시 반영
 
-- **적용 버튼 없음.** 스크린샷 어디에도 "Apply"/"OK" 류 버튼이 없다 — 모든 컨트롤은 값이 바뀌는 즉시(체크박스 클릭, 팝업 선택, 슬라이더 드래그 종료, 레코더 확정) **저장과 엔진 반영이 함께 일어난다**고 가정한다 `(추정 — 근거: 스크린샷에 확인 버튼 부재, §9)`.
-- **엔진으로의 계약**: 환경설정 UI 는 값이 바뀔 때마다 F-07(key-remapping-engine)에 갱신된 설정 스냅샷(또는 변경분 델타)을 전달한다. F-07 은 이를 받아 `CGEventTap` 콜백이 참조하는 매핑 테이블을 원자적으로 교체한다. 이 계약의 정확한 형태(전체 스냅샷 재전송 vs. 필드 단위 델타, 동기/비동기)는 F-07 명세가 정의할 몫이며, F-09 는 "체크박스를 끄면 다음 키 입력부터 즉시 반영되어야 한다"는 **사용자 관찰 가능한 요구사항**만 못박는다.
-- **슬라이더의 "즉시"의 의미**: 드래그 도중 매 픽셀마다 엔진에 반영하는 것은 낭비이므로, 드래그가 끝나는 시점(mouse up) 또는 debounce 이후에 반영하는 것이 합리적이다 `(추정)`. 값 라벨 자체는 드래그 중 실시간으로 갱신된다(시각적 피드백과 엔진 반영 시점은 분리).
-- **저장 실패와 반영의 관계**: 저장(디스크 쓰기)이 실패해도 엔진 반영(메모리 내 상태 갱신)은 별도로 성공할 수 있다 — 즉시 반영을 저장 성공에 의존시키면 디스크 오류가 있을 때 설정이 전혀 동작하지 않는 나쁜 실패 모드가 된다. 엔진 반영은 즉시, 디스크 저장은 비동기로 처리하고 실패 시 사용자에게 알리는 쪽을 채택한다(§5).
+- **적용 버튼 없음 — ⭐ 확인으로 승격.** 기존 판은 "스크린샷에 확인 버튼이 안 보인다"는 `(추정)` 이었다. 이번 실측은 4개 탭 전체의 AX 트리를 판독해 **Apply/OK 류 버튼이 어디에도 없음을 직접 확인했다**(실측: AX 트리, app-bundle-analysis.md §6.1~§6.4 전체 어디에도 그런 버튼이 열거되지 않는다). 모든 컨트롤은 값이 바뀌는 즉시(체크박스 클릭, 팝업 선택, 슬라이더 조작 종료, 레코더 확정) 저장과 엔진 반영이 함께 일어난다.
+- **개별 컨트롤 단위로 즉시 반영됨 — 승격.** 실측 중 항목 하나를 토글했다가 되돌렸을 때, 그 항목에 대응하는 plist 키 하나만 정확히 새로 생겼다(§3.6, app-bundle-analysis.md §7.1) — 탭 단위나 창 닫기 시점의 일괄 저장이 아니라 **컨트롤 단위 즉시 저장**임을 실측이 뒷받침한다.
+- **엔진으로의 계약**: 환경설정 UI 는 값이 바뀔 때마다 F-07(key-remapping-engine)에 갱신된 설정 스냅샷(또는 변경분 델타)을 전달한다. 이 계약의 정확한 형태(전체 스냅샷 재전송 vs. 필드 단위 델타)는 F-07 명세가 정의할 몫이다.
+- **슬라이더의 "즉시"의 의미**: `(미확정)` 로 유지한다 — 드래그 종료(mouse up) 시점 반영인지 debounce 인지는 이번 실측으로도 확인하지 못했다. 슬라이더 범위(250~2000ms)는 확정됐으나 반영 타이밍은 별개 문제다.
+- **저장 실패와 반영의 관계**: 기존 판 유지 — 엔진 반영은 즉시, 디스크 저장은 비동기로 처리하고 실패 시 알린다(§5).
+
+### 3.8 ⭐ 설정 종속 표현 3종 규약
+
+이번 실측에서 확인된 가장 중요한 UI 설계 사실이다. 종속된 하위 설정이 상위 설정 상태에 따라 UI 상 표현되는 방식이 **세 가지로 다르며, 서로 혼동해서는 안 된다.**
+
+| 유형 | 정의 | 실측 사례 |
+| :--- | :--- | :--- |
+| **① 비활성화(dimmed)** | 자리를 계속 차지하지만 회색으로 흐려지고 조작 불가 | `Only show while the remapped key is held` — `Remap key to Seek:` 가 `-`(미설정)이면 dimmed |
+| **② 숨김(hidden)** | AX 트리에서 완전히 사라짐. 자리 자체가 없어짐 | `Match on more than one character` — `Seek using macOS accessibility` 가 ☐ 이면 AX 트리에서 사라진다. `Change menu bar icon when engaged`·`Provide haptic feedback when triggered` 도 `Engage hyper key using trackpad:` 에 대해 같은 방식 |
+| **③ 문장 중간 삽입(inline)** | 팝업이 라벨 문장 사이에 낀다(항상 존재, 종속 관계가 아니라 렌더링 방식) | `Caps lock +` [팝업] ` = ◀︎ ▼ ▲ ▶︎`(중간 삽입) vs. `Caps lock + home row = ` [팝업](끝에 부착) |
+
+⭐ **기존 판 정정.** 이전 판 §3.2 는 "중첩 체크박스는 상위가 꺼지면 비활성화(dimmed)되나 저장값은 보존된다"고 `(추정)` 했다 — `Match on more than one character` 를 예로 들었다. **이 추정은 틀렸다.** 실측 결과 그 항목은 dimmed 가 아니라 **숨김**이다. 클론 UI 도 이 구분을 재현해야 한다 — ①은 CSS `disabled` 속성으로, ②는 조건부 렌더링(DOM 자체를 제거/삽입)으로 구현해야 하며 이 둘을 같은 방식으로 처리하면 원본과 다른 체감을 준다.
 
 ## 4. 설정 항목
 
-⭐ 전체 설정의 색인 표다. 기본값은 각 소유 명세에 위임하고 여기서는 반복하지 않는다.
+⭐ 4개 탭의 전 항목을 실제 UI 기준으로 재작성한다. 각 항목에 라벨 원문·컨트롤 종류·선택지 전량·출고 기본값·활성화/표시 조건·배치 순서와 구분선 위치·소유 명세·저장 키(알려진 경우)를 표기한다. 저장 키가 `—` 인 항목은 IB 아웃렛만 확인되고 `NSUserDefaults` 키는 확인되지 않은 것이다(app-bundle-analysis.md §2.2).
 
-### 4.1 `Seek` 탭 (8개 상위 + 중첩 1개 = 9개 항목)
+### 4.1 `Seek` 탭 (상위 8개 + 조건부 1개 = 9개 항목, 555×378pt)
 
-| 설정 이름 (원문) | 탭 | 컨트롤 타입 | 소유 명세 ID | 출처 |
-| :--- | :--- | :--- | :--- | :--- |
-| `Toggle Seek with shortcut:` | Seek | 단축키 레코더 | F-01 | `superkey-inventory.md` §3.1 |
-| `Remap key to Seek:` | Seek | 팝업 버튼 | F-01 | §3.1 |
-| `Only show while the remapped key is held` | Seek | 체크박스 | F-01 | §3.1 |
-| `Seek using macOS accessibility` ⓘ | Seek | 체크박스 | F-02 | §3.1 |
-| ↳ `Match on more than one character` | Seek | 중첩 체크박스 | F-02 | §3.1 |
-| `Only Seek in the frontmost window` | Seek | 체크박스 | F-02 | §3.1 |
-| `Focus window before clicking` | Seek | 체크박스 | F-04 `(추정)` | §3.1 |
-| `Semicolon highlights next match` | Seek | 체크박스 | F-01 | §3.1 |
-| `Change click modes with modifier keys` ⓘ | Seek | 체크박스 | F-04 `(추정)` | §3.1 |
+배치 순서 그대로 (실측: AX 트리, 02-seek-tab.png):
 
-> `Focus window before clicking`·`Change click modes with modifier keys` 의 F-04 귀속은 `seek-activation-and-session.md` §4 가 "각각 F-02·F-03·F-04 범위"라고만 밝히고 개별 대응을 명시하지 않아 이 문서에서 추론한 것이다 `(추정)` → §9.
+| # | 라벨 원문 | 컨트롤 | 기본값 | 활성화·표시 조건 | 소유 명세 | 저장 키 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| — | `Seek` + ⓘ(제목 옆) | 정적 텍스트 + 정보 팝오버 | — | — | F-01 | — |
+| 1 | `Toggle Seek with shortcut:` | 단축키 레코더(`AXTextField`) | **빈 값(미설정)**, 표시 라벨 `Record Shortcut` | 항상 | F-01 | — |
+| 2 | `Remap key to Seek:` | 팝업 버튼(35종, §4.1.1) | **`-`**(미설정) | 항상 | F-01 | `seekRemapKeycode` |
+| 3 | `Only show while the remapped key is held` | 체크박스 | ☐ | ② 아님, **① 비활성화(dimmed)**: `Remap key to Seek:` = `-` 이면 dimmed. 부제 `Release the remapped key to click` 이 종속 | F-01 | `seekExecuteOnClose` |
+| — | (구분선) | | | | | |
+| 4 | `Seek using macOS accessibility` + ⓘ | 체크박스 + 정보 팝오버 | ☐ | 항상 | F-02 | `seekOptions` 비트 |
+| 5 | `Match on more than one character` | 체크박스(중첩) | **☑**(값 `minAxCharCount = 2`) | **② 숨김**: 항목 4 가 ☐ 이면 AX 트리에서 사라진다 | F-02 | `minAxCharCount`(정수, 불리언 아님) |
+| 6 | `Only Seek in the frontmost window` | 체크박스 | ☐ | 항상 | F-02 | `seekFrontmostOnly` |
+| 7 | `Focus window before clicking` | 체크박스 | ☐ | 항상 | F-04 `(추정 — 소유 배정은 기존과 동일하게 유지, 이번 실측이 F-03/F-04 경계를 확정하지 못함)` | — |
+| 8 | `Semicolon highlights next match` | 체크박스 | ☐ | 항상 | F-01 | `semicolonCycleSeek` |
+| 9 | `Change click modes with modifier keys` + ⓘ | 체크박스 + 정보 팝오버 | **☑** — Seek 탭에서 유일하게 기본 켜짐 | 항상. 부제 `If this setting is disabled, modifiers will be applied to the click` 종속 | F-04 `(추정)` | `seekOptions` 비트 |
 
-### 4.2 `Hyperkey` 탭 (6개 항목)
+**`Remap key to Seek:` 팝업 선택지 35종(표시 순서대로, 실측: AX 트리)**: `-` · `caps lock` · `right option` · `right shift` · `right command` · `right control` · `left option` · `left shift` · `left command` · `left control` · `menu (PC)` · `F1`…`F24`. **`globe` 는 없다** — Hyperkey 탭 팝업(§4.2)에는 있어 두 열거형이 다르다.
 
-| 설정 이름 (원문) | 탭 | 컨트롤 타입 | 소유 명세 ID | 출처 |
-| :--- | :--- | :--- | :--- | :--- |
-| `Remap key to hyper key:` | Hyperkey | 체크박스 + 팝업 버튼 | F-05 `(추정)` | `superkey-inventory.md` §3.2 |
-| `Include shift in hyper key` | Hyperkey | 체크박스 | F-05 `(추정)` | §3.2 |
-| `Remap key to meh key (^⌥⇧):` | Hyperkey | 체크박스 + 팝업 버튼 | F-05 `(추정)` | §3.2 |
-| `bleh key (⌃⌘⇧)` (v1.62 신설, 스크린샷 미공개) | Hyperkey | 체크박스 + 팝업 버튼 `(추정)` | F-05 `(추정)` | §3.2, appcast v1.62 |
-| `Apply modifiers to keypress events and:` (Click/Drag/Move/Scroll) | Hyperkey | 체크박스 4개 | F-05 `(추정)` | §3.2 |
-| `Engage hyper key using trackpad:` | Hyperkey | 체크박스 + 팝업 버튼 | F-08 `(추정)` | §3.2 |
+**ⓘ 팝오버 내용의 소유**: 3개 팝오버(제목·항목4·항목9) 의 문구 자체는 각각 F-01/F-02/F-04 가 소유한다. F-09 는 "그 항목 옆에 ⓘ 가 있다"는 배치 사실만 소유한다(§3.2).
 
-### 4.3 `Presets` 탭 (16개 항목, 4개 그룹)
+### 4.2 `Hyperkey` 탭 (상위 6개 + 조건부 2개 = 8개 항목, 710×517pt)
 
-| 설정 이름 (원문) | 탭 | 컨트롤 타입 | 소유 명세 ID | 출처 |
-| :--- | :--- | :--- | :--- | :--- |
-| `Remap caps lock to:` | Presets(caps lock) | 체크박스 + 팝업 | F-06 `(추정)` | `superkey-inventory.md` §3.3 |
-| `Quick press caps lock to execute:` | Presets(caps lock) | 체크박스 + 팝업 | F-06 `(추정)` | §3.3 |
-| `Quick press duration` | Presets(caps lock) | 슬라이더 + 값 라벨 | F-06 `(추정)` | §3.3 |
-| `Caps lock + space = enter` | Presets(caps lock) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Caps lock + W A S D = ▲◀▼▶` | Presets(caps lock) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Caps lock + [H J K L] = ◀▼▲▶` | Presets(caps lock) | 체크박스 + 인라인 팝업 | F-06 `(추정)` | §3.3 |
-| `Caps lock + home row = [symbol row (A = !)]` | Presets(caps lock) | 체크박스 + 인라인 팝업 | F-06 `(추정)` | §3.3 |
-| `Double tap shift = caps lock` | Presets(shift) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Left shift + right shift = caps lock` | Presets(shift) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Shift + caps lock = caps lock` | Presets(shift) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Quick press left or right shift to input corresponding:` | Presets(shift) | 체크박스 + 팝업 | F-06 `(추정)` | §3.3 |
-| `Hyper + delete = forward delete` | Presets(delete) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Remap delete to forward delete` | Presets(delete) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Shift + delete = forward delete` | Presets(delete) | 체크박스 | F-06 `(추정)` | §3.3 |
-| `Remap paste (⌘+V) to paste w/o formatting (⌘⌥⇧+V):` | Presets(기타) | 체크박스 + 팝업 | F-06 `(추정)` | §3.3 |
-| `Home & end operate on lines` | Presets(기타) | 체크박스 | F-06 `(추정)` | §3.3 |
+| # | 라벨 원문 | 컨트롤 | 기본값 | 활성화·표시 조건 | 소유 명세 | 저장 키 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| — | `Hyperkey` + ⓘ(제목 옆) | 정적 텍스트 + 정보 팝오버 | — | — | F-05 | — |
+| 1 | `Remap key to hyper key:` | 키캡 일러스트 + 체크박스 + 팝업(35종, §4.2.1) | ☐ / `caps lock` | 항상. 일러스트가 팝업 값을 반영 | F-05 | `hyperFlags` + 키코드 |
+| 2 | `Include shift in hyper key` | 조합 미리보기(`⌃⌥⌘⇧` 텍스트) + 체크박스 | **☑**(`hyperFlags = 1966080` 로 시드됨 — `0x1E0000` = Shift\|Control\|Alternate\|Command) | 항상 | F-05 | `hyperFlags` 의 shift 비트 |
+| — | (구분선) | | | | | |
+| 3 | `Remap key to meh key (⌃⌥⇧):` | 키캡 + 체크박스 + 팝업(35종) | ☐ / `caps lock` | 항상 | F-05 | — |
+| 4 | `Remap key to bleh key (⌃⌘⇧):` | 키캡 + 체크박스 + 팝업(35종) | ☐ / `caps lock` | 항상 | F-05 | — |
+| — | (구분선) | | | | | |
+| 5 | `Apply modifiers to keypress events and:` + `Click`/`Drag`/`Move`/`Scroll` | 라벨 + 체크박스 4개(그룹) | **`Click` ☑ · `Drag`/`Move`/`Scroll` ☐** — 켜진 것은 `Click` 하나뿐 | 항상 | F-05 | `clickEventsCheckbox` 등 4종 IB 아웃렛(키 미확인) |
+| — | (구분선) | | | | | |
+| 6 | `Engage hyper key using trackpad:` | 제스처 일러스트 + 체크박스 + 팝업(5종, §4.2.2) | ☐ / `top right` | 항상. 부제 `Slide only one touch in from the selected area the trackpad a little. Remove the touch to release.` 종속 | **F-06** | `oneSwipeFromTop` |
+| 7 | `Change menu bar icon when engaged` | 체크박스 | ☐ | **② 숨김**: 항목 6 이 ☐ 이면 사라진다 | F-06 | `changeMenuBarIcon` |
+| 8 | `Provide haptic feedback when triggered` | 체크박스 | ☐ | **② 숨김**: 항목 6 이 ☐ 이면 사라진다 | F-06 | — |
 
-### 4.4 `General` 탭 — ⚠️ 전부 `(추정)`
+**hyper/meh/bleh 소스 키 팝업 선택지 35종(셋 다 동일, 표시 순서대로)**: `caps lock` · `right option` · `right shift` · `right command` · `right control` · `left option` · `left shift` · `left command` · `left control` · **`globe`** · `menu (PC)` · `F1`…`F24`.
 
-패널 내용 자체가 조사에서 확인되지 않았다(`superkey-inventory.md` §3.4, §7 Q2). 아래는 다른 기능 명세가 요구하는 항목으로부터의 추론이며, 실제 존재 여부·정확한 라벨 문구·컨트롤 타입 전부 확정되지 않았다.
+**트랙패드 영역 팝업 선택지 5종(표시 순서대로)**: `top left` · `top right` · `bottom left` · `bottom right` · **`top`**.
 
-| 설정 이름 (추정 라벨) | 탭 | 컨트롤 타입 (추정) | 소유 명세 ID | 출처 |
-| :--- | :--- | :--- | :--- | :--- |
-| 로그인 시 실행 (`Launch at login` 류) | General | 체크박스 `(추정)` | F-10 `(추정)` | 작업 지시 + `superkey-inventory.md` §3.4 |
-| 자동 업데이트 확인 (`Automatically check for updates` 류) | General | 체크박스 `(추정)` | F-13 `(추정)` | 작업 지시 + §3.4, §2.3(Sparkle) |
-| 라이선스 등록·상태 (`License key` 입력·`Activate` 류) | General | 텍스트 필드 + 버튼 `(추정)` | F-12 `(추정)` | 작업 지시 + §3.4, §4.3(activation 카운트) |
-| 권한 상태 표시 (Accessibility/Screen Recording/Input Monitoring 상태 배지) | General | 상태 표시 + "시스템 설정 열기" 버튼 `(추정)` | F-11 `(추정)` | 작업 지시 + §3.4, §1.3(권한 3종) |
-| 언어 선택 (`Language` 류) | General | 팝업 버튼 `(추정)` | F-14 `(추정)` | 작업 지시 + §2.3(8개 로케일 번들) |
-| 메뉴바 아이콘 표시/숨김 `(추정)` | General | 체크박스 `(추정)` | F-10 `(추정)` | §3.4(추론 목록) |
-| 버전 정보 | General | 텍스트 표시 `(추정)` | 소유 명세 미정 `(추정)` | §3.4(추론 목록) |
-| 환경설정 초기화(`Reset to defaults` 류) | General | 버튼 `(추정)` | F-09(이 문서, 창 자체 동작) | §3.4(추론 목록) |
+### 4.3 `Presets` 탭 (16개 + 조건부 2개, 825×527pt)
+
+전 항목 기본 ☐(캡스락/시프트/삭제/기타 4개 그룹, 배치 순서대로):
+
+| # | 그룹 | 라벨 원문 | 컨트롤 | 선택지 | 기본값 | 소유 | 저장 키 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | caps lock | `Remap caps lock to:` | 체크박스 + 팝업(50종, §4.3.1) | 아래 표 | ☐ / `left control` | F-08 | `capsLockRemapped` |
+| 2 | caps lock | `Quick press caps lock to execute:` | 체크박스 + 팝업(49종, §4.3.1) | 아래 표 | ☐ / `caps lock` | F-08 | — |
+| 3 | caps lock | `Quick press duration` | 슬라이더 + 값 라벨 | 250~2000ms | 1000ms | F-08 | `quickPressTimeout` |
+| 4 | caps lock | `Caps lock + space = enter` | 체크박스 | — | ☐ | F-08 | `capsSpaceEnter` |
+| 5 | caps lock | `Caps lock + W A S D = ▲◀▼▶` | 체크박스 | — | ☐ | F-08 | `capsWasdArrows` |
+| 6 | caps lock | `Caps lock +` [팝업] ` = ◀▼▲▶`(③ 문장 중간 삽입) | 체크박스 + 인라인 팝업(2종) | `H J K L`·`I J K L` | ☐ / `H J K L` | F-08 | `capsHjklArrows`/`capsIjklArrows` |
+| 7 | caps lock | `Caps lock + home row = ` [팝업](③ 문장 끝 부착) | 체크박스 + 인라인 팝업(2종) | `symbol row (A = !)`·`function row (A = F1)` | ☐ / `symbol row (A = !)` | F-08 | `capsHomeSymbol`/`capsHomeFunction` |
+| — | (구분선) | | | | | | |
+| 8 | shift | `Double tap shift = caps lock` | 체크박스 | — | ☐ | F-08 | `doubleShiftToCaps` |
+| 9 | shift | `Left shift + right shift = caps lock` | 체크박스 | — | ☐ | F-08 | `leftRightShiftToCaps` |
+| 10 | shift | `Shift + caps lock = caps lock` | 체크박스 | — | ☐ | F-08 | `shiftPlusCapsToCaps` |
+| 11 | shift | `Quick press left or right shift to input corresponding:` | 체크박스 + 팝업(4종) | `( )`·`[ ]`·`{ }`·`< >` | ☐ / `( )` | F-08 | `shiftToBraceEntersString`/`shiftToBraceSelection` |
+| — | (구분선) | | | | | | |
+| 12 | delete | `Hyper + delete = forward delete` | 체크박스 | — | ☐ | F-08 | `hyperDeleteToForward` |
+| 13 | delete | `Remap delete to forward delete` | 체크박스 | — | ☐ | F-08 | — |
+| 14 | delete | `Shift + delete = forward delete` | 체크박스 | — | ☐ | F-08 | `shiftDeleteToForward` |
+| — | (구분선) | | | | | | |
+| 15 | 기타 | `Remap paste (⌘+V) to paste w/o formatting (⌘⌥⇧+V):` | 체크박스 + 팝업(4종) | `Right ⌘`·`Left ⌘`·`Either ⌘`·`Hyper key` | ☐ / `Right ⌘` | F-08 | — |
+| 16 | 기타 | `Home & end operate on lines` | 체크박스 | — | ☐ | F-08 | — |
+
+**조건부 항목(nib 에는 있으나 기본 상태 AX 트리에는 없음)**:
+
+| 항목 | 표시 조건 | 관련 키 |
+| :--- | :--- | :--- |
+| `Apply hyper to arrows` | `(미확정)` — `Caps lock + W A S D` 만 켜서는 나타나지 않았다(실측으로 재현 시도했으나 실패) | `applyHyperToCapsArrows`·`capsArrowsOverrideModifiers` |
+| Windows 키보드 리매핑(라벨 미확정) | `(미확정)` | `winKeyRemapCheckbox` |
+
+**팝업 선택지 전량**
+
+| 팝업 | 선택지(표시 순서) |
+| :--- | :--- |
+| `Remap caps lock to:` (50종) | `esc` · `nothing (disable it)` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F24` |
+| `Quick press caps lock to execute:` (49종) | `Seek` · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · `/` |
+
+⭐ `Quick press caps lock to execute:` 의 첫 항목이 `Seek` 다 — quick press 로 Seek 세션을 여는 **세 번째 활성화 경로**(단축키 레코더·`Remap key to Seek:` 리매핑에 이어)가 존재한다. F-01 이 이 사실을 §3(활성화 경로)에 반영해야 한다 — F-09 는 여기서 팝업 선택지로서만 기록한다.
+
+레이아웃 변형 키(`hjklArrowColemak`·`wasdArrowDvorak` 등, 실행 파일에는 있으나 팝업에는 없음)는 사용자 선택이 아니라 감지된 키보드 레이아웃에 따라 자동 적용되는 것으로 보인다 `(미확정)` — `F-14`(localization-and-input-sources.md) 소관.
+
+### 4.4 `General` 탭 (7개 컨트롤 + 조건부 1개, 613×273pt) — ⭐ 전면 교체
+
+⭐ **이전 판 §4.4 는 전부 `(추정)`이었고 실제와 크게 다르다.** 실제 구성은 다음과 같다(실측: AX 트리, 05-general-tab.png, 배치 순서대로):
+
+| # | 라벨 원문 | 컨트롤 | 기본값 | 위치 | 소유 명세 | 저장 키 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| — | 앱 로고 이미지 | 정적 이미지 | — | 좌측 | — | — |
+| 1 | `Launch on login` | 체크박스 | ☐ | 첫 행 좌측 | F-10 | — |
+| — | `v1.66 (66)` | **버튼**(정적 텍스트 아님) | — | 첫 행 우측(항목 1 과 같은 행) | 소유 미정 `(미확정)` — About 창 추정 | — |
+| 2 | `Check for updates automatically` | 체크박스 | ☐(`SUEnableAutomaticChecks = false` 와 일치) | | F-13 | `SUEnableAutomaticChecks` |
+| 3 | `Hide menu bar icon` | 체크박스 | ☐ | 부제 `When hidden, relaunch from Finder to open.` 종속 | F-10 | — |
+| 4 | `Menu bar icon` | 라벨 + 팝업(2종, 둘 다 **라벨 없는 이미지 항목**) | 기본 선택 `(미확정)` — 에셋 미추출로 어느 쪽이 기본인지 구분 못함 | | F-10 | — |
+| 5 | `Remove Oldest Activation` | 버튼 | — | | F-12 | — |
+| 6 | `Purchase` | 버튼(강조색) | — | | F-12 | — |
+
+⭐ **"실재하지 않음"이 확인된 항목 — 이전 판이 추정했으나 전부 없다**: **언어 선택 팝업 · 권한 상태 표시(Accessibility/Screen Recording/Input Monitoring 배지) · 라이선스 키 입력 텍스트 필드 · `Reset to defaults` 버튼.** 이전 판 §4.4 표의 8개 행 중 이 4개는 AX 트리에 대응 항목이 없음을 직접 확인했다(실측: AX 트리, app-bundle-analysis.md §6.4) — 조용히 삭제하지 않고 "확인 결과 부재"로 여기 기록한다. 특히 **권한 상태 표시가 General 탭에 없다**는 것은 `F-11`(permissions-onboarding.md)이 짚어야 할 사실이다 — 권한 상태는 온보딩 모달이나 다른 경로로만 노출되고, 환경설정 창에는 상시 표시되지 않는다.
+
+**조건부 항목**: `Relaunch on wake`(`wakeRelaunchCheckbox` / `wakeRelaunchStackView`) — nib 에는 있으나 기본 상태에서 보이지 않는다. 표시 조건 `(미확정)` → §9.
 
 ## 5. 엣지 케이스와 실패 모드
 
-1. **설정 저장 실패.** 디스크 쓰기 실패(권한 문제, 디스크 풀, 샌드박스 경로 문제)가 발생하면, §3.7 의 원칙대로 엔진 반영(메모리 상태)은 계속 성공시키되 사용자에게 저장 실패를 알리고 재시도하거나 마지막 성공 상태로 롤백할지 선택하게 한다 `(추정)`. 조용히 무시하면 재실행 후 설정이 사라지는 조용한 데이터 손실이 된다.
-2. **손상된 설정 파일.** `settings.json` 이 JSON 파싱에 실패하는 경우(비정상 종료 중 쓰기 등), 손상된 파일을 `settings.json.bak` 류로 보존한 뒤 기본값으로 폴백하고 사용자에게 알린다 `(추정)`. 조용히 기본값으로 덮어쓰면 사용자가 공들여 만든 설정이 통보 없이 사라진다.
-3. **이전 버전 스키마 마이그레이션.** 새 버전에서 필드가 추가·삭제·이름 변경되는 경우(v1.62 의 `bleh key` 신설이 실제 사례), 스키마 버전 필드로 판별해 마이그레이션 함수를 순차 적용한다. 마이그레이션 자체가 실패하면 원본 파일을 보존한 채 기본값으로 시작하고 사용자에게 알린다 `(추정)` — `NSUserDefaults` 를 쓰지 않기로 한 결정(§3.6)의 직접적 근거이기도 하다.
-4. **서로 배타적인 설정의 동시 선택 방지.** `Remap key to Seek:` 의 대상 키가 동시에 `Hyperkey` 탭의 소스 키이거나 `Presets` 탭의 리매핑 대상(예: `caps lock`)으로 지정되는 경우, UI 레벨에서 저장을 막을지(하드 차단) 저장은 허용하고 F-07 의 우선순위 규칙으로 해소할지 결정되지 않았다 `(추정)` → §9. `superkey-inventory.md` §6.2 가 이 충돌이 실제 버그 이력(v1.20, v1.62)임을 보여주므로 UI 차원의 최소한의 경고(하드 차단이 아니더라도)는 필요해 보인다.
-5. **권한 없는 상태에서 기능 토글.** Screen Recording 권한이 없는데 Seek 관련 체크박스(`Seek using macOS accessibility` 등)를 켜는 것 자체는 UI 레벨에서 막지 않는다 `(추정)` — 체크박스는 "이 기능을 원한다"는 사용자 의사이며, 실제 동작 가능 여부는 F-11 의 권한 상태 배너가 별도로 알린다. 두 UI(설정 체크박스, 권한 배너)의 불일치를 사용자가 오인하지 않도록 General 탭의 권한 상태 항목이 명확히 보여야 한다.
-6. **단축키 충돌.** §3.5 참조. 이미 점유된 조합이거나 시스템 예약 조합인 경우 경고를 표시하되, 시스템 예약 조합 전체를 프로그램적으로 열거할 공개 API 가 없어(§6) 알려진 위험 목록 기반의 부분 대응만 가능하다.
-7. **창을 닫아도 엔진은 계속 동작.** 환경설정 창의 close 는 앱 종료(quit)가 아니다 — 메뉴바 상주 앱(`F-10`)의 표준 동작이며, `CGEventTap` 과 리매핑 엔진(`F-07`)은 창 상태와 무관하게 계속 실행된다. 창을 닫는 것과 "일시정지"를 혼동하는 UI(예: 창을 닫으면 리매핑이 꺼진다는 오해)를 만들지 않아야 한다.
-8. **다중 디스플레이에서 창 위치 복원.** 마지막으로 창이 있던 디스플레이가 연결 해제된 상태로 재실행되면, 저장된 좌표가 화면 밖을 가리킬 수 있다. 사용 가능한 디스플레이 목록(`available_monitors()`, §6)과 대조해 좌표가 어떤 화면에도 속하지 않으면 주 디스플레이 중앙으로 클램프한다 `(추정)`. `superkey-inventory.md` §2.1 이 v1.55 에서 "다중 디스플레이에서 Seek 오버레이가 깨졌다"는 이력을 보여주므로, 환경설정 창도 같은 부류의 취약점을 안고 시작한다고 가정하고 설계해야 한다.
-9. **로케일별 라벨 길이(RTL 포함).** 번들 8개 로케일 중 `he`/`ar`/`fa` 는 RTL 이다(`superkey-inventory.md` §2.3). 인라인 팝업이 낀 라벨 문장(`Caps lock + [H J K L] = ◀▼▲▶`, `Caps lock + home row = [...]`)은 번역 시 어순이 완전히 달라질 수 있어 고정 문자열 템플릿(`"{prefix} {popup} {suffix}"`)으로 구현하면 RTL 언어에서 문법이 깨진다. 팝업 위치가 문장 내에서 가변적임을 전제로 한 i18n 템플릿 설계가 필요하다. 긴 번역 문자열이 체크박스 라벨을 다단으로 줄바꿈시키는 레이아웃 붕괴도 함께 고려해야 한다.
-10. **단축키 레코딩 중 창/앱 포커스 이동.** 레코딩 모드에서 사용자가 `⌘Tab` 등으로 다른 앱으로 전환하면, 레코딩은 자동으로 취소되고 이전 값으로 되돌아가야 한다 `(추정)` — 포커스를 잃은 채로 레코딩 모드가 남아 있으면 이후 그 앱에서의 키 입력이 의도치 않게 레코더로 흘러들어갈 위험이 있다(단, 로컬 이벤트 캡처이므로 실제로는 포커스 상실과 함께 자연히 입력이 끊길 가능성이 높다 — 그래도 UI 상태는 명시적으로 되돌려야 한다).
-11. **General 탭 민감정보의 저장 방식.** 라이선스 키 등 상대적으로 민감한 값이 §3.6 에서 결정한 평문 JSON 파일에 그대로 남는 것이 적절한지는 별도 검토가 필요하다 `(추정)` — 라이선스 활성화 자체의 보안 모델은 F-12 소관이지만, 저장 위치가 이 문서(F-09)의 결정에 종속되므로 여기서 리스크만 표기한다.
+1. **설정 저장 실패.** §3.7 의 원칙대로 엔진 반영(메모리 상태)은 계속 성공시키되 사용자에게 저장 실패를 알리고 재시도하거나 마지막 성공 상태로 롤백할지 선택하게 한다 `(추정)`.
+2. **손상된 설정 파일.** `settings.json` 이 파싱에 실패하면, 손상된 파일을 `settings.json.bak` 류로 보존한 뒤 §3.6 의 "부재 = 기본값" 규약에 따라 **필드별 기본값으로 채워 시작**하고 사용자에게 알린다 `(추정)`.
+3. **이전 버전 스키마 마이그레이션.** §3.6 의 "부재 = 기본값" 규약 덕분에, 새 버전에서 필드가 추가되는 흔한 경우는 마이그레이션 함수 없이도 자동으로 해결된다(로더가 없는 필드는 기본값으로 채운다) — 필드 **이름 변경·삭제**만 명시적 마이그레이션 함수가 필요하다. 마이그레이션 자체가 실패하면 원본 파일을 보존한 채 기본값으로 시작한다 `(추정)`.
+4. **설정 충돌.** ⭐ **해소됨.** 이전 판은 "UI 레벨에서 막을지 F-07 우선순위로 해소할지 미결"이라 썼으나, 실행 파일 문자열로 확인된 원본의 대화상자("Conflict: Caps lock arrows", "Disable that setting and enable WASD arrows?" 등, 실측: 번들 문자열)가 **사용자에게 묻고 상대 설정을 꺼주는 대화형 해소**임을 보여준다. 이 대화상자의 정확한 버튼 구성·전체 문구·정확한 재현 조건은 `F-15`(settings-store-and-integrity.md, 별도 담당) 가 상세 명세한다 — F-09 는 시나리오 D(§2)로 배치만 기록한다.
+5. **권한 없는 상태에서 기능 토글.** 기존 판 유지 — 체크박스는 "이 기능을 원한다"는 사용자 의사이며, 실제 동작 가능 여부는 F-11 이 별도로 알린다. 다만 **General 탭에 권한 상태 표시 자체가 없음이 확인됐으므로**(§4.4), 이 불일치를 사용자에게 알릴 UI 표면이 원본에는 아예 없다는 뜻이다 — 클론이 이를 개선할지는 F-11 소관의 제품 결정이다.
+6. **단축키 충돌.** §3.5 참조. 원본은 `kHISymbolicHotKeyCode` 등 **비공개 Carbon API 로 시스템 예약 단축키 전체를 조회하는 경로를 실제로 갖고 있다**(실측: 번들 심볼). 기존 판의 "공개 API 가 없어 부분 대응만 가능하다"는 서술은 "원본이 그렇게 한다"는 뜻은 아니었음이 드러났다 — 정정한다. 클론이 같은 비공개 경로를 쓸지의 판단은 §7·§9 참조.
+7. **창을 닫아도 엔진은 계속 동작.** 기존 판 유지.
+8. **다중 디스플레이에서 창 위치 복원.** ⭐ 창 크기가 탭마다 다르다(§3.1)는 사실이 이 로직에 직접 영향을 준다 — 저장된 좌표만으로는 복원할 수 없고, **어느 탭으로 열릴지(§3.3, 미확정)에 따라 창 크기가 달라지므로, 클램프 판정은 "열릴 탭의 크기"를 알고 나서 계산해야 한다.** 원본의 `NSWindow Frame EntryBarWindow` 저장 관례(실측: defaults, app-bundle-analysis.md §2.1)로 미루어, 환경설정 창도 `NSWindow Frame` 류로 위치만(크기는 탭에 종속) 저장할 가능성이 높다 `(추정)`.
+9. **현지화 — ⭐ 성격이 바뀐 항목.** app-bundle-analysis.md §5.1 이 확정한 바, **SuperKey 앱 본체는 현지화가 전혀 없다** — `Contents/Resources/` 에 `Base.lproj` 하나뿐이고 `Info.plist` 에 `CFBundleLocalizations` 키가 없다. 이전 명세가 인용한 "8개 로케일 번들"은 appcast 의 `sparkle:deltaFromSparkleLocales` 오독으로, 실제로는 Sparkle 프레임워크 자체의 로케일 파일 목록이었다(app-bundle-analysis.md §5.1). **즉 로케일별 라벨 길이·RTL 대응은 원본에는 해당하지 않으며, 클론이 현지화를 제품 목표로 추가한다면 그건 원본을 재현하는 문제가 아니라 클론 고유의 신규 과제다.** 삭제하지 않고 이렇게 재규정한다 — 상세는 `F-14`(localization-and-input-sources.md) 소관.
+10. **단축키 레코딩 중 창/앱 포커스 이동.** 기존 판 유지 `(추정)`.
+11. **General 탭 민감정보의 저장 방식.** 기존 판 유지 — 다만 §4.4 확인 결과 General 탭에 **라이선스 키 입력 필드 자체가 없다**(라이선스 활성화는 Paddle Classic 프레임워크의 별도 창을 통한다, app-bundle-analysis.md §4.8). 따라서 이 항목의 실제 리스크 표면은 "환경설정 JSON 에 라이선스 키가 평문으로 남는가"가 아니라 "Paddle 활성화 캐시(`750314.padl`/`.spadl`)의 저장 형식"으로 좁혀진다 — F-12 소관.
+12. **⭐ 토글 후 원상복구해도 저장소에 잔여 키가 남을 수 있다.** §3.6 이 인용한 실측 잔여물(`capsWasdArrows`·`oneSwipeFromTop`·`seekOptions`·`seekRemapKeycode`, app-bundle-analysis.md §7.1)이 보여주듯, 원본은 "값을 기본값으로 되돌려도 키 자체는 지우지 않는다." 클론도 같은 동작(불필요한 `delete` 호출을 하지 않음)을 채택할지, 아니면 "값이 기본값과 같아지면 키를 지워 파일을 더 작게 유지"할지는 결정되지 않았다 `(추정)` — 기능적으로 동등하므로 급하지 않은 결정이나, `settings.json` 사람이 읽고 디버깅한다는 §3.6 의 장점을 살리려면 후자가 더 깔끔하다.
 
 ## 6. 필요한 플랫폼 API
 
-- **창 생성·관리(안전 Rust)**: Tauri `WebviewWindow`/`WindowBuilder` — `decorations(true)`(표준 타이틀바), 고정 크기 또는 리사이즈 가능 여부는 미확인 `(추정)`. `rust-macos-capability-notes.md` §2.6 이 다룬 특수 window level·클릭 통과 등은 오버레이(F-03) 전용 요구사항이며 이 창에는 해당하지 않는다.
-- **창 위치 저장·복원**: Tauri `window.outer_position()` / `set_position()` (안전 Rust) + `window.available_monitors()` 로 디스플레이 목록을 조회해 §5 항목 8 의 클램프 로직을 구현한다.
-- **단축키 레코더의 로컬 키 캡처**: `global-hotkey` 0.8.0(§1.2)은 "가로채기가 아니라 등록"이라 임의 조합을 실시간으로 캡처하는 레코딩 UI 용도로는 맞지 않는다. macOS 표준 패턴은 `NSEvent.addLocalMonitorForEvents(matching:handler:)`(창이 키 창일 때만 동작) 이며, 이는 `objc2-app-kit` 을 통해 접근 가능하나 `rust-macos-capability-notes.md` 는 이 특정 API 의 커버리지를 명시적으로 확인하지 않았다 → §9.
-- **시스템 예약 단축키 조회**: macOS 는 System Settings > Keyboard Shortcuts 에 등록된 전체 단축키 표를 조회하는 공개 API 를 제공하지 않는다(조사 자료에 근거 없음, 일반적으로 알려진 macOS 제약) → 완전 자동 충돌 감지는 불가능하고, 알려진 고위험 조합(`⌘Space`, `⌘Tab`, `⌘⇧3/4/5` 등)의 하드코딩 목록 대조만 가능하다 `(추정)`.
-- **설정 저장**: `tauri-plugin-store`(§1.3) — JSON 기반, 앱 데이터 디렉토리에 저장. 스키마 버전 필드와 마이그레이션은 자체 로직으로 얹는다(플러그인 자체는 마이그레이션을 제공하지 않음).
-- **VoiceOver**: WKWebView 가 표준 HTML 컨트롤을 자동으로 접근성 트리에 노출하므로 별도 네이티브 API 호출이 원칙적으로 불필요하다. 커스텀 컨트롤(단축키 레코더, 인라인 팝업 라벨)에는 ARIA 속성을 HTML/CSS/JS 레벨에서 직접 부여한다 — 플랫폼 API 라기보다 프론트엔드 구현 책임이다.
-- **다크모드**: CSS `prefers-color-scheme` 로 대부분 커버되며, 앱 전체의 강제 라이트/다크 전환(시스템과 무관하게)을 지원하려면 Tauri 의 테마 API 또는 `objc2-app-kit` 의 `NSApp.appearance` 설정이 필요하다 `(추정)`.
-- **권한 상태 조회(General 탭 표시용)**: `rust-macos-capability-notes.md` §2.5 — `AXIsProcessTrusted()`, `CGPreflightScreenCaptureAccess()`, `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)`. 이 문서(F-09)는 상태를 **표시**만 하고, 요청·온보딩 흐름 자체는 F-11 소관이다.
+- **창 생성·관리(안전 Rust)**: Tauri `WebviewWindow`/`WindowBuilder` — `decorations(true)`(표준 타이틀바). ⭐ **탭마다 크기가 다르므로 고정 크기가 아니라 `set_size()` 를 탭 전환 시 호출하는 리사이즈 가능 창이어야 한다**(§3.1·§3.3, 실측: AX 트리로 확정). 오버레이(F-03) 전용 요구사항(특수 window level·클릭 통과)은 이 창에 해당하지 않는다.
+- **창 위치 저장·복원**: Tauri `window.outer_position()` / `set_position()` + `window.available_monitors()`. §5 항목 8 의 클램프 로직은 "열릴 탭의 크기"를 먼저 결정한 뒤 계산해야 한다.
+- **단축키 레코더의 로컬 키 캡처**: `global-hotkey` 크레이트는 "가로채기가 아니라 등록"이라 레코딩 UI 용도로는 맞지 않는다. macOS 표준 패턴은 `NSEvent.addLocalMonitorForEvents(matching:handler:)` 이며, `objc2-app-kit` 을 통해 접근 가능하나 커버리지가 명시적으로 검증되지 않았다 → §9. §3.5 에서 정리했듯, 원본이 쓰는 `KeyboardShortcuts`(Swift 전용 패키지)를 클론이 따라야 할 이유는 없다 — 이 API 경로로 충분하다는 판단이다.
+- **시스템 예약 단축키 조회**: ⭐ 공개 API 는 없으나, 원본이 실제로 쓰는 경로가 확정됐다 — `kHISymbolicHotKeyCode`/`kHISymbolicHotKeyEnabled`/`kHISymbolicHotKeyModifiers`(`CopySymbolicHotKeys` 계열, Carbon HIToolbox, 실측: 번들 심볼). **클론이 이 경로를 택할지의 판단**: 이 API 는 공식 문서화되지 않았고 향후 macOS 버전에서 제거될 위험이 있다(Carbon 은 수년간 deprecated 상태). 그러나 `objc2`/`core-foundation` 바인딩으로 접근 가능한 C 심볼이므로 새 네이티브 shim 은 필요 없다(Rust 바인딩 판정 유지). **권장**: 완전한 커버리지가 필요하지 않다면(§5 항목 6 의 "알려진 고위험 조합 하드코딩 목록" 대응으로 충분하다면) 굳이 비공개 API 위험을 감수하지 않는 쪽을, 원본과 동등한 완전성을 목표로 한다면 이 경로를 채택하되 macOS 버전별 동작 확인을 CI 에 넣는 쪽을 제안한다 — 최종 채택 여부는 `(미확정)`, 제품 결정 사항으로 §9 에 남긴다.
+- **설정 저장**: `tauri-plugin-store` — JSON 기반, 앱 데이터 디렉토리. §3.6 의 "부재 = 기본값" 규약을 로더 레벨에서 구현한다(역직렬화 시 `#[serde(default)]` 류로 필드별 기본값을 채움).
+- **VoiceOver**: §3.4 참조 — 커스텀 컨트롤에는 ARIA 속성을 HTML/CSS/JS 레벨에서 직접 부여한다.
+- **다크모드**: CSS `prefers-color-scheme` + `objc2-app-kit` 의 `NSApp.appearance` `(추정)`.
+- **권한 상태 조회**: `AXIsProcessTrusted()`, `CGPreflightScreenCaptureAccess()`, `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` — 단, §4.4 확인 결과 **원본은 이를 General 탭에 표시하지 않는다.** 클론이 표시할지는 F-11 의 제품 결정이다.
 
 ## 7. 구현 접근
 
-**판정: Rust 바인딩.**
+**판정: Rust 바인딩.** 이번 실측으로도 이 판정은 바뀌지 않는다 — 오히려 근거가 보강됐다.
 
-환경설정 창은 오버레이(F-03)와 요구사항이 근본적으로 다르다. 오버레이는 지연 예산이 빡빡하고(키 입력마다 재렌더링) 특수 window level·클릭 통과·다중 디스플레이 union frame 계산 등 AppKit 저수준 제어가 필수였다(`rust-macos-capability-notes.md` §2.6). 반면 환경설정 창은:
+환경설정 창은 오버레이(F-03)와 요구사항이 근본적으로 다르다:
 
-- **지연 예산이 느슨하다.** 체크박스 클릭, 팝업 선택, 슬라이더 드래그 모두 사람이 조작하는 폼 상호작용이며, 프레임 단위 응답성이 요구되지 않는다.
-- **폼 컨트롤이 많다.** 31개 이상의 개별 설정(§4)이 체크박스·팝업·슬라이더·텍스트 필드로 구성되며, 이는 HTML `<form>` 이 원래 잘하는 일이다. 각 컨트롤을 네이티브 `NSButton`/`NSPopUpButton`/`NSSlider` 로 하나하나 만드는 것보다, HTML/CSS/JS 로 만들고 필요한 곳에만 네이티브 이스케이프(§6)를 쓰는 것이 개발 비용 면에서 합리적이다.
-- **표준 창 동작이면 충분하다.** `decorations: true` 인 평범한 타이틀바 창으로, 오버레이가 요구했던 `NSScreenSaverWindowLevel`·`ignoresMouseEvents`·전체화면 위 표시 같은 특수 처리가 필요 없다.
+- **지연 예산이 느슨하다.** 체크박스 클릭, 팝업 선택, 슬라이더 드래그 모두 사람이 조작하는 폼 상호작용이다.
+- **폼 컨트롤이 많다.** 4개 탭 합계 **41개 컨트롤**(Seek 9 + Hyperkey 8 + Presets 18 + General 8, §4 의 조건부 포함)이 체크박스·팝업·슬라이더·텍스트 필드·버튼으로 구성되며, HTML `<form>` 이 잘하는 일이다.
+- **원본이 리사이즈 가능한 표준 창이라는 점이 실측으로 확정됐다(§3.1).** `NSScreenSaverWindowLevel`·`ignoresMouseEvents` 같은 오버레이 특수 처리가 여기엔 필요 없다는 판단을 오히려 강화한다.
 
-따라서 **Tauri WebView 로 이 창을 만드는 것이 적절하다** — 오버레이와 달리 여기서는 "WebView 왕복 비용"이 문제가 되는 지점이 없다. 다만 두 가지는 명시적으로 짚어야 한다.
+⭐ **원본이 완전히 네이티브(AppKit + Storyboard, WebView 아님)라는 사실**(실측: 번들 문자열, `NSMainStoryboardFile = Main`)이 확정됐다. 이는 클론의 Tauri WebView 채택 결정을 뒤집을 근거는 아니다 — 원본의 구현 언어 선택은 클론 아키텍처의 제약이 아니라 참고 사실일 뿐이며, 클론이 이미 다른 명세들에서 확립한 Tauri 기반 아키텍처(`platform-constraints.md`)와 별개로 판단한다.
 
-1. **네이티브 룩앤필 재현 비용.** WKWebView 는 macOS System Settings 특유의 시각 요소(사이드바 리스트 스타일, `NSPopUpButton` 의 셰브론과 눌림 효과, `NSSlider` 의 눈금 렌더링, 창 전체의 vibrancy)를 "공짜로" 제공하지 않는다. 이들을 CSS/HTML/JS 로 픽셀 단위까지 재현하려면 상당한 프론트엔드 작업이 필요하며, 완벽히 동일한 룩앤필을 포기하고 "네이티브에 가까운" 수준으로 타협하는 것이 현실적이다. 이는 기능적 공백이 아니라 **디자인 투자 비용**의 문제다.
-2. **단축키 레코더만 예외적으로 네이티브에 가깝다.** §6 에서 짚었듯 `NSEvent.addLocalMonitorForEvents` 류 API 가 필요할 가능성이 높고, 이는 `objc2-app-kit` 을 통한 `unsafe` 호출이다(Rust 바인딩 판정의 근거). 그러나 이는 창 전체를 네이티브로 만들어야 한다는 뜻이 아니라, 이 창 안의 **한 컨트롤**만 네이티브 API 를 호출하는 것으로 충분하다.
+1. **네이티브 룩앤필 재현 비용.** WKWebView 는 macOS System Settings 특유의 시각 요소를 "공짜로" 제공하지 않는다 — 특히 원본의 **탭 전환 시 창 리사이즈**(§3.1)는 WebView 창에서도 재현 가능하지만(Tauri `set_size` 애니메이션), AppKit 이 기본 제공하는 부드러움과 동일한 체감을 내려면 추가 튜닝이 필요하다. 디자인 투자 비용의 문제다.
+2. **단축키 레코더만 예외적으로 네이티브에 가깝다.** `NSEvent.addLocalMonitorForEvents` 류 API 가 필요하며 이는 `objc2-app-kit` 을 통한 `unsafe` 호출이다(Rust 바인딩 판정의 근거). §3.5 에서 정리했듯, 원본이 Swift 전용 `KeyboardShortcuts` 패키지를 쓴다는 사실은 클론에 새 shim 의무를 지우지 않는다 — 이 창 안의 **한 컨트롤**만 네이티브 API 를 호출하는 것으로 충분하다.
+3. **시스템 예약 단축키 조회의 비공개 API 위험.** §6 에서 다룬 대로, 완전한 커버리지를 원한다면 `kHISymbolicHotKey*` 경로(비공개, Carbon)를 감수해야 한다. 이는 오버레이(F-03)의 `MultitouchSupport`(F-06) 위험과 같은 종류이므로, 채택한다면 F-06 과 동일하게 "실패 시 격하 가능한 선택 기능"으로 설계하는 편이 안전하다 — 알려진 고위험 조합 하드코딩 목록으로 최소 기능을 유지한 채, 완전 열거는 부가 기능으로 둔다.
 
-- **기각한 대안 1 — "순수 Rust".** 창 위치 저장/복원, 단축키 레코더, 권한 상태 조회(General 탭)가 모두 플랫폼 타입(`NSEvent`, TCC 함수)에 직접 의존해 순수 애플리케이션 로직만으로 완결되지 않는다.
-- **기각한 대안 2 — "네이티브 shim 불가피".** 오버레이(F-03)와 달리 `rust-macos-capability-notes.md` 가 이 창의 요구사항(표준 창, 폼 컨트롤, 위치 복원)에 대해 커버리지 공백을 보고하지 않았다. 유일하게 불확실한 지점(로컬 이벤트 모니터)도 기존 `objc2-app-kit` 바인딩으로 해결 가능할 가능성이 높고, 별도의 Swift/Objective-C 소스 파일을 프로젝트에 추가해야 할 근거는 없다.
+- **기각한 대안 1 — "순수 Rust".** 창 위치 저장/복원, 단축키 레코더, 시스템 예약 단축키 조회가 모두 플랫폼 타입에 직접 의존한다.
+- **기각한 대안 2 — "네이티브 shim 불가피".** `KeyboardShortcuts` 가 Swift 전용이라는 사실을 근거로 이 판정을 택할 수도 있었으나(§3.5), 그 패키지 자체를 이식할 필요가 없고 `objc2-app-kit` 의 `NSEvent` 로컬 모니터로 동등한 UX 를 구현할 수 있다는 판단에 따라 기각한다.
 
 ## 8. 수용 기준
 
-- [ ] 환경설정 창을 열면 좌측 사이드바에 `Seek`·`Hyperkey`·`Presets`·`General` 4개 탭이 이 순서로 표시된다.
-- [ ] 각 탭을 클릭하면 우측 패널이 해당 탭의 설정으로 전환되고, 패널 상단에 탭 이름이 표시된다(`Seek`·`Hyperkey` 는 ⓘ 정보 버튼과 함께).
-- [ ] `Seek` 탭에 §4.1 의 9개 항목(중첩 체크박스 포함)이 모두 존재하고, `Match on more than one character` 는 `Seek using macOS accessibility` 가 꺼진 상태에서 비활성화(조작 불가)로 표시된다.
-- [ ] `Hyperkey` 탭에 §4.2 의 6개 항목이 모두 존재하고, `Apply modifiers to keypress events and:` 아래 `Click`/`Drag`/`Move`/`Scroll` 4개 체크박스가 개별적으로 토글 가능하다.
-- [ ] `Presets` 탭에 §4.3 의 16개 항목이 4개 그룹(caps lock/shift/delete/기타)으로 시각적으로 구분되어 모두 존재한다.
-- [ ] 임의의 체크박스를 토글하면 별도의 "적용"/"확인" 조작 없이 다음 키 입력부터 F-07 리매핑 엔진에 새 값이 반영된다(관찰 가능한 지연 1초 이내).
-- [ ] 단축키 레코더 필드를 클릭하면 레코딩 모드로 전환되고, 조합을 입력하면 그 조합이 필드에 표시되며 저장된다. `Esc` 를 누르면 레코딩이 취소되고 이전 값이 유지된다.
-- [ ] 단축키 레코더의 ✕ 버튼을 누르면 값이 비워지고, 저장된 상태에서 해당 트리거가 비활성화된다.
-- [ ] 앱을 재시작해도 이전에 설정한 모든 값(4개 탭 전체)이 그대로 유지된다(§3.6 저장소에서 로드).
-- [ ] `settings.json`(또는 등가 저장 파일)이 파싱 불가능한 상태로 손상되어 있을 때 앱이 크래시하지 않고 기본값으로 시작하며, 손상된 파일이 별도 백업으로 보존된다.
-- [ ] 환경설정 창을 닫아도(빨간 stoplight 또는 `⌘W`) 앱은 종료되지 않고, 직전까지 활성화되어 있던 리매핑(예: hyper 키)은 계속 동작한다.
-- [ ] VoiceOver 가 켜진 상태에서 `Tab` 키만으로 각 탭과 패널 내 모든 컨트롤에 순서대로 접근할 수 있고, 각 컨트롤의 현재 값이 음성으로 안내된다.
-- [ ] 시스템 외관을 다크 모드로 전환하면 환경설정 창도 별도 재실행 없이 다크 모드로 전환된다.
+- [ ] 환경설정 창을 열면 좌측 사이드바에 `Seek`·`Hyperkey`·`Presets`·`General` 4개 탭이 이 순서로, 각각 토글형 버튼으로 표시된다.
+- [ ] 각 탭을 클릭하면 우측 패널이 전환되고 창 크기가 §3.1 의 값(Seek 555×378 · Hyperkey 710×517 · Presets 825×527 · General 613×273, pt)으로 리사이즈된다.
+- [ ] `Seek` 탭에 §4.1 의 상위 8개 항목이 모두 존재하고, `Match on more than one character` 는 `Seek using macOS accessibility` 가 ☐ 인 상태에서 **DOM/AX 트리에서 완전히 사라진다**(dimmed 가 아니라 hidden). `Only show while the remapped key is held` 는 `Remap key to Seek:` 가 `-` 인 상태에서 **자리를 차지한 채 dimmed** 로 표시된다.
+- [ ] `Hyperkey` 탭에 §4.2 의 상위 6개 항목이 모두 존재하고, `Engage hyper key using trackpad:` 가 ☐ 이면 `Change menu bar icon when engaged`·`Provide haptic feedback when triggered` 2개가 숨김 처리된다.
+- [ ] `Presets` 탭에 §4.3 의 16개 항목이 4개 그룹(캡스락 7·시프트 4·삭제 3·기타 2)으로 구분선과 함께 표시된다. `Quick press duration` 슬라이더는 250~2000ms 범위이고 기본값 1000ms 다.
+- [ ] `General` 탭에 §4.4 의 7개 컨트롤(`Launch on login`·버전 버튼·`Check for updates automatically`·`Hide menu bar icon`·`Menu bar icon` 팝업·`Remove Oldest Activation`·`Purchase`)이 모두 존재하고, 언어 선택·권한 상태 표시·라이선스 키 입력 필드·`Reset to defaults` 는 **의도적으로 없다**.
+- [ ] 신규 설치 상태(설정을 아무것도 바꾸지 않음)에서 §4 의 모든 항목이 표기된 출고 기본값과 정확히 일치한다 — 특히 `Include shift in hyper key`·`Change click modes with modifier keys`·`Match on more than one character` **3개만 ☑**, 나머지는 전부 ☐ 이다.
+- [ ] 임의의 체크박스를 토글하면 별도의 "적용"/"확인" 조작 없이(그런 버튼이 UI 어디에도 없다) 다음 키 입력부터 F-07 리매핑 엔진에 새 값이 반영된다.
+- [ ] 단축키 레코더 필드는 미설정 시 `Record Shortcut` 을 표시하고, 클릭하면 레코딩 모드로 전환되며, `Esc` 를 누르면 레코딩이 취소되고 이전 값이 유지된다.
+- [ ] 앱을 재시작해도 이전에 설정한 모든 값이 그대로 유지되며, **한 번도 건드리지 않은 항목은 저장 파일에 키 자체가 없어도 올바른 기본값으로 동작한다**(§3.6 "부재 = 기본값").
+- [ ] `settings.json` 이 파싱 불가능한 상태로 손상되어 있을 때 앱이 크래시하지 않고 필드별 기본값으로 시작하며, 손상된 파일이 별도 백업으로 보존된다.
+- [ ] 환경설정 창을 닫아도 앱은 종료되지 않고, 직전까지 활성화되어 있던 리매핑은 계속 동작한다.
+- [ ] 서로 충돌하는 caps lock 프리셋 두 개를 순서대로 켜면 대화상자가 뜨고, 확인 시 먼저 켠 설정이 꺼진다(F-15 상세 명세 필요, 여기서는 존재만 검증).
 
 ## 9. 미해결 질문
 
-| # | 질문 | 조사 문서 연결 | 확인 방법 |
-| :--- | :--- | :--- | :--- |
-| 1 | `General` 탭의 실제 항목·라벨·컨트롤 타입 전체 | `superkey-inventory.md` §3.4, §7 Q2 | 앱 설치 후 확인 |
-| 2 | 환경설정 창을 여는 정확한 경로(메뉴바 항목 클릭인지, 최초 실행 시 자동으로 뜨는지, `⌘,` 지원 여부) | 조사 자료에 직접 근거 없음 | 앱 설치 후 확인, 또는 §7 Q15(메뉴바 메뉴 구성)와 함께 확인 |
-| 3 | 재열기 시 마지막으로 보던 탭을 기억하는지 | 조사 자료에 근거 없음 | 앱 설치 후 확인 |
-| 4 | 각 탭의 아이콘 구체적 모양 | 조사 자료가 탭 존재만 확인, 아이콘 모양은 서술하지 않음 | 스크린샷 재확인 또는 앱 설치 |
-| 5 | `Presets`·`General` 패널 제목에도 `Seek ⓘ`/`Hyperkey ⓘ` 와 같은 인라인 ⓘ 버튼이 있는지 | `superkey-inventory.md` §3.1, §3.2 는 Seek·Hyperkey 만 명시 | 스크린샷 재확인(Presets 스크린샷 재검토) 또는 앱 설치 |
-| 6 | `Focus window before clicking`, `Change click modes with modifier keys` 의 정확한 소유 명세(F-03 vs F-04) | `seek-activation-and-session.md` §4 가 F-02·F-03·F-04 로만 뭉뚱그려 서술 | F-03/F-04 명세 작성 시 확정 |
-| 7 | `F-05`(Hyperkey)·`F-06`(Presets)·`F-08`(트랙패드 제스처)의 실제 명세 ID 배정 | 이 문서에서 잔여 번호로 추정 배정 | 프로젝트 명세 ID 부여 규칙 확인, 각 명세 작성 시 확정 |
-| 8 | 단축키 레코더의 정확한 동작(취소 조건, 충돌 시 하드 차단 vs 소프트 경고, blur 시 취소 여부) | 조사 자료에 근거 없음, 동종 앱 관례로 추정 | 앱 설치 후 실동작 확인 |
-| 9 | 서로 다른 탭 간 같은 물리 키를 지정할 때 UI 가 저장을 차단하는지, 아니면 F-07 의 우선순위로만 해소하는지 | `superkey-inventory.md` §6.2(v1.20, v1.62 버그 이력)에서 충돌 자체는 확인되나 UI 차원 처리는 불명 | 앱 설치 후 실동작 확인 |
-| 10 | 설정 변경이 "탭 단위"로 즉시 반영되는지, 컨트롤 단위로 즉시 반영되는지(적용 버튼 부재로 추정한 것일 뿐 명시적 근거 없음) | 스크린샷에 확인 버튼 부재라는 간접 근거만 있음 | 앱 설치 후 실동작 확인 |
-| 11 | `Quick press duration` 슬라이더의 최소/최대/간격 | `superkey-inventory.md` §7 Q6 | 앱 설치 후 슬라이더 조작 |
-| 12 | 각 팝업 버튼의 선택지 전체 목록(`Remap key to hyper key:` 등) | §7 Q4·Q5·Q7·Q8 | 앱 설치 후 팝업 열기 |
-| 13 | 각 설정의 출고 기본값 | §7 Q3 | 앱 최초 실행 후 `defaults read com.knollsoft.Superkey`(원본 기준) — 클론은 자체 기본값을 설계 시점에 정의 |
-| 14 | `NSEvent.addLocalMonitorForEvents` 류 로컬 키 캡처 API 가 `objc2-app-kit` 0.3.2 에 실제로 노출되어 있고 안정적으로 동작하는지 | `rust-macos-capability-notes.md` 가 이 특정 API 를 명시적으로 검증하지 않음 | crates.io 문서 및 실제 바인딩 확인, 프로토타입 구현 |
-| 15 | 메뉴바 메뉴 항목 구성(환경설정을 여는 정확한 메뉴 항목 라벨 포함) | §7 Q15 | 앱 설치 후 확인 |
-| 16 | `NSUserDefaults` 미사용 결정(§3.6)이 실제로 사용자 기대(파워유저의 `defaults` 명령 상호운용성)에 미치는 영향이 받아들여질 수 있는 트레이드오프인지 | 이 문서의 설계 결정, 조사 자료에 직접 근거 없음 | 제품 방향 결정(개발자/기획 판단) |
+⭐ 해소된 것은 어디서 해소됐는지 한 줄로 남기고 이 표에서 지운다. 아래는 여전히 남은 것과 이번에 새로 발견된 것이다.
+
+| # | 질문 | 상태 |
+| :--- | :--- | :--- |
+| 1 | 환경설정 창을 최초 실행 시 자동으로 여는지, `⌘,` 단축키를 지원하는지 | `(미확정)` — 메뉴 항목 라벨(`Settings…`)은 확정됐으나(§3.3) 이 두 가지는 확인 못함 |
+| 2 | 재열기 시 마지막으로 보던 탭을 기억하는지 | `(미확정)` — 관찰 중 항상 같은 탭이었다는 정황뿐, 관찰 시작 조건과 구분 안 됨 |
+| 3 | 4개 탭 아이콘의 구체적 모양 | `(미확정)` — AX 로 아이콘 존재는 확인, 모양은 미확인 |
+| 4 | `Focus window before clicking`·`Change click modes with modifier keys` 의 정확한 소유(F-03 vs F-04) | `(미확정)` — 이번 실측은 UI 배치만 다뤘고 소유 경계는 F-03/F-04 명세가 확정할 몫 |
+| 5 | `Record Modifiers` / `RecorderModifierCocoa` 레코더 UI 의 위치 | `(미확정)` — 실행 파일에 심볼은 있으나 4개 탭 AX 트리 어디에도 없다. 클릭 모드 7종(F-04 영역)의 modifier 지정용으로 추정 |
+| 6 | `Menu bar icon` 팝업 2종의 정체 | `(미확정)` — 라벨 없는 이미지 항목. `Assets.car` 추출은 저작권 경계상 하지 않았다 |
+| 7 | `Apply hyper to arrows`·`Relaunch on wake`·Windows 키보드 리매핑의 표시 조건 | `(미확정)` — 재현 시도했으나 조건을 특정하지 못했다(app-bundle-analysis.md §7 항목 4·6) |
+| 8 | `Quick press duration` 슬라이더의 눈금 간격(step) | `(미확정)` — 범위(250~2000ms)와 기본값(1000ms)만 확정 |
+| 9 | 단축키 레코더의 정확한 취소/충돌 처리(blur 시 취소 여부, 시스템 예약 조합 충돌 시 동작) | `(미확정)` — `KeyboardShortcuts` 패키지 표준 동작을 참고할 뿐 SuperKey 의 실제 동작을 재현 관찰하지 못함 |
+| 10 | 시스템 예약 단축키 조회에 비공개 `kHISymbolicHotKey*` 경로를 클론이 실제로 채택할지 | 제품 결정 사항 `(미확정)` — 위험과 대안은 §6·§7 에 판단 근거를 남겼다 |
+| 11 | `NSUserDefaults` 미사용 결정(§3.6)이 파워유저의 `defaults` 명령 상호운용성 기대에 미치는 영향을 받아들일지 | 제품 결정 사항, 이번 실측이 "부재 = 기본값" 규약의 중요성을 더 명확히 했을 뿐 결론은 내지 않았다 |
+| 12 | `v1.66 (66)` 버튼의 클릭 동작과 소유 명세 | `(미확정)` — About 창 오픈으로 추정만 했다 |
+| 13 | `NSEvent.addLocalMonitorForEvents` 가 `objc2-app-kit` 에 실제로 안정적으로 노출되어 있는지 | `(미확정)` — 크레이트 문서·프로토타입으로 별도 검증 필요, 이번 실측 범위 밖 |
+
+**해소되어 제거된 항목(이전 판 §9)과 해소 근거**:
+- `General` 탭의 실제 항목·라벨·컨트롤 타입 → §4.4(실측: AX 트리)로 확정.
+- 환경설정 창을 여는 메뉴 항목 라벨 → `Settings…` 로 확정(실측: 번들 문자열, §3.3).
+- `Presets`·`General` 패널 제목에 ⓘ 가 있는지 → 없음으로 확정(§3.1, 정보 팝오버 컨트롤러가 4개뿐임을 실측).
+- 각 팝업 버튼의 선택지 전체 목록 → §4.1~§4.3 에 전량 확정.
+- 각 설정의 출고 기본값 → §2.1(plist) + §6(AX) 조합으로 확정.
+- `F-05`/`F-06`/`F-08` 의 실제 명세 ID 배정 → 각 명세 문서 자체의 헤더에서 이미 확정되어 있었음을 확인, 이 문서의 ID 혼동을 정정(§3.1).
+- 서로 다른 탭 간 동일 물리 키 충돌 시 UI 차단 여부 → 대화형 해소(사용자에게 묻고 상대를 끔)로 확정, 상세는 F-15 소관(§5 항목 4).
+- 설정 변경이 컨트롤 단위로 즉시 반영되는지 → 확정(§3.7, 잔여 plist 키 실측 근거).
+- 메뉴바 메뉴 항목 구성 → 전량 확정(app-bundle-analysis.md §6.5, F-10 소관 문서가 갱신 필요).
