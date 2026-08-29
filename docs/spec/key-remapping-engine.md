@@ -1,8 +1,9 @@
 # F-07 · 키 리매핑 엔진 (공통 기반)
 
-> **한 줄 요약** — Seek(F-01)·Hyperkey/meh/bleh(F-05)·Power User Presets(F-08) 가 하나의 물리 키 이벤트 스트림을 공유하는 **단일 `CGEventTap` 기반 중재(arbitration) 엔진**. 기능별로 독립된 이벤트 탭을 설치하는 설계는 명시적으로 기각한다.
-> **의존성** — Accessibility + Input Monitoring 권한(상세는 F-11)이 승인되어 있지 않으면 `CGEventTapCreate` 자체가 유효한 탭을 반환하지 않는다. 이 문서는 "권한이 있다"는 전제 위에서 엔진 내부 동작만 다룬다.
-> **이 엔진을 소비하는 명세** — F-01(Seek 트리거의 키 리매핑 진입점), F-05(Hyperkey / meh / bleh), F-08(Power User Presets 전 항목). 세 명세 모두 이 문서가 정의하는 규칙 테이블 위에 자신의 "규칙"만 등록한다.
+> **한 줄 요약** — Seek(F-01)·Hyperkey/meh/bleh(F-05)·Power User Presets(F-08) 가 공유하는 키 리매핑 하부구조. ⭐ 실측으로 확정: 리매핑은 단일 `CGEventTap` 경로가 아니라 **물리적으로 다른 세 경로**(A: `CGEventTap` 이벤트 합성·중재, B: IOHID 커널 레벨 매핑, C: HID 잠금 상태 직접 조작)로 나뉜다(§1, §3-d). 경로 A 내부에서는 여전히 단일 중재(arbitration) 엔진이 규칙을 조정하며, 기능별로 독립된 이벤트 탭이나 독립된 IOHID 매핑을 설치하는 설계는 명시적으로 기각한다.
+> **의존성** — Accessibility 권한(F-11)이 승인되어 있지 않으면 경로 A(`CGEventTapCreate`)가 유효한 탭을 반환하지 않는다. ⭐ 실측 정정: SuperKey 가 앱 시작 시 명시적으로 확인하는 권한은 `AXIsProcessTrusted` 하나뿐이다 — Input Monitoring 은 명시적으로 확인되지 않고 실패·재시도로 흡수된다(§3-a, §6). 이 문서는 "권한 절차 자체는 F-11 소관"이라는 전제 위에서 엔진 내부 동작만 다룬다.
+> **이 엔진을 소비하는 명세** — F-01(Seek 트리거의 키 리매핑 진입점 — ⭐ quick press 로 Seek 를 여는 세 번째 활성화 경로가 실측으로 확인됨, §3-c), F-05(Hyperkey / meh / bleh), F-08(Power User Presets 전 항목). 세 명세 모두 이 문서가 정의하는 규칙 테이블 위에 자신의 "규칙"만 등록한다.
+> **앱별 비활성화 게이트** — 최전면 앱을 추적해 비활성 목록에 든 앱에서는 리매핑을 통과시켜야 한다(§3-f). 게이트 자체의 판정 시점은 이 문서 소관이나, 메뉴바 UI·저장 형식의 상세는 `menu-bar-and-lifecycle.md`(F-10) 소관이다.
 
 ---
 
@@ -17,11 +18,22 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 
 > **물리 키 하나의 현재 상태(눌림 여부, 눌린 지속 시간, 동시에 눌린 다른 키)는 시스템 전체에서 단 하나의 "정본(canonical) 상태"로만 존재한다.** Seek/Hyperkey/Presets 는 이 정본 상태를 **읽기만** 하며, 각자 별도의 이벤트 탭이나 별도의 keyDown/keyUp 추적 로직을 갖지 않는다. "이 이벤트를 최종적으로 어떻게 바꿀 것인가"는 이 문서가 정의하는 단일 중재 우선순위 표(§3-b)가 매 이벤트마다 한 번만 결정한다.
 
-엔진은 세 가지 책임을 진다.
+⭐ **경로가 하나가 아니라 셋이다(실측: 번들 심볼·번들 문자열).** 위 원칙은 "정본 상태"를 어떻게 유지하느냐에 대한 것이고, 그 정본 상태를 바탕으로 **실제로 바깥 세계에 리매핑 결과를 내보내는 경로**는 셋으로 갈린다. 이는 기존 명세가 암묵적으로 전제했던 "모든 리매핑은 `CGEventTap` 하나를 거친다"는 가정을 무너뜨리는, 이번 실측의 가장 큰 발견이다.
 
-1. **이벤트 탭 인프라** — 하나의 `CGEventTap` 을 열고, 죽지 않게 유지하고, 콜백 안에서 안전하게 판단을 내린다.
-2. **중재** — 여러 규칙이 동시에 해당하는 물리 키 이벤트에 대해 결정론적으로 하나의 결과만 낸다.
-3. **판정 원시 자료 제공** — quick press/hold 판정, 물리 키코드 기반 매칭, 레이아웃 독립적 문자 출력, Secure Input 인지라는 네 가지 "저수준 서비스"를 F-01/F-05/F-08 이 공통으로 가져다 쓸 수 있게 만든다.
+| 경로 | 메커니즘 | 확인된 심볼/문자열 |
+| :--- | :--- | :--- |
+| **A — 이벤트 합성** | `CGEventTap` 으로 원본 이벤트를 가로채 다른 `CGEvent` 로 치환·방출 | `CGEventTapCreate`·`CGEventTapEnable`·`CGEventTapIsEnabled`·`CGEventCreateKeyboardEvent`·`CGEventCreateMouseEvent`·`CGEventGetFlags`·`CGEventSetFlags`·`CGEventSetType`·`CGEventSetIntegerValueField`·`CGEventPost`·`CGEventKeyboardSetUnicodeString`·`CGEventSourceCreate`·`CGEventGetLocation` |
+| **B — IOHID 커널 레벨 매핑** | `hidutil` 이 쓰는 것과 동일한 `HIDKeyboardModifierMappingSrc`/`Dst` 키를 `IOHIDServiceClientSetProperty` 로 직접 쓰거나, `hidutil` 자체를 서브프로세스로 실행. 매핑은 커널 HID 드라이버 층에서 적용되며 개별 앱의 이벤트 스트림을 거치지 않는다 | 심볼 `IOHIDServiceClientSetProperty`·`IOHIDEventSystemClientCreateSimpleClient`·`IOHIDServiceClientConformsTo` / 문자열 `hidutil property -g UserKeyMapping`, `HIDKeyboardModifierMappingSrc`/`Dst`, `Unable to set keyboard mapping`(SuperKey 원문) / `Tools_Tools.bundle` 의 셸 실행 오류 `bash command error: %@`, `Error parsing plist response` |
+| **C — HID 잠금 상태 직접 조작** | caps lock 의 실제 잠금(대문자 고정·LED)을 직접 읽고 쓴다 — 이벤트 합성이 아니다 | 심볼 `IOHIDGetModifierLockState`·`IOHIDSetModifierLockState` |
+
+세 경로의 역할 분담과 선택 기준은 §3-d 에서 정의한다.
+
+엔진은 다음 책임을 진다.
+
+1. **리매핑 경로 인프라** — 경로 A(`CGEventTap`)를 열고 죽지 않게 유지하며, 경로 B(IOHID/`hidutil`)의 시스템 전역 상태를 설치·추적하고 **앱 종료 시 정리(cleanup)를 책임지며**(§3-a2), 경로 C(HID 잠금 상태)를 필요할 때 직접 읽고 쓴다.
+2. **경로 선택** — 규칙마다 어느 경로로 구현할지 결정한다(§3-d). 사용자에게는 보통 노출되지 않지만, `Advanced ▸ Synthesize Caps Lock Remap` 처럼 경로를 전환하는 스위치가 실재한다(§3-d).
+3. **중재** — 경로 A 내부에서, 여러 규칙이 동시에 해당하는 물리 키 이벤트에 대해 결정론적으로 하나의 결과만 낸다(§3-b).
+4. **판정 원시 자료 제공** — quick press/hold 판정, 물리 키코드 기반 매칭, 레이아웃 독립적 문자 출력, Secure Input 인지, 최전면 앱 게이트(§3-f)라는 다섯 가지 "저수준 서비스"를 F-01/F-05/F-08 이 공통으로 가져다 쓸 수 있게 만든다.
 
 ---
 
@@ -42,26 +54,53 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
    맥북을 열자마자 caps lock 을 눌러 hyper 단축키를 쓰려 했지만 반응이 없다. 엔진은 `NSWorkspaceDidWakeNotification` 수신 시 탭 상태를 점검하고, 죽어 있으면 재설치한다 — 사용자는 이 과정을 인지하지 못하고 그냥 "항상 동작한다"고 느껴야 한다.
 
 5. **암호 입력 필드에 포커스를 둔 사용자**
-   Secure Input 이 활성화된 창(예: 로그인 다이얼로그)에 포커스가 가 있는 동안 caps lock 을 눌러도 hyper 조합이 발동하지 않는다. 이는 macOS 의 의도된 보안 제약이며, 엔진은 이를 우회하지 않고 원본 이벤트를 그대로 통과시킨다.
+   Secure Input 이 활성화된 창(예: 로그인 다이얼로그)에 포커스가 가 있는 동안 caps lock 을 눌러도 **경로 A(이벤트 합성) 기반** hyper 조합은 발동하지 않는다. 이는 macOS 의 의도된 보안 제약이며, 엔진은 이를 우회하지 않고 원본 이벤트를 그대로 통과시킨다. ⭐ 다만 caps lock 리매핑이 경로 B/C(커널 HID 매핑·HID 잠금 상태)로 구현된 규칙이라면, Secure Input 은 애플리케이션에 전달되는 이벤트 스트림만 걸러낼 뿐 그보다 아래 층(커널)의 HID 상태 자체를 바꾸지 않으므로 **영향을 받지 않을 가능성이 있다** `(미확정 — 실측으로 검증하지 않았다. 단정하지 않는다. §5·§9)`.
+
+6. **SuperKey 가 강제 종료된 뒤 재실행한 사용자** (경로 B 정리(cleanup) 시나리오)
+   사용자가 `Remap caps lock to: left control` 을 켜둔 채 Activity Monitor 등으로 SuperKey 프로세스를 강제 종료한다. 경로 B(IOHID 매핑)는 시스템 전역·영구 상태이므로 앱이 죽어도 caps lock 은 계속 left control 로 동작한다 — 문자열 "Key remap cleared. Reloading key remapping"(SuperKey 원문)이 이 정리 절차가 정상적으로는 존재함을 뒷받침한다. 사용자가 SuperKey 를 다시 실행하면, 엔진은 시작 시점에 기존 IOHID 매핑 잔존 여부를 감지하고 자신의 현재 설정과 재조정한다 — 그렇지 않으면 사용자가 설정을 끈 뒤에도 caps lock 이 영구히 left control 로 남는 사고가 난다(§3-a2, §5).
+
+7. **외장 키보드를 연결/해제한 사용자**
+   USB 키보드를 연결하면 macOS 는 그 장치에도 별도의 HID 서비스를 노출한다. 경로 B(IOHID 매핑)는 장치 단위로 적용되는 것으로 보이므로 `(미확정 — 이유는 해석)`, 새로 연결된 키보드에는 기존에 설치해둔 매핑이 적용되어 있지 않을 수 있다. 엔진은 `IOHIDManagerRegisterDeviceMatchingCallback` 으로 새 장치 연결을 감지하고 경로 B 리매핑을 다시 적용한다 — 문자열 "Detected keyboard: "(SuperKey 원문)이 이 감지 이벤트가 로그로 남는다는 근거다(§3-a, §5).
 
 ---
 
 ## 3. 동작 명세
 
-### 3-a. 이벤트 탭 생명주기 상태표
+### 3-a. 이벤트 탭 생명주기 상태표 (경로 A)
 
 | 상태 | 진입 조건 | 엔진 동작 | 다음 상태로의 전이 | 비고 |
 | :--- | :--- | :--- | :--- | :--- |
-| `NotInstalled` | 앱 시작 직후, 또는 권한 상실 확정 후 | 탭 없음. 모든 키 이벤트는 macOS 기본 동작 그대로 | Accessibility+Input Monitoring 권한 확인 성공 → `Installing` | F-11 권한 상태와 1:1 대응 |
-| `Installing` | 권한 확인 통과, `CGEventTapCreate` 호출 시도 중 | `kCGSessionEventTap` / `kCGHeadInsertEventTap` / `kCGEventTapOptionDefault` 로 생성 시도 | 성공(`NULL` 아닌 탭 반환) → `Active` / 실패 → `NotInstalled` (재시도는 지수 백오프) | `Default` 옵션이어야 이벤트 소비·치환 가능 — `ListenOnly` 는 관찰만 가능해 이 엔진의 목적과 맞지 않으므로 채택하지 않는다 |
-| `Active` | 탭 생성 성공, `CFRunLoopSource` 가 런루프에 등록되어 콜백이 실제로 호출됨 | keyDown/keyUp/flagsChanged/(설정된 마우스 이벤트) 콜백마다 §3-b 중재 규칙 실행 | 콜백이 `kCGEventTapDisabledByTimeout` 또는 `kCGEventTapDisabledByUserInput` 을 이벤트 타입으로 받음 → `Disabled` / 권한이 런타임에 취소됨(§5) → `NotInstalled` | 정상 상태. 대부분의 시간을 여기서 보낸다 |
-| `Disabled` | 콜백 자신이 타임아웃 또는 사용자 개입으로 탭이 꺼졌음을 통지받음 | 즉시 `CGEventTapEnable(tap, true)` 호출로 재활성화 시도 | 재활성화 성공 → `Active` (같은 프레임에서 즉시 복귀 시도, 실패 시 짧은 지수 백오프로 재시도) | v1.58 "key remapping was not working upon wake or login" 이 이 상태에서 재활성화 로직이 없었을 때 발생하는 실패 모드. `kCGEventTapDisabledByTimeout` 은 콜백이 너무 오래 걸렸다는 신호이기도 하므로, 재발 방지를 위해 §3-a 하단 "콜백 금지 사항"을 반드시 지킨다 |
-| `SuspendedBySleepOrLock` | `NSWorkspaceWillSleepNotification` / 화면 잠금(`com.apple.screenIsLocked` distributed notification) 수신 | 탭 자체는 유지하되, 깨어난 직후 한 차례 `CGEventTapEnable` 로 살아있는지 강제 확인(taps 는 절전 중 죽는 경우가 실측으로 확인되어 왔음 — v1.58 원인 추정 범주) | `NSWorkspaceDidWakeNotification` / 화면 잠금 해제(`com.apple.screenIsUnlocked`) 수신 → 탭 상태 재확인 후 `Active` 또는 `Installing` (탭이 완전히 무효화되어 있으면 재생성) | 로그인 시에도 동일 절차 — `NSWorkspaceSessionDidBecomeActiveNotification` 수신 시 탭 재확인 |
-| `Terminated` | 앱 종료, 또는 사용자가 시스템 설정에서 Accessibility 권한을 명시적으로 회수 | `CFRunLoopSourceInvalidate` + 탭 참조 해제 | 앱 재시작 또는 권한 재승인 시 `NotInstalled` 부터 재시작 | — |
+| `NotInstalled` | 앱 시작 직후, 또는 권한 상실 확정 후 | 탭 없음. 모든 키 이벤트는 macOS 기본 동작 그대로 | Accessibility 권한 확인 성공(`AXIsProcessTrusted`) → `Installing` — ⭐ 실측 정정: **Input Monitoring 은 앱이 명시적으로 확인하지 않는다**(`IOHIDCheckAccess`/`IOHIDRequestAccess` 링크 없음). 대신 뒤이은 `IOHIDManagerOpen` 실패를 재시도로 흡수한다(§6) | F-11 권한 상태와 1:1 대응. 상세는 F-11 소관 |
+| `Installing` | 권한 확인 통과, `CGEventTapCreate` 호출 시도 중 | `kCGSessionEventTap` / `kCGHeadInsertEventTap` / `kCGEventTapOptionDefault` 로 생성 시도 | 성공(`NULL` 아닌 탭 반환) → `Active` / **권한 미승인으로 인한 실패** → `NotInstalled`(F-11 이 권한을 다시 부여할 때까지 대기, 재시도는 지수 백오프) / **권한이 확인된 상태에서도 생성 자체가 실패**(희귀 케이스) → `Terminated`(치명적 — 아래 "탭 생성 실패는 치명적이다" 참조) | `Default` 옵션이어야 이벤트 소비·치환 가능 — `ListenOnly` 는 관찰만 가능해 이 엔진의 목적과 맞지 않으므로 채택하지 않는다 |
+| `Active` | 탭 생성 성공, `CFRunLoopSource` 가 런루프에 등록되어 콜백이 실제로 호출됨 | keyDown/keyUp/flagsChanged/(설정된 마우스 이벤트) 콜백마다 §3-b 중재 규칙 실행. ⭐ **동시에 별도의 주기적 워치독이 탭 생존을 폴링한다**(실측: 번들 문자열 "Checking key loop.") — `kCGEventTapDisabledByTimeout` 콜백 통지만으로는 탭이 죽었는지 확정하기에 부족하다는 뜻이다. 폴링 주기는 `(미확정)`(§9) | 콜백이 `kCGEventTapDisabledByTimeout` 또는 `kCGEventTapDisabledByUserInput` 을 이벤트 타입으로 받음, **또는** 워치독이 부재("Key loop appears to not be running,")를 판정 → `Disabled` / 권한이 런타임에 취소됨(§5) → `NotInstalled` | 정상 상태. 대부분의 시간을 여기서 보낸다. 실측 문자열 "Key loop starting." → "Key loop started running" 이 이 상태 진입을 로그로 남기는 것으로 보인다 |
+| `Disabled` | 콜백 자신이 타임아웃 또는 사용자 개입으로 탭이 꺼졌음을 통지받거나, 워치독이 부재를 판정("Key loop no longer exists.") | 즉시 `CGEventTapEnable(tap, true)` 호출로 재활성화 시도("Resume key loop.") | 재활성화 성공 → `Active` (같은 프레임에서 즉시 복귀 시도, 실패 시 짧은 지수 백오프로 재시도) | v1.58 "key remapping was not working upon wake or login" 이 이 상태에서 재활성화 로직이 없었을 때 발생하는 실패 모드. `kCGEventTapDisabledByTimeout` 은 콜백이 너무 오래 걸렸다는 신호이기도 하므로, 재발 방지를 위해 §3-a 하단 "콜백 금지 사항"을 반드시 지킨다 |
+| `SuspendedBySleepOrLock` | `NSWorkspaceWillSleepNotification` / 화면 잠금(`com.apple.screenIsLocked` distributed notification) 수신(실측 문자열: "Received sleep notification", "Stopping listening") | 탭 자체는 유지하되, 깨어난 직후 한 차례 `CGEventTapEnable` 로 살아있는지 강제 확인(taps 는 절전 중 죽는 경우가 실측으로 확인되어 왔음 — v1.58 원인 추정 범주) | `NSWorkspaceDidWakeNotification`(실측 문자열: "Received wake notification", "Restarting keyboard listener on wake") / 화면 잠금 해제 → ⭐ **즉시 재확인하지 않는다.** 실측(설정 키)으로 확정: 재확인·재시작은 지연(delay) 뒤에 실행되며, 지연 파라미터가 트리거마다 별도로 존재한다(`restartOnWakeDelay`·`wakeKeyboardDelay`·`keyboardConnectionDelay`·`touchListenerDelay`) → 지연 경과 후 탭 상태 재확인 → `Active` 또는 `Installing`(탭이 완전히 무효화되어 있으면 재생성) | 로그인 시에도 동일 절차 — `NSWorkspaceSessionDidBecomeActiveNotification` 수신 시 탭 재확인. ⭐ **디바운스가 있다**: 문자열 "Time since last exit: …s ago, no need to restart."(SuperKey 원문)이 확정하듯, 직전 재시작/종료로부터 경과 시간이 임계값 미만이면 재시작 자체를 건너뛴다(임계값 `(미확정)`, §9) — 절전·잠금해제·세션전환이 짧은 간격으로 연달아 발생해도 탭을 반복 재생성하지 않기 위한 디바운스로 보인다 |
+| `Terminated` | 앱 종료, 사용자가 시스템 설정에서 Accessibility 권한을 명시적으로 회수, **또는 `Installing` 상태에서 권한이 확인된 채로 탭 생성이 실패**(치명적) | `CFRunLoopSourceInvalidate` + 탭 참조 해제. 치명적 실패의 경우 프로세스 자체를 종료한다(실측 문자열: "com-knollsoft-Superkey Failed to create event tap. Exiting program") | 앱 재시작 또는 권한 재승인 시 `NotInstalled` 부터 재시작 | — |
+
+⭐ **탭 생성 실패는 치명적이다 — 재시도하지 않고 종료한다(실측: 번들 문자열).** 이전 버전은 `Installing` 실패 전부를 "지수 백오프로 재시도"로 다루었으나, 이는 **권한이 아직 없어 실패하는 흔한 경우**에만 맞는 서술이었다. SuperKey 원본은 문자열 "Failed to create event tap. Exiting program" 이 보여주듯, 권한이 확인된 상태에서 `CGEventTapCreate` 자체가 실패하는 (희귀한) 경우에는 재시도 루프를 돌리지 않고 **프로세스를 그대로 종료**한다. 이 구분을 명세에 반영한다: 권한 부재로 인한 실패는 F-11 온보딩 루프에 맡기고(`NotInstalled` 유지), 권한이 확인된 상태에서의 생성 실패는 치명적 실패로 별도 처리한다(§5·§8).
+
+⭐ **재시작(relaunch)은 탭 재활성화가 아니라 프로세스 재실행이다(실측: AX).** 메뉴바 `Advanced` 에 `Relaunch` · `Relaunch After Wake` · `Delay Relaunch After Wake` · `Relaunch on Keyboard Connected` 항목이 실재한다. 이 라벨들의 동사가 "재활성화(re-enable)"가 아니라 "재실행(relaunch)"이라는 사실은, 원본이 궁극적인 복구 수단으로 `CGEventTapEnable` 재활성화보다 훨씬 무거운 **앱 프로세스 자체의 재시작**을 준비해두고 있다는 뜻이다 — 이는 `Disabled`→`Active` 전이(탭만 재활성화)가 항상 충분하지는 않다는 실측 방증이며, 기존 명세가 상정했던 것보다 훨씬 무거운 복구 수단이다. 원본이 왜 여기까지 필요로 했는지는 확정할 수 없다 `(미확정)`. 가능한 이유: (a) 경로 B(IOHID 매핑)의 시스템 상태가 탭과 독립적으로 어긋날 수 있고 프로세스 재시작이 그 상태를 재조정하는 가장 확실한 방법이거나, (b) 절전 복귀 후 `IOHIDManagerOpen`/`CGEventTapCreate` 가 요구하는 커널 리소스 자체가 일시적으로 불안정해 단순 재활성화보다 완전한 재초기화가 더 신뢰성 있게 동작하기 때문일 수 있다. 이 명세는 §3-a `Disabled`/`SuspendedBySleepOrLock` 전이(탭 재활성화)를 1차 복구 수단으로 유지하되, 반복 실패 시 프로세스 재실행을 최종 수단으로 두는 설계를 §5·§8 에 반영한다.
+
+⭐ **외장 키보드 핫플러그 대응(실측: 번들 심볼·문자열, 신규 확정).** `IOHIDManagerRegisterDeviceMatchingCallback` / `IOHIDManagerRegisterDeviceRemovalCallback` / `IOHIDManagerSetDeviceMatching` / `IOHIDManagerScheduleWithRunLoop` 심볼, 문자열 "Detected keyboard: "(SuperKey 원문), 메뉴바 `Advanced ▸ Relaunch on Keyboard Connected`(실측: AX)가 이를 뒷받침한다. 키보드 장치가 연결·해제될 때 엔진은 리매핑을 다시 적용해야 한다 — 경로 B(IOHID 매핑)가 장치 단위로 적용되기 때문으로 보인다 `(미확정 — 이유는 해석)`. 기존 명세에 없던 실패 모드이며 §5 에 신규 항목으로 반영한다.
 
 **콜백 안에서 해서는 안 되는 일**(모든 상태에 공통 적용): 블로킹 I/O(파일, 네트워크), AX 트리 순회, OCR, 뮤텍스 경합 가능성이 있는 잠금 획득, 로그 파일 동기 쓰기. macOS 는 이벤트 탭 콜백이 일정 시간(경험적으로 수백 ms 수준, Apple 은 정확한 값을 공개하지 않음) 안에 리턴하지 않으면 해당 탭을 `kCGEventTapDisabledByTimeout` 으로 강제 비활성화한다. 이는 §3-a `Disabled` 전이의 가장 흔한 원인이며, v1.58 부류 버그의 재발 방지는 "재활성화 로직"과 "애초에 타임아웃을 유발하지 않는 콜백 설계" 양쪽 모두를 요구한다. 무거운 작업이 필요한 판정(예: Seek 세션 시작)은 콜백 안에서는 **가벼운 상태 플래그 읽기/쓰기만** 수행하고, 실제 무거운 작업은 채널을 통해 다른 스레드로 위임한다.
 
+### 3-a2. 경로 B/C 생명주기 — 설치·정리(cleanup) ⭐
+
+경로 B(IOHID 커널 매핑)와 경로 C(HID 잠금 상태)는 경로 A 와 근본적으로 다른 생명주기를 가진다. **경로 A 는 앱 프로세스에 종속된다**(탭은 프로세스가 갖는 mach port 자원이라 프로세스가 죽으면 자동으로 사라진다). **경로 B 는 그렇지 않다** — `hidutil`/`IOHIDServiceClientSetProperty` 로 설정한 `UserKeyMapping` 은 커널 HID 드라이버 층의 전역·영구 상태이며, **앱이 비정상 종료되어도 남는다.**
+
+| 항목 | 경로 A | 경로 B | 경로 C |
+| :--- | :--- | :--- | :--- |
+| 적용 범위 | 프로세스 내 이벤트 스트림 | 시스템 전역(커널 HID 층) | 시스템 전역(HID 잠금 상태 하나) |
+| 앱 종료 시 자동 해제 | 예 | **아니오** — 명시적 정리 필요 | 해당 없음(마지막 값 유지) — 사용자가 실제로 caps lock 을 켜둔 것과 구분되지 않으므로 "정리 대상"이 아니라 "정상 상태" |
+| 설치 시점 | 권한 확인 후 앱 시작 시(§3-a) | 해당 규칙이 활성화될 때 | 해당 규칙 평가 시점(이벤트 발생 시) |
+| 정리(cleanup) 책임 | 프로세스 종료가 자동 처리 | ⭐ **엔진이 명시적으로 져야 한다** — 정상 종료 시 매핑을 비우거나, 다음 실행 시작 시 잔존 매핑을 감지해 자신의 현재 설정과 재조정한다. 문자열 "Key remap cleared. Reloading key remapping"(SuperKey 원문)이 이 정리 절차의 존재를 확정한다(실측: 번들 문자열) | 없음 |
+
+⭐ **새 실패 모드 — 앱이 비정상 종료되어 경로 B 의 HID 매핑이 남는 경우**(§5 신규 항목). Activity Monitor 강제 종료, 크래시, `kill -9` 등으로 정상 종료 경로("Key remap cleared…")를 거치지 못하면 시스템 전역 키 매핑이 다음 실행까지, 혹은 재부팅까지 잔존한다. 관련 설정 키: `keepExistingIohid` · `currentMapping` · `axMapping` · `nonModMap` · `lastReadFromCommand` · `lastReadFromCommandDate` — 이름으로 미루어 엔진이 "마지막으로 커맨드(hidutil)에서 읽은 매핑"을 캐시해두고 시작 시 현재 상태와 비교하는 것으로 보인다 `(미확정 — 이름으로부터의 해석)`.
+
 ### 3-b. 중재(arbitration) 우선순위 표 ⭐
+
+⭐ **이 표는 경로 A(이벤트 합성) 내부의 중재 규칙이다.** 경로 B/C 로 구현되는 규칙(§3-d)은 이 표를 거치지 않고 커널/HID 층에서 직접 적용된다 — 대신 경로 B/C 자체가 §3-d 의 선택 기준을 통해 경로 A 와 충돌하지 않도록 미리 배정된다. 즉 "정본 상태를 하나로 공유한다"는 원칙은 경로 A 안에서의 판정에 대한 것이고, 경로 선택 자체는 그보다 상위의 결정이다.
 
 매 keyDown/keyUp/flagsChanged 이벤트는 도착 즉시 아래 계층을 **위에서부터 순서대로** 평가하며, 처음으로 조건이 성립하는 계층에서 멈춘다. 낮은 계층의 규칙은 평가조차 되지 않는다(short-circuit). 단, 계층 판정에 필요한 "이 키가 지금 눌려 있는가" 류의 원시 상태는 계층과 무관하게 **하나의 공유 상태 테이블**(물리 키코드 → 눌림 여부/눌린 시각/quick-press 상태 머신 상태)에서 읽는다 — 이 공유가 v1.20 류의 버그를 구조적으로 막는 지점이다(하단 설명 참조).
 
@@ -101,10 +140,52 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 **핵심 난점 — 보류(버퍼링) vs 낙관적 통과, 그리고 결정.** 이 엔진은 **보류(버퍼링) 방식을 채택**하며, 순수 낙관적 통과-후-보정 방식은 기각한다.
 
 - *기각 사유*: `CGEventTap` 이 한 번 방출한 keyDown 은 대상 앱에 실제로 전달되며, macOS 에는 "방금 보낸 keyDown 을 취소"하는 API 가 없다. 낙관적으로 caps lock 의 원본 keyDown 을 그대로 통과시켰다가, 나중에 "사실은 quick press 였다"고 판명되면 이미 도착한 keyDown(예: 실제 caps lock 토글)을 되돌릴 방법이 없다 — 잘못된 낙관적 방출은 **되돌릴 수 없는 부작용**을 만든다. 정확성을 latency 보다 우선한다.
-- *체감 지연을 최소화하는 설계*: 다만 이 보류는 "매번 `Quick press duration`(추정 1000ms) 전체를 기다린다"는 뜻이 아니다. 상태표에서 보듯 판정은 **모호성이 해소되는 즉시** 끝난다 — (1) 다른 키가 눌리는 순간(hyper 조합의 일반적 사용 패턴, 보통 수십 ms 이내에 해소), (2) keyUp 이 오는 순간(quick press 그 자체 — 사용자가 키를 뗀 시점과 판정 시점이 사실상 동일해 체감 지연이 없다), (3) 타이머 만료(소스 키를 홀로 오래 누르고 있는 경우로, 이 경우는 정의상 "아직 아무 것도 할 필요가 없는" 대기 상태이므로 지연으로 느껴지지 않는다). 실제로 전체 `Quick press duration` 만큼 지연이 체감되는 경우는 "소스 키만 누르고 다른 키도 안 누르고 떼지도 않은 채 가만히 있는" 드문 상황뿐이며, 이 상황에서는 지연을 느낄 만한 출력 자체가 없다.
+- *체감 지연을 최소화하는 설계*: 다만 이 보류는 "매번 `Quick press duration`(실측: 최소 250ms·최대 2000ms·현재값 1000ms, §4)을 전체 다 기다린다"는 뜻이 아니다. 상태표에서 보듯 판정은 **모호성이 해소되는 즉시** 끝난다 — (1) 다른 키가 눌리는 순간(hyper 조합의 일반적 사용 패턴, 보통 수십 ms 이내에 해소), (2) keyUp 이 오는 순간(quick press 그 자체 — 사용자가 키를 뗀 시점과 판정 시점이 사실상 동일해 체감 지연이 없다), (3) 타이머 만료(소스 키를 홀로 오래 누르고 있는 경우로, 이 경우는 정의상 "아직 아무 것도 할 필요가 없는" 대기 상태이므로 지연으로 느껴지지 않는다). 실제로 전체 `Quick press duration` 만큼 지연이 체감되는 경우는 "소스 키만 누르고 다른 키도 안 누르고 떼지도 않은 채 가만히 있는" 드문 상황뿐이며, 이 상황에서는 지연을 느낄 만한 출력 자체가 없다.
 - 이 결정은 Karabiner-Elements/QMK 류의 tap-hold 알고리즘(“permissive hold”)과 원리가 같다 — 이미 검증된 패턴을 채택한다.
 
-**Double tap 은 별도 차원.** `Double tap shift = caps lock` 은 단일 눌림의 지속 시간이 아니라 **연속된 두 번의 탭 사이 간격**을 판정해야 하므로, 위 표의 `WaitingSecondTap` 이라는 별도 상태와 별도 임계값(§4, 내부 상수로 추정)을 필요로 한다. `Quick press duration` 슬라이더와는 다른 값이며, 스크린샷에 이 값을 조절하는 UI 컨트롤은 확인되지 않았다(§4, §9).
+**Double tap 은 별도 차원.** `Double tap shift = caps lock` 은 단일 눌림의 지속 시간이 아니라 **연속된 두 번의 탭 사이 간격**을 판정해야 하므로, 위 표의 `WaitingSecondTap` 이라는 별도 상태와 별도 임계값(§4, 내부 상수로 추정)을 필요로 한다. `Quick press duration` 슬라이더와는 다른 값이며, AX 트리 실측으로도(4개 탭 전체 확인) 이 값을 조절하는 UI 컨트롤은 확인되지 않았다(§4, §9).
+
+⭐ **quick press 판정 결과는 키 합성만이 아니다 — Seek 세션 열기로도 분기한다(실측: AX).** `Quick press caps lock to execute:` 팝업의 첫 항목이 `Seek` 다. 즉 이 상태 머신이 `QuickPressEmitted`/`DoubleTapConfirmed` 로 방출하는 "액션"은 키 이벤트 합성에 한정되지 않고, F-01 의 Seek 세션을 여는 신호일 수도 있다. 이는 F-01(`seek-activation-and-session.md`)이 정의하는 두 활성화 경로(전역 단축키 토글, 키 리매핑 hold 트리거)에 더해 **세 번째 활성화 경로**다 — F-01 은 이 상태 머신이 방출하는 "Seek 열기" 액션도 자신의 상태 머신 진입점으로 받아들여야 한다.
+
+⭐ **hyper 소스 키에도 quick press 가 있다 — 존재가 확정된다(실측: 번들 문자열).** 키 `quickHyperKeycode` · `executeQuickHyperKey` · `hyperDownTime` 이 이를 뒷받침한다. 이 상태 머신은 caps lock quick press 전용이 아니라 hyper/meh/bleh 소스 키에도 적용되는 일반 메커니즘으로 보인다. 기존 §9 의 "hyper quick press 존재 여부 미확정"은 이로써 **존재 확정**으로 바뀐다. 다만 대응 UI 를 Seek/Hyperkey/Presets/General 4개 탭 어디에서도 찾지 못했다 — **노출 경로와 정확한 의미는 `(미확정)`**(§9).
+
+키 `longPressCapsLockTurnsItOff` 의 존재는 별도 규칙을 시사한다 `(미확정 — 이름으로부터의 해석)`: caps lock 을 길게 누르면 (quick press 로 켜진) caps lock 잠금을 다시 해제하는 규칙일 가능성이 있다. 대응 UI 는 확인되지 않았다(§9). 그 밖에 실행 파일에서 확인되나 정확한 의미가 `(미확정)`인 타이밍 키: `debounceTime`(물리 키 디바운스로 추정) · `longPress`(quick press 와 별도의 홀드 판정 상수로 추정).
+
+### 3-d. 경로 선택 기준 — 어떤 규칙이 어느 경로로 구현되는가 ⭐
+
+세 경로는 상호 배타적 대안이 아니라 **역할이 다른 세 도구**다. 실측 심볼·문자열·설정 키만으로 "이 프리셋은 경로 X" 라고 1:1 확정할 수 있는 항목은 caps lock 잠금 상태(경로 C) 뿐이다. 나머지는 아래 원칙으로 판정하되, 개별 프리셋의 최종 배정은 F-08(`power-user-presets.md`) 소관이며 이 절은 **판정 기준**만 제공한다(개별 프리셋 전수 배정은 §9 미확정).
+
+| 경로 | 적합한 경우 | 부적합한 경우 | 근거 |
+| :--- | :--- | :--- | :--- |
+| **A — 이벤트 합성** | 조건부 리매핑(다른 키와의 조합, quick press, hold 판정), 임의의 목표 키/문자로의 치환, Seek 소스 키, hyper/meh/bleh modifier 합성 — 즉 **"지금 이 순간의 판단"이 필요한 모든 것** | caps lock 의 실제 잠금 상태(LED·대문자 고정)를 바꿔야 하는 경우 — 이벤트 합성으로 caps lock keyDown/keyUp 을 내보내는 것과 실제 HID 잠금 상태를 바꾸는 것은 다르다(§3-a2) | `CGEventTap` 콜백은 매 이벤트마다 임의 판단을 실행할 수 있는 유일한 지점이다 |
+| **B — IOHID 커널 매핑** | 무조건적인 1:1 키 치환으로, 앱이 죽어도 유지되길 원하거나 Secure Input 구간에서도 적용되어야 하는 경우로 보인다 `(미확정 — 실제 채택 이유는 해석)` | 조건부 판정이 필요한 모든 경우 — `hidutil`/`IOHIDServiceClientSetProperty` 는 "이 키코드는 항상 저 키코드" 라는 정적 테이블만 표현할 수 있고, quick press·hold·조합 같은 시간·문맥 조건은 표현할 수 없다 | `HIDKeyboardModifierMappingSrc`/`Dst` 자체가 정적 소스→대상 쌍의 배열이다(실측: 번들 문자열) |
+| **C — HID 잠금 상태 직접 조작** | caps lock 의 "진짜 켜짐/꺼짐"이 의미를 갖는 규칙(`Double tap shift = caps lock`, `Left shift + right shift = caps lock`, `Shift + caps lock = caps lock` 등 — 결과물이 "caps lock 을 토글해야 한다"는 규칙 전부) | caps lock 을 다른 키로 치환하는 경우(`Remap caps lock to: left control` 류)는 대상이 caps lock 자체가 아니므로 해당 없음 | `IOHIDGetModifierLockState`/`SetModifierLockState` 는 잠금 상태 하나를 읽고 쓰는 API 이지 이벤트 치환 API 가 아니다 |
+
+⭐ **`Advanced ▸ Synthesize Caps Lock Remap`(실측: AX)의 의미.** 메뉴바에 이 항목이 실재한다. 라벨이 "합성(synthesize)"이라는 단어를 쓰는 것으로 미루어, **기본은 경로 B/C(커널 매핑·HID 잠금 조작)이고 이 스위치를 켜면 경로 A(이벤트 합성)로 강제 전환**하는 것으로 해석된다 `(미확정 — 라벨로부터의 해석, 실제 동작을 관찰하지는 못했다)`. 이 해석이 맞다면 원본은 caps lock 리매핑에 대해 **두 구현을 모두 유지하며 사용자가 고를 수 있게 했다**는 뜻이다 — 아마도 경로 B/C 가 일부 환경(특정 커널 확장·보안 소프트웨어·가상 키보드 드라이버와의 충돌 등)에서 문제를 일으킬 때의 우회 수단으로 보인다. **클론 설계에 반영할 가치**: caps lock 관련 리매핑을 처음부터 경로 A 하나로만 구현하기보다, 경로 B/C 를 기본으로 하되 경로 A 폴백 스위치를 남겨두는 이중 구현 여지를 열어두는 편이 원본과의 기능 동등성에 유리하다. 이 문서는 그 스위치의 **존재와 방향성**만 확정하고, 실제 구현 여부·우선순위는 F-08/제품 결정 소관으로 넘긴다.
+
+**경로 B 의 실행 방식 — FFI 직접 호출과 서브프로세스 실행이 공존한다(실측: 번들 심볼·`Tools_Tools.bundle` 문자열).** `IOHIDServiceClientSetProperty` 를 통한 직접 FFI 호출 경로와, `hidutil` 바이너리를 셸 서브프로세스로 실행하는 경로가 둘 다 심볼/문자열로 확인된다. 이 둘이 같은 결과에 도달하는 두 구현(하나가 폴백)인지, 서로 다른 설정 항목에 쓰이는 별개 경로인지는 `(미확정)`. 이 구분이 §7 의 구현 접근 판정(FFI 대 프로세스 실행)에 직접 영향을 준다.
+
+### 3-e. 레이아웃 독립 판정 — 확정 API 조합 ⭐
+
+기존 명세가 `(추정)`으로 남겼던 API 조합이 실측으로 확정된다(실측: 번들 심볼): `TISCopyCurrentKeyboardInputSource` · `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` · `TISGetInputSourceProperty` · `UCKeyTranslate` · `LMGetKbdType`. 관련 설정 키: `selectedKeyboardInputSource` · `checksStandardANSI` · `DynamicKeyCodes` · `ignoredKeycodes` · `handledKeys` · `cmdOptionKeycodes`.
+
+⭐ **`TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 의 존재가 판정 절차를 바꾼다.** 이는 **비-ASCII 입력기(한글·일본어·중국어 등 CJK IME)가 현재 활성 입력 소스일 때 ASCII 가능한 레이아웃으로 폴백해 물리 키코드를 해석**하는 표준 macOS 기법이다 — `TISCopyCurrentKeyboardInputSource` 가 반환하는 소스를 그대로 `UCKeyTranslate` 에 넘기면, IME 가 활성인 동안 keycode→문자 변환 자체가 실패하거나 무의미한 결과를 낼 수 있다. 판정 절차를 다음으로 확정한다.
+
+1. `TISCopyCurrentKeyboardInputSource()` 로 현재 입력 소스를 얻는다.
+2. 그 소스가 ASCII 가능한지 판정한다(정확한 프로퍼티 키는 `(미확정)`).
+3. ASCII 가능하지 않으면(CJK IME 등), `TISCopyCurrentASCIICapableKeyboardLayoutInputSource()` 가 반환하는 대체 레이아웃으로 **교체**해 이후 `UCKeyTranslate` 조회에 사용한다.
+4. `LMGetKbdType()` 으로 물리 키보드 하드웨어 타입을 얻어 `UCKeyTranslate` 의 `iKeyboardType` 인자로 넘긴다(레이아웃 데이터가 키보드 타입에 따라 달라지는 배열을 포함하기 때문).
+5. `TISGetInputSourceProperty(kTISPropertyUnicodeKeyLayoutData)` 로 얻은 레이아웃 데이터와 물리 keycode 를 `UCKeyTranslate` 에 넣어 목표 문자 또는 문자→keycode 역방향 테이블을 계산한다.
+
+이 절차의 상세(정방향/역방향 테이블 구축, 캐시 무효화 시점, `CGEventKeyboardSetUnicodeString` 폴백)는 `localization-and-input-sources.md`(F-14) 소관이다 — F-14 는 아직 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 를 반영하지 않았으므로, 이 문서가 실측으로 확정한 API 조합을 F-14 갱신 시 반영해야 한다.
+
+### 3-f. 앱별 비활성화 게이트 ⭐
+
+메뉴바에 `Ignore <최전면앱이름>` 항목이 실재한다(실측: AX — 관찰 당시 "Ignore Ghostty"). 관련 키: `disabledApps` · `enabledApps` · `disabledForApp` · `frontAppId` · `frontAppName` · `frontmostAppToggle` · `ApplicationToggle`. 심볼 `NSWorkspaceDidActivateApplicationNotification`.
+
+**엔진은 최전면 앱을 추적하고, 매 keyDown/keyUp/flagsChanged 이벤트 판정 이전에 이 게이트를 확인해야 한다.** 최전면 앱이 비활성화 목록에 있으면 §3-b 의 5개 계층을 전혀 평가하지 않고 원본 이벤트를 통과시킨다 — 개념적으로는 §3-b 계층 1 보다도 먼저 평가되는 계층 0(문지기)에 해당한다. `NSWorkspaceDidActivateApplicationNotification` 수신 시 `frontAppId`/`frontAppName` 상태를 갱신한다.
+
+상세 정의(메뉴 항목의 정확한 라벨 생성 규칙, `disabledApps`/`enabledApps` 저장 형식, `typeToSeekEnabledAppIDs`/`typeToSeekDisabledAppIDs` 와의 관계)는 `menu-bar-and-lifecycle.md`(F-10) 소관이며, 이 문서는 엔진이 이 상태를 **참조해야 한다는 사실과 평가 시점**만 정의한다.
 
 ---
 
@@ -114,10 +195,11 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 
 | 설정 항목 | UI 위치 | 컨트롤 | 관측/제안 값 | 근거 |
 | :--- | :--- | :--- | :--- | :--- |
-| `Quick press duration` | Presets 탭, caps lock 그룹 | 슬라이더(눈금 8칸) + 값 라벨 | 스크린샷 관측값 **1000 ms**. 최소/최대/간격은 미확정 → `(추정)` **최소 200ms · 최대 1600ms · 간격 200ms**(8개 눈금: 200/400/600/800/1000/1200/1400/1600, 1000 이 5번째 눈금과 정확히 일치) | 조사 원문에 수치 범위 없음(연구노트 Q6). 8칸 눈금과 관측값 1000ms 을 동시에 만족하는 등간격 배열을 역산해 제안. §9 로 승계 |
-| Double tap 최대 간격 | (UI 노출 없음, 내부 상수로 추정) | — | `(추정)` **300 ms** | 스크린샷에 `Double tap shift = caps lock` 옆에 슬라이더나 값 표시가 없다 — 사용자 조절 UI 없이 내부 고정값일 가능성. 300ms 는 OS 표준 더블클릭 간격(시스템 환경설정 기본값 대역)에서 유추한 추정치. §9 로 승계 |
+| `Quick press duration` | Presets 탭, caps lock 그룹 | 슬라이더 + 값 라벨 | ⭐ **실측(AX 트리): 최소 250 ms · 최대 2000 ms · 현재값(기본) 1000 ms.** 저장 키 `quickPressTimeout`. step 간격은 여전히 `(미확정)`(§9) | 이전 버전은 "눈금 8칸으로부터 최소 200ms·최대 1600ms·간격 200ms" 를 역산해 제안했으나 **틀렸다** — 실측과 어긋난다. **교훈**: 슬라이더의 시각적 눈금 개수만으로 min/max/step 을 역산하는 방법은 신뢰할 수 없다 — 반드시 슬라이더 자체의 최소/최대 값 속성(AX)이나 실제 드래그 관찰로 직접 확정해야 한다 |
+| Double tap 최대 간격 | (UI 노출 없음, 내부 상수로 추정) | — | `(추정)` **300 ms** — 여전히 `(미확정)`, 값 자체는 근거 없는 추정치 | 저장 키 `doubleClickInterval` 로 확인됨(실측: 번들 문자열). **"사용자 조절 UI 없는 내부값"이라는 기존 추정은 승격 확정된다**: 4개 탭 전체를 AX 트리로 재확인해도 `Double tap shift = caps lock` 옆에 슬라이더·값 표시가 없다(실측: AX 트리). 300ms 자체(OS 표준 더블클릭 간격에서 유추)는 여전히 근거 없는 추정치다. §9 로 승계 |
+| hyper quick press(`quickHyperKeycode` / `executeQuickHyperKey` / `hyperDownTime`) | `(미확정)` — 4개 탭 어디에서도 대응 컨트롤을 찾지 못했다 | — | 존재는 확정(실측: 번들 문자열). 노출 경로·정확한 의미는 `(미확정)` | §3-c 참조. `Quick press caps lock to execute:` 와 유사한 메커니즘이 hyper/meh/bleh 소스 키에도 있는 것으로 보인다(§9) |
 
-이 엔진 자체는 위 두 값을 제외하면 사용자에게 노출되는 설정이 없다. 이벤트 탭 인프라, 중재 우선순위, 레이아웃 독립 판정, Secure Input 대응은 모두 내부 동작이며 설정 항목이 아니다.
+이 엔진 자체는 위 값들을 제외하면 사용자에게 노출되는 설정이 없다. 이벤트 탭 인프라, 중재 우선순위, 경로 선택(§3-d), 레이아웃 독립 판정, Secure Input 대응, 앱별 비활성화 게이트는 모두 내부 동작이며 설정 항목이 아니다.
 
 ---
 
@@ -130,45 +212,84 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 | 3 | **절전 복귀**(v1.58 실패 모드) | `NSWorkspaceDidWakeNotification` 수신 시 탭 유효성 강제 재확인. 죽어 있으면 처음부터 재생성 |
 | 4 | **로그인 / 화면 잠금 해제** | `NSWorkspaceSessionDidBecomeActiveNotification`, 화면 잠금 해제 알림 수신 시 동일하게 재확인 |
 | 5 | **사용자 전환(Fast User Switching)** | 세션이 비활성화되는 동안(`NSWorkspaceSessionDidResignActiveNotification`) 탭은 유지하되 이벤트가 오지 않는 것이 정상. 세션이 다시 활성화되면 #4 와 동일 절차로 재확인 |
-| 6 | **Secure Input 활성화**(암호 필드 포커스) | 콜백 진입 시 `IsSecureEventInputEnabled()` 확인. `true` 면 §3-b/§3-c 어떤 규칙도 평가하지 않고 원본 이벤트를 그대로 통과(§6 참조). 이 상태에서 quick-press 상태 머신이 `PendingDown` 등 중간 상태에 있었다면, 다음 정상 이벤트가 왔을 때 상태를 `Idle` 로 강제 리셋하여 stale 상태가 남지 않게 한다 |
+| 6 | **Secure Input 활성화**(암호 필드 포커스) | 콜백 진입 시 `IsSecureEventInputEnabled()` 확인. `true` 면 §3-b/§3-c 어떤 규칙도 평가하지 않고 원본 이벤트를 그대로 통과(§6 참조) — **단, 이는 경로 A 에만 해당한다.** ⭐ 경로 B(커널 HID 매핑)·경로 C(HID 잠금 상태)는 애플리케이션 이벤트 스트림보다 아래 층(커널)에서 동작하므로, Secure Input 이 걸러내는 것은 경로 A 의 결과물뿐이고 **경로 B/C 는 영향을 받지 않을 가능성이 있다** `(미확정 — 실측으로 검증하지 않았다. 단정하지 않는다. §9)`. 이 상태에서 quick-press 상태 머신이 `PendingDown` 등 중간 상태에 있었다면, 다음 정상 이벤트가 왔을 때 상태를 `Idle` 로 강제 리셋하여 stale 상태가 남지 않게 한다 |
 | 7 | **권한 취소가 런타임 중 일어남**(앱 실행 중 시스템 설정에서 Accessibility 를 끔) | 다음 콜백 호출 자체가 오지 않거나 탭이 무효화된다. 주기적 폴링(예: 수 초 간격)으로 `AXIsProcessTrusted()` 를 확인해 취소를 감지하고 `Terminated`/`NotInstalled` 로 전이, F-11 UI 와 연동 |
 | 8 | **키를 누른 채 앱 전환**(⌘Tab 등으로 포커스가 바뀜) | 소스 키 상태 머신은 앱 포커스와 무관하게 물리 키 상태만 추적하므로 영향 없음. 단, hold-confirmed 된 modifier 를 전환된 새 앱에도 계속 적용할지는 규칙에 달림 — 물리적으로 키가 계속 눌려 있다면 modifier 도 계속 유지 |
 | 9 | **키를 누른 채 세션 종료 / 절전 진입(stuck modifier)** | 소스 키의 keyUp 이벤트를 영영 받지 못하는 경우(예: 화면이 잠기며 keyUp 이 소실). 절전/잠금 진입 알림 수신 시 모든 `PendingDown`/`HoldConfirmed` 상태를 `Idle` 로 강제 리셋하고, 필요 시 모든 activee modifier 에 대해 합성 flagsChanged(off)를 방출해 stuck modifier 를 예방 |
-| 10 | **외장 키보드 연결/해제** | `CGEventTap` 은 특정 키보드 장치가 아니라 세션 전체의 HID 이벤트를 받으므로 장치 목록 변경 자체는 엔진에 직접 영향이 없다. 다만 외장 키보드가 non-Apple 배열이라 caps lock 등 특정 키의 물리 keycode 매핑이 다를 가능성은 §9 미해결 질문으로 남긴다 |
+| 10 | **외장 키보드 연결/해제**(실측: 번들 심볼·문자열 — 신규 확정, 이전 명세에 없던 실패 모드) | `CGEventTap`(경로 A)은 특정 키보드 장치가 아니라 세션 전체의 HID 이벤트를 받으므로 장치 목록 변경 자체는 경로 A 에 직접 영향이 없다. ⭐ 그러나 **경로 B(IOHID 매핑)는 장치 단위로 적용되는 것으로 보이므로**(미확정 — 이유는 해석) 새로 연결된 키보드에는 기존 매핑이 적용되어 있지 않을 수 있다. 엔진은 `IOHIDManagerRegisterDeviceMatchingCallback`/`RemovalCallback` 으로 연결·해제를 감지해(문자열 "Detected keyboard: ") 경로 B 리매핑을 재적용한다. 메뉴바 `Advanced ▸ Relaunch on Keyboard Connected` 가 이 대응의 수동 트리거로 보인다. 외장(비-Apple) 키보드에서 caps lock 등 주요 소스 키의 물리 keycode 가 Apple 내장 키보드와 다를 가능성은 여전히 §9 미해결 질문으로 남긴다 |
 | 11 | **입력 소스(키보드 레이아웃) 변경** | `kTISNotifySelectedKeyboardInputSourceChanged` 수신 시, §6 의 레이아웃→문자 역산 캐시를 무효화하고 다음 요청 시 재계산 |
 | 12 | **다른 리매퍼(Karabiner-Elements 등)와 공존** | Karabiner-Elements 는 자체적으로 가상 HID 드라이버(Karabiner VirtualHIDDevice)를 통해 이벤트를 재주입하는 방식을 쓰므로, 이 엔진의 탭에는 Karabiner 가 이미 가공한 이벤트가 도착할 수 있다. 엔진은 이를 구분하지 않고 "도착한 그대로의 물리 이벤트"로 처리한다 — 두 리매퍼가 같은 키를 다르게 재정의하면 사용자에게 예측 불가능한 결과가 나올 수 있으나, 이는 macOS 이벤트 탭 체인의 구조적 한계이며 이 엔진이 해결할 수 있는 범위 밖이다. 최소한 자기 자신이 만든 합성 이벤트를 자기 탭이 다시 가로채 무한 루프에 빠지지 않도록, 합성 이벤트에는 식별 가능한 마커(예: `CGEventSetIntegerValueField` 로 커스텀 필드에 엔진 고유 태그 삽입)를 남기고 콜백 최초 진입 시 이 마커를 확인해 자기 자신의 합성 이벤트는 즉시 통과시킨다 |
 | 13 | **키 반복(auto-repeat)** | 물리 키를 길게 누르고 있으면 OS 가 반복 keyDown 을 보낸다(`kCGKeyboardEventAutorepeat` 필드로 구분 가능). quick-press 상태 머신은 이미 `HoldConfirmed` 상태이므로 반복 keyDown 은 상태 전이를 유발하지 않고 무시(또는 필요 시 반복 keyDown 자체를 소비)한다 — 반복 keyDown 을 매번 새 `PendingDown` 으로 오인하면 안 된다 |
 | 14 | **동일 키 중복 배정** | §3-b 하단 "동일 소스 키 중복 배정 방지" 결정에 따라 런타임은 항상 §3-b 우선순위 표로 결정론적으로 처리하고, UI 는 저장 시점에 경고를 표시(차단하지 않음) |
+| 15 | ⭐ **앱이 비정상 종료되어 경로 B 의 IOHID 매핑이 남는 경우**(신규 확정, §3-a2) | 정상 종료 경로("Key remap cleared. Reloading key remapping")를 거치지 못하면 시스템 전역 키 매핑이 잔존한다. 엔진은 시작 시점에 기존 IOHID 매핑을 감지해 현재 설정과 재조정한다(비교에 쓰이는 것으로 보이는 캐시 키: `currentMapping`/`lastReadFromCommand`/`lastReadFromCommandDate`) |
+| 16 | ⭐ **탭 생성이 권한 확인 통과 후에도 실패하는 경우**(신규 확정, §3-a) | 원본은 재시도하지 않고 프로세스를 즉시 종료한다(문자열 "Failed to create event tap. Exiting program"). 이 명세는 권한 부재로 인한 실패(F-11 온보딩으로 위임)와 이 치명적 실패를 구분해 처리한다 |
+| 17 | ⭐ **탭 재활성화만으로 복구되지 않는 경우**(신규 확정, §3-a) | 메뉴바 `Advanced ▸ Relaunch` 류 항목이 실재한다는 사실은, 원본이 `CGEventTapEnable` 재활성화보다 무거운 프로세스 재실행을 최종 복구 수단으로 두고 있다는 방증이다. 이 명세는 반복된 재활성화 실패 시 최종 수단으로 프로세스 재시작을 고려할 것을 §8 수용 기준에 반영한다(트리거 조건은 `(미확정)`) |
 
 ---
 
 ## 6. 필요한 플랫폼 API
 
+### 경로 A — CGEventTap
+
 | API / 알림 | 용도 |
 | :--- | :--- |
 | `CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, mask, callback, userInfo)` | 탭 생성. `Default` 옵션 필수(소비·치환을 위해) |
 | `CGEventTapEnable(tap, enable)` | 탭 재활성화(§3-a `Disabled` 상태 복구) |
+| `CGEventTapIsEnabled` | 탭 생존 여부 조회 — 워치독 폴링에 쓰이는 것으로 보임(§3-a) |
 | `CFMachPortCreateRunLoopSource` / `CFRunLoopAddSource` / `CFRunLoopRun` | 탭을 런루프에 등록하고 구동(§7 런루프 소유권 결정과 직결) |
 | `CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)` | 물리 키코드 판독 — 모든 판정의 입력 (§3-b, §3-c, 레이아웃 독립성의 근거) |
 | `CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)` | 키 반복 판별(엣지 케이스 13) |
-| `CGEventCreateKeyboardEvent` / `CGEventSetFlags` | 치환 이벤트 합성(단순 리매핑, 합성 modifier) |
+| `CGEventCreateKeyboardEvent` / `CGEventCreateMouseEvent` / `CGEventSetType` / `CGEventGetFlags` / `CGEventSetFlags` / `CGEventSetIntegerValueField` / `CGEventPost` / `CGEventSourceCreate` / `CGEventGetLocation` | 치환 이벤트 합성 전반(단순 리매핑, 합성 modifier, 마우스 이벤트에 modifier 얹기 등) — 실측으로 전량 확인된 경로 A 심볼 |
 | `CGEventKeyboardSetUnicodeString` | 물리 키코드로 표현 불가능한 문자를 강제로 얹는 폴백 경로(§3-b 계층 3/4 의 문자 출력, §7 결정 참조) |
-| `TISCopyCurrentKeyboardInputSource`, `TISGetInputSourceProperty(kTISPropertyUnicodeKeyLayoutData)`, `UCKeyTranslate` | 현재 입력 소스에서 "원하는 문자를 내는 물리 키코드"를 역산(레이아웃 독립 출력의 주 경로) |
+| `IsSecureEventInputEnabled()` | Secure Input 상태 판별(§5 엣지 케이스 6) — 폴링 전용, 상태 변경을 알리는 공개 알림 API 는 확인되지 않음. **경로 A 에만 적용됨**(§5 엣지 케이스 6, §9) |
+| `NSWorkspaceDidWakeNotification` / `NSWorkspaceWillSleepNotification` / `NSWorkspaceSessionDidBecomeActiveNotification` / `NSWorkspaceSessionDidResignActiveNotification` / `NSWorkspaceDidActivateApplicationNotification` | 절전·로그인·사용자 전환 시 탭 재확인 트리거, 마지막 알림은 §3-f 앱별 비활성화 게이트의 최전면 앱 추적용 |
+
+### 경로 B — IOHID 커널 매핑
+
+| API / 문자열 | 용도 |
+| :--- | :--- |
+| `IOHIDServiceClientSetProperty` | `HIDKeyboardModifierMappingSrc`/`Dst` 를 커널 HID 서비스에 직접 기록(§3-d) |
+| `IOHIDEventSystemClientCreateSimpleClient` | HID 이벤트 시스템 클라이언트 생성 — 대상 서비스 열거의 전제 |
+| `IOHIDServiceClientConformsTo` | 대상 HID 서비스(키보드) 판별 |
+| `hidutil property -g/-set UserKeyMapping`(서브프로세스 실행, FFI 아님) | 경로 B 의 대체/병행 경로(§3-d, §7) — `Tools_Tools.bundle` 의 셸 실행 오류 문자열이 이 경로를 뒷받침 |
+| `IOHIDManagerRegisterDeviceMatchingCallback` / `RegisterDeviceRemovalCallback` / `SetDeviceMatching` / `ScheduleWithRunLoop` | 키보드 핫플러그 감지 → 경로 B 재적용(§3-a, §5 엣지 케이스 10) |
+
+### 경로 C — HID 잠금 상태
+
+| API | 용도 |
+| :--- | :--- |
+| `IOHIDGetModifierLockState` / `IOHIDSetModifierLockState` | caps lock 의 실제 잠금(대문자 고정·LED) 읽기/쓰기(§3-d) |
+
+### 레이아웃 독립 판정
+
+| API / 알림 | 용도 |
+| :--- | :--- |
+| `TISCopyCurrentKeyboardInputSource` | 현재 입력 소스 조회 |
+| `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` | ⭐ 비-ASCII 입력기(CJK IME 등) 활성 시 ASCII 가능 레이아웃으로 폴백(§3-e, 신규 확정) |
+| `TISGetInputSourceProperty(kTISPropertyUnicodeKeyLayoutData)` | 레이아웃 데이터 조회 |
+| `UCKeyTranslate` | keycode+modifier → 문자 정방향 변환, 역방향 탐색 테이블의 기반 |
+| `LMGetKbdType` | ⭐ 물리 키보드 하드웨어 타입 조회 — `UCKeyTranslate` 의 `iKeyboardType` 인자(§3-e, 신규 확정) |
 | `kTISNotifySelectedKeyboardInputSourceChanged`(Distributed Notification, `CFNotificationCenterAddObserver`) | 입력 소스 변경 감지 → 레이아웃 역산 캐시 무효화 |
-| `IsSecureEventInputEnabled()` | Secure Input 상태 판별(§5 엣지 케이스 6) — 폴링 전용, 상태 변경을 알리는 공개 알림 API 는 확인되지 않음 |
-| `NSWorkspaceDidWakeNotification` / `NSWorkspaceWillSleepNotification` / `NSWorkspaceSessionDidBecomeActiveNotification` / `NSWorkspaceSessionDidResignActiveNotification` | 절전·로그인·사용자 전환 시 탭 재확인 트리거 |
-| `AXIsProcessTrusted()` | 런타임 권한 취소 감지용 폴링(엣지 케이스 7). 권한 요청 자체는 F-11 소유 |
-| *(참조만, F-11 소유)* `IOHIDCheckAccess` / `IOHIDRequestAccess` | Input Monitoring 권한 — 이 문서는 "권한 없으면 탭이 안 열린다"는 의존 사실만 인지 |
+
+### 권한 확인 (F-11 소유, 참조만)
+
+| API | 용도 |
+| :--- | :--- |
+| `AXIsProcessTrusted()` | ⭐ **실측: SuperKey 가 명시적으로 확인하는 유일한 권한.** 런타임 권한 취소 감지용 폴링(엣지 케이스 7)에도 쓰임. 권한 요청 자체는 F-11 소유 |
+| ~~`IOHIDCheckAccess` / `IOHIDRequestAccess`~~ | ⭐ **실측 정정: 이 심볼은 링크되어 있지 않다.** Input Monitoring 권한을 명시적으로 확인하지 않는다. 대신 `IOHIDManagerOpen` 실패(`kIOReturnNotPermitted`)를 재시도로 흡수한다 — 문자열 "IOHIDManagerOpen failed with kIOReturnNotPermitted. Retrying... (Attempt "(SuperKey 원문) |
+| ~~`AXIsProcessTrustedWithOptions`~~ | ⭐ **실측 정정: 링크되어 있지 않다.** 즉 시스템 프롬프트를 띄우지 않고, 자체 모달로 시스템 설정을 안내한다. 상세 온보딩 흐름은 F-11(`permissions-onboarding.md`) 소관이며, 이 문서는 "엔진이 의존하는 권한 상태"만 인지한다 |
 
 ---
 
 ## 7. 구현 접근
 
-구현 접근은 프로젝트 공통 3분류로 판정한다 ([`README.md`](README.md#구현-접근-3분류) 참조).
+구현 접근은 프로젝트 공통 3분류로 판정한다 ([`README.md`](README.md#구현-접근-3분류) 참조). ⭐ 세 리매핑 경로가 서로 다른 판정을 받는다 — 아래 경로별로 나누어 판정한다.
 
 - **순수 Rust** — 기존 안전(safe) 래퍼 크레이트만으로 완전히 커버되어 `unsafe` FFI 도 네이티브 shim 도 불필요
 - **Rust 바인딩** — 크레이트는 존재하나 `unsafe` FFI(`objc2-*` 계열의 헤더 자동 생성 바인딩 또는 수기 `extern "C"` 선언) 직접 호출이 필요. 별도로 빌드하는 Swift/Objective-C 소스 파일은 없다
 - **네이티브 shim 불가피** — Rust 에서 호출할 방법이 없어 Swift/Objective-C 소스를 별도로 빌드해 링크해야 함
+
+### 경로 A — CGEventTap: Rust 바인딩
 
 **판정: Rust 바인딩.**
 
@@ -193,6 +314,22 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 
 **주요 크레이트/버전**: `core-graphics` 0.25.0(탭 생성·기본 이벤트 조작), `objc2-core-graphics` 0.3.2 + `objc2-core-foundation` 0.3.2(런루프 수동 관리, 탭 래퍼가 커버 못 하는 필드 접근), `objc2-application-services` 0.3.2(`TIS*`, `IsSecureEventInputEnabled` 등 Application Services 네임스페이스), `objc2` 0.6.4(런타임 기반).
 
+### 경로 B — IOHID 커널 매핑: 혼합(Rust 바인딩 + 프로세스 실행) ⭐
+
+경로 B 는 두 구현 방식이 실측으로 공존한다(§3-d).
+
+- **FFI 직접 호출** — `IOHIDServiceClientSetProperty` / `IOHIDEventSystemClientCreateSimpleClient` / `IOHIDServiceClientConformsTo` / `IOHIDManagerRegisterDeviceMatchingCallback` 류는 C ABI 함수이며 `IOKit.framework` 에 링크해 `extern "C"` 선언(또는 `objc2-io-kit` 류 바인딩, 전용 크레이트 존재 여부는 별도 확인 필요)으로 호출 가능하다 → **분류 B(Rust 바인딩)**.
+- **`hidutil` 서브프로세스 실행** — ⭐ **판정: 이것은 FFI 가 아니라 프로세스 실행이며, README.md 의 3분류 어디에도 자리가 없다.** 3분류는 "Rust 에서 네이티브 API 를 어떻게 호출하는가"(라이브러리 호출의 안전성 정도)를 축으로 하는 분류다. `std::process::Command` 로 `hidutil` 을 실행하고 stdout/plist 를 파싱하는 것은 `unsafe` FFI 도, 별도로 빌드하는 네이티브 shim 도 필요 없다는 점에서 표면적으로는 순수 Rust 에 가장 가깝다. 그러나 "라이브러리를 안전하게 감싸 호출한다"는 3분류의 전제 자체가 성립하지 않는다 — 대신 **외부 실행 파일의 존재·경로·버전·출력 형식에 의존**하는 별개의 리스크(macOS 버전 간 `hidutil` 동작 차이, 셸 인용·파싱 오류, 서브프로세스 실행 자체의 권한/샌드박스 제약)를 진다. `Tools_Tools.bundle` 의 `bash command error: %@` / `Error parsing plist response` 문자열이 원본에서도 이 리스크가 실제로 존재해 에러 핸들링을 별도로 두었음을 보여준다. 이 문서의 판정: **프로세스 실행은 3분류 바깥의 별도 범주로 다루고, 클론 설계는 README.md 3분류표에 이를 각주로 남길 것을 제안한다**(§9).
+- **원본이 왜 `hidutil` 서브프로세스를 병용하는가는 `(미확정)`.** 가능성: FFI 경로가 macOS 버전마다 불안정해 Apple 이 유지보수하는 CLI 를 폴백으로 쓰거나, 반대로 `hidutil` 이 1차 경로이고 FFI 는 상태 조회·확인용일 수 있다. 클론 설계는 **FFI 직접 호출을 1차로 채택**하되(에러 처리·테스트가 프로세스 실행보다 결정론적이다), `hidutil` 서브프로세스를 진단·폴백 경로로 남겨두는 것을 권장한다.
+
+### 경로 C — HID 잠금 상태 직접 조작: Rust 바인딩
+
+`IOHIDGetModifierLockState` / `IOHIDSetModifierLockState` 는 C ABI 함수로, `IOKit.framework` 링크 후 `extern "C"` 선언으로 호출 가능하다. 전용 안전 래퍼 크레이트는 확인되지 않았다 `(미확정)` → **분류 B(Rust 바인딩)**. 경로 A 와 별도의 코드 경로이지만 요구되는 unsafe 표면 자체는 작다(함수 2개).
+
+### 종합 판정
+
+이 엔진 전체의 구현 접근은 **Rust 바인딩(분류 B)** 이 중심이되, 경로 B 한정으로 **프로세스 실행(3분류 바깥의 범주)** 이 보조적으로 관여한다. 네이티브 shim(분류 C)은 세 경로 어디에도 필요하지 않다 — 모든 API 가 C ABI 로 노출되어 Rust 에서 직접 FFI 로 해결 가능하기 때문이다.
+
 ---
 
 ## 8. 수용 기준
@@ -212,18 +349,34 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 - [ ] 동일 소스 키가 둘 이상의 규칙에 등록된 경우에도 런타임은 항상 §3-b 우선순위에 따라 결정론적으로 하나의 결과만 낸다(비결정적 동작이나 크래시가 없다).
 - [ ] 키 반복(auto-repeat) 이벤트가 quick-press 상태 머신을 다시 `PendingDown` 으로 되돌리지 않는다.
 - [ ] 절전 진입/화면 잠금 등으로 keyUp 을 영영 받지 못할 수 있는 상황에서, 관련 알림 수신 시 모든 진행 중 상태를 강제로 `Idle` 로 리셋해 stuck modifier 를 방지한다.
+- [ ] ⭐ 경로 B(IOHID 커널 매핑) 규칙은 앱 정상 종료 시 명시적으로 정리(cleanup)되고, 비정상 종료로 정리가 되지 않은 경우 다음 실행 시작 시 잔존 매핑을 감지해 현재 설정과 재조정한다(§3-a2).
+- [ ] ⭐ 경로 C(HID 잠금 상태)로 구현되는 규칙(`Double tap shift = caps lock` 류)은 이벤트 합성이 아니라 `IOHIDSetModifierLockState` 로 실제 caps lock 잠금을 토글한다(§3-d).
+- [ ] ⭐ 권한 확인이 확실히 통과한 상태에서 `CGEventTapCreate` 자체가 실패하는 경우, 무한 재시도 루프에 빠지지 않고 명시적인 치명적 실패 경로로 처리된다(§3-a, §5#16).
+- [ ] ⭐ 절전/로그인/세션전환 복귀 시 탭 재확인은 즉시 실행되지 않고 지연(delay) 뒤에 실행되며, 직전 재시작으로부터 짧은 시간 안의 중복 재확인은 디바운스로 억제된다(§3-a).
+- [ ] ⭐ 외장 키보드 연결/해제 감지 시 경로 B 리매핑이 재적용된다(§3-a, §5#10).
+- [ ] ⭐ 최전면 앱이 비활성화 목록에 있는 동안에는 §3-b 의 어떤 계층도 평가되지 않고 원본 이벤트가 그대로 통과한다(§3-f).
+- [ ] ⭐ 레이아웃 독립 판정은 현재 입력 소스가 ASCII 가능하지 않을 때 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 로 폴백한 레이아웃을 사용한다(§3-e).
 
 ---
 
 ## 9. 미해결 질문
 
+⭐ **이번 실측으로 해소된 질문** — 이전 버전의 다음 두 항목은 실측으로 해소되어 표에서 제거한다: "`Quick press duration` 슬라이더의 정확한 최소/최대/간격"(→ §4 에서 최소 250ms·최대 2000ms·현재값 1000ms 로 확정, step 간격만 아래 #1 로 승계), "hyper quick press 존재 여부"(→ §3-c 에서 존재 확정, 노출 경로만 아래 #5 로 승계).
+
 | # | 질문 | 현재 처리 | 확인 방법 |
 | :--- | :--- | :--- | :--- |
-| 1 | `Quick press duration` 슬라이더의 정확한 최소/최대/간격 | `(추정)` 200–1600ms, 200ms 간격으로 제안(§4). 8개 눈금과 관측값 1000ms 을 만족하도록 역산한 값일 뿐, 실측 근거 없음 | 앱 설치 후 슬라이더 드래그하며 값 읽기(연구노트 Q6과 동일 항목) |
-| 2 | Double tap 최대 간격의 실제 값과, 사용자 조절 UI 존재 여부 | `(추정)` 내부 상수 300ms. UI 노출 없다고 가정 | 앱 설치 후 `General` 탭 등에 숨겨진 컨트롤이 있는지 확인 |
-| 3 | `CFRunLoopSource` 를 전용 스레드에 두는 결정(§7)의 실측 검증 | 설계 근거는 있으나 실제 타임아웃 발생률·지연시간 미측정 | 프로토타입 구현 후 트래킹 모드 상황(메뉴 열기 등)에서 hyper 키 반응성 측정 |
-| 4 | 동일 키 중복 배정 UI 경고의 정확한 문구·배지 디자인 | 결정은 §3-b 에서 내렸으나(런타임 우선순위 + 비차단 경고) 구체적 UI 카피는 미정 | F-05/F-08 UI 설계 시점에 확정 |
-| 5 | Karabiner-Elements 등 타 리매퍼와 동시에 이벤트 탭이 설치되었을 때 macOS 가 실제로 어떤 순서로 콜백 체인을 호출하는지 | 엣지 케이스 12 에서 "구조적 한계로 통제 불가"로만 서술 | 실제 두 앱을 함께 실행해 관찰 |
-| 6 | `IsSecureEventInputEnabled()` 를 매 콜백마다 확인할지, 별도 주기로 폴링할지 | 이 문서는 매 콜백 확인을 전제로 서술(오버헤드가 작은 syscall 이라는 가정) | 실측으로 오버헤드 확인, 필요 시 캐시+주기 폴링으로 전환 |
-| 7 | 외장(비-Apple) 키보드에서 caps lock 등 주요 소스 키의 물리 keycode 가 Apple 내장 키보드와 다를 가능성 | 엣지 케이스 10 에서 미해결로 남김 | 실제 외장 키보드 다수로 keycode 로그 비교 |
-| 8 | 콜백이 강제 종료되기까지의 정확한 타임아웃 값(Apple 비공개) | §3-a 에서 "경험적으로 수백 ms 수준"으로만 서술 | 실측(의도적으로 콜백을 지연시켜 타임아웃 발생 시점 측정) |
+| 1 | `Quick press duration` 슬라이더의 정확한 step 간격 | 최소 250ms·최대 2000ms·현재값 1000ms 는 실측으로 확정(§4, AX 트리). **step 간격만 미확정.** 이전 버전이 "8칸 눈금 역산"으로 200ms 간격을 추정했던 것은 **틀렸다** — 눈금 개수로부터의 역산은 신뢰할 수 없다는 교훈을 남긴다(§4) | 슬라이더를 실제로 드래그하며 각 정지점의 라벨 값을 읽는다(AX 의 min/max 값 속성만으로는 연속 슬라이더의 스텝을 알 수 없다) |
+| 2 | Double tap 최대 간격의 실제 ms 값 | UI 노출이 없다는 것은 확정(실측: AX, 4개 탭 전 컨트롤 확인). 정확한 내부 상수값은 여전히 `(미확정)`, 300ms 는 근거 없는 추정치로 유지 | 실제 키 입력 타이밍 실험(다양한 간격으로 double tap 반복해 임계점 이분 탐색) |
+| 3 | 세 리매핑 경로(A/B/C)의 개별 프리셋별 정확한 배정 | §3-d 가 판정 **기준**은 확정했으나, F-08 16종 프리셋 각각이 실제로 어느 경로로 구현되는지 전수 확인은 못 했다. caps lock 잠금 토글 계열(경로 C)만 심볼로 확정 | 동적 트레이싱(`dtrace`, API 호출 로깅) — 이번 조사는 정적 분석과 AX 관찰만 했다(디컴파일 금지 원칙) |
+| 4 | `Advanced ▸ Synthesize Caps Lock Remap` 의 정확한 의미·동작 | `(미확정 — 라벨로부터의 해석)`. "기본은 경로 B/C, 스위치를 켜면 경로 A로 강제 전환"으로 해석했으나 토글 전후 실제 동작을 관찰하지 못했다(§3-d) | 토글 전후 `hidutil property -g UserKeyMapping` 출력 비교, caps lock 프리셋 동작 재관찰 |
+| 5 | hyper quick press(`quickHyperKeycode`/`executeQuickHyperKey`/`hyperDownTime`)의 UI 노출 경로와 정확한 의미 | 존재는 확정(실측: 번들 문자열, §3-c). 4개 탭 어디에도 대응 컨트롤을 찾지 못했다 — 숨은 설정이거나 조건부 표시일 가능성 | 조건부 표시 후보(다른 설정 조합 시 나타나는지) 재현, 또는 이 키들을 직접 조작 후 UI 재관찰 |
+| 6 | `longPressCapsLockTurnsItOff` 의 정확한 규칙 | `(미확정 — 이름으로부터의 해석)`. "caps lock 을 길게 누르면 잠금 해제"로 추정(§3-c) | 대응 UI 탐색, 또는 실제 caps lock 을 길게 눌러 거동 관찰 |
+| 7 | 워치독("Checking key loop.")의 폴링 주기, 재시작 디바운스("Time since last exit…")의 정확한 임계값(초) | `(미확정)`. 존재와 메커니즘만 문자열로 확정(§3-a) | 로그 활성화(메뉴바 `Show Logging…`/`Log to File`) 후 타임스탬프 간격 측정 |
+| 8 | 경로 B(IOHID 커널 매핑)·경로 C(HID 잠금 상태)가 Secure Input 구간에서도 유효한가 | `(미확정)`. §5 엣지 케이스 6 에서 "영향받지 않을 가능성"으로만 서술, 단정하지 않는다 | 로그인 다이얼로그 등 Secure Input 활성 창에 포커스를 둔 채 caps lock 프리셋의 실제 동작 관찰 |
+| 9 | `CFRunLoopSource` 를 전용 스레드에 두는 결정(§7)의 실측 검증 | 설계 근거는 있으나 실제 타임아웃 발생률·지연시간 미측정 | 프로토타입 구현 후 트래킹 모드 상황(메뉴 열기 등)에서 hyper 키 반응성 측정 |
+| 10 | 동일 키 중복 배정 UI 경고의 정확한 문구·배지 디자인 | 결정은 §3-b 에서 내렸으나(런타임 우선순위 + 비차단 경고) 구체적 UI 카피는 미정 | F-05/F-08 UI 설계 시점에 확정 |
+| 11 | Karabiner-Elements 등 타 리매퍼와 동시에 이벤트 탭이 설치되었을 때 macOS 가 실제로 어떤 순서로 콜백 체인을 호출하는지 | 엣지 케이스 12 에서 "구조적 한계로 통제 불가"로만 서술 | 실제 두 앱을 함께 실행해 관찰 |
+| 12 | `IsSecureEventInputEnabled()` 를 매 콜백마다 확인할지, 별도 주기로 폴링할지 | 이 문서는 매 콜백 확인을 전제로 서술(오버헤드가 작은 syscall 이라는 가정) | 실측으로 오버헤드 확인, 필요 시 캐시+주기 폴링으로 전환 |
+| 13 | 외장(비-Apple) 키보드에서 caps lock 등 주요 소스 키의 물리 keycode 가 Apple 내장 키보드와 다를 가능성 | 엣지 케이스 10 에서 미해결로 남김. 핫플러그 시 경로 B 재적용 로직 자체는 이번에 확정됨(§3-a) | 실제 외장 키보드 다수로 keycode 로그 비교 |
+| 14 | 콜백이 강제 종료되기까지의 정확한 타임아웃 값(Apple 비공개) | §3-a 에서 "경험적으로 수백 ms 수준"으로만 서술 | 실측(의도적으로 콜백을 지연시켜 타임아웃 발생 시점 측정) |
+| 15 | `hidutil` 서브프로세스 실행과 `IOHIDServiceClientSetProperty` FFI 직접 호출 중 원본이 실제로 어느 쪽을 1차 경로로 쓰는가 | `(미확정)`. §7 은 두 경로가 공존한다는 사실만 확정했다 | 동적 트레이싱, 또는 `hidutil` 프로세스 스폰 여부를 로그로 관찰 |
