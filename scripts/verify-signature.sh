@@ -51,8 +51,8 @@ echo "${VERIFY_OUTPUT}" | sed 's/^/  /'
 mark "${VERIFY_STATUS}" "서명 무결성 검증 통과"
 echo
 
-echo "== 2. codesign -dv --entitlements :- =="
-DV_OUTPUT="$(codesign -dv --entitlements :- "${APP_PATH}" 2>&1)"
+echo "== 2. codesign -dvv --entitlements - =="
+DV_OUTPUT="$(codesign -dvv --entitlements - "${APP_PATH}" 2>&1)"
 echo "${DV_OUTPUT}" | sed 's/^/  /'
 echo
 
