@@ -4,6 +4,29 @@
 > 대상: [superkey.app](https://superkey.app/) 전 페이지 + Sparkle 체인지로그 + 제품 스크린샷 + 제3자 자료
 > 조사 시점 최신 버전: **1.66** (2026-06-23)
 
+---
+
+## ⚠️ 이 문서는 실측으로 일부가 반증되었다 (2026-08-30 추가)
+
+이후 SuperKey **v1.66 (66) 을 실제로 설치·실행해 전수 검증**했다. 결과는 [`app-bundle-analysis.md`](app-bundle-analysis.md) 와 [`spec-verification-report.md`](spec-verification-report.md) 에 있다.
+
+**이 문서와 실측이 충돌하면 `app-bundle-analysis.md` 가 우선한다.** 이 문서는 웹 조사가 어디까지 갈 수 있었는지의 기록으로서 **그대로 보존**한다 — 지우지 않는 것이 검증의 산출물이다.
+
+반증된 주요 항목:
+
+| 이 문서의 서술 | 실측 결과 | 근거 |
+| :--- | :--- | :--- |
+| §3.1~§3.3 랜딩 스크린샷의 체크 상태 (여러 항목 ☑) | ❌ **출고 기본값은 사실상 전부 ☐** 다. 랜딩 스크린샷은 홍보용 구성이었다. §3.4 의 유보("출고 기본값이라는 보장은 없다")가 옳았고, 그 유보를 **Q3 로 남긴 판단이 정확했다** | `app-bundle-analysis.md` §2.1, §6 |
+| §2.3 `sparkle:deltaFromSparkleLocales` → "앱이 8개 로케일을 번들, 3개 RTL" | ❌ **오독.** 그 속성은 델타 업데이트가 건드린 **Sparkle 프레임워크 자신의** 로케일 목록이다. SuperKey 본체는 `Base.lproj` 하나뿐이고 `CFBundleLocalizations` 도 없다 — **영어 단일, 현지화 없음** | `app-bundle-analysis.md` §5.1 |
+| §3.1 `Seek` 탭에 `Match on more than one character` 가 상시 표시 | ⚠️ **부분 오류.** 항목은 실재하나 `Seek using macOS accessibility` 가 꺼져 있으면 **완전히 숨겨진다**. 그리고 불리언이 아니라 정수(`minAxCharCount`)다 | `app-bundle-analysis.md` §6.1 |
+| §3.2 `Apply modifiers to keypress events and:` → `Click`·`Drag`·`Move` ☑ | ❌ **`Click` 하나만 ☑** 다 | `app-bundle-analysis.md` §6.2 |
+| §3.4 `General` 탭 "❓미확인" | ✅ 해소. 실제 구성은 7개 컨트롤이며, 여기서 추론한 항목 중 **언어 선택·권한 상태 표시·라이선스 키 입력·환경설정 초기화는 실재하지 않는다** | `app-bundle-analysis.md` §6.4 |
+| §7 Q1~Q15 | 대부분 해소. 남은 것은 라이선스 API 사양·판매가 등 앱 밖의 것들이다 | `spec-verification-report.md` |
+
+⭐ **교훈**: 간접 증거(델타 업데이트의 부수 속성)를 직접 증거로 취급한 것이 가장 큰 오류였다. 홍보 스크린샷을 기본값으로 읽지 않고 Q3 로 유보한 것은 옳았다.
+
+---
+
 ## 이 문서를 읽는 법
 
 - **사실(확정)** — 출처 URL 과 원문 인용이 함께 붙은 항목. 그대로 명세의 근거로 쓴다.
