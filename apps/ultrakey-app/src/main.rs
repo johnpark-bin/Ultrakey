@@ -74,9 +74,9 @@ fn modal_copy(state: State<'_, Arc<AppState>>) -> ModalCopy {
 
     // ⭐ out-of-sync 는 온보딩과 다른 화면이다(`permissions-onboarding.md` §3.3).
     // ⛔ 자동 TCC 리셋 버튼은 없다 — §3.3·§7 이 채택하지 않기로 판정했다.
-    if permission_state == PermissionState::OutOfSync {
+    let copy = if permission_state == PermissionState::OutOfSync {
         let c = out_of_sync_copy(catalog);
-        return ModalCopy {
+        ModalCopy {
             kind: "out_of_sync",
             title: c.title,
             body: c.body,
@@ -86,21 +86,26 @@ fn modal_copy(state: State<'_, Arc<AppState>>) -> ModalCopy {
             locked_hint: String::new(),
             manual_steps: c.manual_steps,
             quit: c.quit,
-        };
-    }
+        }
+    } else {
+        let c = onboarding_copy(catalog);
+        ModalCopy {
+            kind: "onboarding",
+            title: c.title,
+            body: c.body,
+            path: c.path,
+            open_button: c.open_button,
+            checkbox_hint: c.checkbox_hint,
+            locked_hint: c.locked_hint,
+            manual_steps: String::new(),
+            quit: catalog.get("common.quit").to_string(),
+        }
+    };
 
-    let c = onboarding_copy(catalog);
-    ModalCopy {
-        kind: "onboarding",
-        title: c.title,
-        body: c.body,
-        path: c.path,
-        open_button: c.open_button,
-        checkbox_hint: c.checkbox_hint,
-        locked_hint: c.locked_hint,
-        manual_steps: String::new(),
-        quit: catalog.get("common.quit").to_string(),
-    }
+    // ⭐ 프런트엔드가 실제로 invoke 에 성공했는지 판별하는 핵심 신호 — 이 로그가 없으면
+    // 모달이 안 보이는 이유가 "커맨드가 실패했다" 인지 "창이 안 보인다" 인지 구분이 안 된다.
+    tracing::info!(kind = copy.kind, "modal_copy 커맨드 호출됨");
+    copy
 }
 
 #[tauri::command]
@@ -113,15 +118,85 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 로그 구독자를 세운다 — stderr 는 항상, 파일은 열 수 있을 때만 함께 남긴다.
+///
+/// `open Ultrakey.app` 으로 실행하면 stderr 가 사라져 아무 로그도 못 본다. 그래서
+/// `~/Library/Logs/Ultrakey/ultrakey.log` 에도 같이 쓴다. 파일을 못 열어도(권한·디스크
+/// 문제 등) **앱은 죽지 않는다** — stderr 만으로 계속 진행한다.
+fn init_logging() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    let make_filter = || {
+        tracing_subscriber::EnvFilter::try_from_env("ULTRAKEY_LOG")
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+
+    let init_result = match open_log_file() {
+        Some(file) => {
+            let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+            // 파일 레이어는 ANSI 컬러 코드를 끈다 — 텍스트 에디터로 볼 로그다.
+            let file_layer = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(Arc::new(file));
+            tracing_subscriber::registry()
+                .with(make_filter())
+                .with(stderr_layer)
+                .with(file_layer)
+                .try_init()
+        }
+        None => {
+            let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+            tracing_subscriber::registry()
+                .with(make_filter())
+                .with(stderr_layer)
+                .try_init()
+        }
+    };
+
+    if init_result.is_err() {
+        // 로그 구독자 자체를 못 세운 것 — tracing 매크로가 아무 데도 안 나갈 상황이므로
+        // stderr 에 직접 남긴다.
+        eprintln!("[ultrakey] 로그 구독자 초기화 실패 — 로그가 나오지 않을 수 있다");
+    }
+}
+
+/// `~/Library/Logs/Ultrakey/ultrakey.log` 를 append 모드로 연다.
+///
+/// ⭐ 무한정 커지지 않게: 열기 전에 크기를 확인해 2 MiB 를 넘으면 `ultrakey.log.1` 로
+/// rename 하고 새로 시작한다(단순 1세대 롤오버). 홈 디렉터리를 못 찾거나, 디렉터리를
+/// 못 만들거나, 파일을 못 열면 `None` — 호출자는 stderr 만으로 계속한다.
+fn open_log_file() -> Option<std::fs::File> {
+    const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::PathBuf::from(home).join("Library/Logs/Ultrakey");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    let path = dir.join("ultrakey.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > MAX_LOG_BYTES {
+            let _ = std::fs::rename(&path, dir.join("ultrakey.log.1"));
+        }
+    }
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+}
+
 fn main() {
-    // 1) 로그 — 기본은 조용하고, `ULTRAKEY_LOG=debug` 로 켠다.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("ULTRAKEY_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // 1) 로그 — 기본은 `info`, `ULTRAKEY_LOG=debug` 로 켠다. stderr 는 항상 나가고,
+    //    `open Ultrakey.app` 처럼 stderr 가 사라지는 실행 경로를 위해
+    //    `~/Library/Logs/Ultrakey/ultrakey.log` 에도 같이 남긴다.
+    init_logging();
+    tracing::info!(
+        pid = std::process::id(),
+        exe = ?std::env::current_exe(),
+        "=== Ultrakey 기동 ==="
+    );
 
     // 2) 로케일 → 카탈로그 (D4: ko + en)
     let catalog = Catalog::resolve(&bundle::preferred_languages());
@@ -170,6 +245,11 @@ fn main() {
             *state.monitor.lock().unwrap() = Some(monitor);
             on_permission_transition(app.handle(), &state, initial);
 
+            tracing::info!(
+                windows = ?app.webview_windows().keys().collect::<Vec<_>>(),
+                "setup() 완료 — 웹뷰 창 목록"
+            );
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -187,6 +267,7 @@ fn on_permission_transition(
     state: &Arc<AppState>,
     to: PermissionState,
 ) {
+    tracing::info!(?to, "on_permission_transition 진입");
     match to {
         PermissionState::Granted => {
             hide_modal(handle);
@@ -260,14 +341,42 @@ fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
 }
 
 fn show_modal(handle: &tauri::AppHandle) {
-    if let Some(w) = handle.get_webview_window("permissions") {
-        let _ = w.show();
-        let _ = w.set_focus();
+    match handle.get_webview_window("permissions") {
+        Some(w) => {
+            tracing::info!("show_modal: permissions 창을 찾았다");
+            let _ = w.show();
+            let _ = w.set_focus();
+            tracing::info!(
+                is_visible = ?w.is_visible(),
+                outer_position = ?w.outer_position(),
+                outer_size = ?w.outer_size(),
+                is_focused = ?w.is_focused(),
+                is_minimized = ?w.is_minimized(),
+                "show_modal 호출 후 창 상태"
+            );
+        }
+        None => {
+            tracing::error!("show_modal: permissions 창을 찾지 못했다");
+        }
     }
 }
 
 fn hide_modal(handle: &tauri::AppHandle) {
-    if let Some(w) = handle.get_webview_window("permissions") {
-        let _ = w.hide();
+    match handle.get_webview_window("permissions") {
+        Some(w) => {
+            tracing::info!("hide_modal: permissions 창을 찾았다");
+            let _ = w.hide();
+            tracing::info!(
+                is_visible = ?w.is_visible(),
+                outer_position = ?w.outer_position(),
+                outer_size = ?w.outer_size(),
+                is_focused = ?w.is_focused(),
+                is_minimized = ?w.is_minimized(),
+                "hide_modal 호출 후 창 상태"
+            );
+        }
+        None => {
+            tracing::info!("hide_modal: permissions 창을 찾지 못했다");
+        }
     }
 }
