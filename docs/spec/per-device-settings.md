@@ -39,7 +39,7 @@ right_option  → right_command
 
 ## 2. 사용자 시나리오
 
-**시나리오 A — 외장 키보드에서만 command/option 을 바꾼다.** 사용자가 내장 키보드는 그대로 두고, 자주 쓰는 서드파티 외장 키보드(예: F108Pro)에서만 `left_command ↔ left_option` 4행을 등록한다. `Keyboards` 탭에서 디바이스 선택 팝업을 F108Pro 로 바꾸고 4행을 추가한다. 내장 키보드에서는 이 규칙이 전혀 적용되지 않는다.
+**시나리오 A — 외장 키보드에서만 command/option 을 바꾼다.** 사용자가 내장 키보드는 그대로 두고, 자주 쓰는 서드파티 외장 키보드(예: F108Pro)에서만 `left_command ↔ left_option` 4행을 등록한다. `Keyboards` 탭에서 좌측 패인의 선택을 F108Pro 로 바꾸고 4행을 추가한다. 내장 키보드에서는 이 규칙이 전혀 적용되지 않는다.
 
 **시나리오 B — 여러 키보드에 서로 다른 규칙.** 사무실 키보드에는 `caps lock → left control`, 집 키보드에는 `caps lock → escape` 를 각각 등록한다. 두 규칙은 서로 다른 디바이스 키(`<vid>:<pid>`) 아래 저장되어 있어 충돌하지 않는다 — 스파이크 S-1(실측)이 확정한 대로, `--matching {VID,PID}` 로 쓴 배열은 그 디바이스에만 적용된다.
 
@@ -47,7 +47,7 @@ right_option  → right_command
 
 **시나리오 D — 공통 설정을 따르다 한 디바이스만 끈다.** 사용자가 `For all devices` 아래에 `left_command ↔ left_option` 스왑을 등록해 두었다(모든 키보드에 적용). 그런데 특정 게임용 키보드에서는 이 스왑이 게임 단축키와 충돌해 불편하다. 그 디바이스를 선택해 기능 1 전체를 "끔"으로 설정한다 — 공통 목록은 그대로 있지만 이 디바이스에서는 적용되지 않는다(§3.3 의 `null` sentinel).
 
-**시나리오 E — 디바이스를 뽑았다가 다시 꽂는다.** 사용자가 규칙을 걸어 둔 외장 키보드를 뽑는다. `Keyboards` 탭의 디바이스 팝업에는 그 키보드가 `(연결 안 됨)` 배지와 함께 계속 남아 있고, 설정은 그대로 보존된다. 나중에 같은 키보드(같은 VID+PID)를 다시 꽂으면 핫플러그 감지가 그 디바이스의 합성 배열을 다시 적용한다(§3.6 항목 8).
+**시나리오 E — 디바이스를 뽑았다가 다시 꽂는다.** 사용자가 규칙을 걸어 둔 외장 키보드를 뽑는다. `Keyboards` 탭의 좌측 패인에는 그 키보드가 `(연결 안 됨)` 접미사와 함께 계속 남아 있고, 설정은 그대로 보존된다. 나중에 같은 키보드(같은 VID+PID)를 다시 꽂으면 핫플러그 감지가 그 디바이스의 합성 배열을 다시 적용한다(§3.6 항목 8).
 
 **시나리오 F — 같은 `from` 을 두 행이 요구한다.** 사용자가 실수로 `caps lock → left control` 행을 두 번 추가한다(두 번째는 `caps lock → escape`). 저장 시점에 F-15 패턴의 충돌 대화상자가 뜨고, 사용자가 확인하면 먼저 만든 행이 꺼지고 새 행이 활성화된다(§3.4).
 
@@ -68,21 +68,23 @@ right_option  → right_command
 - **`Per-Device`/`키보드별 설정`** — 형용사구라 다른 탭 이름(단일 명사)과 형식이 어긋난다.
 - **`HID`** — 구현 용어가 UI 로 새어 나온다.
 
-#### 3.1.2 탭 내부 배치 — 디바이스 선택은 팝업 버튼
+#### 3.1.2 탭 내부 배치 — 디바이스 선택은 좌측 세로 패인
 
-탭 상단에 **디바이스 선택 팝업** 하나를 둔다. 항목 구성(위에서부터):
+⚠️ **이 결정은 §9 질문 11 이 예고한 재검토를 이슈 #31 이 실제로 트리거한 결과다 — 아래는 그 갱신된 판단이다.**
+
+탭 좌측에 **디바이스 선택 세로 패인** 하나를 둔다. 항목 구성(위에서부터):
 
 | 순서 | 항목 | 표시 |
 | :--- | :--- | :--- |
 | 1 | 공통 계층 | `For all devices` |
-| 2 | 현재 붙어 있는 키보드 전부 | 제품명(예: `F108Pro Dongle`, 실측: 스파이크 §10 `hidutil list` 출력의 `Product` 컬럼) |
-| 3 | 설정만 남아 있는 미연결 키보드 | 제품명 + `(연결 안 됨)` 접미 |
+| 2 | 현재 붙어 있는 키보드 전부 | 제품명(예: `F108Pro Dongle`, 실측: 스파이크 §10 `hidutil list` 출력의 `Product` 컬럼) + 그 아래 작은 글씨로 `[VID: <십진>, PID: <십진>]` |
+| 3 | 설정만 남아 있는 미연결 키보드 | 제품명 + `(연결 안 됨)` 접미 + 위와 같은 VID/PID 서브라벨 |
 
-선택이 바뀌면 그 아래 두 그룹(**키 변환 세트** = 기능 1, **Function Keys** = 기능 2)이 선택된 대상의 값으로 즉시 갈린다(다른 컨트롤과 동일하게 별도 "적용" 버튼 없음, F-09 §3.7).
+선택이 바뀌면 그 오른쪽 두 그룹(**키 변환 세트** = 기능 1, **Function Keys** = 기능 2)이 선택된 대상의 값으로 즉시 갈린다(다른 컨트롤과 동일하게 별도 "적용" 버튼 없음, F-09 §3.7).
 
-**근거**: F-09 의 어느 탭에도 사이드바(좌측 목록 + 우측 상세)가 없다. 이 탭만 좌우 분할 구조를 가지면 F-09 §3.1 의 "탭 전환 시 창이 내용에 맞게 리사이즈된다"는 규약과 겹쳐 이 탭만 폭이 크게 튄다. 팝업은 F-09 가 이미 쓰는 컨트롤 유형이라(§3.2 컨트롤 타입 카탈로그) 문자열 카탈로그·키보드 접근성 규약을 그대로 물려받고, 미연결 디바이스도 팝업 항목 하나에 `(연결 안 됨)` 을 붙이는 것만으로 자연스럽게 표현된다.
+**근거**: 사용자 요청("키보드 설정 쪽의 U/I는 카라비너처럼 하는 게 좋을 것 같다. 키보드의 목록을 왼쪽의 패인으로 배치하는 형태가 훨씬 가시성이 좋은 것 같음", 이슈 #31 ④) + 참고 스크린샷(`docs/research/screenshots/issue-31-karabiner-function-keys-menu.png` — Karabiner 의 실제 배치: 좌측에 `For all devices` + 디바이스 목록, 우측에 그 디바이스의 설정). 팝업이 확정 당시에도 이미 §9 질문 11 로 "디바이스가 많아지면 불편해질 수 있다"는 재검토 여지를 남겼었고, 이슈 #31 이 바로 그 상황(가시성 저하)을 실제로 보고했다.
 
-**기각한 대안 — 좌측 디바이스 목록 + 우측 설정(Karabiner 식 master-detail)**: 한눈에 여러 디바이스를 조망할 수 있다는 장점은 분명하지만, F-09 의 탭 구조 규약(사이드바 없음, 탭별 고정 크기)을 이 탭만 깨고 폭이 크게 늘어난다. ⚠️ 디바이스가 많아지면(예: 여러 대의 외장 키보드를 상시 연결하는 사용자) 팝업이 불편해질 수 있으므로, 이는 **재검토 가능한 결정**으로 §9 에 남긴다.
+**기각한 대안 — 팝업 유지**: §3.1.2 의 이전 판본이 택했던 안이다. F-09 의 탭 구조 규약(사이드바 없음, 탭별 고정 크기)과 더 잘 맞고 구현 비용도 낮았지만, 디바이스가 여러 대면 "지금 어느 디바이스를 보고 있는지"를 팝업을 열어야만 확인할 수 있어 가시성이 떨어진다 — 사용자가 실제로 겪은 문제이므로 이번에는 이 비용을 감수하고 좌측 패인을 택한다. ⛔ **창 크기는 이 변경의 범위 밖이다**(이슈 #32 가 별도로 다룬다) — 패인 폭만 좁게(약 180~200px) 잡고, 넘치는 목록은 패인 안에서만 세로 스크롤한다. 그 결과 창이 좁아 다소 답답해 보일 수 있다는 것은 이 트레이드오프가 감수하는 알려진 대가다.
 
 #### 3.1.3 종속 표현 3종의 적용
 
@@ -91,12 +93,14 @@ F-09 §3.8 의 3종 규약을 이 탭에 다음과 같이 구체화한다.
 | 유형 | 이 탭에서의 사례 |
 | :--- | :--- |
 | **① 비활성화(dimmed)** | 기능 1 목록 편집기의 `+ Add item` 버튼은, 이미 **빈 행**(from 또는 to 가 아직 선택되지 않은 행)이 목록 끝에 있는 동안 dimmed 된다. 근거: 빈 행은 저장하지 않는다는 규약(§3.4.1)을 지키려면, 사용자가 완성되지 않은 행을 여러 개 쌓지 못하게 막아야 한다 — 먼저 그 행을 완성하거나 삭제해야 새 행을 추가할 수 있다 |
-| **② 숨김(hidden)** | (a) 선택된 대상이 실제로 붙어 있으면(또는 `For all devices` 를 선택했으면) `(연결 안 됨)` 경고 배지는 DOM/AX 트리에서 완전히 사라진다. 선택된 대상이 미연결 디바이스일 때만 나타난다. (b) `For all devices` 를 선택한 상태에서는 기능 2 각 F-키의 선택 팝업에서 `--- (공통 설정을 따름)` 선택지 자체가 사라진다 — 공통 계층 위에는 따를 상위 계층이 없으므로 그 선택지는 개념적으로 성립하지 않는다. 이때 팝업은 **시스템 기능 12종 + `표준 F-키로 사용`** 만 갖는다 |
-| **③ 문장 중간 삽입(inline)** | **해당 없음.** 이 탭의 모든 컨트롤(디바이스 팝업, 기능 1 의 행, 기능 2 의 F-key 팝업)은 라벨 뒤에 컨트롤이 붙는 표준 배치이지, `Caps lock +` [팝업] `= ◀▼▲▶` 류의 문장 중간 삽입 형태가 필요한 자리가 없다. 억지로 이 패턴을 만들지 않는다 — 없는 사례를 있는 것처럼 적는 것보다, 해당 없음을 명시하는 편이 정직하다 |
+| **② 숨김(hidden)** | (a) 선택된 대상이 실제로 붙어 있으면(또는 `For all devices` 를 선택했으면) `(연결 안 됨)` 접미사는 좌측 패인 항목의 서브라벨 텍스트 자체에만 붙고 별도 DOM 노드가 아니다 — 연결된 디바이스는 그 문구가 아예 만들어지지 않는다. (b) `For all devices` 를 선택한 상태에서는 기능 2 각 F-키의 선택 팝업에서 `--- (공통 설정을 따름)` 선택지 자체가 사라진다 — 공통 계층 위에는 따를 상위 계층이 없으므로 그 선택지는 개념적으로 성립하지 않는다. (c) 선택된 목적지가 §3.5 의 근거 등급에서 "동작 미확인"이면 그 F-키 행 아래에 힌트가 나타나고, 동작이 실측된 목적지를 고르면 그 힌트 자체가 만들어지지 않는다(이슈 #31 ②) |
+| **③ 문장 중간 삽입(inline)** | **해당 없음.** 이 탭의 모든 컨트롤(디바이스 선택 패인, 기능 1 의 행, 기능 2 의 F-key 팝업)은 라벨 뒤에 컨트롤이 붙는 표준 배치이지, `Caps lock +` [팝업] `= ◀▼▲▶` 류의 문장 중간 삽입 형태가 필요한 자리가 없다. 억지로 이 패턴을 만들지 않는다 — 없는 사례를 있는 것처럼 적는 것보다, 해당 없음을 명시하는 편이 정직하다 |
 
 #### 3.1.4 탭별 리사이즈 — 기준 크기와 목록 영역 스크롤
 
-F-09 §3.1 의 탭별 고정 창 크기 표(Seek 555×378 · Hyperkey 710×517 · Presets 825×527 · General 613×273, 전부 실측)에 이 탭을 추가해야 하지만, **이 탭은 신설이라 실측 근거가 없다** `(미확정)`. 설계 목표만 제안한다: 디바이스 팝업 + 두 그룹(목록 편집기 + F1~F12 표)을 담는 밀도가 `Hyperkey` 탭과 비슷할 것으로 보여, 그 크기(710×517pt)를 잠정 목표로 제안한다. 정확한 pt 값은 실제 UI 구현 후 F-09 문서가 실측·확정해야 한다.
+⚠️ **이 절의 전제가 이슈 #32 로 바뀌었다 — 탭별 리사이즈 자체가 없어졌다.** 명세 초판은 F-09 §3.1 의 탭별 고정 창 크기 표에 이 탭을 추가해야 한다고 보고, 신설이라 실측 근거가 없다며 `Hyperkey` 크기(710×517pt)를 잠정 목표로 제안했다. 그러나 이슈 #32(D5, `../spec/README.md` 갈라짐 표)가 **탭마다 창을 리사이즈하는 동작 자체를 걷어내고 단일 고정 크기 + 사용자 조절 크기 영속으로 바꿨다** — 기본값은 `SETTINGS_WINDOW_DEFAULT` = 825 × 821pt 이고, `Keyboards` 탭의 필요 높이 665px 도 그때 **다른 5개 탭과 동등하게 실측**됐다(`main.rs` 의 그 상수 doc 주석). 즉 이 탭만 잠정값이라는 전제는 더 이상 성립하지 않는다.
+
+⛔ 좌측 패인 도입(§3.1.2, 이슈 #31 ④)은 그 창 크기를 바꾸지 않는다 — 패인 폭은 그 안에서 좁게(약 180~200px) 잡고, 넘치는 목록은 패인 내부 스크롤로 흡수한다.
 
 ⭐ **목록 편집기 때문에 같은 탭 안에서 높이가 변하는 문제**는 브리프가 이미 내린 결정을 그대로 따른다: **탭 최소 높이를 정하고, 목록이 그보다 길어지면 목록 편집기 영역만 세로 스크롤한다.** 창 자체는 행 추가·삭제로 늘었다 줄었다 하지 않는다. 예시 기준값(제안, `(미확정)`): 행 6개까지는 탭 높이에 흡수하고, 7행째부터 목록 영역 내부 스크롤이 나타난다.
 
@@ -108,7 +112,7 @@ F-09 §3.1 의 탭별 컨트롤 개수 표는 지금까지 전부 고정 정수�
 
 | 항목 | 개수 |
 | :--- | :--- |
-| 고정 컨트롤 | 4개 — 디바이스 선택 팝업 1 + 그룹 제목 2("키 변환 세트", "Function Keys") + macOS Function Keys 상태 표시줄(읽기전용 뱃지 + 시스템 설정 버튼) 1 |
+| 고정 컨트롤 | 4개 — 디바이스 선택 좌측 패인 1(이슈 #31 ④, §3.1.2) + 그룹 제목 2("키 변환 세트", "Function Keys") + macOS Function Keys 상태 표시줄(읽기전용 뱃지 + 시스템 설정 버튼) 1 |
 | 기능 1 (가변) | 선택된 디바이스/공통 계층의 행 수만큼(0행 이상) — 각 행은 팝업 2개 + 삭제 버튼 1 |
 | 기능 2 (고정) | 12개 — F1~F12 각각 선택 팝업 1개(§3.5) |
 
@@ -125,7 +129,7 @@ F-09 §4 에 편입할 때는 "고정 16개 + 가변 M행(기능 1)"으로 표�
 **기존 자산 재사용 판정(스파이크 §10, 실측)**: `ultrakey-platform/src/hotplug.rs` 의 `IOServiceAddMatchingNotification` 기구는 매칭 필터가 `UsagePage 1 / Usage 6` 로 이 기능이 필요로 하는 것과 정확히 같고, Input Monitoring 권한도 불필요해(`docs/dev/architecture.md` §3 "결정 2") **재사용할 수 있다.** ⛔ 그러나 현재 `pub enum HotplugEvent { Attached, Detached }` 는 **디바이스 속성을 싣지 않는다** — 확인 결과 `hotplug.rs` 는 이터레이터를 순회할 뿐 `IORegistryEntryCreateCFProperty` 로 `VendorID`/`ProductID`/`Product` 를 읽지 않는다. 이 기능은 다음 확장을 요구한다:
 
 1. `HotplugEvent::Attached`/`Detached` 가 `DeviceInfo { vendor_id, product_id, product_name, transport, built_in }` 를 함께 싣도록 확장한다. `IORegistryEntryCreateCFProperty` 로 `VendorID`/`ProductID`/`Product` 읽는 경로를 `drain_iterator` 안에 추가하면 된다(스파이크 §10 이 확장 지점으로 지목한 자리와 동일).
-2. **현재 붙어 있는 키보드를 열거**하는 API(`list_attached_keyboards() -> Vec<DeviceInfo>`)를 신설한다 — 알림 등록 없이 `IOServiceGetMatchingServices` 로 한 번 순회하는 것으로 충분하다. `Keyboards` 탭의 디바이스 팝업 초기 목록과 §3.6 의 기동 시 재조정(startup reconciliation) 둘 다 이 API 를 쓴다.
+2. **현재 붙어 있는 키보드를 열거**하는 API(`list_attached_keyboards() -> Vec<DeviceInfo>`)를 신설한다 — 알림 등록 없이 `IOServiceGetMatchingServices` 로 한 번 순회하는 것으로 충분하다. `Keyboards` 탭의 좌측 패인 초기 목록과 §3.6 의 기동 시 재조정(startup reconciliation) 둘 다 이 API 를 쓴다.
 3. `Built-In` 값을 얻는 정확한 IOKit 프로퍼티 키는 `(미확정)` — `hidutil list` 의 CLI 출력이 어떤 원천 프로퍼티(들)를 조합해 이 컬럼을 만드는지 스파이크가 확인하지 않았다. `ioreg -l` 로 후보 키를 대조해야 한다(§9).
 
 **`(미확정)`으로 남는 것(스파이크 S-4, 그대로 승계)**:
@@ -192,7 +196,7 @@ F-09 의 기존 컨트롤과 다른 점 네 가지:
 
 1. **컨트롤 개수가 설계 시점에 정해지지 않는다.** F-09 §3.1 의 탭별 컨트롤 개수 표(Seek 9개·Hyperkey 8개 …)는 이 탭에 고정 숫자를 쓸 수 없다 — §3.1.5 가 "고정 N개 + 가변 M행" 표기로 이를 반영한다.
 
-2. **F-09 의 탭별 고정 리사이즈 규약과 충돌한다.** F-09 는 "탭마다 창 크기가 다르고 탭 전환 시 리사이즈"인데, 목록 편집기는 **같은 탭 안에서 행 추가·삭제로 높이가 변한다.** → 결정: **탭 최소 높이를 정하고, 목록이 그보다 길어지면 목록 영역만 세로 스크롤한다**(§3.1.4). 창이 행마다 늘었다 줄었다 하지 않는다.
+2. **~~F-09 의 탭별 고정 리사이즈 규약과 충돌한다.~~** 초판의 문제 제기였다 — F-09 가 "탭마다 창 크기가 다르고 탭 전환 시 리사이즈"였는데 목록 편집기는 **같은 탭 안에서 행 추가·삭제로 높이가 변하기** 때문이다. ⚠️ **이슈 #32 가 탭별 리사이즈를 없애면서 이 충돌 자체가 사라졌다**(§3.1.4). 그때 내린 결정(**목록이 길어지면 목록 영역만 세로 스크롤한다**)은 그대로 유효하다 — 창이 행마다 늘었다 줄었다 하지 않는 편이 낫다는 판단은 리사이즈 규약과 무관하게 성립한다.
 
 3. **종속 표현 3종이 행 단위에는 그대로 적용되지 않는다.** 행은 종속이 아니라 **사용자가 만든 데이터**다. dimmed/hidden/inline 은 "디바이스가 선택되지 않았을 때 목록 전체를 어떻게 하는가" 수준에만 적용한다 — 이 탭에서는 §3.1.3 이 이를 구체화한다(`(연결 안 됨)` 배지, `+ Add item` dimmed).
 
@@ -214,44 +218,59 @@ F-09 의 기존 컨트롤과 다른 점 네 가지:
 
 **전제 조건**: macOS 시스템 설정의 `Use F1, F2, etc. keys as standard function keys` 가 **켜져 있어야** 한다. 켜져 있을 때 F-키 단독 입력이 Keyboard Page usage 로 도착함을 실측했다(스파이크 S-9 말미 — F9 단독 입력이 Keyboard Page usage `0x42` 로 도착했고, 우리가 설치한 리매핑이 그것을 갈아탔다). ⚠️ **꺼져 있을 때 무엇이 도착하는지는 `(미확정)`** — 그 경우의 동작을 보증하지 않는다(§5·§9).
 
-**시스템 기능 12종과 usage 대응표**:
+#### ⭐ 이슈 #31 ② — 목적지 카탈로그: 313종 / 15카테고리
 
-| F-키 | 기능 | 근거 등급 | Consumer Page usage(0x0C, 16진) |
-| :--- | :--- | :--- | :--- |
-| F1 | `display_brightness_decrement` | `(미확정)` | 표준 USB HID Consumer Page 정의 기준 후보값 `0x70`(검증 안 됨) |
-| F2 | `display_brightness_increment` | `(미확정)` | 후보값 `0x6F`(검증 안 됨) |
-| F3 | `mission_control` | `(미확정)` | 표준 Consumer Page 대응이 자명하지 않다 — Apple 고유 시스템 제스처라 표준 usage 자체가 없을 가능성이 있다 |
-| F4 | `spotlight` | `(미확정)` | 표준 Consumer Page 대응이 자명하지 않다 — 위와 동일한 사정 |
-| F5 | `dictation` | `(미확정)` | 표준 Consumer Page 대응이 자명하지 않다 — 위와 동일한 사정 |
-| F6 | `do_not_disturb`(macOS 14+) | `(미확정)` | 표준 Consumer Page 대응이 자명하지 않다. macOS 버전 게이트까지 겹쳐 검증 부담이 가장 크다 |
-| F7 | `rewind` | `(미확정)` | 후보값 `0xB4`("Rewind", 검증 안 됨) |
-| F8 | `play_or_pause` | `(미확정)` | 후보값 `0xCD`("Play/Pause", 검증 안 됨) |
-| F9 | `fast_forward` | `(미확정)` | 후보값 `0xB3`("Fast Forward", 검증 안 됨) |
-| F10 | `mute` | `(미확정)` | 후보값 `0xE2`("Mute", 검증 안 됨) |
-| F11 | `volume_decrement` | `(미확정)` | 후보값 `0xEA`("Volume Decrement", 검증 안 됨) |
-| F12 | `volume_increment` | ⭐ **실측** | `0xC000000E9` — 스파이크 S-8 에서 **키 입력으로 확인**. ⚠️ 정확히 실측된 명제는 "`0xC000000E9` 를 `Dst` 로 쓰면 볼륨이 올라간다"이다(시험은 F9 키에 걸어 수행했다). F12 라는 **행 배치**가 검증된 것이 아니라 **usage 값과 그 동작**이 검증된 것이다 |
+명세 초판은 이 자리에서 "시스템 기능 12종"(그중 경로 B 로 실제 표현 가능한 것은 8종뿐)만 선택지로 제시했다. 이슈 #31 이 "Function Keys 옵션이 거의 구현되지 않았다"고 보고했고, 이 판은 그 좁은 선택지를 **목적지 카탈로그 313종 / 15카테고리**로 대체한다. 옛 12종 표는 §9 의 미해결 질문에서 참고용으로만 남긴다(아래 "옛 12종의 지위" 참고).
 
-⭐ **volume_increment 한 종만 `(실측)`이고 나머지 11종은 전부 `(미확정)`이다.** 표의 "후보값" 열은 USB HID Usage Tables 표준 정의를 참고한 **비공식 참조값**일 뿐, 이 프로젝트가 검증한 사실이 아니다 — 근거 등급은 어디까지나 `(미확정)`이며, 후보값은 구현 착수 시 검증 순서를 줄이기 위한 참고로만 둔다. `mission_control`·`spotlight`·`dictation`·`do_not_disturb` 4종은 표준 Consumer Page 대응이 있는지 자체가 불분명해 후보값조차 제시하지 않는다 — Apple 벤더 정의 usage page(비공개)를 요구할 가능성이 있다.
+**출처 — 두 사실의 조인.** 어느 쪽 코드·리소스도 복사하지 않았다 — 목록과 숫자라는 사실만 참조했다:
+
+1. **어떤 목적지가 존재하는가·어느 카테고리인가** — Karabiner-Elements 의 `simple_modifications.json`(읽기 전용으로 조사). 이슈 #31 의 스크린샷에 보이는 그 카테고리 트리와 같다.
+2. **각 이름의 HID usage 숫자** — `pqrs-org/cpp-hid` 의 표준·Apple 벤더 usage page 표와 Karabiner 의 이름 별칭 표를 조인해 얻었고, usage page 번호는 이 워크스테이션의 IOKit SDK 헤더(`IOHIDUsageTables.h`)와 교차 확인했다.
+
+**제외한 카테고리와 그 이유.** `UserKeyMapping` 의 `Dst` 는 `(page << 32) | usage` 한 쌍이라, usage page/usage 로 표현되지 않는 것은 애초에 후보가 될 수 없다 — Karabiner 의 19개 카테고리 중 다음을 통째로 뺐다:
+
+| 뺀 카테고리 | 이유 |
+| :--- | :--- |
+| Mouse buttons(255종) | Button page(0x09) — `UserKeyMapping` 은 키보드 usage 만 다룬다 |
+| Mouse keys(28종) | Karabiner 내부 가상 기능(포인터 이동) — HID usage 가 아니다 |
+| Sticky modifier keys(18종) | Karabiner 내부 상태 기계 — HID usage 가 아니다 |
+| Software function(9종) | Karabiner 내부 기능(설정 창 열기 등) — HID usage 가 아니다 |
+| D-pad·Generic desktop keys | Generic Desktop page(0x01) — D-17-4 의 닫힌 어휘(page ∈ {0x07, 0x0C, 0xFF, 0xFF01}) 밖 |
+| `do_not_disturb` | 같은 이유(Generic Desktop page) — 옛 12종 표 중 유일하게 여기서 탈락한다 |
+
+또 **별칭은 값 기준으로 중복 제거했다.** Karabiner 의 `Others` 카테고리 다수와 `Japanese` 5종은 대부분 다른 카테고리 항목과 같은 usage 값을 가리키는 옛 이름이다(예: `left_alt` = `left_option`) — 같은 값을 두 번 보여 주면 사용자가 "무엇이 다른가"를 알 수 없으므로, 카테고리 순서상 먼저 나오는 것 하나만 남겼다. 그 결과 카테고리는 15개다(Karabiner 의 19개에서 위 표의 넷과 `Japanese` 가 빠진 것): `Disable`·`Modifier keys`·`Controls and symbols`·`Arrow keys`·`Letter keys`·`Number keys`·`Function keys`·`Media controls`·`Keypad keys`·`PC keyboard keys`·`International keys`·`Application launch keys`·`GUI application control keys`·`Remote control buttons`·`Others`.
+
+**동작 근거 등급 — 셋.** usage **숫자**는 전부 표준·벤더 표에서 온 사실이지만, 그 page 를 `UserKeyMapping` 의 목적지로 썼을 때 실제로 동작하는지는 page 마다 근거가 다르다:
+
+| 등급 | 의미 | 대상 |
+| :--- | :--- | :--- |
+| 실측(Measured) | 목적지로 쓴 동작이 키 입력으로 확인됨 | Keyboard page(0x07, F-17 실기 확인) · Consumer page(0x0C, 스파이크 S-8) — 카탈로그 대다수 |
+| 벤더 page 미확인 | usage 값은 Apple 벤더 정의 page(`AppleVendorTopCase` 0x00FF / `AppleVendorKeyboard` 0xFF01) 표의 사실이지만, 목적지로 쓴 동작은 확인 안 됨 | 이 두 page 를 쓰는 항목 전부(`mission_control`·`spotlight`·`brightness_up/down`·`keyboard_fn` 등) |
+| Disable 미확인 | page(Keyboard, 0x07)는 실측됐지만 usage `0x00`("Reserved")을 목적지로 준 동작(IOHID 가 이벤트를 버리는지)은 확인 안 됨 | `disable`(`Disable this key`) 1종 |
+
+물리 키를 눌러 보지 않고는 검증할 수 없다(§9 질문 1·2) — 미검증 항목은 UI 가 그 F-키 행 아래에 "동작 미확인" 힌트로 사실을 그대로 알린다(§3.1.3 (c)). **카탈로그에서 숨기지 않는다** — "고를 수는 있는데 아무 일도 안 일어나는 UX 를 만들지 마라"는 이슈 #31 요구에 대한 이 판의 답은 "빼기"가 아니라 "알리기"다.
+
+**옛 12종의 지위.** 옛 표(위 판본)의 12종은 전부 이 카탈로그의 부분집합이 됐다 — 8종은 값이 그대로 유지되고, `mission_control`·`spotlight`·`dictation` 3종은 오히려 벤더 page 후보를 얻었다(값이 새로 생겼다). `do_not_disturb` 만 여전히 표현 불가능하다(위 표). 옛 저장값(`SystemFunction` variant 이름, 예: `"Mute"`)은 새 저장 표현으로 읽을 때 마이그레이션되어 계속 동작한다 — 사용자가 그 F-키를 다시 저장하는 순간 새 목적지 id(예: `"consumer.mute"`)로 넘어간다.
 
 #### ⭐ 각 행은 "켜고 끄기"가 아니라 **"무엇을 할지 고르기"** 다
 
-⚠️ **이 결정을 이진 토글로 축소해서는 안 된다.** F-키마다 `미디어 키로 / 표준 F-키로` 두 상태만 주면, F1 은 영원히 밝기 감소에만 묶이고 **F1 을 `mute` 로 바꾸는 것이 불가능해진다.** 그것은 이 기능이 대응하는 Karabiner `Function Keys` 가 실제로 주는 값(각 행이 12종 중 하나를 고르는 드롭다운)보다 좁고, §1 이 내건 재정의("이 디바이스의 F1~F12 각 키가 **무엇을 하는가**")와도 어긋난다.
+⚠️ **이 결정을 이진 토글로 축소해서는 안 된다.** F-키마다 `미디어 키로 / 표준 F-키로` 두 상태만 주면, F1 은 영원히 밝기 감소에만 묶이고 **F1 을 `mute` 로 바꾸는 것이 불가능해진다.** 그것은 이 기능이 대응하는 Karabiner `Function Keys` 가 실제로 주는 값(각 행이 목적지 목록 중 하나를 고르는 드롭다운)보다 좁고, §1 이 내건 재정의("이 디바이스의 F1~F12 각 키가 **무엇을 하는가**")와도 어긋난다.
 
 **따라서 각 행은 선택 팝업이며 선택지는 다음과 같다:**
 
 | 선택지 | 의미 | 저장 |
 | :--- | :--- | :--- |
 | `--- (공통 설정을 따름)` | 상위 계층 값을 쓴다 | **키 부재** |
-| 시스템 기능 12종 중 하나 | 이 F-키가 그 기능을 낸다 | 기능 이름 문자열(예: `"mute"`) |
+| 목적지 카탈로그 313종 중 하나 | 이 F-키가 그 목적지로 매핑된다 | 목적지 id 문자열(예: `"consumer.mute"`, `"key.f1"`, `"disable"`) |
 | `표준 F-키로 사용` | 이 디바이스에서 이 키는 그냥 F-키다(= 명시적 끔) | `null` |
 
-⭐ **경로 B 관점에서 12종 중 무엇을 고르든 비용이 같다** — 배열 항목의 `Dst` 에 들어가는 usage 값이 달라질 뿐이다. 표현력을 좁힐 기술적 이유가 없다.
+⭐ **경로 B 관점에서 313종 중 무엇을 고르든 비용이 같다** — 배열 항목의 `Dst` 에 들어가는 usage 값이 달라질 뿐이다. 표현력을 좁힐 기술적 이유가 없다.
 
-**저장**: `perDevice.<vid>:<pid>.functionKeys.f1`~`f12` 각각 **기능 이름 문자열**(디바이스별 값) / `null`(끔) / 부재(공통 따름). §3.3 의 "`값 === null` 이면 명시적 끔" 판정 규약은 그대로 유지된다.
+**저장**: `perDevice.<vid>:<pid>.functionKeys.f1`~`f12` 각각 **목적지 id 문자열**(디바이스별 값) / `null`(끔) / 부재(공통 따름). §3.3 의 "`값 === null` 이면 명시적 끔" 판정 규약은 그대로 유지된다.
 
-**기본 배치**: `perDevice.all.functionKeys.*` 의 출고 기본값은 **부재**다(= 매핑을 설치하지 않는다 = 표준 F-키). 스크린샷의 `For all devices` 배치(f1 밝기↓ … f12 볼륨↑)는 **Karabiner 가 그렇게 채워 둔 것**이지 우리 출고 기본값이 아니다 — F-15 의 "부재 = 기본값"을 지키려면 우리는 아무것도 미리 쓰지 않아야 한다. 다만 사용자가 각 행을 열었을 때 **그 위치의 관례적 기능이 목록 맨 위에 오도록** 정렬해 선택 비용을 낮춘다.
+**기본 배치**: `perDevice.all.functionKeys.*` 의 출고 기본값은 **부재**다(= 매핑을 설치하지 않는다 = 표준 F-키). 스크린샷의 `For all devices` 배치(f1 밝기↓ … f12 볼륨↑)는 **Karabiner 가 그렇게 채워 둔 것**이지 우리 출고 기본값이 아니다 — F-15 의 "부재 = 기본값"을 지키려면 우리는 아무것도 미리 쓰지 않아야 한다.
 
-**UI**: F1~F12 각 행 = 정적 라벨(F-키 번호) + 위 선택 팝업. `For all devices` 선택 시 첫 항목(`--- (공통 설정을 따름)`)은 숨겨진다(§3.1.3).
+**UI**: F1~F12 각 행 = 정적 라벨(F-키 번호) + 선택 팝업. 팝업 순서: `--- (공통 설정을 따름)`(디바이스 선택 시에만) → `표준 F-키로 사용`(⚠️ 313개 목적지 **앞**에 둔다 — 뒤에 있으면 스크롤 없이는 사실상 못 찾는다) → 카테고리 15개 각각 `<optgroup>` + 그 안의 목적지. 목적지 라벨은 HID usage 이름 그대로 쓰고(키캡 각인과 같은 이유로 번역하지 않는다) 카테고리 이름만 번역한다. `For all devices` 선택 시 첫 항목(`--- (공통 설정을 따름)`)은 숨겨진다(§3.1.3). 선택된 목적지가 동작 미확인 등급이면 그 행 아래에 힌트가 나타난다(§3.1.3 (c)).
 
 #### 3.5.1 ⭐ macOS 자체 설정과의 관계 — 왜 별도 기구가 필요한가
 
@@ -259,7 +278,18 @@ macOS 는 `Use F1, F2, etc. keys as standard function keys` **토글 하나**만
 
 UI 는 Karabiner 처럼 **현재 macOS 토글 상태를 표시하고 시스템 설정으로 가는 버튼을 둔다.** 우리가 그 값을 바꾸지는 않는다(사용자의 시스템 설정을 대신 조작하지 않는다) — `Keyboards` 탭 상단의 고정 컨트롤 하나(§3.1.5)가 이 표시줄이다.
 
-**읽는 방법 — ⭐ 실측으로 확정(2026-08-30, 이슈 #28)**: 이 토글은 전역 도메인(`NSGlobalDomain`)의 `com.apple.keyboard.fnState` 불리언이 **맞다**. 검증 명령과 출력: `defaults read -g com.apple.keyboard.fnState` → `1`(토글 켜짐). 구현은 `CFPreferencesCopyAppValue(CFSTR("com.apple.keyboard.fnState"), kCFPreferencesAnyApplication)` 로 읽는다 — 키가 아예 없으면 꺼짐(macOS 기본), 호출 자체가 실패하면 UI 에 "알 수 없음" 으로 표시한다. 시스템 설정으로 연결하는 버튼은 `open x-apple.systempreferences:com.apple.preference.keyboard` 류의 URL 스킴을 쓰는 것이 관례이나 이 역시 검증되지 않았다(`(추정)`) — §9.
+⭐ **이슈 #31 ③ 로 아래 두 가지가 갱신됐다 — 옛 판본(`CFPreferences` 읽기 + 최상단 URL)은 사용자가 실제로 겪은 두 버그의 원인이었다.**
+
+**딥링크 — Function Keys 패널로 바로 들어간다.** 옛 URL(`x-apple.systempreferences:com.apple.preference.keyboard`)은 Ventura 이전 번들 이름이라 지금 macOS 에서는 `Keyboard` 최상단 화면만 열린다(사용자 보고: "시스템 세팅스를 열었을 때 해당 메뉴로 바로 진입하지 않는다"). 대신
+`x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys` 를 쓴다 — Karabiner-Elements 의 `Open System Settings > Function Keys…` 버튼이 쓰는 것과 같은 문자열이고(그 앱 바이너리의 `strings` 출력으로 교차 확인), 확장자 번들 ID(`com.apple.Keyboard-Settings.extension`)는 `Keyboard-Settings.appex` 의 `Info.plist` 로 교차 확인했다.
+
+**읽는 방법 — IOKit 레지스트리(`CFPreferences` 가 아니다).** 이슈 #28 이 처음 확정했을 때는 전역 도메인(`NSGlobalDomain`)의 `com.apple.keyboard.fnState` 를 `CFPreferencesCopyAppValue` 로 읽었다(검증: `defaults read -g com.apple.keyboard.fnState` → `1`). 그러나 이슈 #31 에서 사용자가 **시스템 설정에서 토글을 꺼도 앱이 계속 On 으로 표시한다**고 보고했다 — 원인은 `CFPreferences` 가 프로세스 안에서 값을 캐시해, 우리 프로세스가 살아있는 동안 시스템 설정 앱이 값을 바꿔도 그 변경을 반영하지 못하는 것이다. Karabiner-Elements 는 정확히 이 이유로 `CFPreferences` 대신 IOKit 레지스트리에서 이 값을 읽는다(커널이 들고 있어 캐시되지 않는다) — 우리도 같은 경로로 바꿨다:
+
+- 레지스트리 엔트리: `IOHIDSystem` 서비스(`IOService:/IOResources/IOHIDSystem`)
+- 프로퍼티: `HIDParameters`(`CFDictionary`) 안의 `HIDFKeyMode`(정수) — `0` 이 아니면 토글 켜짐
+- 이 워크트리에서 직접 실측 확인(2026-08-30): `ioreg -l -w 0 -c IOHIDSystem | grep -o 'HIDFKeyMode"=[0-9]*'` → `HIDFKeyMode"=1`, 같은 시점 `defaults read -g com.apple.keyboard.fnState` → `1` — 두 경로가 같은 값을 준다. 차이는 IOKit 쪽이 **커널의 현재 값**이라 절대 캐시되지 않는다는 점이다
+
+**폴링 — 변경 알림이 아니라 3초 주기.** `com.apple.keyboard.fnstatedidchange` 같은 분산 알림이 실제로 게시되는지 확인하지 못했다(§9 질문 12) — 그래서 Karabiner 와 같은 방식으로 이 값을 3초 주기로 다시 읽는다. 비용은 IOKit 프로퍼티 1회 읽기라 작지만, `Keyboards` 탭이 실제로 보일 때만(창이 숨겨지거나 다른 탭으로 전환하면 멈춘다) 돈다.
 
 ### 3.6 ⭐ 자원 공존 — 경로 B 합성과 D-1 재설계
 
@@ -327,7 +357,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 ⛔ 하드코딩 금지 — 아래는 이 탭이 새로 요구하는 문자열 키다. 35종 키 이름(from/to 팝업 선택지)은 `F-05` 카탈로그를 재사용하며 여기서 새로 만들지 않는다.
 
-⭐ **시스템 기능 이름은 F-키 위치가 아니라 기능 정체성으로 키를 잡는다**(`…function.mute`, `…name.f10` 이 아니라) — §3.5 에서 각 F-키가 12종 중 무엇이든 고를 수 있게 했으므로, 위치에 이름을 묶으면 `F1` 에 `mute` 를 고른 순간 라벨이 어긋난다.
+⭐ **이슈 #31 ② 로 목적지 개별 이름은 더 이상 이 카탈로그에 없다.** 목적지 313종의 라벨은 HID usage 이름 그대로 UI 에 실리고(키캡 각인과 같은 이유로 번역하지 않는다), 번역이 필요한 것은 **카테고리 이름 15개**와 예외 항목 `disable` 하나뿐이다 — 옛 판본의 "시스템 기능 12종" 문자열 키(`…function.mute` 등)는 전부 폐기됐다.
 
 | 키(제안) | en | ko |
 | :--- | :--- | :--- |
@@ -343,20 +373,25 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | `preferences.keyboards.functionKeys.useStandardFKey` | `Use as standard function key` | `표준 F-키로 사용` |
 | `preferences.keyboards.functionKeys.macosStatus.label` | `macOS setting: "Use F1, F2, etc. keys as standard function keys"` | `macOS 설정: "F1, F2 등의 키를 표준 기능 키로 사용"` |
 | `preferences.keyboards.functionKeys.macosStatus.openButton` | `Open System Settings` | `시스템 설정 열기` |
-| `preferences.keyboards.functionKeys.function.displayBrightnessDown` | `Display brightness down` | `디스플레이 밝기 낮추기` |
-| `preferences.keyboards.functionKeys.function.displayBrightnessUp` | `Display brightness up` | `디스플레이 밝기 높이기` |
-| `preferences.keyboards.functionKeys.function.missionControl` | `Mission Control` | `Mission Control` |
-| `preferences.keyboards.functionKeys.function.spotlight` | `Spotlight` | `Spotlight` |
-| `preferences.keyboards.functionKeys.function.dictation` | `Dictation` | `받아쓰기` |
-| `preferences.keyboards.functionKeys.function.doNotDisturb` | `Do Not Disturb` | `방해 금지 모드` |
-| `preferences.keyboards.functionKeys.function.rewind` | `Rewind` | `되감기` |
-| `preferences.keyboards.functionKeys.function.playPause` | `Play/Pause` | `재생/일시정지` |
-| `preferences.keyboards.functionKeys.function.fastForward` | `Fast Forward` | `빨리 감기` |
-| `preferences.keyboards.functionKeys.function.mute` | `Mute` | `음소거` |
-| `preferences.keyboards.functionKeys.function.volumeDown` | `Volume Down` | `볼륨 낮추기` |
-| `preferences.keyboards.functionKeys.function.volumeUp` | `Volume Up` | `볼륨 높이기` |
+| `preferences.keyboards.functionKeys.disable` | `Nothing (disable this key)` | `아무 동작 없음 (이 키 비활성화)` |
+| `preferences.keyboards.functionKeys.unverifiedHint` | `This destination's usage page has not been verified to work through hidutil.` | `이 목적지의 usage page 가 hidutil 을 통해 실제로 동작하는지는 아직 확인되지 않았습니다.` |
+| `preferences.keyboards.functionKeys.category.disable` | `Disable` | `비활성화` |
+| `preferences.keyboards.functionKeys.category.modifierKeys` | `Modifier keys` | `보조키` |
+| `preferences.keyboards.functionKeys.category.controlsAndSymbols` | `Controls and symbols` | `제어 및 기호` |
+| `preferences.keyboards.functionKeys.category.arrowKeys` | `Arrow keys` | `방향키` |
+| `preferences.keyboards.functionKeys.category.letterKeys` | `Letter keys` | `문자키` |
+| `preferences.keyboards.functionKeys.category.numberKeys` | `Number keys` | `숫자키` |
+| `preferences.keyboards.functionKeys.category.functionKeys` | `Function keys` | `기능키` |
+| `preferences.keyboards.functionKeys.category.mediaControls` | `Media controls` | `미디어 컨트롤` |
+| `preferences.keyboards.functionKeys.category.keypadKeys` | `Keypad keys` | `키패드키` |
+| `preferences.keyboards.functionKeys.category.pcKeyboardKeys` | `PC keyboard keys` | `PC 키보드키` |
+| `preferences.keyboards.functionKeys.category.internationalKeys` | `International keys` | `다국어 키` |
+| `preferences.keyboards.functionKeys.category.applicationLaunchKeys` | `Application launch keys` | `앱 실행 키` |
+| `preferences.keyboards.functionKeys.category.guiApplicationControlKeys` | `GUI application control keys` | `GUI 앱 제어 키` |
+| `preferences.keyboards.functionKeys.category.remoteControlButtons` | `Remote control buttons` | `리모컨 버튼` |
+| `preferences.keyboards.functionKeys.category.others` | `Others` | `기타` |
 
-> ⚠️ 이 카피는 이 명세 문서의 **제안**이지 최종 확정된 UI 카피가 아니다. 원본 SuperKey 에 대응 문구가 없으므로(§1 divergence) 표절 대상 원문이 없다 — F-09 UI 구현·리뷰 단계에서 조정될 수 있다.
+> ⚠️ 이 카피는 이 명세 문서의 **제안**이지 최종 확정된 UI 카피가 아니다. 원본 SuperKey 에 대응 문구가 없으므로(§1 divergence) 표절 대상 원문이 없다 — F-09 UI 구현·리뷰 단계에서 조정될 수 있다. ⚖️ 카테고리 영문 라벨은 **우리 문구다** — Karabiner 의 카테고리 이름을 그대로 베끼지 않았다. 대부분은 그 분류를 가리키는 자연스러운 영어라 결과적으로 같아지지만(`Modifier keys`·`Arrow keys` 등), 두 곳은 의도적으로 다르게 썼다: Karabiner 의 `Keys in pc keyboards` → `PC keyboard keys`, `Generic GUI application control keys` → `GUI application control keys`. 이 기능이 참조한 것은 **어떤 목적지가 어느 분류에 속하는가라는 사실**이지 그 표현이 아니다(§3.5 "출처").
 
 ### 4.2 기능 1 — 디바이스별 키 변환 세트
 
@@ -371,14 +406,14 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 | # | 항목 | 컨트롤 | 저장 키 | 기본값 |
 | :--- | :--- | :--- | :--- | :--- |
-| 1~12 | `F1`~`F12` 각각 | 선택 팝업 — `--- (공통 설정을 따름)` + **시스템 기능 12종** + `표준 F-키로 사용`(§3.5) | `perDevice.all.functionKeys.f1`~`f12` / `perDevice.<vid>:<pid>.functionKeys.f1`~`f12` | 부재(공통 따름 → 최상위에서 표준 F-키) |
+| 1~12 | `F1`~`F12` 각각 | 선택 팝업 — `--- (공통 설정을 따름)` + `표준 F-키로 사용` + **목적지 카탈로그 313종/15카테고리**(§3.5, 이슈 #31 ②) | `perDevice.all.functionKeys.f1`~`f12` / `perDevice.<vid>:<pid>.functionKeys.f1`~`f12` | 부재(공통 따름 → 최상위에서 표준 F-키) |
 | — | macOS 설정 상태 표시줄 | 읽기 전용 뱃지 + `시스템 설정 열기` 버튼 | — (macOS 전역 설정을 읽기만 함, 우리가 쓰지 않음) | — |
 
 ---
 
 ## 5. 엣지 케이스와 실패 모드
 
-1. **설정된 디바이스가 뽑혀 있을 때** — 설정은 남기고 디바이스 선택 팝업에 `(연결 안 됨)` 배지로 표시한다. 삭제하지 않는다(시나리오 E).
+1. **설정된 디바이스가 뽑혀 있을 때** — 설정은 남기고 좌측 패인 항목에 `(연결 안 됨)` 접미사로 표시한다. 삭제하지 않는다(시나리오 E).
 2. **앱 비정상 종료 후 잔존 매핑** — `F-07` §3-a2 의 디바이스 판본(§3.6 규칙 6). 원장에 있는 디바이스가 다음 실행 시작 또는 재연결 시 계산된 배열로 덮어써진다.
 3. **다른 HID 계층 리매퍼(Karabiner 등)와의 공존** — `F-07` §5 #19. Karabiner 는 가상 HID 디바이스를 만들어 붙이므로 **우리 디바이스 목록에 가상 디바이스가 나타날 수 있다.** 그것을 목록에 보일지는 `(미확정)` — 사용자에게 의미 없는 항목(가상 드라이버 이름)이 섞여 혼란을 줄 수도 있고, 반대로 실제로 매핑 가능한 대상이라 숨기면 안 될 수도 있다(§9).
 4. **같은 `from` 을 기능 1 의 두 행이 요구** — §3.4 의 충돌 대화상자.
@@ -414,7 +449,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 - `IOHIDServiceClientSetProperty`/`IORegistryEntryCreateCFProperty` 계열 FFI 가 필요하고(핫플러그 콜백에 디바이스 속성을 싣는 데 `IORegistryEntryCreateCFProperty` 가 필요), 네이티브 `.m`/`.swift` 는 필요 없다 — `key-remapping-engine.md` §7 이 이미 같은 분류를 확정한 IOKit 계열 함수들이다.
 - **1차 구현은 기존 `hid_mapping.rs` 처럼 `hidutil` 서브프로세스로 간다.** `key-remapping-engine.md` §7 의 판정 반전(FFI 대신 `hidutil` 1차 채택)과 같은 근거를 그대로 물려받는다 — `IOHIDServiceClientSetProperty`/`IOHIDEventSystemClientCreateSimpleClient` 는 공개 헤더에 없는 심볼이라 시그니처를 검증할 수 없고, `platform-constraints.md` P6 의 경고("시그니처를 추측으로 쓰지 말 것")가 그대로 적용된다.
 - 구체적 변경 지점: `HidutilBackend::apply`/`read_current`/`clear` 가 현재 매칭 인자를 받지 않는다(§3.6) — `{VendorID, ProductID}` 매칭 사전을 받는 시그니처로 확장해야 한다. `set_mapping_json` 은 이미 임의 개수의 `KeyMapping` 을 받으므로, 합성된 배열(D-1 + 기능1 + 기능2)을 그대로 넘기면 된다(§3.6 규칙 4).
-- `Keyboards` 탭 자체(디바이스 팝업, 목록 편집기, 기능 선택 팝업)는 `F-09` 가 이미 채택한 Tauri/WebView 렌더링 인프라를 그대로 쓴다 — 이 문서가 새로 판정할 렌더링 계층 플랫폼 API 는 없다.
+- `Keyboards` 탭 자체(디바이스 선택 좌측 패인, 목록 편집기, 기능 선택 팝업)는 `F-09` 가 이미 채택한 Tauri/WebView 렌더링 인프라를 그대로 쓴다 — 이 문서가 새로 판정할 렌더링 계층 플랫폼 API 는 없다.
 
 **기각한 대안**: FFI 직접 호출을 1차로 — `key-remapping-engine.md` §7 이 이미 이 대안을 검토하고 기각했다(추측 시그니처의 `extern "C"` 호출은 컴파일·테스트를 통과한 뒤 임의 시점에 UB 를 낸다). 이 문서가 같은 결론을 다시 낼 이유가 없다.
 
@@ -422,7 +457,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 ## 8. 수용 기준
 
-- [ ] `Keyboards` 탭이 F-09 의 4개 탭 뒤에 5번째로 존재하고, 디바이스 선택 팝업 + 두 그룹(키 변환 세트·Function Keys)으로 구성된다.
+- [ ] `Keyboards` 탭이 F-09 의 4개 탭 뒤에 5번째로 존재하고, 디바이스 선택 좌측 패인 + 두 그룹(키 변환 세트·Function Keys)으로 구성된다.
 - [ ] 디바이스 A 에 등록한 기능 1/2 설정이 디바이스 B 에 전혀 영향을 주지 않는다(스파이크 S-1 재현).
 - [ ] D-1(caps lock 의존 규칙이 켜져 있는 경우)이 설치된 디바이스에서 기능 1/2 설정도 함께 정상 적용된다 — 즉 D-1 과 F-17 이 같은 디바이스의 배열에서 **공존**한다(§3.6 규칙 2·4).
 - [ ] 기능 1 목록에서 행을 추가·삭제·수정하면 즉시(별도 저장 버튼 없이) 해당 디바이스의 경로 B 배열이 갱신되고, 빈 행(from/to 미선택)은 저장 파일에 반영되지 않는다.
@@ -450,10 +485,13 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | 5 | 기능 2 의 11종(volume_increment 제외) 시스템 기능이 표에 제시한 후보 Consumer Page usage 로 실제 동작하는가 | `(미확정)` — 후보값은 검증되지 않은 참고값(§3.5) | 스파이크 S-8 과 동일한 통제 실험(대조군 포함, 매핑을 주기적으로 재설치해 S-6 을 이기고, 설치 직후·키 입력 직후 되읽기로 생존 확인) 을 나머지 11종 각각에 반복 |
 | 6 | `mission_control`/`spotlight`/`dictation`/`do_not_disturb` 4종이 표준 Consumer Page 로 표현 가능한지, 아니면 Apple 벤더 정의 usage page 가 필요한지 | `(미확정)` | USB HID Usage Tables 표준 문서 대조 + 실제 usage 값 후보를 걸고 키 입력으로 확인(질문 5 와 같은 절차) |
 | 7 | `hidutil list` 의 `Built-In` 컬럼이 어느 IOKit 프로퍼티(들)에서 유도되는가 | `(미확정)` | `ioreg -l` 로 동일 디바이스의 전체 프로퍼티를 덤프해 후보 키(`BuiltIn`, `kIOHIDBuiltInKey` 등) 대조 |
-| 8 | `com.apple.keyboard.fnState` 가 실제 저장 키 이름·도메인이 맞는가 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — `defaults read -g com.apple.keyboard.fnState` → `1`. `NSGlobalDomain`(`kCFPreferencesAnyApplication`)의 `com.apple.keyboard.fnState` 로 확정 | (해소됨) 재확인이 필요하면 시스템 설정에서 토글을 켜고 끄며 같은 명령의 출력 변화를 관찰 |
+| 8 | `com.apple.keyboard.fnState` 가 실제 저장 키 이름·도메인이 맞는가 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — `defaults read -g com.apple.keyboard.fnState` → `1`. `NSGlobalDomain`(`kCFPreferencesAnyApplication`)의 `com.apple.keyboard.fnState` 로 확정. ⚠️ **그러나 이 경로는 더 이상 쓰지 않는다** — 키 이름은 맞았지만 `CFPreferences` 가 프로세스 안에서 값을 캐시해 외부 변경을 반영하지 못했다(이슈 #31 ③). 읽기는 IOKit `HIDFKeyMode` 로 옮겼다(§3.5.1) | (해소됨) 재확인이 필요하면 시스템 설정에서 토글을 켜고 끄며 같은 명령의 출력 변화를 관찰 |
 | 9 | 다른 HID 계층 리매퍼(Karabiner 등)의 가상 디바이스를 `Keyboards` 탭 목록에 보일지 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — ⭐ **애초에 목록에 오지 않으므로 제품 결정이 필요 없다.** Karabiner-Elements 가 **실행 중인 상태**(`Karabiner-Core-Service` · `Karabiner-VirtualHIDDevice-Daemon` · DriverKit `dext` 셋 다 살아 있음)에서 `hidutil list` 전체 253행 중 `karabiner`/`pqrs`/`virtual` 에 걸리는 행이 **0건**이었다 | (해소됨) 다른 리매퍼(예: 가상 HID 를 실제로 노출하는 도구)가 등장하면 같은 절차로 재확인 |
 | 10 | 35종 소스 키 어휘로 못 덮는 실사용 요구가 있는가(문자 키·숫자 키 재배정 등) | `(미확정)` | 사용자 요청/이슈 수집. 스파이크·조사 범위 밖 |
-| 11 | 디바이스가 많을 때(예: 5대 이상 상시 연결) 팝업 기반 디바이스 선택이 실사용에 불편한가 | `(미확정)` — §3.1.2 가 재검토 가능 결정으로 남겼다 | 다수 디바이스 보유 사용자 대상 사용성 테스트, 또는 좌측 목록 UI 로 재설계 시 F-09 리사이즈 규약과의 충돌 재평가 |
+| 11 | 디바이스가 많을 때(예: 5대 이상 상시 연결) 팝업 기반 디바이스 선택이 실사용에 불편한가 | ⭕ **해소(제품 결정, 이슈 #31 ④)** — 사용자가 직접 이 불편을 보고했다. §3.1.2 를 좌측 세로 패인(Karabiner 식 배치)으로 갱신했다 — 팝업을 열지 않고도 지금 어느 디바이스를 보고 있는지 항상 보인다 | (해소됨) 다수 디바이스 보유 사용자의 후속 피드백으로 배치 자체를 재평가할 수 있다 |
+| 12 | `AppleVendorTopCase`(0x00FF)·`AppleVendorKeyboard`(0xFF01) page 를 `UserKeyMapping` 의 목적지로 썼을 때 실제로 동작하는가 | `(미확정)` — usage 값은 표준·벤더 표에서 온 사실이지만, 그 page 를 목적지로 쓴 동작 자체는 물리 키 입력 없이는 검증할 수 없다(§3.5 `VendorPageUnverified` 등급, 이슈 #31 ②) | 이 두 page 를 쓰는 목적지(예: `mission_control`, `brightness_up`) 를 F-키에 걸고 실제로 눌러 동작을 확인 — 질문 5 와 같은 통제 실험 절차 |
+| 13 | `Disable this key`(Keyboard page usage `0x00`)를 목적지로 줬을 때 IOHID 가 이벤트를 버리는가 | `(미확정)` — page(Keyboard, 0x07)는 실측됐지만 usage `0x00`("Reserved")을 목적지로 준 동작은 확인 안 됨(§3.5 `DisableUnverified` 등급) | F-키 하나를 `disable` 목적지로 매핑하고 실제로 눌러 아무 이벤트도 발생하지 않는지 확인 |
+| 14 | `com.apple.keyboard.fnstatedidchange` 가 실제로 분산 알림으로 게시되는가 | `(미확정)` — 확인하지 못해 3초 폴링을 택했다(§3.5.1) | `NSDistributedNotificationCenter` 로 이 이름을 구독해 두고 시스템 설정에서 토글을 켜고 끄며 알림이 실제로 도착하는지 로그로 관찰 — 도착이 확인되면 폴링을 알림 구독으로 대체할 수 있다 |
 
 **폴백 정책 기록 — 검토했으나 기각한 대안들.** 디바이스 구분(§3.2)은 스파이크 S-1 이 **가능한 것으로 실측 확정**했으므로, 주 경로에 폴백은 필요 없다. 그러나 그 판단 과정을 기록으로 남긴다:
 
@@ -461,4 +499,4 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 - **기능 2 포기** — 기각. S-8 이 Consumer Page 목적지의 실제 동작을 키 입력으로 확인했다. 다만 `fn +` 조건은 표현할 수 없어 §3.5 가 의미론을 다시 정의하는 것으로 대응했다.
 - **경로 A 로 구현** — 기각. 경로 A(`CGEventTap`)는 세션 전체 이벤트를 받아 **디바이스를 구분할 수 없다**(`F-07` §1). 표현력은 높지만 이 기능의 핵심 요구(디바이스 한정)를 원리적으로 만족할 수 없다.
 
-**남는 한 가지 진짜 한계**: 동일 모델 2대(같은 VID+PID)는 구분되지 않아 설정을 공유한다(§3.2, §5 항목 8). 이때는 전역 격하가 아니라 **"두 대가 한 항목을 공유한다"**로 다루고, 사용자에게도 그렇게 보이도록 한다(예: 디바이스 팝업에 두 대를 하나의 항목으로만 표시) — 이는 원리적 한계이지 설계 실패가 아니다.
+**남는 한 가지 진짜 한계**: 동일 모델 2대(같은 VID+PID)는 구분되지 않아 설정을 공유한다(§3.2, §5 항목 8). 이때는 전역 격하가 아니라 **"두 대가 한 항목을 공유한다"**로 다루고, 사용자에게도 그렇게 보이도록 한다(예: 좌측 패인에 두 대를 하나의 항목으로만 표시) — 이는 원리적 한계이지 설계 실패가 아니다.

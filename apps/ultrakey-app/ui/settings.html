@@ -119,6 +119,38 @@
 
   input[type="range"] { width: 200px; }
 
+  /* Keyboards 탭 — 디바이스 선택 좌측 패인(이슈 #31 ④, Karabiner 식 배치).
+     ⛔ 창 크기는 이 변경 범위 밖(이슈 #32) — 패인 폭만 좁게 고정하고 넘치는
+     내용은 패인 안에서만 세로 스크롤한다. 다른 색과 마찬가지로 시스템 색
+     (currentColor 기반 color-mix)만 쓴다 — 새 색을 하드코딩하지 않는다. */
+  .keyboards-layout { display: flex; gap: 14px; align-items: flex-start; }
+  .keyboards-device-pane {
+    width: 190px;
+    flex: 0 0 auto;
+    max-height: 380px;
+    overflow-y: auto;
+    border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    border-radius: 6px;
+    padding: 4px;
+  }
+  .keyboards-device-pane [role="option"] {
+    display: block;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .keyboards-device-pane [role="option"]:hover {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+  .keyboards-device-pane [role="option"][aria-selected="true"] {
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    font-weight: 600;
+  }
+  .keyboards-device-pane .device-name { display: block; }
+  .keyboards-device-pane .device-ids { display: block; opacity: .6; font-size: 11px; }
+  .keyboards-detail-pane { flex: 1 1 auto; min-width: 0; }
+  .fkey-item { margin-bottom: 2px; }
+
   /* 충돌 대화상자 오버레이 — 창 안에서만 뜨는 모달. */
   #conflict-overlay {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -480,22 +512,39 @@
          이 탭은 F-17 명세가 새로 잡은 이름이라 표를 그대로 따르는 쪽이 근거가 더
          선명하다).
 
-         고정 컨트롤 4개(§3.1.5): 디바이스 선택 팝업 1 + 그룹 제목 2("키 변환 세트",
+         고정 컨트롤 4개(§3.1.5): 디바이스 선택 좌측 패인 1(이슈 #31 ④ — Karabiner
+         식 배치로 재설계, 아래 근거 참고) + 그룹 제목 2("키 변환 세트",
          "Function Keys") + macOS Function Keys 상태 표시줄(뱃지+버튼) 1.
          기능 1(가변 M행): 가변 길이 목록 편집기(§3.4.1) — JS 의 renderKeyRemapGroup()
          이 매 렌더마다 행을 새로 그린다(다른 탭의 renderTrackpadExtra() 와 같은
          "② 숨김" 패턴 — DOM 을 통째로 비우고 다시 채운다).
-         기능 2(고정 12개): F1~F12 각각 선택 팝업.
+         기능 2(고정 12개): F1~F12 각각 선택 팝업(이슈 #31 ② — 목적지 카탈로그
+         313종/15카테고리로 확장, populateFunctionKeySelect 참고).
+
+         ⭐ 이슈 #31 ④ — 디바이스 선택을 팝업에서 **좌측 세로 패인**으로 바꾼
+         근거: 사용자 요청("카라비너처럼 … 왼쪽의 패인으로 배치하는 형태가 훨씬
+         가시성이 좋은 것 같음") + 참고 스크린샷
+         (docs/research/screenshots/issue-31-karabiner-function-keys-menu.png).
+         기각한 대안 — 팝업 유지: per-device-settings.md §3.1.2 확정 당시의
+         선택이었지만, 그 문서 자신이 "디바이스가 많아지면 팝업이 불편해질 수
+         있다"고 재검토 여지를 남겼다(§9 질문 11) — 이슈 #31 이 그 재검토를
+         트리거했다. ⛔ 창 크기는 이 변경의 범위 밖이다(이슈 #32 담당) — 패인
+         폭만 좁게(약 180~200px) 잡고, 넘치면 패인 내부만 세로 스크롤한다. 창
+         자체가 좁아 항목이 빽빽해 보일 수 있다는 것은 이 트레이드오프의 알려진
+         대가로 남긴다.
 
          종속 표현 3종(§3.1.3):
            ① dimmed — 목록 끝에 미완성(from/to 미선택) 행이 있는 동안
                       #keyboards-keyremap-add-btn 이 disabled.
-           ② 숨김   — (a) `(연결 안 됨)` 배지는 디바이스 팝업의 옵션 텍스트 자체에
-                      접미로만 붙고 별도 DOM 노드가 아니다(연결된 디바이스를 고르면
-                      그 문구가 아예 만들어지지 않는다). (b) `For all devices` 선택
-                      시(`currentDevice === "all"`) 기능 2 팝업에서
-                      `followCommon` 옵션 자체를 만들지 않는다
-                      (populateFunctionKeySelect 의 includeFollow 인자).
+           ② 숨김   — (a) `(연결 안 됨)` 접미사는 좌측 패인 항목의 서브라벨
+                      텍스트 자체에만 붙고 별도 DOM 노드가 아니다(연결된
+                      디바이스는 그 문구가 아예 만들어지지 않는다). (b)
+                      `For all devices` 선택 시(`currentDevice === "all"`) 기능 2
+                      팝업에서 `followCommon` 옵션 자체를 만들지 않는다
+                      (populateFunctionKeySelect 의 includeFollowCommon 인자).
+                      (c) 선택된 목적지가 `verified === true` 면 "동작 미확인"
+                      힌트 자체가 만들어지지 않는다(이슈 #31 ②,
+                      renderHiddenNote 와 같은 패턴).
            ③ 문장 중간 삽입 — 해당 없음(명세 §3.1.3 이 명시적으로 "해당 없음"이라고
                       못박았다 — 이 탭의 모든 컨트롤은 라벨 뒤에 컨트롤이 붙는
                       표준 배치다).
@@ -510,47 +559,94 @@
     <section id="panel-keyboards" class="tabpanel" role="tabpanel" aria-labelledby="tab-keyboards" hidden>
       <h1 id="keyboards-heading"></h1>
 
-      <!-- 고정 컨트롤 1 — 디바이스 선택 팝업. "For all devices" + 연결된 키보드
-           + 미연결 키보드(제품명 + 접미사) 순서(§3.1.2 표). -->
-      <div class="row">
-        <select id="keyboards-device-picker"></select>
-      </div>
+      <div class="keyboards-layout">
+        <!-- 고정 컨트롤 1 — 디바이스 선택 좌측 패인(이슈 #31 ④). "For all devices"
+             + 연결된 키보드 + 미연결 키보드(제품명 + 접미사) 순서(§3.1.2 표),
+             각 항목은 제품명 + `[VID: …, PID: …]` 서브라벨(십진, populateDeviceList
+             참고). ⛔ 창 크기는 건드리지 않는다 — 패인 폭만 좁게 잡고 내부 스크롤. -->
+        <div
+          id="keyboards-device-list"
+          class="keyboards-device-pane"
+          role="listbox"
+          aria-labelledby="keyboards-heading"
+          tabindex="0"
+        ></div>
 
-      <!-- 고정 컨트롤 2 — macOS Function Keys 상태 표시줄(§3.5.1). 읽기 전용
-           뱃지 + 시스템 설정 버튼. 이 값을 우리가 쓰지 않는다 — 읽기만 한다. -->
-      <div class="row">
-        <span id="keyboards-fnstate-label"></span>
-        <span class="badge" id="keyboards-fnstate-badge"></span>
-        <button id="keyboards-open-system-settings-btn"></button>
-      </div>
+        <div class="keyboards-detail-pane">
+          <!-- 고정 컨트롤 2 — macOS Function Keys 상태 표시줄(§3.5.1). 읽기 전용
+               뱃지 + 시스템 설정 버튼. 이 값을 우리가 쓰지 않는다 — 읽기만 한다. -->
+          <div class="row">
+            <span id="keyboards-fnstate-label"></span>
+            <span class="badge" id="keyboards-fnstate-badge"></span>
+            <button id="keyboards-open-system-settings-btn"></button>
+          </div>
 
-      <hr />
+          <hr />
 
-      <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1). -->
-      <h2 class="group" id="keyboards-keyremap-heading"></h2>
-      <div id="keyboards-keyremap-list"></div>
-      <p class="hint" id="keyboards-keyremap-empty"></p>
-      <p class="hint" id="keyboards-keyremap-inherited" hidden></p>
-      <button id="keyboards-keyremap-add-btn"></button>
+          <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1). -->
+          <h2 class="group" id="keyboards-keyremap-heading"></h2>
+          <div id="keyboards-keyremap-list"></div>
+          <p class="hint" id="keyboards-keyremap-empty"></p>
+          <p class="hint" id="keyboards-keyremap-inherited" hidden></p>
+          <button id="keyboards-keyremap-add-btn"></button>
 
-      <hr />
+          <hr />
 
-      <!-- 그룹 2 — Function Keys(기능 2, §3.5). F1~F12 정적 라벨(키캡 각인이라
-           번역하지 않는다, populateSourceSelects 의 같은 규약) + 선택 팝업. -->
-      <h2 class="group" id="keyboards-functionkeys-heading"></h2>
-      <div id="keyboards-functionkeys-list">
-        <div class="row"><span class="fkey-label">F1</span><select id="keyboards-fkey-f1" data-fn-key="f1"></select></div>
-        <div class="row"><span class="fkey-label">F2</span><select id="keyboards-fkey-f2" data-fn-key="f2"></select></div>
-        <div class="row"><span class="fkey-label">F3</span><select id="keyboards-fkey-f3" data-fn-key="f3"></select></div>
-        <div class="row"><span class="fkey-label">F4</span><select id="keyboards-fkey-f4" data-fn-key="f4"></select></div>
-        <div class="row"><span class="fkey-label">F5</span><select id="keyboards-fkey-f5" data-fn-key="f5"></select></div>
-        <div class="row"><span class="fkey-label">F6</span><select id="keyboards-fkey-f6" data-fn-key="f6"></select></div>
-        <div class="row"><span class="fkey-label">F7</span><select id="keyboards-fkey-f7" data-fn-key="f7"></select></div>
-        <div class="row"><span class="fkey-label">F8</span><select id="keyboards-fkey-f8" data-fn-key="f8"></select></div>
-        <div class="row"><span class="fkey-label">F9</span><select id="keyboards-fkey-f9" data-fn-key="f9"></select></div>
-        <div class="row"><span class="fkey-label">F10</span><select id="keyboards-fkey-f10" data-fn-key="f10"></select></div>
-        <div class="row"><span class="fkey-label">F11</span><select id="keyboards-fkey-f11" data-fn-key="f11"></select></div>
-        <div class="row"><span class="fkey-label">F12</span><select id="keyboards-fkey-f12" data-fn-key="f12"></select></div>
+          <!-- 그룹 2 — Function Keys(기능 2, §3.5). F1~F12 정적 라벨(키캡 각인이라
+               번역하지 않는다, populateSourceSelects 의 같은 규약) + 선택 팝업
+               (이슈 #31 ② — 목적지 카탈로그 313종) + 동작 미확인 힌트 호스트. -->
+          <h2 class="group" id="keyboards-functionkeys-heading"></h2>
+          <div id="keyboards-functionkeys-list">
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F1</span><select id="keyboards-fkey-f1" data-fn-key="f1"></select></div>
+              <div id="keyboards-fkey-f1-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F2</span><select id="keyboards-fkey-f2" data-fn-key="f2"></select></div>
+              <div id="keyboards-fkey-f2-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F3</span><select id="keyboards-fkey-f3" data-fn-key="f3"></select></div>
+              <div id="keyboards-fkey-f3-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F4</span><select id="keyboards-fkey-f4" data-fn-key="f4"></select></div>
+              <div id="keyboards-fkey-f4-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F5</span><select id="keyboards-fkey-f5" data-fn-key="f5"></select></div>
+              <div id="keyboards-fkey-f5-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F6</span><select id="keyboards-fkey-f6" data-fn-key="f6"></select></div>
+              <div id="keyboards-fkey-f6-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F7</span><select id="keyboards-fkey-f7" data-fn-key="f7"></select></div>
+              <div id="keyboards-fkey-f7-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F8</span><select id="keyboards-fkey-f8" data-fn-key="f8"></select></div>
+              <div id="keyboards-fkey-f8-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F9</span><select id="keyboards-fkey-f9" data-fn-key="f9"></select></div>
+              <div id="keyboards-fkey-f9-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F10</span><select id="keyboards-fkey-f10" data-fn-key="f10"></select></div>
+              <div id="keyboards-fkey-f10-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F11</span><select id="keyboards-fkey-f11" data-fn-key="f11"></select></div>
+              <div id="keyboards-fkey-f11-hint"></div>
+            </div>
+            <div class="fkey-item">
+              <div class="row"><span class="fkey-label">F12</span><select id="keyboards-fkey-f12" data-fn-key="f12"></select></div>
+              <div id="keyboards-fkey-f12-hint"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -854,11 +950,12 @@ if (!tauri || !tauri.core) {
   // crates 쪽을 완성하지 않았을 때) 이 탭 전체가 조용히 아무 일도 하지 않는다
   // — boot()/renderState() 양쪽에서 `if (state.perDevice)` 로 방어한다.
   //
-  // 기대하는 계약 모양(정본은 이 브랜치의 CONTRACT.md):
+  // 기대하는 계약 모양(정본은 이 브랜치의 CONTRACT.md, 이슈 #31 ②④ 로 확장):
   //   state.perDevice = {
-  //     devices: [{ id, name, connected }, …],
+  //     devices: [{ id, name, connected, vendorId, productId }, …],
   //     sourceKeys: [{ value, label }, …],           // 35종, 키캡 각인 — 번역 안 함
-  //     systemFunctions: [{ value, labelKey }, …],    // hid_usage() 가 Some 인 것만
+  //     destinationCategories: [{ key, labelKey }, …],// 15종, 팝업 <optgroup> 순서 그대로
+  //     destinations: [{ value, label, category, verified }, …], // 313종
   //     fnStateIsStandard: true | false | null,       // null = 읽기 실패("알 수 없음")
   //     values: { "perDevice.all.keyRemap.rows": […], "perDevice.<vid>:<pid>.functionKeys.f1": null, … }
   //   }
@@ -889,43 +986,80 @@ if (!tauri || !tauri.core) {
     }
   }
 
-  // 디바이스 선택 팝업(§3.1.2 표) — ① For all devices ② 연결된 키보드(제품명,
-  // 번역 안 함 — 고유명사) ③ 미연결 키보드(제품명 + notConnectedSuffix).
-  function populateDevicePicker(devices) {
-    const select = $("keyboards-device-picker");
-    select.innerHTML = "";
+  // ⭐ 이슈 #31 ④ — 디바이스 선택 좌측 패인(§3.1.2 표, Karabiner 식 배치로
+  // 재설계). 순서: ① For all devices ② 연결된 키보드(제품명, 번역 안 함 —
+  // 고유명사) ③ 미연결 키보드(제품명 + notConnectedSuffix). 각 항목은 제품명 +
+  // `[VID: …, PID: …]` 서브라벨(십진 — 참고 스크린샷 그대로, VID/PID 라벨
+  // 자체는 고유명사라 번역하지 않는다). `role="listbox"`/`role="option"` +
+  // `aria-selected` 로 접근성을 맞춘다 — 방향키 이동·클릭 선택은 아래 리스너.
+  function buildDeviceOption(id, name, device) {
+    const opt = document.createElement("div");
+    opt.setAttribute("role", "option");
+    opt.dataset.deviceId = id;
+    opt.tabIndex = -1;
 
-    const allOpt = document.createElement("option");
-    allOpt.value = "all";
-    allOpt.textContent = t("preferences.keyboards.devicePicker.forAllDevices");
-    select.append(allOpt);
+    const nameEl = document.createElement("span");
+    nameEl.className = "device-name";
+    nameEl.textContent = name;
+    opt.append(nameEl);
+
+    // "For all devices" 에는 VID/PID 가 없다(device === null) — 서브라벨 자체를
+    // 만들지 않는다(② 숨김 패턴).
+    if (device) {
+      const idsEl = document.createElement("span");
+      idsEl.className = "device-ids";
+      idsEl.textContent = `[VID: ${device.vendorId}, PID: ${device.productId}]`;
+      opt.append(idsEl);
+    }
+    return opt;
+  }
+
+  function highlightSelectedDevice() {
+    const options = $("keyboards-device-list").querySelectorAll('[role="option"]');
+    for (const o of options) {
+      const selected = o.dataset.deviceId === currentDevice;
+      o.setAttribute("aria-selected", String(selected));
+      o.tabIndex = selected ? 0 : -1;
+    }
+  }
+
+  function populateDeviceList(devices) {
+    const host = $("keyboards-device-list");
+    host.innerHTML = "";
+    host.append(buildDeviceOption("all", t("preferences.keyboards.devicePicker.forAllDevices"), null));
 
     const connected = devices.filter((d) => d.connected);
     const disconnected = devices.filter((d) => !d.connected);
     for (const d of connected) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = d.name;
-      select.append(opt);
+      host.append(buildDeviceOption(d.id, d.name, d));
     }
     for (const d of disconnected) {
-      const opt = document.createElement("option");
-      opt.value = d.id;
-      opt.textContent = `${d.name} ${t("preferences.keyboards.devicePicker.notConnectedSuffix")}`;
-      select.append(opt);
+      const label = `${d.name} ${t("preferences.keyboards.devicePicker.notConnectedSuffix")}`;
+      host.append(buildDeviceOption(d.id, label, d));
     }
 
     // 선택했던 디바이스가 목록에서 사라졌으면(이론상 일어나지 않는다 — 설정은
     // 삭제되지 않으므로, §5 엣지 1) "For all devices" 로 되돌린다.
-    const stillExists = Array.from(select.options).some((o) => o.value === currentDevice);
+    const stillExists = Array.from(host.querySelectorAll('[role="option"]')).some(
+      (o) => o.dataset.deviceId === currentDevice
+    );
     if (!stillExists) currentDevice = "all";
-    select.value = currentDevice;
+    highlightSelectedDevice();
+  }
+
+  function selectDevice(id) {
+    currentDevice = id;
+    highlightSelectedDevice();
+    if (currentPerDevice) {
+      renderKeyRemapGroup(currentPerDevice, currentDevice);
+      renderFunctionKeysGroup(currentPerDevice, currentDevice);
+    }
   }
 
   // macOS Function Keys 상태 표시줄(§3.5.1) — 읽기 전용. 우리는 이 값을 쓰지 않는다.
   function renderMacosFnStateBadge(fnStateIsStandard) {
     const badge = $("keyboards-fnstate-badge");
-    if (fnStateIsStandard === null) {
+    if (fnStateIsStandard === null || fnStateIsStandard === undefined) {
       badge.textContent = t("preferences.keyboards.functionKeys.macosStatus.unknown");
     } else if (fnStateIsStandard) {
       badge.textContent = t("preferences.keyboards.functionKeys.macosStatus.on");
@@ -933,6 +1067,50 @@ if (!tauri || !tauri.core) {
       badge.textContent = t("preferences.keyboards.functionKeys.macosStatus.off");
     }
   }
+
+  // ⭐ 이슈 #31 ③(b) — 사용자가 **시스템 설정 앱에서** 토글을 바꾼 것은 우리
+  // 쪽에 아무 일도 일으키지 않는다. `state.perDevice.fnStateIsStandard` 는
+  // 설정을 건드릴 때만 갱신되므로, 그것만 보면 앱을 켠 시점의 값이 계속 남는다
+  // (사용자 보고: "그래서 항상 on 으로 표현되는 것 같거든").
+  //
+  // ⚠️ 변경 알림이 아니라 **폴링**이다 — macOS 가 이 값의 변경을 알려 주는 공개
+  // 알림을 확인하지 못했다(Rust 쪽 `keyboard_fn_state` 주석에 근거). Karabiner
+  // 도 같은 값을 3초 주기로 폴링한다. 비용은 IOKit 프로퍼티 1회 읽기라 작지만,
+  // 그래도 **Keyboards 탭이 실제로 보일 때만** 돈다.
+  const FN_STATE_POLL_MS = 3000;
+  let fnStatePollTimer = null;
+
+  async function refreshMacosFnStateBadge() {
+    try {
+      const value = await invoke("keyboard_fn_state");
+      // 캐시도 함께 갱신한다 — 다음 renderState 가 옛 값으로 되돌리지 않도록.
+      if (currentPerDevice) currentPerDevice.fnStateIsStandard = value ?? null;
+      renderMacosFnStateBadge(value ?? null);
+    } catch (err) {
+      // 읽기 실패는 치명적이지 않다 — 배지만 "알 수 없음"으로 두고 넘어간다.
+      renderMacosFnStateBadge(null);
+    }
+  }
+
+  function syncFnStatePolling() {
+    // 창이 숨겨져 있으면(메뉴바 앱이라 설정 창은 자주 닫힌다) 폴링을 멈춘다.
+    const shouldPoll = activeTab === "keyboards" && !document.hidden;
+    if (shouldPoll && fnStatePollTimer === null) {
+      refreshMacosFnStateBadge();
+      fnStatePollTimer = setInterval(refreshMacosFnStateBadge, FN_STATE_POLL_MS);
+    } else if (!shouldPoll && fnStatePollTimer !== null) {
+      clearInterval(fnStatePollTimer);
+      fnStatePollTimer = null;
+    }
+  }
+
+  // 창이 다시 보이거나 포커스를 되찾는 순간은 "사용자가 방금 시스템 설정에서
+  // 돌아왔다"일 가능성이 가장 높은 시점이다 — 폴링 주기를 기다리지 않고 즉시
+  // 다시 읽는다.
+  document.addEventListener("visibilitychange", syncFnStatePolling);
+  window.addEventListener("focus", () => {
+    if (activeTab === "keyboards") refreshMacosFnStateBadge();
+  });
 
   // 기능 1 — 가변 길이 목록 편집기(§3.4.1). from/to 팝업에 빈 행 전용 자리표시
   // 옵션(value="")을 하나 앞세운다 — sourceKeys 35종에는 원래 빈 항목이 없어서,
@@ -1041,10 +1219,28 @@ if (!tauri || !tauri.core) {
     return rows;
   }
 
+  // 두 행 목록이 완전히 같은지(순서 포함). 이슈 #31 의 저장/재렌더 억제 판정에 쓴다.
+  function keyRemapRowsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i].from !== b[i].from || a[i].to !== b[i].to) return false;
+    }
+    return true;
+  }
+
   // 행 추가·삭제·from/to 변경 각각이 저장 1회다(§3.4.1 항목 4). 저장 값은
   // "행 하나"가 아니라 그 대상의 rows 배열 전체다. 0행이 되는 시점에는
   // 배열(`[]`)이 아니라 `null` 을 쓴다 — §3.3 이 기능 1/2 의 "끔"을 `null` 로
   // 통일하기로 확정했기 때문이다(빈 배열과 null 을 UI 상 구분하지 않는다).
+  //
+  // ⭐ 이슈 #31 ① — **완성된 행 집합이 그대로면 저장하지 않는다.**
+  // 미완성 행(from 만 골랐고 to 는 아직)은 §3.4.1 4항에 따라 저장 대상이 아니다.
+  // 그런데 예전 구현은 그 변경에도 `commit()` 을 불렀고, `commit()` 은 응답으로
+  // 받은 상태로 화면 전체를 다시 그린다 — 그때 저장소에 없는 미완성 행이 DOM 에서
+  // 사라졌다. 두 번째 행을 만들려고 `from` 을 고르는 순간 그 행이 없어지므로,
+  // 사용자는 `left_option → left_command` 다음에 역방향 행을 **끝까지 만들 수가
+  // 없었다**(사용자 보고: "레프트 커맨드를 시작점에 있는 키로 등록만 하면 무조건
+  // 다 삭제가 발생하네"). 저장할 것이 없으면 저장하지 않는 것으로 그 경로를 끊는다.
   function saveKeyRemapRows() {
     refreshKeyRemapAddButtonState();
     renderKeyRemapDuplicateWarnings();
@@ -1052,12 +1248,30 @@ if (!tauri || !tauri.core) {
     const key = keyRemapRowsKey(currentDevice);
     const rows = collectCompletedKeyRemapRows();
     const hadKey = Object.prototype.hasOwnProperty.call(currentPerDevice.values, key);
+    // ⭐ 이슈 #31 ① — 저장소에 이미 들어 있는 것과 완성된 행 집합이 같으면 아무
+    // 것도 하지 않는다. `hadKey` 를 함께 보는 이유: 디바이스 계층 키가 아직
+    // **부재**(공통을 물려받는 중)면 같은 배열이라도 "이 디바이스 전용으로 굳히는"
+    // 저장이 실제로 필요하기 때문이다(§3.4).
+    if (hadKey && keyRemapRowsEqual(rows, currentPerDevice.values[key] || [])) {
+      return;
+    }
     if (rows.length > 0) {
       // 물려받은 목록을 편집한 경우도 여기로 온다 — 화면에 보이던 행 전체가
       // 그대로 이 디바이스 전용 배열로 굳는다(§3.4, 병합하지 않는다).
       commit(key, rows);
       return;
     }
+    // ⭐ 이슈 #31 ① 세 번째 방어선 — **편집 중인 행이 남아 있으면 끄지 않는다.**
+    // 완성된 행이 0개라도 화면에 행이 남아 있으면 그것은 "이 디바이스의 변환을
+    // 껐다"가 아니라 "지금 고르는 중"이다. 예전 구현은 이 둘을 구별하지 않아,
+    // 완성된 행 하나짜리 목록에서 `to` 를 `—` 로 되돌려 **다시 고르려고만 해도**
+    // 그 순간 `null`(=전부 끔)이 저장되고 행이 화면에서 사라졌다. 사용자가 본
+    // "무조건 다 삭제"의 가장 파괴적인 경로가 이것이다.
+    // 끄는 수단은 그대로 남아 있다 — 행을 × 로 전부 지우면 화면에 행이 하나도
+    // 없게 되어 아래 `null` 저장으로 간다(§2 시나리오 D 의 진입점).
+    const domRowCount = $("keyboards-keyremap-list").querySelectorAll(".keyremap-row-wrapper").length;
+    if (domRowCount > 0) return;
+
     // 0행이 됐다. `[]` 가 아니라 `null`(명시적 끔)을 쓴다 — §3.3 이 기능 1/2 의
     // "끔"을 `null` 로 통일하기로 확정했다.
     // ⭐ 시나리오 D 의 진입점이 바로 여기다: 공통 계층에서 물려받은 행을 이
@@ -1096,15 +1310,33 @@ if (!tauri || !tauri.core) {
     return { rows: [], inherited: true };
   }
 
+  // 지금 DOM 에 그려져 있는 목록이 어느 디바이스 것인지 — `renderKeyRemapGroup` 이
+  // 목록을 다시 만들어야 하는지 판정하는 데 쓴다(이슈 #31 ②).
+  let keyRemapRenderedDevice = null;
+
   function renderKeyRemapGroup(perDevice, device) {
     const list = $("keyboards-keyremap-list");
-    list.innerHTML = "";
     const { rows, inherited } = resolveKeyRemapRows(perDevice, device);
 
-    for (const row of rows) {
-      list.append(buildKeyRemapRow(perDevice.sourceKeys, row.from, row.to));
+    // ⭐ 이슈 #31 ② — **편집 중인 미완성 행을 재렌더로 지우지 않는다.**
+    // `commit()` 은 저장 응답으로 화면 전체를 다시 그린다. 예전 구현은 그때마다
+    // 목록 DOM 을 통째로 새로 만들었고, 저장 대상이 아닌 미완성 행(from 만 고른
+    // 상태)이 그 자리에서 사라졌다. 같은 디바이스를 보고 있고 저장소의 행 집합이
+    // 화면의 **완성된** 행 집합과 이미 같다면 다시 만들 이유가 없다 — 우리가 방금
+    // 쓴 값이 그대로 돌아온 것이기 때문이다. 다른 디바이스로 바꿨거나 저장소 쪽이
+    // 실제로 달라졌을 때만(외부 변경·되돌리기) 목록을 새로 만든다.
+    const sameDevice = keyRemapRenderedDevice === device;
+    if (!sameDevice || !keyRemapRowsEqual(collectCompletedKeyRemapRows(), rows)) {
+      list.innerHTML = "";
+      for (const row of rows) {
+        list.append(buildKeyRemapRow(perDevice.sourceKeys, row.from, row.to));
+      }
+      keyRemapRenderedDevice = device;
     }
-    $("keyboards-keyremap-empty").hidden = rows.length > 0;
+    // 빈 목록 안내는 저장된 행이 아니라 **화면에 실제로 있는 행** 기준이다 —
+    // 편집 중인 미완성 행이 한 줄이라도 있으면 목록은 비어 있지 않다.
+    const domRowCount = list.querySelectorAll(".keyremap-row-wrapper").length;
+    $("keyboards-keyremap-empty").hidden = domRowCount > 0;
     // 물려받은 행을 보여주는 중이라는 것을 알린다 — 아무 행이나 건드리는 순간
     // 이 디바이스 전용 목록으로 굳는다(§3.4 "디바이스별 배열이 있으면 공통
     // 배열을 완전히 대체한다").
@@ -1113,25 +1345,50 @@ if (!tauri || !tauri.core) {
     renderKeyRemapDuplicateWarnings();
   }
 
-  // 기능 2 — F-키 선택 팝업(§3.5). 선택지: `--- (공통 설정을 따름)`(디바이스
-  // 선택 시에만, ② 숨김) + 시스템 기능 N종 + `표준 F-키로 사용`.
-  function populateFunctionKeySelect(id, systemFunctions, includeFollowCommon) {
-    const options = [];
+  // 기능 2 — F-키 선택 팝업(§3.5, 이슈 #31 ②). 선택지 순서: `--- (공통 설정을
+  // 따름)`(디바이스 선택 시에만, ② 숨김) → `표준 F-키로 사용`(⚠️ 예전에는 팝업
+  // 맨 끝에 있었다 — 목적지 313개 뒤에 있으면 스크롤 없이는 사실상 못 찾는다.
+  // 이 세션이 followCommon 바로 다음으로 옮겼다) → 카테고리 15개 각각
+  // `<optgroup>` + 그 안의 목적지 전량.
+  function populateFunctionKeySelect(id, perDevice, includeFollowCommon) {
+    const select = $(id);
+    select.innerHTML = "";
+
     if (includeFollowCommon) {
-      options.push({ value: KEYBOARDS_FOLLOW_COMMON, labelKey: "preferences.keyboards.functionKeys.followCommon" });
+      const opt = document.createElement("option");
+      opt.value = KEYBOARDS_FOLLOW_COMMON;
+      opt.textContent = t("preferences.keyboards.functionKeys.followCommon");
+      select.append(opt);
     }
-    for (const fn of systemFunctions) {
-      options.push({ value: fn.value, labelKey: fn.labelKey });
+
+    const standardOpt = document.createElement("option");
+    standardOpt.value = KEYBOARDS_STANDARD_FKEY;
+    standardOpt.textContent = t("preferences.keyboards.functionKeys.useStandardFKey");
+    select.append(standardOpt);
+
+    for (const category of perDevice.destinationCategories) {
+      const inCategory = perDevice.destinations.filter((d) => d.category === category.key);
+      if (inCategory.length === 0) continue;
+      const group = document.createElement("optgroup");
+      group.label = t(category.labelKey);
+      for (const d of inCategory) {
+        const opt = document.createElement("option");
+        opt.value = d.value;
+        // ⛔ 라벨은 번역하지 않는다 — HID usage 이름 그대로다(키캡 각인 규약,
+        // destinations::FunctionDestination::label 문서 참고). 예외 하나:
+        // `disable` 은 서술형 항목이라 i18n 카탈로그 문구를 쓴다.
+        opt.textContent = d.value === "disable" ? t("preferences.keyboards.functionKeys.disable") : d.label;
+        group.append(opt);
+      }
+      select.append(group);
     }
-    options.push({ value: KEYBOARDS_STANDARD_FKEY, labelKey: "preferences.keyboards.functionKeys.useStandardFKey" });
-    fillSelect(id, options);
   }
 
   function renderFunctionKeysGroup(perDevice, device) {
     const includeFollowCommon = device !== "all";
     for (const fk of KEYBOARDS_FN_KEYS) {
       const id = `keyboards-fkey-${fk}`;
-      populateFunctionKeySelect(id, perDevice.systemFunctions, includeFollowCommon);
+      populateFunctionKeySelect(id, perDevice, includeFollowCommon);
 
       const key = functionKeyStorageKey(device, fk);
       const hasKey = Object.prototype.hasOwnProperty.call(perDevice.values, key);
@@ -1144,7 +1401,29 @@ if (!tauri || !tauri.core) {
         const val = perDevice.values[key];
         selected = val === null ? KEYBOARDS_STANDARD_FKEY : val;
       }
-      setSelectValue(id, selected);
+
+      // ⭐ 저장값이 옛 SystemFunction variant 이름이거나 손상된 값이면 팝업의
+      // 새 id 옵션과 매칭되지 않는다 — 그런 값을 프런트가 새 id 로 옮기지는
+      // 않는다(백엔드가 읽을 때만 옮긴다, perdevice/mod.rs 근거). 화면에는
+      // "표준 F-키로 사용"으로 보이되 **저장소는 건드리지 않는다** — 갈림길에서
+      // 더 안전한 쪽을 골랐다: 여기서 조용히 값을 다시 써 버리면 사용자가
+      // 고르지 않은 변경이 저장 파일에 남는다.
+      const knownOption =
+        selected === KEYBOARDS_FOLLOW_COMMON ||
+        selected === KEYBOARDS_STANDARD_FKEY ||
+        Array.from($(id).options).some((o) => o.value === selected);
+      setSelectValue(id, knownOption ? selected : KEYBOARDS_STANDARD_FKEY);
+
+      // ⭐ 이슈 #31 ② — 동작 미확인 힌트. 카탈로그에서 숨기는 대신 그 자리에서
+      // 사실을 알린다(다른 탭의 renderHiddenNote 와 같은 "② 숨김" 패턴).
+      const destination = perDevice.destinations.find((d) => d.value === selected);
+      renderHiddenNote(
+        `${id}-hint`,
+        Boolean(destination && !destination.verified),
+        "preferences.keyboards.functionKeys.unverifiedHint",
+        "hint",
+        "warn"
+      );
     }
   }
 
@@ -1155,18 +1434,29 @@ if (!tauri || !tauri.core) {
     if (!perDevice) return;
     currentPerDevice = perDevice;
 
-    populateDevicePicker(perDevice.devices);
+    populateDeviceList(perDevice.devices);
     renderMacosFnStateBadge(perDevice.fnStateIsStandard);
     renderKeyRemapGroup(perDevice, currentDevice);
     renderFunctionKeysGroup(perDevice, currentDevice);
   }
 
-  $("keyboards-device-picker").addEventListener("change", (ev) => {
-    currentDevice = ev.target.value;
-    if (currentPerDevice) {
-      renderKeyRemapGroup(currentPerDevice, currentDevice);
-      renderFunctionKeysGroup(currentPerDevice, currentDevice);
-    }
+  // ⭐ 이슈 #31 ④ — 좌측 패인 선택: 클릭 + 방향키(↑/↓) 이동. 이 파일의 탭
+  // 목록(`#tablist` keydown 리스너)과 같은 수준의 키보드 처리를 맞춘다.
+  $("keyboards-device-list").addEventListener("click", (ev) => {
+    const opt = ev.target.closest('[role="option"]');
+    if (opt) selectDevice(opt.dataset.deviceId);
+  });
+
+  $("keyboards-device-list").addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    const options = Array.from($("keyboards-device-list").querySelectorAll('[role="option"]'));
+    if (options.length === 0) return;
+    const idx = options.findIndex((o) => o.dataset.deviceId === currentDevice);
+    const nextIdx =
+      ev.key === "ArrowDown" ? (idx + 1) % options.length : (idx - 1 + options.length) % options.length;
+    ev.preventDefault();
+    selectDevice(options[nextIdx].dataset.deviceId);
+    options[nextIdx].focus();
   });
 
   $("keyboards-open-system-settings-btn").addEventListener("click", () => {
@@ -1207,12 +1497,16 @@ if (!tauri || !tauri.core) {
   });
 
   // ② 숨김 — 조건이 성립할 때만 노드를 만든다. ① dimmed 와 달리 DOM 에서 사라진다.
-  function renderHiddenNote(hostId, show, textKey, className) {
+  // ⚠️ 클래스명은 가변 인자로 받는다 — `classNames` 를 공백 포함 문자열 하나로
+  // 받으면(예: `"hint warn"`) 공백이 든 큰따옴표 리터럴을 전부 문장으로 보는
+  // 하드코딩 영어 문장 탐지기에 걸린다(buildKeyRemapRow 의 classList.add 와
+  // 같은 회피 이유). 호출부는 토큰을 나눠 넘긴다.
+  function renderHiddenNote(hostId, show, textKey, ...classNames) {
     const host = $(hostId);
     host.innerHTML = "";
     if (!show) return;
     const p = document.createElement("p");
-    p.className = className;
+    p.classList.add(...classNames);
     p.textContent = t(textKey);
     host.append(p);
   }
@@ -1421,6 +1715,8 @@ if (!tauri || !tauri.core) {
     invoke("settings_set_tab", { tab, persist }).catch((err) => {
       showFatal("Failed to switch tab: " + String(err));
     });
+    // Keyboards 탭이 보이는 동안에만 macOS Function Keys 토글을 폴링한다.
+    syncFnStatePolling();
   }
 
   $("tablist").addEventListener("keydown", (ev) => {

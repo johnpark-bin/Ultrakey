@@ -49,17 +49,14 @@ use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEven
 
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
 use ultrakey_core::keycode::{KeyCode, SourceKey};
-use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger, SystemFunction};
+use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
+use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger};
 use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::Catalog;
 use ultrakey_korean::KoreanSettings;
-use ultrakey_presets::{
-    ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
-    QuickPressCapsAction, RemapCapsTarget,
-};
 use ultrakey_permissions::{
     dev_build_warning, onboarding_copy, open_accessibility_settings, out_of_sync_copy,
     PermissionMonitor, PermissionState,
@@ -69,6 +66,10 @@ use ultrakey_platform::fn_state;
 use ultrakey_platform::hid_device;
 use ultrakey_platform::login_item;
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
+use ultrakey_presets::{
+    ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
+    QuickPressCapsAction, RemapCapsTarget,
+};
 
 /// ⭐ F-10 메뉴 항목 id — 그대로 i18n 카탈로그 키이기도 하다(고유하고, 라벨을
 /// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
@@ -517,24 +518,53 @@ fn general_view(store: &SettingsStore) -> GeneralView {
 // `CONTRACT.md` §B.6 이다.
 // ============================================================================
 
-/// `state.perDevice.devices` 항목 하나 — 팝업이 그대로 쓴다(§3.1.2).
+/// `state.perDevice.devices` 항목 하나 — 좌측 패인이 그대로 쓴다(§3.1.2,
+/// 이슈 #31 ④ — Karabiner 식 좌측 세로 목록으로 재배치).
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PerDeviceDeviceView {
     id: String,
     name: String,
     connected: bool,
+    /// `[VID: …, PID: …]` 서브라벨용 — ⚠️ **십진수**다(`DeviceId`/`id` 는 저장 키
+    /// 조립에 쓰는 16진 문자열이라 그대로 못 쓴다). 스크린샷
+    /// (`docs/research/screenshots/issue-31-karabiner-function-keys-menu.png`)이
+    /// 십진 표기를 쓴다 — 그 배치를 그대로 옮긴다.
+    vendor_id: u32,
+    product_id: u32,
 }
 
-/// `state.perDevice.systemFunctions` 항목 하나 — 기능 2 선택 팝업(§3.5).
+/// `state.perDevice.destinationCategories` 항목 하나 — 기능 2 팝업의
+/// `<optgroup>` 하나(§3.5, 이슈 #31 ②). 순서는
+/// [`destinations::DestinationCategory::all`] 그대로다(15종).
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct PerDeviceSystemFunctionView {
-    value: String,
+struct PerDeviceDestinationCategoryView {
+    key: String,
     label_key: String,
 }
 
-/// `Keyboards` 탭 전체를 그리는 데 필요한 다섯 필드(계약 §B.6).
+/// `state.perDevice.destinations` 항목 하나 — 기능 2 팝업의 `<option>`
+/// (§3.5, 이슈 #31 ②). 카탈로그 313종 전량, 카테고리 순서 그대로.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PerDeviceDestinationView {
+    value: String,
+    /// ⛔ 번역하지 않는다 — HID usage 이름 그대로다(키캡 각인 규약,
+    /// `destinations::FunctionDestination::label` 문서 참고). 예외는 `"disable"`
+    /// 하나뿐이고, 그 경우도 이 필드가 아니라 프런트가 `value === "disable"` 을
+    /// 보고 i18n 카탈로그에서 문구를 가져온다.
+    label: String,
+    category: String,
+    /// [`destinations::PathBSupport::is_verified`] — `false` 면 이 목적지는
+    /// usage page 가 실제로 동작하는지 확인되지 않았다. 프런트는 이 값이 `false`
+    /// 인 채로 선택돼 있을 때만 "동작 미확인" 힌트를 보인다(카탈로그에서 숨기지
+    /// 않는다 — 이슈 #31 ② "고를 수는 있는데 아무 일도 안 일어나는 UX 를 만들지
+    /// 마라"에 대한 이 세션의 결정: 뺄지 말지 대신 사실을 알린다).
+    verified: bool,
+}
+
+/// `Keyboards` 탭 전체를 그리는 데 필요한 필드(계약 §B.6, 이슈 #31 ②④ 반영).
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PerDeviceView {
@@ -542,25 +572,10 @@ struct PerDeviceView {
     /// `state.sourceKeys` 와 같은 형식(`{value,label}` — 여기서는 `hasKeycode` 도
     /// 함께 실리지만 프런트는 그 필드를 쓰지 않는다) — `SourceKey::all()` 35종.
     source_keys: Vec<SourceKeyView>,
-    system_functions: Vec<PerDeviceSystemFunctionView>,
+    destination_categories: Vec<PerDeviceDestinationCategoryView>,
+    destinations: Vec<PerDeviceDestinationView>,
     fn_state_is_standard: Option<bool>,
     values: serde_json::Map<String, serde_json::Value>,
-}
-
-/// `SystemFunction` variant 이름(PascalCase, 예: `"DisplayBrightnessDown"`)을
-/// `preferences.keyboards.functionKeys.function.<camelCase>` i18n 키로 바꾼다.
-/// ⚠️ `SystemFunction` 은 `SourceKey`/`KeyRemapRow` 와 같은 이유로 variant 이름
-/// 그대로 직렬화된다(`perdevice/mod.rs` 문서 주석) — 그래서 `serde_variant_name`
-/// 이 주는 문자열의 첫 글자만 낮추면 §4.1 카탈로그의 camelCase 세그먼트와 정확히
-/// 맞아떨어진다(예: `"Mute"` → `mute`, `"DoNotDisturb"` → `doNotDisturb`).
-fn system_function_label_key(f: SystemFunction) -> String {
-    let variant = serde_variant_name(&f);
-    let mut chars = variant.chars();
-    let camel = match chars.next() {
-        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    };
-    format!("preferences.keyboards.functionKeys.function.{camel}")
 }
 
 /// `perDevice.` 접두사 키 전부를 원본 JSON 그대로 모은다 — `perDevice._managed`
@@ -580,7 +595,7 @@ fn collect_per_device_values(store: &SettingsStore) -> BTreeMap<String, serde_js
     values
 }
 
-/// `state.perDevice` 조립 — 계약 §B.6 다섯 필드.
+/// `state.perDevice` 조립 — 계약 §B.6, 이슈 #31 ②④ 로 확장된 필드 전부.
 fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
     // devices — list_attached_keyboards() ∪ 설정 키가 존재하는 디바이스, (vid,pid)
     // 중복 제거(§3.2). `BTreeMap<DeviceId, _>` 자체가 중복 제거 역할을 한다.
@@ -593,7 +608,13 @@ fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
             .unwrap_or_else(|| id.as_str().to_string());
         devices.insert(
             id.clone(),
-            PerDeviceDeviceView { id: id.as_str().to_string(), name, connected: true },
+            PerDeviceDeviceView {
+                id: id.as_str().to_string(),
+                name,
+                connected: true,
+                vendor_id: info.vendor_id,
+                product_id: info.product_id,
+            },
         );
     }
     for key in store.keys() {
@@ -610,29 +631,55 @@ fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
         };
         devices.entry(id.clone()).or_insert_with(|| {
             // 미연결 디바이스의 이름 — 저장된 제품명이 없으니 id 그대로 쓴다
-            // (⛔ 개인 디바이스 이름 하드코딩 금지, 계약 §B.6).
-            PerDeviceDeviceView { id: id.as_str().to_string(), name: id.as_str().to_string(), connected: false }
+            // (⛔ 개인 디바이스 이름 하드코딩 금지, 계약 §B.6). VID/PID 는
+            // `DeviceId::to_match()` 로 되돌린다 — 저장 키(16진 문자열)와 달리
+            // 좌측 패인의 `[VID: …, PID: …]` 서브라벨은 십진수다(이슈 #31 ④).
+            let m = id.to_match();
+            PerDeviceDeviceView {
+                id: id.as_str().to_string(),
+                name: id.as_str().to_string(),
+                connected: false,
+                vendor_id: m.vendor_id,
+                product_id: m.product_id,
+            }
         });
     }
 
     // sourceKeys — `state.sourceKeys` 와 같은 조립 함수를 재사용한다(35종, 키캡 각인).
-    let source_keys = SourceKey::all().iter().copied().map(source_key_view).collect();
-
-    // systemFunctions — hid_usage() 가 Some 인 것만(CONTRACT §2.2, 팝업 규약).
-    let system_functions = SystemFunction::all()
+    let source_keys = SourceKey::all()
         .iter()
         .copied()
-        .filter(|f| f.hid_usage().is_some())
-        .map(|f| PerDeviceSystemFunctionView {
-            value: serde_variant_name(&f),
-            label_key: system_function_label_key(f),
+        .map(source_key_view)
+        .collect();
+
+    // destinationCategories/destinations — 기능 2 팝업의 목적지 카탈로그
+    // 313종/15카테고리(이슈 #31 ②) 그대로 실어 보낸다. 카탈로그 자체가 이미
+    // 팝업 표시 순서(카테고리별로 묶여)라 여기서 재정렬하지 않는다.
+    let destination_categories = DestinationCategory::all()
+        .iter()
+        .map(|c| PerDeviceDestinationCategoryView {
+            key: c.label_segment().to_string(),
+            label_key: format!(
+                "preferences.keyboards.functionKeys.category.{}",
+                c.label_segment()
+            ),
+        })
+        .collect();
+    let destinations = destinations::all()
+        .iter()
+        .map(|d| PerDeviceDestinationView {
+            value: d.id.to_string(),
+            label: d.label.to_string(),
+            category: d.category.label_segment().to_string(),
+            verified: d.support.is_verified(),
         })
         .collect();
 
     PerDeviceView {
         devices: devices.into_values().collect(),
         source_keys,
-        system_functions,
+        destination_categories,
+        destinations,
         fn_state_is_standard: fn_state::f_keys_are_standard(),
         values: collect_per_device_values(store).into_iter().collect(),
     }
@@ -665,6 +712,44 @@ fn validate_per_device_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// ⭐ 이슈 #31 ② — `validate_per_device_key` 가 **키 모양**만 본 뒤, 기능 2 슬롯에
+/// 한해 **값의 내용**도 검증한다. `key` 가 `functionKeys.f1`~`f12` 이고 `value` 가
+/// 문자열이면 그 문자열이 [`destinations::resolve_stored`] 로 풀려야 한다 — 그
+/// 외(기능 1 의 배열/`null`, 기능 2 의 `null`=명시적 끔)는 이 함수의 관심사가
+/// 아니므로 그냥 통과시킨다(§3.3 의 끔/부재 구분을 이 검증이 막으면 안 된다).
+///
+/// **근거**: 프런트가 보내는 값을 검증 없이 그대로 저장하면, 카탈로그에 없는
+/// 문자열(오타·구버전 프런트·수동 조작으로 만든 값)이 설정 파일에 조용히 남는다.
+/// `PerDeviceSettings::resolved_function_key`(perdevice/mod.rs)는 그런 값을 경고
+/// 로그만 남기고 `None`으로 처리해 앱을 죽이지는 않지만, 그 결과는 "골랐는데
+/// 아무 일도 일어나지 않는다"다 — 이슈 #31 이 명시적으로 경계한 UX 다. 저장 전에
+/// 거부하면 그 상태 자체가 설정 파일에 생기지 않는다.
+fn validate_per_device_function_key_value(
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let Some(rest) = key.strip_prefix("perDevice.") else {
+        return Ok(());
+    };
+    let Some((_scope, tail)) = rest.split_once('.') else {
+        return Ok(());
+    };
+    let is_function_key = FKey::all()
+        .iter()
+        .any(|f| tail == format!("functionKeys.{}", f.key_segment()));
+    if !is_function_key {
+        return Ok(());
+    }
+    // `null`(명시적 끔) 등 문자열이 아닌 값은 이 검증의 대상이 아니다.
+    let Some(s) = value.as_str() else {
+        return Ok(());
+    };
+    if destinations::resolve_stored(s).is_none() {
+        return Err(format!("알 수 없는 목적지 id: {s}"));
+    }
+    Ok(())
+}
+
 /// `settings_set` 의 `perDevice.*` 경로(F-17). 다른 `settings_set_*` 와 달리 메모리
 /// 캐시가 없다 — `perDevice.*` 값은 저장소 자체가 정본이고, `EngineConfig::
 /// per_device_values` 는 매번 저장소에서 다시 채운다(`build_engine_config`).
@@ -680,6 +765,7 @@ fn settings_set_per_device(
     value: &serde_json::Value,
 ) -> Result<SettingsState, String> {
     validate_per_device_key(key)?;
+    validate_per_device_function_key_value(key, value)?;
 
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
@@ -698,7 +784,13 @@ fn settings_set_per_device(
 
     // perDevice.* 는 hyperkey/meh/bleh 소스 키 자체를 바꾸지 않으므로 force_reset
     // (stuck modifier 방지) 은 필요 없다 — D-D 의 대상 밖이다.
-    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, false)?;
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        false,
+    )?;
 
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
@@ -833,7 +925,11 @@ fn disable_label_key_for_setting(store_key: &str) -> &'static str {
     }
 }
 
-fn pending_conflict_view(conflict: Conflict, key: &str, value: &serde_json::Value) -> PendingConflictView {
+fn pending_conflict_view(
+    conflict: Conflict,
+    key: &str,
+    value: &serde_json::Value,
+) -> PendingConflictView {
     PendingConflictView {
         kind: conflict_kind_str(conflict.kind),
         key: key.to_string(),
@@ -899,7 +995,10 @@ fn build_preset_warnings(
     if presets.caps_lock_remap.enabled
         && matches!(
             presets.caps_lock_remap.target,
-            RemapCapsTarget::F21 | RemapCapsTarget::F22 | RemapCapsTarget::F23 | RemapCapsTarget::F24
+            RemapCapsTarget::F21
+                | RemapCapsTarget::F22
+                | RemapCapsTarget::F23
+                | RemapCapsTarget::F24
         )
     {
         warnings.push(WarningView {
@@ -914,11 +1013,15 @@ fn build_preset_warnings(
             (hyperkey.meh.enabled, hyperkey.meh.source),
             (hyperkey.bleh.enabled, hyperkey.bleh.source),
         ];
-        if slots.into_iter().any(|(enabled, source)| enabled && source == SourceKey::F18) {
-            tracing::warn!(
-                "D-1 caps lock alias(F18)가 hyper/meh/bleh 소스로 고른 F18 과 충돌한다"
-            );
-            warnings.push(WarningView { kind: "duplicate", key: SourceKey::F18.label().to_string() });
+        if slots
+            .into_iter()
+            .any(|(enabled, source)| enabled && source == SourceKey::F18)
+        {
+            tracing::warn!("D-1 caps lock alias(F18)가 hyper/meh/bleh 소스로 고른 F18 과 충돌한다");
+            warnings.push(WarningView {
+                kind: "duplicate",
+                key: SourceKey::F18.label().to_string(),
+            });
         }
     }
 
@@ -969,13 +1072,18 @@ fn build_settings_state(
     let caps_is_source = caps_is_modifier_source(hyperkey);
     let caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
 
-    let mut warnings: Vec<WarningView> = hyperkey.validate().into_iter().map(warning_view).collect();
+    let mut warnings: Vec<WarningView> =
+        hyperkey.validate().into_iter().map(warning_view).collect();
     warnings.extend(build_preset_warnings(hyperkey, presets, caps_lock_alias));
 
     SettingsState {
         hyperkey: hyperkey_view(hyperkey),
         hyper_preview: hyper_preview(hyperkey),
-        source_keys: SourceKey::all().iter().copied().map(source_key_view).collect(),
+        source_keys: SourceKey::all()
+            .iter()
+            .copied()
+            .map(source_key_view)
+            .collect(),
         trackpad_areas: TrackpadArea::all()
             .iter()
             .copied()
@@ -1233,7 +1341,9 @@ fn apply_preset_setting(
         k if k == keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS => {
             presets.left_right_shift_to_caps = parse(value, key)?
         }
-        k if k == keys::PRESETS_SHIFT_CAPS_TO_CAPS => presets.shift_caps_to_caps = parse(value, key)?,
+        k if k == keys::PRESETS_SHIFT_CAPS_TO_CAPS => {
+            presets.shift_caps_to_caps = parse(value, key)?
+        }
         k if k == keys::PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED => {
             presets.shift_quick_press_brackets.enabled = parse(value, key)?
         }
@@ -1412,7 +1522,9 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
     let presets = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean = *state.korean.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(build_settings_state(&hyperkey, &presets, &korean, &store, None, None))
+    Ok(build_settings_state(
+        &hyperkey, &presets, &korean, &store, None, None,
+    ))
 }
 
 /// hyperkey.* 변경 뒤 `Engine::reconfigure` + (필요하면) `force_reset_state` 를
@@ -1507,7 +1619,13 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         remove_setting_key(&mut store, &key)?;
     }
 
-    reconfigure_engine(&state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, false)?;
+    reconfigure_engine(
+        &state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        false,
+    )?;
 
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
@@ -1520,16 +1638,49 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
     ))
 }
 
-/// F-17 §3.5.1 — `시스템 설정 열기` 버튼. `(추정)` URL 스킴(명세 §3.5.1·§9) — 실패해도
-/// 앱은 죽지 않고 프런트에 `Err` 로만 알린다(`settings.html` 의
+/// F-17 §3.5.1 — `시스템 설정 열기` 버튼.
+///
+/// ⭐ 이슈 #31 ③(a) — **Function Keys 패널로 바로 들어간다.** 예전 URL
+/// (`com.apple.preference.keyboard`)은 Ventura 이전 이름이라 지금은 Keyboard
+/// 최상단만 열렸다 — 사용자 보고: "시스템 세팅스를 열었을 때 해당 메뉴로 바로
+/// 진입하지 않는다". 아래 URL 은 Karabiner-Elements 의
+/// `Open System Settings > Function Keys…` 버튼이 쓰는 것과 같은 문자열이고,
+/// 이 머신의 `/Applications/Karabiner-Elements.app` 바이너리 `strings` 에서도
+/// 그대로 확인했다. 확장자 번들 ID `com.apple.Keyboard-Settings.extension` 은
+/// 이 머신의 `Keyboard-Settings.appex` `Info.plist` 로 교차 확인했다.
+const KEYBOARD_FUNCTION_KEYS_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys";
+
+/// 실패해도 앱은 죽지 않고 프런트에 `Err` 로만 알린다(`settings.html` 의
 /// `keyboards-open-system-settings-btn` 리스너가 `.catch()` 로 받는다).
 #[tauri::command]
 fn open_keyboard_settings() -> Result<(), String> {
-    if bundle::open_url("x-apple.systempreferences:com.apple.preference.keyboard") {
+    if bundle::open_url(KEYBOARD_FUNCTION_KEYS_SETTINGS_URL) {
         Ok(())
     } else {
         Err("키보드 시스템 설정을 열지 못했다".to_string())
     }
+}
+
+/// ⭐ 이슈 #31 ③(b) — `Use F1, F2, etc. keys as standard function keys` 의 **현재**
+/// 값만 따로 읽는다. 사용자 보고: "그 메뉴에서 옵션을 껐음에도 울트라키에서 옵션의
+/// 변경 상태를 인지하지 못하는 상황. 그래서 항상 on 으로 표현되는 것 같거든."
+///
+/// 값 자체는 `settings_bootstrap`/`settings_set` 이 돌려주는 `state.perDevice`
+/// 안에도 들어 있지만, 그 경로는 **설정을 건드릴 때만** 갱신된다 — 사용자가 시스템
+/// 설정 앱에서 토글을 바꾼 것은 우리 쪽에 아무 일도 일으키지 않는다. 그래서
+/// 프런트가 이 커맨드만 따로 주기적으로 부른다(§3.5.1).
+///
+/// ⚠️ **변경 알림이 아니라 폴링이다.** macOS 가 이 값의 변경을 알려 주는 공개
+/// 알림을 우리가 확인하지 못했다(`Keyboard-Settings.appex` 바이너리에
+/// `com.apple.keyboard.fnstatedidchange` 문자열이 보이지만, 그것이 실제로
+/// 분산 알림으로 게시되는지는 확인하지 못했다 — ⛔ 추측으로 배선하지 않는다).
+/// Karabiner-Elements 도 같은 값을 3초 주기로 폴링한다. 폴링 비용은 IOKit
+/// 레지스트리 프로퍼티 1회 읽기라 무시할 만하고, 프런트는 Keyboards 탭이 보일
+/// 때만 호출한다.
+#[tauri::command]
+fn keyboard_fn_state() -> Option<bool> {
+    fn_state::f_keys_are_standard()
 }
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
@@ -1672,7 +1823,13 @@ fn settings_set_preset(
     // 3) 엔진 반영 — presets.* 변경은 항상 규칙 테이블을 바꾼다(단순 슬라이더도
     // `quick_press_duration_ms` 를 통해 FSM 타이밍에 영향을 준다) — 언제나
     // force_reset 한다.
-    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true)?;
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        true,
+    )?;
 
     // 4) 저장.
     let save_error = {
@@ -1721,7 +1878,13 @@ fn settings_set_korean(
     };
 
     // 2) 엔진 반영 — korean.* 변경은 항상 규칙 테이블을 바꾼다.
-    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true)?;
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        true,
+    )?;
 
     // 3) ⭐ 항목 5 는 게이트다 — 엔진 설정이 아니다(D-K3).
     if key == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP {
@@ -2163,6 +2326,7 @@ fn main() {
             general_set_launch_on_login,
             general_set_hide_menu_bar_icon,
             open_keyboard_settings,
+            keyboard_fn_state,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
@@ -2333,7 +2497,9 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
 
     // F-17 — `LedgerStore` 구현(`perDevice._managed`, 계약 §B.2). 엔진이 이것을
     // `PathBManager` 에 넘겨 디바이스별 원장을 영속화한다.
-    let ledger: Box<dyn LedgerStore> = Box::new(AppLedgerStore { app_state: state.clone() });
+    let ledger: Box<dyn LedgerStore> = Box::new(AppLedgerStore {
+        app_state: state.clone(),
+    });
 
     let handle_for_events = handle.clone();
     match Engine::start(
@@ -2791,9 +2957,17 @@ fn build_normal_menu(
 }
 
 /// `unauthorizedMenu`(§3.1) — 권한이 없을 때 메뉴 전체를 이 2항목으로 교체한다.
-fn build_unauthorized_menu(handle: &tauri::AppHandle, catalog: &Catalog) -> tauri::Result<Menu<Wry>> {
+fn build_unauthorized_menu(
+    handle: &tauri::AppHandle,
+    catalog: &Catalog,
+) -> tauri::Result<Menu<Wry>> {
     // 상태 안내는 클릭해도 아무 일도 일어나지 않는 비활성 항목이다.
-    let status_item = MenuItem::new(handle, catalog.get("menu.unauthorized.title"), false, None::<&str>)?;
+    let status_item = MenuItem::new(
+        handle,
+        catalog.get("menu.unauthorized.title"),
+        false,
+        None::<&str>,
+    )?;
     let authorize_item = MenuItem::with_id(
         handle,
         menu_ids::AUTHORIZE,
@@ -3005,7 +3179,13 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
     };
     // `force_reset = true` — alias 가 바뀌면 추적 키 집합(F18 ↔ caps lock)이 통째로
     // 바뀌므로, 규칙 변경과 같은 이유로 stuck modifier 위험이 있다(D-D).
-    if let Err(e) = reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true) {
+    if let Err(e) = reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        true,
+    ) {
         tracing::error!(error = %e, "Synthesize Caps Lock Remap 을 엔진에 반영하지 못했다");
     }
 
@@ -3016,7 +3196,10 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
             tracing::error!(error = %e, "presets.synthesizeCapsLockRemap 저장 실패");
         }
     }
-    tracing::info!(value = next, "Synthesize Caps Lock Remap 토글됨 — 엔진·경로 B 에 반영했다");
+    tracing::info!(
+        value = next,
+        "Synthesize Caps Lock Remap 토글됨 — 엔진·경로 B 에 반영했다"
+    );
 }
 
 /// `Relaunch` 클릭 — 현재 실행 파일을 `open -n -b <bundle-id>` 로 새로 띄우고
@@ -3032,10 +3215,18 @@ fn on_menu_relaunch(app: &tauri::AppHandle, state: &Arc<AppState>) {
         tracing::warn!("번들 ID 를 얻지 못해 Relaunch 를 건너뛴다");
         return;
     };
-    tracing::info!(bundle_id, "Relaunch 요청 — open -n -b 로 새 인스턴스를 띄운다");
-    match std::process::Command::new("open").args(["-n", "-b", &bundle_id]).spawn() {
+    tracing::info!(
+        bundle_id,
+        "Relaunch 요청 — open -n -b 로 새 인스턴스를 띄운다"
+    );
+    match std::process::Command::new("open")
+        .args(["-n", "-b", &bundle_id])
+        .spawn()
+    {
         Ok(_) => shutdown_and_exit(app, state),
-        Err(e) => tracing::error!(error = %e, "Relaunch 를 위한 open 실행 실패 — 기존 인스턴스를 유지한다"),
+        Err(e) => {
+            tracing::error!(error = %e, "Relaunch 를 위한 open 실행 실패 — 기존 인스턴스를 유지한다")
+        }
     }
 }
 
@@ -3084,7 +3275,11 @@ fn setup_front_app_tracking(handle: &tauri::AppHandle, state: &Arc<AppState>) {
 /// 해도 안전하다. 판정(`bundle_id ∈ disabledApps`) 자체는 `AppGateController::
 /// set_front_app` 이 즉시 `AtomicBool` 에 게시한다(`docs/dev/architecture.md`
 /// §2.3) — 콜백 임계 경로(탭 스레드)는 이 함수와 전혀 만나지 않는다.
-fn on_front_app_changed(_handle: &tauri::AppHandle, state: &Arc<AppState>, ident: Option<AppIdentity>) {
+fn on_front_app_changed(
+    _handle: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    ident: Option<AppIdentity>,
+) {
     state.gate_controller.set_front_app(ident);
     refresh_ignore_menu_item(state);
 }
@@ -3344,7 +3539,9 @@ mod tests {
         ));
         assert!(key_affects_modifier_rules(keys::HYPERKEY_MEH_ENABLED));
         assert!(key_affects_modifier_rules(keys::HYPERKEY_BLEH_SOURCE));
-        assert!(!key_affects_modifier_rules(keys::HYPERKEY_MOUSE_APPLY_CLICK));
+        assert!(!key_affects_modifier_rules(
+            keys::HYPERKEY_MOUSE_APPLY_CLICK
+        ));
         assert!(!key_affects_modifier_rules(keys::HYPERKEY_TRACKPAD_ENABLED));
         assert!(!key_affects_modifier_rules(keys::UI_LAST_TAB));
     }
@@ -3372,7 +3569,11 @@ mod tests {
     #[test]
     fn build_engine_config_reflects_preset_settings() {
         let hyperkey = HyperkeySettings::default();
-        let presets = PresetSettings { caps_space_enter: true, quick_press_duration_ms: 500, ..PresetSettings::default() };
+        let presets = PresetSettings {
+            caps_space_enter: true,
+            quick_press_duration_ms: 500,
+            ..PresetSettings::default()
+        };
 
         let config = build_engine_config(
             &hyperkey,
@@ -3398,7 +3599,10 @@ mod tests {
         );
         assert_eq!(none_needed.caps_lock_alias, None);
 
-        let needs_alias = PresetSettings { caps_space_enter: true, ..PresetSettings::default() };
+        let needs_alias = PresetSettings {
+            caps_space_enter: true,
+            ..PresetSettings::default()
+        };
         let with_alias = build_engine_config(
             &hyperkey,
             &needs_alias,
@@ -3443,9 +3647,14 @@ mod tests {
     fn build_engine_config_collects_per_device_values_excluding_managed_ledger() {
         let mut store = SettingsStore::in_memory();
         store
-            .set(&keys::per_device_key_remap_rows(keys::PER_DEVICE_COMMON_SCOPE), &serde_json::json!([]))
+            .set(
+                &keys::per_device_key_remap_rows(keys::PER_DEVICE_COMMON_SCOPE),
+                &serde_json::json!([]),
+            )
             .unwrap();
-        store.set(keys::PER_DEVICE_MANAGED, &serde_json::json!({})).unwrap();
+        store
+            .set(keys::PER_DEVICE_MANAGED, &serde_json::json!({}))
+            .unwrap();
 
         let config = build_engine_config(
             &HyperkeySettings::default(),
@@ -3456,8 +3665,12 @@ mod tests {
 
         assert!(config
             .per_device_values
-            .contains_key(&keys::per_device_key_remap_rows(keys::PER_DEVICE_COMMON_SCOPE)));
-        assert!(!config.per_device_values.contains_key(keys::PER_DEVICE_MANAGED));
+            .contains_key(&keys::per_device_key_remap_rows(
+                keys::PER_DEVICE_COMMON_SCOPE
+            )));
+        assert!(!config
+            .per_device_values
+            .contains_key(keys::PER_DEVICE_MANAGED));
     }
 
     // F-17 — validate_per_device_key() §3.3 이 정한 두 모양(keyRemap.rows·
@@ -3485,6 +3698,49 @@ mod tests {
         assert!(validate_per_device_key("hyperkey.hyper.enabled").is_err());
     }
 
+    // ⭐ 이슈 #31 ② — validate_per_device_function_key_value() 는 기능 2 슬롯의
+    // 문자열 값만 카탈로그 대조로 거부한다. 키 변환 세트(배열)·`null`(끔)은 이
+    // 검증의 대상이 아니다 — §3.3 의 끔/부재 구분을 건드리면 안 된다.
+    #[test]
+    fn validate_per_device_function_key_value_checks_only_function_key_strings() {
+        // 카탈로그에 있는 새 id — 통과.
+        assert!(validate_per_device_function_key_value(
+            "perDevice.all.functionKeys.f1",
+            &serde_json::Value::String("consumer.mute".to_string())
+        )
+        .is_ok());
+
+        // 카탈로그에 없는 문자열 — 거부.
+        assert!(validate_per_device_function_key_value(
+            "perDevice.all.functionKeys.f1",
+            &serde_json::Value::String("nope.not_a_key".to_string())
+        )
+        .is_err());
+
+        // 옛 SystemFunction variant 이름 — 마이그레이션 경로로 여전히 풀리므로 통과.
+        assert!(validate_per_device_function_key_value(
+            "perDevice.all.functionKeys.f1",
+            &serde_json::Value::String("Mute".to_string())
+        )
+        .is_ok());
+
+        // null(명시적 끔)은 문자열이 아니므로 이 검증을 그냥 통과한다.
+        assert!(validate_per_device_function_key_value(
+            "perDevice.all.functionKeys.f1",
+            &serde_json::Value::Null
+        )
+        .is_ok());
+
+        // 기능 1(키 변환 세트, 배열)은 이 함수의 관심사가 아니다 — 카탈로그에
+        // 없는 문자열이 배열 안에 있어도 이 함수 자체는 통과시킨다(모양 검증은
+        // validate_per_device_key 의 몫).
+        assert!(validate_per_device_function_key_value(
+            "perDevice.all.keyRemap.rows",
+            &serde_json::json!([{"from": "CapsLock", "to": "F18"}])
+        )
+        .is_ok());
+    }
+
     // F-17 — collect_per_device_values() 는 `perDevice.` 접두사 키만 원본 JSON
     // 그대로 모으고 `_managed` 원장은 제외한다. `null` 값(명시적 끔, §3.3)도 그대로
     // 실린다 — 부재와 구별돼야 하기 때문이다.
@@ -3492,10 +3748,17 @@ mod tests {
     fn collect_per_device_values_includes_null_and_excludes_managed_ledger() {
         let mut store = SettingsStore::in_memory();
         store
-            .set(&keys::per_device_function_key("all", FKey::F1), &serde_json::Value::Null)
+            .set(
+                &keys::per_device_function_key("all", FKey::F1),
+                &serde_json::Value::Null,
+            )
             .unwrap();
-        store.set(keys::PER_DEVICE_MANAGED, &serde_json::json!({})).unwrap();
-        store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &true).unwrap();
+        store
+            .set(keys::PER_DEVICE_MANAGED, &serde_json::json!({}))
+            .unwrap();
+        store
+            .set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &true)
+            .unwrap();
 
         let values = collect_per_device_values(&store);
 
@@ -3507,36 +3770,33 @@ mod tests {
         assert!(!values.contains_key(settings_keys::GENERAL_LAUNCH_ON_LOGIN));
     }
 
-    // F-17 — system_function_label_key() 는 §4.1 카탈로그의 camelCase 세그먼트와
-    // 정확히 맞아떨어져야 한다(실제 en.json 키와 대조).
+    // ⭐ 이슈 #31 ② — build_per_device_view() 의 destinationCategories/destinations
+    // 는 목적지 카탈로그 313종/15카테고리 전량을 실어 보낸다(옛 8종짜리
+    // systemFunctions 를 대체). label_key 조립 규칙과 카탈로그 개수를 함께 고정한다.
     #[test]
-    fn system_function_label_key_matches_catalog_segments() {
-        assert_eq!(
-            system_function_label_key(SystemFunction::Mute),
-            "preferences.keyboards.functionKeys.function.mute"
-        );
-        assert_eq!(
-            system_function_label_key(SystemFunction::DoNotDisturb),
-            "preferences.keyboards.functionKeys.function.doNotDisturb"
-        );
-        assert_eq!(
-            system_function_label_key(SystemFunction::DisplayBrightnessDown),
-            "preferences.keyboards.functionKeys.function.displayBrightnessDown"
-        );
-    }
-
-    // F-17 — build_per_device_view() 의 systemFunctions 는 hid_usage() 가 Some 인
-    // 8종만 낸다(CONTRACT §2.2 — MissionControl·Spotlight·Dictation·DoNotDisturb 는
-    // 팝업에서 빠진다).
-    #[test]
-    fn build_per_device_view_system_functions_excludes_four_unknown_functions() {
+    fn build_per_device_view_carries_the_full_destination_catalog() {
         let view = build_per_device_view(&SettingsStore::in_memory());
-        assert_eq!(view.system_functions.len(), 8);
-        let values: Vec<&str> = view.system_functions.iter().map(|f| f.value.as_str()).collect();
-        assert!(!values.contains(&"MissionControl"));
-        assert!(!values.contains(&"Spotlight"));
-        assert!(!values.contains(&"Dictation"));
-        assert!(!values.contains(&"DoNotDisturb"));
+
+        assert_eq!(view.destination_categories.len(), 15);
+        assert_eq!(view.destinations.len(), destinations::all().len());
+
+        let disable = view
+            .destination_categories
+            .iter()
+            .find(|c| c.key == "disable")
+            .expect("disable 카테고리가 있어야 한다");
+        assert_eq!(
+            disable.label_key,
+            "preferences.keyboards.functionKeys.category.disable"
+        );
+
+        // 새 카탈로그가 이전 8종짜리 옛 어휘를 아예 쓰지 않는다는 것도 확인한다.
+        let values: Vec<&str> = view.destinations.iter().map(|d| d.value.as_str()).collect();
+        assert!(values.contains(&"consumer.mute"));
+        assert!(values.contains(&"appleKeyboard.mission_control"));
+        assert!(!values
+            .iter()
+            .any(|v| v.chars().next().is_some_and(char::is_uppercase)));
     }
 
     // caps_is_modifier_source() — hyper/meh/bleh 중 활성화된 슬롯만 본다.
@@ -3545,11 +3805,17 @@ mod tests {
     #[test]
     fn caps_modifier_slot_keys_lists_only_enabled_caps_lock_slots() {
         let mut h = HyperkeySettings::default();
-        assert!(caps_modifier_slot_keys(&h).is_empty(), "기본값은 전부 꺼져 있다");
+        assert!(
+            caps_modifier_slot_keys(&h).is_empty(),
+            "기본값은 전부 꺼져 있다"
+        );
 
         h.hyper.enabled = true;
         h.hyper.source = SourceKey::CapsLock;
-        assert_eq!(caps_modifier_slot_keys(&h), vec![settings_keys::HYPERKEY_HYPER_ENABLED]);
+        assert_eq!(
+            caps_modifier_slot_keys(&h),
+            vec![settings_keys::HYPERKEY_HYPER_ENABLED]
+        );
 
         // 소스가 caps lock 이 아니면 세지 않는다.
         h.hyper.source = SourceKey::RightCommand;
@@ -3561,7 +3827,10 @@ mod tests {
         h.meh.source = SourceKey::CapsLock;
         assert_eq!(
             caps_modifier_slot_keys(&h),
-            vec![settings_keys::HYPERKEY_HYPER_ENABLED, settings_keys::HYPERKEY_MEH_ENABLED]
+            vec![
+                settings_keys::HYPERKEY_HYPER_ENABLED,
+                settings_keys::HYPERKEY_MEH_ENABLED
+            ]
         );
     }
 
@@ -3569,9 +3838,18 @@ mod tests {
     #[test]
     fn disable_label_key_covers_modifier_slots() {
         for (store_key, expected) in [
-            (settings_keys::HYPERKEY_HYPER_ENABLED, "settings.hyperkey.hyper.label"),
-            (settings_keys::HYPERKEY_MEH_ENABLED, "settings.hyperkey.meh.label"),
-            (settings_keys::HYPERKEY_BLEH_ENABLED, "settings.hyperkey.bleh.label"),
+            (
+                settings_keys::HYPERKEY_HYPER_ENABLED,
+                "settings.hyperkey.hyper.label",
+            ),
+            (
+                settings_keys::HYPERKEY_MEH_ENABLED,
+                "settings.hyperkey.meh.label",
+            ),
+            (
+                settings_keys::HYPERKEY_BLEH_ENABLED,
+                "settings.hyperkey.bleh.label",
+            ),
         ] {
             assert_eq!(disable_label_key_for_setting(store_key), expected);
         }
@@ -3583,7 +3861,10 @@ mod tests {
         assert!(!caps_is_modifier_source(&hyperkey));
 
         hyperkey.hyper.source = SourceKey::CapsLock;
-        assert!(!caps_is_modifier_source(&hyperkey), "꺼진 슬롯은 세지 않는다");
+        assert!(
+            !caps_is_modifier_source(&hyperkey),
+            "꺼진 슬롯은 세지 않는다"
+        );
 
         hyperkey.hyper.enabled = true;
         assert!(caps_is_modifier_source(&hyperkey));
@@ -3592,10 +3873,19 @@ mod tests {
     // compute_caps_lock_alias() — needs_caps_lock_alias × synthesize 조합.
     #[test]
     fn compute_caps_lock_alias_matrix() {
-        assert_eq!(compute_caps_lock_alias(&PresetSettings::default(), false), None);
-        assert_eq!(compute_caps_lock_alias(&PresetSettings::default(), true), Some(KeyCode::F18));
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), false),
+            None
+        );
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), true),
+            Some(KeyCode::F18)
+        );
 
-        let synthesize = PresetSettings { synthesize_caps_lock_remap: true, ..PresetSettings::default() };
+        let synthesize = PresetSettings {
+            synthesize_caps_lock_remap: true,
+            ..PresetSettings::default()
+        };
         assert_eq!(compute_caps_lock_alias(&synthesize, true), None);
     }
 
@@ -3615,13 +3905,24 @@ mod tests {
             .iter()
             .find(|o| o.value == "Nothing")
             .unwrap();
-        assert_eq!(nothing.label_key.as_deref(), Some("settings.presets.option.nothing"));
+        assert_eq!(
+            nothing.label_key.as_deref(),
+            Some("settings.presets.option.nothing")
+        );
 
-        let seek = opts.caps_quick_actions.iter().find(|o| o.value == "Seek").unwrap();
+        let seek = opts
+            .caps_quick_actions
+            .iter()
+            .find(|o| o.value == "Seek")
+            .unwrap();
         assert_eq!(seek.label, "Seek");
         assert_eq!(seek.label_key, None, "Seek 는 고유명사라 labelKey 가 없다");
 
-        let esc = opts.caps_remap_targets.iter().find(|o| o.value == "Esc").unwrap();
+        let esc = opts
+            .caps_remap_targets
+            .iter()
+            .find(|o| o.value == "Esc")
+            .unwrap();
         assert_eq!(esc.label, "esc");
         assert_eq!(esc.label_key, None, "키캡 각인은 labelKey 가 없다");
 
@@ -3630,10 +3931,20 @@ mod tests {
             .iter()
             .find(|o| o.value == "SymbolRow")
             .unwrap();
-        assert_eq!(symbol.label_key.as_deref(), Some("settings.presets.option.home_row.symbol"));
+        assert_eq!(
+            symbol.label_key.as_deref(),
+            Some("settings.presets.option.home_row.symbol")
+        );
 
-        let hyper_trigger = opts.paste_triggers.iter().find(|o| o.value == "HyperKey").unwrap();
-        assert_eq!(hyper_trigger.label_key.as_deref(), Some("settings.presets.option.paste.hyper"));
+        let hyper_trigger = opts
+            .paste_triggers
+            .iter()
+            .find(|o| o.value == "HyperKey")
+            .unwrap();
+        assert_eq!(
+            hyper_trigger.label_key.as_deref(),
+            Some("settings.presets.option.paste.hyper")
+        );
     }
 
     // presets_view() — variant 이름이 저장 형식(serde 기본값)과 일치한다.
@@ -3659,11 +3970,18 @@ mod tests {
             kind: ConflictKind::CapsLockArrows,
             to_disable: vec![keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED],
         };
-        let view = pending_conflict_view(conflict, keys::PRESETS_CAPS_WASD_ARROWS, &serde_json::json!(true));
+        let view = pending_conflict_view(
+            conflict,
+            keys::PRESETS_CAPS_WASD_ARROWS,
+            &serde_json::json!(true),
+        );
         assert_eq!(view.kind, "capsLockArrows");
         assert_eq!(view.key, keys::PRESETS_CAPS_WASD_ARROWS);
         assert_eq!(view.value, serde_json::json!(true));
-        assert_eq!(view.disable_label_keys, vec!["settings.presets.caps_hjkl.prefix".to_string()]);
+        assert_eq!(
+            view.disable_label_keys,
+            vec!["settings.presets.caps_hjkl.prefix".to_string()]
+        );
     }
 
     // apply_preset_setting()/validate_and_apply_preset() — 알려진 키를 갱신하고,
@@ -3695,8 +4013,12 @@ mod tests {
     #[test]
     fn validate_and_apply_preset_rejects_unknown_key() {
         let mut presets = PresetSettings::default();
-        let err = validate_and_apply_preset(&mut presets, "presets.doesNotExist", &serde_json::json!(true))
-            .unwrap_err();
+        let err = validate_and_apply_preset(
+            &mut presets,
+            "presets.doesNotExist",
+            &serde_json::json!(true),
+        )
+        .unwrap_err();
         assert!(err.contains("알 수 없는"));
     }
 
@@ -3732,8 +4054,9 @@ mod tests {
     #[test]
     fn validate_and_apply_korean_rejects_unknown_key() {
         let mut korean = KoreanSettings::default();
-        let err = validate_and_apply_korean(&mut korean, "korean.doesNotExist", &serde_json::json!(true))
-            .unwrap_err();
+        let err =
+            validate_and_apply_korean(&mut korean, "korean.doesNotExist", &serde_json::json!(true))
+                .unwrap_err();
         assert!(err.contains("알 수 없는"));
     }
 
@@ -3869,7 +4192,8 @@ mod tests {
         hyperkey.hyper.enabled = true;
         hyperkey.hyper.source = SourceKey::F18;
 
-        let warnings = build_preset_warnings(&hyperkey, &PresetSettings::default(), Some(KeyCode::F18));
+        let warnings =
+            build_preset_warnings(&hyperkey, &PresetSettings::default(), Some(KeyCode::F18));
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "duplicate");
         assert_eq!(warnings[0].key, "F18");
@@ -3897,7 +4221,10 @@ mod tests {
     #[test]
     fn ignore_menu_text_falls_back_when_front_app_unknown() {
         let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
-        assert_eq!(ignore_menu_text(&catalog, None), catalog.get("menu.ignore_app.none"));
+        assert_eq!(
+            ignore_menu_text(&catalog, None),
+            catalog.get("menu.ignore_app.none")
+        );
     }
 
     // synthesize_caps_lock_remap_enabled() — 부재 = 기본값(꺼짐), 저장된 값이 있으면 그대로.
@@ -3932,6 +4259,10 @@ mod tests {
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "중복된 메뉴 항목 id 가 있다: {ids:?}");
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "중복된 메뉴 항목 id 가 있다: {ids:?}"
+        );
     }
 }

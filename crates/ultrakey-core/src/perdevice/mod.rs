@@ -26,6 +26,7 @@ use serde_json::Value;
 use crate::keycode::SourceKey;
 use crate::settings::keys as settings_keys;
 
+pub mod destinations;
 pub mod usage;
 pub use usage::Evidence;
 
@@ -217,11 +218,20 @@ impl FKey {
     }
 }
 
-/// 시스템 기능 12종(§3.5) — 기능 2 선택 팝업의 선택지. ⭐ 이름은 F-키 위치가 아니라
-/// 기능 정체성으로 잡는다(§4.1) — F1 에 `Mute` 를 골라도 라벨이 어긋나지 않는다.
+/// ⚠️ **이것은 PR #29 가 출하한 *옛* 저장 표현이다 — 새 어휘는 [`destinations`] 다.**
+/// 이슈 #31 ② 이전에는 이 12종(그중 [`SystemFunction::hid_usage`] 가 `Some` 인 8종만)
+/// 이 기능 2 선택 팝업의 전체 선택지였다. 지금은 **더 이상 UI 선택지가 아니다** —
+/// 팝업은 [`destinations::all`] 313종을 쓴다. 이 타입이 남아 있는 이유는 순전히
+/// 마이그레이션 때문이다: 옛 버전이 이미 이 variant 이름으로 저장해 둔 값을
+/// [`destinations::resolve_stored`] 가 읽을 때 옮겨 줘야 한다(같은 파일
+/// `migrate_legacy_system_function`). 새 코드에서 이 타입을 저장 대상으로 쓰지
+/// 않는다 — 이름은 F-키 위치가 아니라 기능 정체성으로 잡았었다(§4.1 옛 표) — F1 에
+/// `Mute` 를 골라도 라벨이 어긋나지 않게 하려던 설계였다.
 ///
 /// ⚠️ `Serialize`/`Deserialize` 는 variant 이름을 그대로 쓴다 — [`KeyRemapRow`] 와
-/// 같은 이유(저장 표현을 §4.1 의 UI 문자열 카탈로그와 분리).
+/// 같은 이유(저장 표현을 §4.1 의 UI 문자열 카탈로그와 분리). 마이그레이션 테스트가
+/// 이 직렬화 형태에 의존한다(`destinations.rs` 의
+/// `legacy_system_functions_migrate_to_the_same_values`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SystemFunction {
     DisplayBrightnessDown,
@@ -338,29 +348,47 @@ impl<'a> PerDeviceSettings<'a> {
         }
     }
 
-    /// 기능 2 — 디바이스 계층의 원시 3상태.
-    pub fn function_key_device(&self, device: &DeviceId, f: FKey) -> Tri<SystemFunction> {
+    /// 기능 2 — 디바이스 계층의 원시 3상태. ⚠️ 이슈 #31 ② — 저장값은 이제
+    /// [`destinations::FunctionDestination::id`] 문자열이다(옛 [`SystemFunction`]
+    /// variant 이름도 여전히 읽을 수 있다 — 해석은 [`resolved_function_key`]가 한다).
+    /// 이 메서드 자체는 raw 문자열만 돌려준다 — 해석 전이라 아직 어느 어휘인지
+    /// 모른다.
+    pub fn function_key_device(&self, device: &DeviceId, f: FKey) -> Tri<String> {
         self.read_tri(&settings_keys::per_device_function_key(device.as_str(), f))
     }
 
     /// 기능 2 — 공통 계층의 원시 3상태.
-    pub fn function_key_common(&self, f: FKey) -> Tri<SystemFunction> {
+    pub fn function_key_common(&self, f: FKey) -> Tri<String> {
         self.read_tri(&settings_keys::per_device_function_key(
             settings_keys::PER_DEVICE_COMMON_SCOPE,
             f,
         ))
     }
 
-    /// 기능 2 — §3.3 최종 해석. `None` = 매핑 없음(표준 F-키 그대로 동작).
-    pub fn resolved_function_key(&self, device: &DeviceId, f: FKey) -> Option<SystemFunction> {
-        match self.function_key_device(device, f) {
-            Tri::Value(func) => Some(func),
-            Tri::Off => None,
+    /// 기능 2 — §3.3 최종 해석. `None` = 매핑 없음(표준 F-키 그대로 동작이거나,
+    /// 저장된 문자열을 해석할 수 없는 경우 — 손상된 설정 하나가 앱을 죽이지 않는다,
+    /// [`destinations::resolve_stored`] 와 같은 관용).
+    pub fn resolved_function_key(
+        &self,
+        device: &DeviceId,
+        f: FKey,
+    ) -> Option<&'static destinations::FunctionDestination> {
+        let stored = match self.function_key_device(device, f) {
+            Tri::Value(s) => s,
+            Tri::Off => return None,
             Tri::Inherit => match self.function_key_common(f) {
-                Tri::Value(func) => Some(func),
-                Tri::Off | Tri::Inherit => None,
+                Tri::Value(s) => s,
+                Tri::Off | Tri::Inherit => return None,
             },
+        };
+        let resolved = destinations::resolve_stored(&stored);
+        if resolved.is_none() {
+            tracing::warn!(
+                value = %stored,
+                "perDevice 기능 2 저장값을 목적지 카탈로그에서 찾을 수 없다 — 매핑 없음으로 취급"
+            );
         }
+        resolved
     }
 }
 
@@ -371,7 +399,11 @@ impl<'a> PerDeviceSettings<'a> {
 ///
 /// ⚠️ 쓰기 전 **전체를 다시 합성**한다(규칙 4, 증분 쓰기 금지) — 호출할 때마다
 /// 새로 계산하고, 이 함수 자체는 상태를 갖지 않는다.
-pub fn compose(device: &DeviceId, settings: &PerDeviceSettings<'_>, d1: Option<KeyMapping>) -> Composition {
+pub fn compose(
+    device: &DeviceId,
+    settings: &PerDeviceSettings<'_>,
+    d1: Option<KeyMapping>,
+) -> Composition {
     let mut mappings = Vec::new();
     let mut used_src: HashSet<u64> = HashSet::new();
     let mut suppressed = Vec::new();
@@ -385,8 +417,14 @@ pub fn compose(device: &DeviceId, settings: &PerDeviceSettings<'_>, d1: Option<K
     // 2순위 — 기능 1(사용자가 명시적으로 만든 변환 세트).
     for row in settings.resolved_key_remap_rows(device) {
         // SourceKey::hid_usage() 는 35종 전부에 대해 Some 이다(keycode.rs) — unwrap 이 안전하다.
-        let src = row.from.hid_usage().expect("SourceKey::hid_usage() 는 35종 전부 Some 이다");
-        let dst = row.to.hid_usage().expect("SourceKey::hid_usage() 는 35종 전부 Some 이다");
+        let src = row
+            .from
+            .hid_usage()
+            .expect("SourceKey::hid_usage() 는 35종 전부 Some 이다");
+        let dst = row
+            .to
+            .hid_usage()
+            .expect("SourceKey::hid_usage() 는 35종 전부 Some 이다");
         if used_src.insert(src) {
             mappings.push(KeyMapping { src, dst });
         } else {
@@ -394,17 +432,19 @@ pub fn compose(device: &DeviceId, settings: &PerDeviceSettings<'_>, d1: Option<K
         }
     }
 
-    // 3순위 — 기능 2(F1~F12 슬롯의 시스템 기능 배치).
+    // 3순위 — 기능 2(F1~F12 슬롯의 목적지 카탈로그 배치, 이슈 #31 ②).
     for &fkey in FKey::all() {
-        let Some(function) = settings.resolved_function_key(device, fkey) else {
+        // `resolved_function_key` 가 `None` 을 주는 경우는 둘이다: ① 이 F-키에
+        // 매핑이 없다(부재/끔) ② 저장값이 있지만 카탈로그가 해석하지 못한다(손상된
+        // 설정·옛 버전이 남긴 알 수 없는 문자열). 옛 구현에는 "hid_usage() 가
+        // None 인 4종은 애초에 후보를 못 낸다"는 별도 분기가 있었지만, 새 카탈로그는
+        // 모든 항목이 값을 가지므로(destinations.rs — 값 없는 목적지는 카탈로그
+        // 자체에서 뺐다) 그 분기는 사라졌다 — 여기서는 해석 실패만 같은 자리에서
+        // 조용히 건너뛴다. 두 경우 다 밀린 것이 아니므로 suppressed 에 담지 않는다.
+        let Some(destination) = settings.resolved_function_key(device, fkey) else {
             continue;
         };
-        // hid_usage() 가 None 인 4종(usage.rs — MissionControl·Spotlight·Dictation·
-        // DoNotDisturb)은 경로 B 로 표현할 수 없다. 밀린 것이 아니라 애초에 후보를
-        // 낼 수 없는 것이므로 suppressed 에도 담지 않는다.
-        let Some(dst) = function.hid_usage() else {
-            continue;
-        };
+        let dst = destination.value;
         let src = fkey
             .source_key()
             .hid_usage()
@@ -416,7 +456,10 @@ pub fn compose(device: &DeviceId, settings: &PerDeviceSettings<'_>, d1: Option<K
         }
     }
 
-    Composition { mappings, suppressed }
+    Composition {
+        mappings,
+        suppressed,
+    }
 }
 
 /// 같은 계층 안에서 같은 `from` 을 요구하는 행이 있는지 판정한다(§3.4 충돌
@@ -518,7 +561,10 @@ pub fn read_managed_ledger(value: &Value) -> ManagedLedger {
     };
     for (key, raw) in obj {
         let Some(device) = DeviceId::parse(key) else {
-            tracing::warn!(key, "perDevice._managed 의 디바이스 키를 해석할 수 없다 — 건너뜀");
+            tracing::warn!(
+                key,
+                "perDevice._managed 의 디바이스 키를 해석할 수 없다 — 건너뜀"
+            );
             continue;
         };
         match serde_json::from_value::<Vec<KeyMapping>>(raw.clone()) {
@@ -638,6 +684,9 @@ mod tests {
     }
 
     // 기능 2 — 부재(디바이스) = 공통 따름(값이 있을 때).
+    // ⚠️ 저장값은 옛 SystemFunction variant 이름("Mute") 그대로 둔다 — 마이그레이션
+    // 경로(destinations::resolve_stored)가 여전히 그것을 읽어낸다는 것을 이 테스트가
+    // 증명한다(이슈 #31 ②, PR #29 저장값 호환).
     #[test]
     fn feature2_absent_device_falls_back_to_common_value() {
         let common_key = settings_keys::per_device_function_key(
@@ -652,7 +701,7 @@ mod tests {
 
         assert_eq!(
             settings.resolved_function_key(&device(), FKey::F9),
-            Some(SystemFunction::Mute)
+            destinations::find("consumer.mute")
         );
     }
 
@@ -688,7 +737,7 @@ mod tests {
 
         assert_eq!(
             settings.resolved_function_key(&dev, FKey::F9),
-            Some(SystemFunction::VolumeUp)
+            destinations::find("consumer.volume_increment")
         );
     }
 
@@ -711,6 +760,31 @@ mod tests {
         let settings = PerDeviceSettings::new(&values);
 
         assert_eq!(settings.resolved_function_key(&dev, FKey::F9), None);
+    }
+
+    // ⭐ 이슈 #31 ② 회귀 방지 — 새 카탈로그 id 로 저장한 값도 정확히 해석된다.
+    #[test]
+    fn feature2_resolves_new_catalog_id() {
+        let dev = device();
+        let device_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F1);
+        let values = BTreeMap::from([(device_key, Value::String("consumer.mute".to_string()))]);
+        let settings = PerDeviceSettings::new(&values);
+
+        assert_eq!(
+            settings.resolved_function_key(&dev, FKey::F1),
+            destinations::find("consumer.mute")
+        );
+    }
+
+    // ⭐ 손상된 설정(모르는 문자열)이 앱을 죽이지 않는다 — 매핑 없음으로 취급.
+    #[test]
+    fn feature2_unknown_stored_id_resolves_to_no_mapping_without_panicking() {
+        let dev = device();
+        let device_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F1);
+        let values = BTreeMap::from([(device_key, Value::String("nope.not_a_key".to_string()))]);
+        let settings = PerDeviceSettings::new(&values);
+
+        assert_eq!(settings.resolved_function_key(&dev, FKey::F1), None);
     }
 
     // ── §3.6 규칙 4 — 합성이 서로를 지우지 않는다 ────────────────────────────────
@@ -810,16 +884,80 @@ mod tests {
         );
     }
 
-    // hid_usage() 가 None 인 4종은 기능 2 로 선택돼 있어도 애초에 배열 후보를 못
-    // 낸다 — 밀린 것이 아니므로 suppressed 에도 담기지 않는다(usage.rs §2.2).
+    // ⚠️ 이슈 #31 ② 로 전제가 바뀐 테스트 — 예전에는 `SystemFunction::hid_usage()`
+    // 가 `None` 인 4종(MissionControl·Spotlight·Dictation·DoNotDisturb) 전부가
+    // 배열 후보를 못 냈다. 새 카탈로그에서는 그중 3종(MissionControl 포함)이 벤더
+    // page 값을 얻어 후보를 낸다 — `destinations.rs` 의
+    // `legacy_system_functions_migrate_to_the_same_values` 가 이미 그 사실을
+    // 못박았다. 여기서는 그 새 동작을 compose 계층에서 재확인한다.
     #[test]
-    fn compose_silently_skips_functions_without_hid_usage() {
+    fn compose_migrates_legacy_function_that_gained_a_value() {
         let dev = device();
         let f3_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F3);
         let values = BTreeMap::from([(
             f3_key,
             serde_json::to_value(SystemFunction::MissionControl).unwrap(),
         )]);
+        let settings = PerDeviceSettings::new(&values);
+
+        let composition = compose(&dev, &settings, None);
+
+        let expected = destinations::find("appleKeyboard.mission_control").unwrap();
+        assert_eq!(
+            composition.mappings,
+            vec![KeyMapping {
+                src: SourceKey::F3.hid_usage().unwrap(),
+                dst: expected.value,
+            }]
+        );
+        assert!(composition.suppressed.is_empty());
+    }
+
+    // `DoNotDisturb` 만은 새 카탈로그에도 값이 없다(Generic Desktop page, D-17-4
+    // 허용 집합 밖 — destinations.rs 모듈 문서 "무엇을 뺐는가" 표) — 애초에 배열
+    // 후보를 못 낸다. 밀린 것이 아니므로 suppressed 에도 담기지 않는다.
+    #[test]
+    fn compose_silently_skips_do_not_disturb_which_still_has_no_destination() {
+        let dev = device();
+        let f6_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F6);
+        let values = BTreeMap::from([(
+            f6_key,
+            serde_json::to_value(SystemFunction::DoNotDisturb).unwrap(),
+        )]);
+        let settings = PerDeviceSettings::new(&values);
+
+        let composition = compose(&dev, &settings, None);
+
+        assert!(composition.mappings.is_empty());
+        assert!(composition.suppressed.is_empty());
+    }
+
+    // ⭐ 이슈 #31 ② — 새 id 로 저장한 값이 compose 에서 그대로 매핑을 만든다.
+    #[test]
+    fn compose_maps_new_catalog_id_to_its_value() {
+        let dev = device();
+        let f1_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F1);
+        let values = BTreeMap::from([(f1_key, Value::String("consumer.mute".to_string()))]);
+        let settings = PerDeviceSettings::new(&values);
+
+        let composition = compose(&dev, &settings, None);
+
+        assert_eq!(
+            composition.mappings,
+            vec![KeyMapping {
+                src: SourceKey::F1.hid_usage().unwrap(),
+                dst: destinations::find("consumer.mute").unwrap().value,
+            }]
+        );
+        assert!(composition.suppressed.is_empty());
+    }
+
+    // ⭐ 모르는 id 는 매핑도 suppressed 도 만들지 않는다 — panic 없이 조용히 건너뛴다.
+    #[test]
+    fn compose_skips_unknown_id_without_panicking() {
+        let dev = device();
+        let f1_key = settings_keys::per_device_function_key(dev.as_str(), FKey::F1);
+        let values = BTreeMap::from([(f1_key, Value::String("nope.not_a_key".to_string()))]);
         let settings = PerDeviceSettings::new(&values);
 
         let composition = compose(&dev, &settings, None);
@@ -841,7 +979,10 @@ mod tests {
             dst: SourceKey::F18.hid_usage().unwrap(),
         }];
 
-        assert_eq!(validate(&device, &mappings), Err(ValidationError::ZeroProductId));
+        assert_eq!(
+            validate(&device, &mappings),
+            Err(ValidationError::ZeroProductId)
+        );
     }
 
     #[test]
@@ -985,6 +1126,112 @@ mod tests {
 
         assert!(find_duplicate_from(&rows).is_empty());
     }
+
+    // ── ⭐ 이슈 #31 회귀 방지 — 충돌은 **source 중복만**이다 ──────────────────────
+    //
+    // 사용자 보고: "Left option -> Left Command, Left Command -> Left option 이렇게
+    // 표현하게 하고 싶은데 … 어떤 한 키가 할당이 되면 다른 방향(Source/Target)으로
+    // 설정할 수 없게 동작하는 것 같음." 양방향 스왑은 이 기능의 대표 사용례이고
+    // (이슈 #21 이 참조한 사용자 Karabiner 설정이 정확히 그것이다), **같은 키가 한
+    // 행에서는 from, 다른 행에서는 to 로 나타나는 것은 충돌이 아니다.** 아래 세 층
+    // (검출·합성·쓰기 전 검증) 전부에서 그것을 고정한다.
+
+    /// 양방향 스왑 2행 — from 은 서로 다르다. 중복 검출에 걸리면 안 된다.
+    #[test]
+    fn bidirectional_swap_is_not_a_duplicate_from() {
+        let rows = vec![
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+        ];
+
+        assert!(
+            find_duplicate_from(&rows).is_empty(),
+            "source↔target 교차는 충돌이 아니다: {rows:?}"
+        );
+    }
+
+    /// 한 키가 여러 행의 **to** 로 나타나는 것도 충돌이 아니다 — 충돌 판정은
+    /// `from` 만 본다.
+    #[test]
+    fn repeated_to_is_not_a_duplicate() {
+        let rows = vec![
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::RightOption, SourceKey::LeftCommand),
+        ];
+
+        assert!(find_duplicate_from(&rows).is_empty(), "{rows:?}");
+    }
+
+    /// 같은 `from` 이 두 번이면 — 그리고 그때만 — 충돌이다.
+    #[test]
+    fn only_repeated_from_is_a_duplicate() {
+        let rows = vec![
+            // from 이 겹치는 유일한 쌍.
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+            row(SourceKey::LeftCommand, SourceKey::LeftControl),
+            // 아래 두 행은 위 행들과 to/from 이 교차하지만 from 은 고유하다.
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::LeftControl, SourceKey::LeftCommand),
+        ];
+
+        assert_eq!(find_duplicate_from(&rows), vec![SourceKey::LeftCommand]);
+    }
+
+    /// 합성 — 양방향 스왑 4행(좌우 각각)이 **한 행도 밀려나지 않고** 전부 배열에
+    /// 들어간다. 이슈 #21 이 참조한 사용자 Karabiner 설정 그대로다.
+    #[test]
+    fn compose_keeps_both_directions_of_a_swap() {
+        let dev = device();
+        let rows = vec![
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::RightCommand, SourceKey::RightOption),
+            row(SourceKey::RightOption, SourceKey::RightCommand),
+        ];
+        let values = BTreeMap::from([(
+            settings_keys::per_device_key_remap_rows(dev.as_str()),
+            serde_json::to_value(&rows).unwrap(),
+        )]);
+        let settings = PerDeviceSettings::new(&values);
+
+        let composition = compose(&dev, &settings, None);
+
+        assert!(
+            composition.suppressed.is_empty(),
+            "양방향 스왑은 서로를 밀어내지 않는다: {composition:?}"
+        );
+        assert_eq!(composition.mappings.len(), 4, "{composition:?}");
+        for r in &rows {
+            let want = KeyMapping {
+                src: r.from.hid_usage().unwrap(),
+                dst: r.to.hid_usage().unwrap(),
+            };
+            assert!(
+                composition.mappings.contains(&want),
+                "{r:?} 가 빠졌다: {composition:?}"
+            );
+        }
+    }
+
+    /// 쓰기 전 검증 — 양방향 스왑 배열은 `DuplicateSrc` 에 걸리지 않는다.
+    #[test]
+    fn validate_accepts_bidirectional_swap() {
+        let mappings = vec![
+            KeyMapping {
+                src: SourceKey::LeftCommand.hid_usage().unwrap(),
+                dst: SourceKey::LeftOption.hid_usage().unwrap(),
+            },
+            KeyMapping {
+                src: SourceKey::LeftOption.hid_usage().unwrap(),
+                dst: SourceKey::LeftCommand.hid_usage().unwrap(),
+            },
+        ];
+
+        assert_eq!(validate(&device().to_match(), &mappings), Ok(()));
+    }
+
+    // 반대 방향(같은 `src` 가 두 번이면 여전히 거부한다 — 충돌 검사 자체를 없앤 것이
+    // 아니다)은 아래 `validate_rejects_duplicate_src` 가 이미 고정하고 있다.
 
     // ── D-17-2 — 원장 직렬화 ────────────────────────────────────────────────────
 
