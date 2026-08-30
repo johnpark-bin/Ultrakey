@@ -1889,14 +1889,19 @@ fn synthesize_caps_lock_remap_enabled(store: &SettingsStore) -> bool {
 fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result<()> {
     let catalog = &state.catalog;
 
-    // ⭐ 전용 트레이 아이콘 에셋을 새로 만들지 않는다(위임 지시) — 기존 32×32 앱
-    // 아이콘을 템플릿 이미지로 재사용한다. **한계**: 템플릿 모드(`icon_as_template`)
-    // 는 macOS 가 아이콘의 알파 채널만 남기고 단색(현재 시스템 외관에 맞는 흑/백)
-    // 실루엣으로 다시 칠한다 — 원본 PNG 의 색·디테일은 메뉴바에서 보이지 않는다.
-    // 전용 모노크롬 트레이 아이콘 제작(`StatusTemplate`/`HyperStatusTemplate` 류,
-    // §3.3 관찰)은 후속 과제로 남긴다 — `Assets.car` 는 저작권 경계상 확보하지
-    // 못했다(`menu-bar-and-lifecycle.md` §9 항목 2).
-    let icon_bytes = include_bytes!("../icons/32x32.png");
+    // ⭐ 전용 모노크롬 template 아이콘을 쓴다(이슈 #16). 앱 번들 아이콘(둥근
+    // 타일 + 밝은 글리프)을 그대로 재사용하던 과거 코드는 메뉴바에서 **타일
+    // 전체가 불투명한 사각 실루엣**으로 뭉개졌다 — 템플릿 모드
+    // (`icon_as_template`)에서 macOS 는 아이콘의 알파 채널만 남기고 현재 시스템
+    // 외관(라이트/다크·메뉴 강조)에 맞는 단색으로 다시 칠하기 때문에, 색이 아니라
+    // **알파 모양**이 곧 보이는 것 전부다.
+    //
+    // `menubar-template.png` 는 배경 없이 선화만 알파로 남긴 36×36 자산이다.
+    // 36px 인 이유: `tray-icon` 0.24.2 가 NSImage 크기를 18pt 로 고정하므로
+    // (platform_impl/macos/mod.rs `icon_height: f64 = 18.0`) Retina 에서 1:1 이
+    // 되는 픽셀 크기가 36 이다. 생성 절차는 `scripts/generate-icons.sh`,
+    // 디자인 근거는 `docs/dev/icons.md`.
+    let icon_bytes = include_bytes!("../icons/menubar-template.png");
     // `Image::from_bytes` 는 `image-png` 기능이 있어야 존재하고(앱 Cargo.toml 에
     // 이미 켬), 실패하면 `tauri::Error::Image` 로 `?` 가 그대로 전파한다.
     let icon = tauri::image::Image::from_bytes(icon_bytes)?;

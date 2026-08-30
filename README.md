@@ -1,9 +1,12 @@
+<img src="apps/ultrakey-app/icons/128x128@2x.png" alt="Ultrakey 앱 아이콘" width="96" />
+
 # Ultrakey
 
 macOS 유틸리티 **SuperKey** 의 Rust/Tauri 클론.
 
 - 명세: [`docs/spec/`](docs/spec/) — [`docs/spec/README.md`](docs/spec/README.md) 가 색인이자 구현 순서다
 - 구현 구조: [`docs/dev/architecture.md`](docs/dev/architecture.md)
+- 아이콘: [`docs/dev/icons.md`](docs/dev/icons.md) — 정본 SVG 하나에서 전량을 다시 만드는 절차
 - 에이전트 규약: [`AGENTS.md`](AGENTS.md)
 
 현재 단계: **M1 — 키 이벤트 탭 + 리매핑 엔진** (F-11 권한 · F-07 엔진 · F-14(B) 입력 소스 독립성 · F-05 Hyperkey 최소 동작 · F-10 게이트 인터페이스)
@@ -32,6 +35,10 @@ cargo test -p ultrakey-core -p ultrakey-i18n -p ultrakey-hyperkey -p ultrakey-la
 # 워크스페이스 전체
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+
+# 아이콘 재생성 — 정본 assets/app-icon/ultrakey.svg 하나에서 전량을 다시 만든다
+# (macOS 기본 도구만 쓴다. PNG 를 직접 편집하지 않는다 — docs/dev/icons.md)
+./scripts/generate-icons.sh
 
 # ⭐ 서명된 universal .app — 권한이 필요한 기능은 반드시 이것으로 테스트한다
 ./scripts/build-signed.sh
