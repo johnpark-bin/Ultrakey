@@ -46,6 +46,56 @@ pub const HYPERKEY_TRACKPAD_HAPTIC: &str = "hyperkey.trackpad.haptic";
 /// 환경설정 창이 마지막으로 열려 있던 탭(F-09).
 pub const UI_LAST_TAB: &str = "ui.lastTab";
 
+// ── F-08 Power User Presets(`power-user-presets.md`) — `ultrakey-presets` 가 소비한다 ──
+
+/// F-08.1 `Remap caps lock to:` — 체크박스.
+pub const PRESETS_CAPS_LOCK_REMAP_ENABLED: &str = "presets.capsLockRemap.enabled";
+/// F-08.1 — 팝업(50종).
+pub const PRESETS_CAPS_LOCK_REMAP_TARGET: &str = "presets.capsLockRemap.target";
+/// F-08.2 `Quick press caps lock to execute:` — 체크박스.
+pub const PRESETS_CAPS_QUICK_PRESS_ENABLED: &str = "presets.capsQuickPress.enabled";
+/// F-08.2 — 팝업(48종 + 구분선 1).
+pub const PRESETS_CAPS_QUICK_PRESS_ACTION: &str = "presets.capsQuickPress.action";
+/// F-08.3 `Quick press duration` — 슬라이더(250~2000ms, 기본 1000ms).
+pub const PRESETS_QUICK_PRESS_DURATION_MS: &str = "presets.quickPressDurationMs";
+/// F-08.4 `Caps lock + space = enter` — 체크박스.
+pub const PRESETS_CAPS_SPACE_ENTER: &str = "presets.capsSpaceEnter";
+/// F-08.5 `Caps lock + W A S D = ▲◀▼▶` — 체크박스.
+pub const PRESETS_CAPS_WASD_ARROWS: &str = "presets.capsWasdArrows";
+/// F-08.6 `Caps lock +` [팝업] ` = ◀▼▲▶` — 체크박스.
+pub const PRESETS_CAPS_HJKL_ARROWS_ENABLED: &str = "presets.capsHjklArrows.enabled";
+/// F-08.6 — 인라인 팝업(`H J K L` · `I J K L`).
+pub const PRESETS_CAPS_HJKL_ARROWS_KEY_SET: &str = "presets.capsHjklArrows.keySet";
+/// F-08.7 `Caps lock + home row = ` [팝업] — 체크박스.
+pub const PRESETS_CAPS_HOME_ROW_ENABLED: &str = "presets.capsHomeRow.enabled";
+/// F-08.7 — 인라인 팝업(symbol row · function row).
+pub const PRESETS_CAPS_HOME_ROW_SCHEME: &str = "presets.capsHomeRow.scheme";
+/// F-08.8 `Double tap shift = caps lock` — 체크박스.
+pub const PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS: &str = "presets.doubleTapShiftToCaps";
+/// F-08.9 `Left shift + right shift = caps lock` — 체크박스.
+pub const PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS: &str = "presets.leftRightShiftToCaps";
+/// F-08.10 `Shift + caps lock = caps lock` — 체크박스.
+pub const PRESETS_SHIFT_CAPS_TO_CAPS: &str = "presets.shiftCapsToCaps";
+/// F-08.11 `Quick press left or right shift to input corresponding:` — 체크박스.
+pub const PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED: &str = "presets.shiftQuickPressBrackets.enabled";
+/// F-08.11 — 팝업(4종 문자 쌍).
+pub const PRESETS_SHIFT_QUICK_PRESS_BRACKETS_PAIR: &str = "presets.shiftQuickPressBrackets.pair";
+/// F-08.12 `Hyper + delete = forward delete` — 체크박스.
+pub const PRESETS_HYPER_DELETE_TO_FORWARD: &str = "presets.hyperDeleteToForward";
+/// F-08.13 `Remap delete to forward delete` — 체크박스.
+pub const PRESETS_DELETE_TO_FORWARD: &str = "presets.deleteToForward";
+/// F-08.14 `Shift + delete = forward delete` — 체크박스.
+pub const PRESETS_SHIFT_DELETE_TO_FORWARD: &str = "presets.shiftDeleteToForward";
+/// F-08.15 `Remap paste (⌘+V) to paste w/o formatting (⌘⌥⇧+V):` — 체크박스.
+pub const PRESETS_PASTE_WITHOUT_FORMATTING_ENABLED: &str = "presets.pasteWithoutFormatting.enabled";
+/// F-08.15 — 팝업(4종 트리거).
+pub const PRESETS_PASTE_WITHOUT_FORMATTING_TRIGGER: &str = "presets.pasteWithoutFormatting.trigger";
+/// F-08.16 `Home & end operate on lines` — 체크박스.
+pub const PRESETS_HOME_END_ON_LINES: &str = "presets.homeEndOnLines";
+/// Advanced 토글 — 켜져 있으면(true) 경로 B(`hidutil` 커널 매핑)를 쓰지 않고 경로 A
+/// (이벤트 합성)만 쓴다(D-1, `docs/dev/architecture.md` §6.1 되돌릴 수단).
+pub const PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP: &str = "presets.synthesizeCapsLockRemap";
+
 /// 전량 나열 — 테스트가 오타·중복·접두사 규칙을 검증하는 데 쓴다.
 pub fn all() -> &'static [&'static str] {
     &[
@@ -65,6 +115,29 @@ pub fn all() -> &'static [&'static str] {
         HYPERKEY_TRACKPAD_CHANGE_MENU_BAR_ICON,
         HYPERKEY_TRACKPAD_HAPTIC,
         UI_LAST_TAB,
+        PRESETS_CAPS_LOCK_REMAP_ENABLED,
+        PRESETS_CAPS_LOCK_REMAP_TARGET,
+        PRESETS_CAPS_QUICK_PRESS_ENABLED,
+        PRESETS_CAPS_QUICK_PRESS_ACTION,
+        PRESETS_QUICK_PRESS_DURATION_MS,
+        PRESETS_CAPS_SPACE_ENTER,
+        PRESETS_CAPS_WASD_ARROWS,
+        PRESETS_CAPS_HJKL_ARROWS_ENABLED,
+        PRESETS_CAPS_HJKL_ARROWS_KEY_SET,
+        PRESETS_CAPS_HOME_ROW_ENABLED,
+        PRESETS_CAPS_HOME_ROW_SCHEME,
+        PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS,
+        PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS,
+        PRESETS_SHIFT_CAPS_TO_CAPS,
+        PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED,
+        PRESETS_SHIFT_QUICK_PRESS_BRACKETS_PAIR,
+        PRESETS_HYPER_DELETE_TO_FORWARD,
+        PRESETS_DELETE_TO_FORWARD,
+        PRESETS_SHIFT_DELETE_TO_FORWARD,
+        PRESETS_PASTE_WITHOUT_FORMATTING_ENABLED,
+        PRESETS_PASTE_WITHOUT_FORMATTING_TRIGGER,
+        PRESETS_HOME_END_ON_LINES,
+        PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP,
     ]
 }
 
@@ -82,12 +155,17 @@ mod tests {
         assert_eq!(sorted.len(), keys.len(), "중복된 키가 있다: {keys:?}");
     }
 
-    // keys::all() 의 모든 키가 접두사 규칙(hyperkey.* / ui.*)을 지킨다.
+    // keys::all() 의 모든 키가 접두사 규칙(hyperkey.* / ui.* / presets.* / general.*)을
+    // 지킨다. ⭐ M2 에서 `presets.*`(F-08, 이 파일)와 `general.*`(F-10, 다른 크레이트가
+    // 동시에 작업 중)를 추가로 허용하도록 넓혔다.
     #[test]
     fn all_keys_follow_prefix_convention() {
         for key in all() {
             assert!(
-                key.starts_with("hyperkey.") || key.starts_with("ui."),
+                key.starts_with("hyperkey.")
+                    || key.starts_with("ui.")
+                    || key.starts_with("presets.")
+                    || key.starts_with("general."),
                 "접두사 규칙을 벗어난 키: {key}"
             );
         }
