@@ -138,7 +138,7 @@ const WARMUP: usize = 5;
 pub fn start(app: &tauri::AppHandle) {
     let displays = ultrakey_platform::screen_capture::active_displays();
     if displays.is_empty() {
-        tracing::error!("디스플레이를 하나도 찾지 못했다 — 스파이크를 중단한다");
+        tracing::error!("no displays found; aborting spike");
         return;
     }
 
@@ -175,10 +175,10 @@ pub fn start(app: &tauri::AppHandle) {
         match built {
             Ok(w) => {
                 let _ = w.set_ignore_cursor_events(true);
-                tracing::info!(%label, w = g.width_pt, h = g.height_pt, "스파이크 창 생성");
+                tracing::info!(%label, w = g.width_pt, h = g.height_pt, "spike window created");
                 windows.push((label, w, *g));
             }
-            Err(e) => tracing::error!(%label, error = %e, "스파이크 창 생성 실패"),
+            Err(e) => tracing::error!(%label, error = %e, "failed to create spike window"),
         }
     }
     if windows.is_empty() {
@@ -208,13 +208,13 @@ fn drive(
         match ready_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(label) => {
                 ready += 1;
-                tracing::info!(%label, ready, total = windows.len(), "스파이크 창 준비됨");
+                tracing::info!(%label, ready, total = windows.len(), "spike window ready");
             }
             Err(_) => continue,
         }
     }
     if ready < windows.len() {
-        tracing::error!(ready, total = windows.len(), "준비되지 않은 창이 있다 — 그래도 계속한다");
+        tracing::error!(ready, total = windows.len(), "some windows are not ready; continuing anyway");
     }
     // 웹뷰 첫 프레임 합성이 끝나도록 잠깐 둔다(콜드 비용을 WARMUP 이 아니라
     // 여기서 흡수시킨다).
@@ -262,7 +262,7 @@ fn drive(
                     // ack 이 창 수의 제곱만큼 온다. 반드시 대상 지정이다.
                     let target = tauri::EventTarget::webview_window(windows[*i].0.clone());
                     if let Err(e) = app.emit_to(target, "spike://frame", f) {
-                        tracing::warn!(error = %e, "emit 실패");
+                        tracing::warn!(error = %e, "emit failed");
                     }
                 }
 
@@ -282,14 +282,14 @@ fn drive(
                             paint_max = paint_max.max(a.paint_ms);
                         }
                         Ok(stale) => {
-                            tracing::debug!(seq = stale.seq, label = %stale.label, "지난 시행의 ack — 버린다");
+                            tracing::debug!(seq = stale.seq, label = %stale.label, "ack from a previous trial; discarding");
                         }
                         Err(_) => break,
                     }
                 }
                 let rt = t0.elapsed().as_secs_f64() * 1000.0;
                 if got < windows.len() {
-                    tracing::warn!(seq, got, "ack 이 모자란다 — 이 시행은 버린다");
+                    tracing::warn!(seq, got, "not enough acks; discarding this trial");
                     continue;
                 }
                 if rep >= WARMUP {
@@ -321,13 +321,13 @@ fn drive(
                 build_median_ms = median(&mut builds),
                 paint_median_ms = median(&mut paints),
                 serialize_median_us = median(&mut serialize_us),
-                "P3 시행"
+                "P3 trial"
             );
             report.push_str(&line);
         }
     }
 
-    tracing::info!("\n=== ⭐ F-03 P3 실측 (창 {}개) ===\n{}", windows.len(), report);
+    tracing::info!("\n=== F-03 P3 measurement ({} windows) ===\n{}", windows.len(), report);
     write_report(&windows, &report);
 
     // 창을 치우고 프로세스를 끝낸다 — 스파이크는 제품 세션이 아니다.

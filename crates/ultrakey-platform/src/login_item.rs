@@ -43,13 +43,68 @@ pub enum LoginItemError {
 impl std::fmt::Display for LoginItemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoginItemError::Unsupported => write!(f, "이 환경에서는 로그인 항목 등록을 지원하지 않는다"),
-            LoginItemError::RegisterFailed(reason) => write!(f, "로그인 항목 등록/해제 실패: {reason}"),
+            LoginItemError::Unsupported => write!(f, "login item registration is not supported in this environment"),
+            LoginItemError::RegisterFailed(reason) => write!(f, "login item register/unregister failed: {reason}"),
         }
     }
 }
 
 impl std::error::Error for LoginItemError {}
+
+/// ⭐ OS 가 말하는 **로그인 항목의 실제 상태**. 이슈 #39 에서 확인된 문제의 핵심이
+/// 여기 있다 — 지금까지 앱은 `is_enabled()`(불리언)만 보고 있었고, 그래서
+/// "등록되지 않았다"와 "등록됐지만 사용자가 승인하지 않았다/껐다"를 구분하지
+/// 못했다. 둘은 사용자가 해야 하는 일이 완전히 다르다.
+///
+/// `SMAppServiceStatus`(SDK 헤더 실측): `NotRegistered=0` · `Enabled=1` ·
+/// `RequiresApproval=2` · `NotFound=3`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginItemStatus {
+    /// 등록된 적이 없다(또는 해제됐다).
+    NotRegistered,
+    /// 등록되어 있고 로그인 시 실행된다.
+    Enabled,
+    /// ⭐ 등록은 되어 있으나 **사용자 승인이 필요하다.** macOS 13+ 는 사용자가
+    /// `시스템 설정 ▸ 일반 ▸ 로그인 항목` 에서 항목을 끄면 이 상태가 되고, 앱이
+    /// `register` 를 다시 불러도 이 상태 그대로다 — 사용자만 되돌릴 수 있다.
+    /// **앱이 "성공"이라고 보고하면서 실제로는 로그인 시 뜨지 않는 경로가 바로 이것이다.**
+    RequiresApproval,
+    /// 등록 대상(번들/plist)을 찾을 수 없다.
+    NotFound,
+    /// `SMAppService` 가 이 빌드가 모르는 값을 돌려줬다.
+    Unknown(isize),
+    /// macOS 12 폴백 경로 — `~/Library/LaunchAgents/<bundle-id>.plist` 존재 여부.
+    /// 이 경로에는 "승인 필요" 상태가 없다.
+    LegacyPlist { present: bool },
+    /// 판정 자체가 불가능하다(macOS 가 아니거나 HOME·번들 ID 를 얻지 못함).
+    Unsupported,
+}
+
+impl LoginItemStatus {
+    /// "로그인 시 실제로 뜨는 상태인가". `RequiresApproval` 은 **거짓이다** —
+    /// 등록 레코드는 있지만 macOS 가 실행하지 않기 때문이다.
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            LoginItemStatus::Enabled | LoginItemStatus::LegacyPlist { present: true }
+        )
+    }
+
+    /// 로그에 남길 안정적인 영어 식별자. ⛔ 사용자에게 보여줄 문구가 아니다 —
+    /// UI 문구는 문자열 카탈로그(`ultrakey-i18n`)에서 온다.
+    pub fn as_log_str(self) -> &'static str {
+        match self {
+            LoginItemStatus::NotRegistered => "not-registered",
+            LoginItemStatus::Enabled => "enabled",
+            LoginItemStatus::RequiresApproval => "requires-approval",
+            LoginItemStatus::NotFound => "not-found",
+            LoginItemStatus::Unknown(_) => "unknown",
+            LoginItemStatus::LegacyPlist { present: true } => "legacy-plist-present",
+            LoginItemStatus::LegacyPlist { present: false } => "legacy-plist-absent",
+            LoginItemStatus::Unsupported => "unsupported",
+        }
+    }
+}
 
 /// §5 항목 3 — 등록 실패 시 상한 있는 재시도. 원본은 0.1초 간격이었지만(실측 문자열
 /// "Retrying in 0.1s"), 클론은 architecture.md §6.7 이 확정한 값(0.2초 간격 5회)을
@@ -96,8 +151,8 @@ fn build_launch_agent_plist(bundle_id: &str, exe_path: &Path) -> LaunchAgentPlis
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use super::{
-        build_launch_agent_plist, launch_agent_plist_path, LoginItemError, MAX_ATTEMPTS,
-        RETRY_INTERVAL,
+        build_launch_agent_plist, launch_agent_plist_path, LoginItemError, LoginItemStatus,
+        MAX_ATTEMPTS, RETRY_INTERVAL,
     };
     use objc2::msg_send;
     use objc2::rc::Retained;
@@ -119,6 +174,27 @@ mod macos_impl {
     /// `SMAppServiceStatus`(헤더 실측): `NotRegistered=0` · `Enabled=1` ·
     /// `RequiresApproval=2` · `NotFound=3`.
     const SM_APP_SERVICE_STATUS_ENABLED: isize = 1;
+
+    /// ⭐ OS 정본 상태. [`super::is_enabled`] 는 이 값을 불리언으로 접은 것이다.
+    pub fn status() -> LoginItemStatus {
+        if let Some(service) = main_app_service() {
+            // SAFETY: `status` 는 인자 없는 인스턴스 프로퍼티 getter다(헤더 실측).
+            let raw: isize = unsafe { msg_send![&service, status] };
+            return match raw {
+                0 => LoginItemStatus::NotRegistered,
+                1 => LoginItemStatus::Enabled,
+                2 => LoginItemStatus::RequiresApproval,
+                3 => LoginItemStatus::NotFound,
+                other => LoginItemStatus::Unknown(other),
+            };
+        }
+        match legacy_context() {
+            Some((path, _, _)) => LoginItemStatus::LegacyPlist {
+                present: path.exists(),
+            },
+            None => LoginItemStatus::Unsupported,
+        }
+    }
 
     /// `SMAppService.mainAppService`(class 프로퍼티). ⚠️ 헤더의 `NS_SWIFT_NAME(mainApp)`
     /// 는 **Swift 쪽 이름**일 뿐, Objective-C 선택자(그리고 이 프로퍼티의 실제 이름)는
@@ -168,7 +244,7 @@ mod macos_impl {
                         attempt,
                         max = MAX_ATTEMPTS,
                         error = %e,
-                        "로그인 항목 등록/해제 실패 — 재시도한다"
+                        "login item register/unregister failed; retrying"
                     );
                     last_err = e;
                     if attempt < MAX_ATTEMPTS {
@@ -179,7 +255,7 @@ mod macos_impl {
         }
         tracing::error!(
             max = MAX_ATTEMPTS,
-            "로그인 항목 등록/해제가 상한만큼 반복 실패했다 — 포기한다(무한 재시도 금지, §5 항목 3)"
+            "login item register/unregister failed after the retry cap; giving up (no unbounded retries, §5 item 3)"
         );
         Err(last_err)
     }
@@ -241,14 +317,18 @@ mod macos_impl {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos_impl::{is_enabled, set_enabled};
+pub use macos_impl::{is_enabled, set_enabled, status};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {
-    use super::LoginItemError;
+    use super::{LoginItemError, LoginItemStatus};
 
     pub fn is_enabled() -> bool {
         false
+    }
+
+    pub fn status() -> LoginItemStatus {
+        LoginItemStatus::Unsupported
     }
 
     pub fn set_enabled(_on: bool) -> Result<(), LoginItemError> {
@@ -257,7 +337,7 @@ mod stub_impl {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub use stub_impl::{is_enabled, set_enabled};
+pub use stub_impl::{is_enabled, set_enabled, status};
 
 #[cfg(test)]
 mod tests {
@@ -314,11 +394,11 @@ mod tests {
 
     #[test]
     fn login_item_error_display_is_human_readable() {
-        let err = LoginItemError::RegisterFailed("디스크가 가득 찼다".to_string());
-        assert!(err.to_string().contains("디스크가 가득 찼다"));
+        let err = LoginItemError::RegisterFailed("disk is full".to_string());
+        assert!(err.to_string().contains("disk is full"));
         assert_eq!(
             LoginItemError::Unsupported.to_string(),
-            "이 환경에서는 로그인 항목 등록을 지원하지 않는다"
+            "login item registration is not supported in this environment"
         );
     }
 

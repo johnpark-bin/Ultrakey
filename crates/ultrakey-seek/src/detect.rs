@@ -162,7 +162,7 @@ pub fn detect_candidates(
             Ok(v) => v,
             Err(e) => {
                 // 한 디스플레이가 실패해도 나머지로 계속한다(§5 #2).
-                tracing::warn!(display_id = frame.display_id, error = %e, "OCR 실패 — 이 디스플레이는 건너뛴다");
+                tracing::warn!(display_id = frame.display_id, error = %e, "OCR failed; skipping this display");
                 Vec::new()
             }
         };
@@ -207,7 +207,7 @@ pub fn detect_candidates(
                     .collect();
             }
             Err(e) => {
-                tracing::warn!(error = ?e, "AX 순회 실패 — 소스 A 결과만으로 계속한다");
+                tracing::warn!(error = ?e, "AX traversal failed; continuing with source A results only");
                 ax_error = Some(e);
             }
         }

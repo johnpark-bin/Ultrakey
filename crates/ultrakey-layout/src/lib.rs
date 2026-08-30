@@ -287,7 +287,7 @@ impl LayoutResolver {
             Some(snapshot) => self.rebuild_with(&snapshot, &PlatformTranslator),
             None => {
                 tracing::debug!(
-                    "레이아웃 스냅샷 조회 실패 — 기존 LayoutTable 을 유지한다"
+                    "layout snapshot query failed; keeping the existing LayoutTable"
                 );
                 false
             }

@@ -58,13 +58,13 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
     // 실제로 이 검증 중에 그 상황을 겪었다.
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        tracing::error!(panic = %info, "⛔ 패닉");
+        tracing::error!(panic = %info, "panic");
         previous(info);
     }));
 
     let displays = overlay_displays();
     if displays.is_empty() {
-        tracing::error!("NSScreen 을 하나도 얻지 못했다 — 데모를 중단한다");
+        tracing::error!("failed to get any NSScreen; aborting demo");
         return;
     }
     for d in &displays {
@@ -75,11 +75,11 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
             w = d.frame.width,
             h = d.frame.height,
             backing_scale = d.backing_scale,
-            "디스플레이"
+            "display"
         );
     }
     if let Some(u) = ultrakey_overlay::geometry::union_frame(&displays) {
-        tracing::info!(x = u.x, y = u.y, w = u.width, h = u.height, "⭐ union frame");
+        tracing::info!(x = u.x, y = u.y, w = u.width, h = u.height, "union frame");
     }
 
     // ⭐ 검색 바 위치 — F-15 "부재 = 기본값". 저장된 값이 없으면 커서가 있는
@@ -87,7 +87,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
     let origin = store_origin.unwrap_or_else(|| {
         let m = ultrakey_platform::screens::mouse_location();
         let o = default_search_bar_origin(&displays, m);
-        tracing::info!(mouse = ?m, origin = ?o, "저장된 검색 바 위치가 없다 — 기본 위치를 쓴다");
+        tracing::info!(mouse = ?m, origin = ?o, "no stored search bar position; using default position");
         o
     });
 
@@ -108,7 +108,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
     let dark = ultrakey_platform::screens::is_dark_appearance().unwrap_or(true);
     let appearance = if dark { Appearance::Dark } else { Appearance::Light };
     let reduce_motion = ultrakey_platform::screens::should_reduce_motion();
-    tracing::info!(dark, reduce_motion, "외관·모션 설정");
+    tracing::info!(dark, reduce_motion, "appearance/motion settings");
 
     // ⭐ 핫플러그(§5 #1) — `NSApplicationDidChangeScreenParametersNotification`.
     // 옵저버는 메인 스레드에서 만들고 앱 수명 내내 살아 있어야 하므로 누수시킨다
@@ -117,7 +117,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
     let hotplug = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let hotplug_for_obs = hotplug.clone();
     let observer = ultrakey_platform::screens::ScreenObserver::start(move || {
-        tracing::warn!("⭐ 디스플레이 구성 변경 알림 수신(핫플러그)");
+        tracing::warn!("received display configuration change notification (hotplug)");
         hotplug_for_obs.store(true, std::sync::atomic::Ordering::Release);
     });
     Box::leak(Box::new(observer));
@@ -128,7 +128,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
         .spawn(move || {
             tracing::warn!(
                 secs = ARM_DELAY_SECS,
-                "⭐ 오버레이를 띄우기 전 대기 — 지금 다른 앱을 클릭해 커서를 두어라"
+                "waiting before showing overlay; click another app now to place the cursor"
             );
             std::thread::sleep(Duration::from_secs(ARM_DELAY_SECS));
 
@@ -143,7 +143,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
             )));
             tracing::warn!(
                 elapsed_ms = opened.elapsed().as_secs_f64() * 1000.0,
-                "⭐ 오버레이를 열었다 — 후보 0개 상태다(S-6). 지금 원래 앱의 커서가 살아 있어야 한다"
+                "overlay opened with zero candidates (S-6); the original app's cursor should still be alive now"
             );
 
             // ── 검출 — 결과를 디스플레이 단위로 **도착하는 대로** 밀어 넣는다.
@@ -162,7 +162,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
             let query = std::env::var("ULTRAKEY_OVERLAY_DEMO_QUERY").unwrap_or_else(|_| "se".into());
             let first: String = query.chars().take(1).collect();
             controller.lock().unwrap().set_query(&first);
-            tracing::warn!(query = %first, "⭐ 검출 전에 질의를 걸었다 — 지금부터 하이라이트가 증분으로 늘어난다");
+            tracing::warn!(query = %first, "query set before detection; highlights should now grow incrementally");
             let ctrl_for_detect = controller.clone();
             let detect_started = Instant::now();
             let outcome = ultrakey_seek::detect_candidates(&params, |result| {
@@ -176,7 +176,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                     display_id = result.display_id,
                     candidates = n,
                     arrived_at_ms = at,
-                    "⭐ 증분 수신 — 이 시점에 화면에 하이라이트가 늘어나야 한다"
+                    "incremental result received; highlights should grow on screen at this point"
                 );
             });
             {
@@ -191,7 +191,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                     .cloned()
                     .collect();
                 if !ax_only.is_empty() {
-                    tracing::warn!(count = ax_only.len(), "⭐ AX 후보를 넣는다 — 파선 테두리로 그려져야 한다");
+                    tracing::warn!(count = ax_only.len(), "adding AX candidates; should render with a dashed border");
                     c.ingest_extra(ax_only);
                 }
                 c.finish_detection();
@@ -203,12 +203,12 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                     merged = outcome.candidates.len(),
                     screen_recording = ?outcome.screen_recording,
                     matches = c.match_count(),
-                    "검출 완료"
+                    "detection complete"
                 );
                 if outcome.ocr_blocked_by_permission() {
                     tracing::error!(
-                        "⛔ 화면 기록 권한이 없다 — 후보가 메뉴 막대뿐이다. \
-                         시스템 설정에서 권한을 주고 다시 실행하라(F-02 검증과 같은 함정)"
+                        "no screen recording permission; candidates are menu bar only. \
+                         grant permission in system settings and re-run (same trap as F-02 verification)"
                     );
                 }
             }
@@ -228,15 +228,15 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                     query = %typed,
                     matches = count,
                     dispatch_ms = t0.elapsed().as_secs_f64() * 1000.0,
-                    "⭐ 키 입력 — 재렌더링"
+                    "key input; re-rendering"
                 );
                 std::thread::sleep(Duration::from_millis(TYPE_INTERVAL_MS));
             }
 
             // ── 순환 — 선택이 디스플레이를 넘나들며 연결선이 경계를 넘는지 본다.
             tracing::warn!(
-                "⭐ 이제부터 {CYCLE_INTERVAL_MS} ms 마다 선택을 순환한다 — \
-                 연결선이 디스플레이 경계에서 끊기지 않는지 보라. 끝내려면 앱을 종료하라"
+                "cycling selection every {CYCLE_INTERVAL_MS} ms from now; \
+                 watch whether the connector line breaks at display boundaries. quit the app to stop"
             );
             let mut tick: u32 = 0;
             loop {
@@ -257,7 +257,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                             y = sel.frame.y,
                             display = ?sel.display_id,
                             source = ?sel.source,
-                            "선택 이동"
+                            "selection moved"
                         );
                     }
                 }
@@ -266,7 +266,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                     if let Some(state) = app_for_persist.try_state::<Arc<crate::AppState>>() {
                         let mut store = state.store.lock().unwrap();
                         persist_search_bar_origin(&mut store, x, y);
-                        tracing::warn!(x, y, "⭐ 검색 바 위치를 저장했다(§3.4)");
+                        tracing::warn!(x, y, "persisted search bar position (§3.4)");
                     }
                     controller.lock().unwrap().search_bar_moved(x, y);
                 }
@@ -282,10 +282,10 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
                 // "세션 종료 시 오버레이가 즉시 숨겨지고 하이라이트·연결선
                 // 잔상이 남지 않는다" 를 반복 관찰할 수 있게.
                 if tick % 20 == 0 {
-                    tracing::warn!("⭐ 오버레이를 숨긴다 — 잔상이 남으면 안 된다");
+                    tracing::warn!("hiding overlay; no residual artifacts should remain");
                     controller.lock().unwrap().close();
                     std::thread::sleep(Duration::from_millis(1500));
-                    tracing::warn!("⭐ 오버레이를 다시 띄운다");
+                    tracing::warn!("showing overlay again");
                     controller.lock().unwrap().reopen();
                 }
                 std::thread::sleep(Duration::from_millis(CYCLE_INTERVAL_MS));

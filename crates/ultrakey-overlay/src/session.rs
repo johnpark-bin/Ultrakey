@@ -87,7 +87,7 @@ impl OverlaySession {
         tracing::trace!(
             display_id,
             count = candidates.len(),
-            "Seek 오버레이: 디스플레이별 후보 수신"
+            "seek overlay: received per-display candidates"
         );
         self.by_display.insert(display_id, candidates);
         self.recompute_matching();
@@ -97,7 +97,7 @@ impl OverlaySession {
     /// 호출할 때마다 이전 값을 통째로 교체한다 — AX 패스는 디스플레이별로
     /// 나뉘어 오지 않으므로 부분 갱신할 키가 없다.
     pub fn ingest_extra(&mut self, candidates: Vec<TextCandidate>) {
-        tracing::trace!(count = candidates.len(), "Seek 오버레이: 디스플레이 특정 안 된 후보 수신");
+        tracing::trace!(count = candidates.len(), "seek overlay: received candidates with no display assigned");
         self.extra = candidates;
         self.recompute_matching();
     }
@@ -163,7 +163,7 @@ impl OverlaySession {
         let surviving_ids: HashSet<u32> = displays.iter().map(|d| d.display_id).collect();
         let removed = self.by_display.keys().filter(|id| !surviving_ids.contains(id)).count();
         if removed > 0 {
-            tracing::debug!(removed, "Seek 오버레이: 핫플러그로 사라진 디스플레이의 후보를 버린다");
+            tracing::debug!(removed, "seek overlay: dropping candidates for displays removed by hotplug");
         }
         self.by_display.retain(|id, _| surviving_ids.contains(id));
         self.displays = displays;
@@ -173,7 +173,7 @@ impl OverlaySession {
             geometry::display_for_point(&self.displays, self.bar_origin.0, self.bar_origin.1).is_some();
         if !bar_still_visible {
             if let Some(first) = self.displays.first() {
-                tracing::debug!("Seek 오버레이: 검색 바가 있던 디스플레이가 사라져 재배치한다");
+                tracing::debug!("seek overlay: display with the search bar disappeared; repositioning");
                 self.bar_origin = default_bar_origin(first);
             }
             // 남은 디스플레이가 하나도 없으면(극단 케이스) 위치를 그대로
