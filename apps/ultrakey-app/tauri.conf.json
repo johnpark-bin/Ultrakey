@@ -17,6 +17,16 @@
         "resizable": false,
         "visible": false,
         "center": true
+      },
+      {
+        "label": "settings",
+        "url": "settings.html",
+        "title": "Ultrakey",
+        "width": 710,
+        "height": 517,
+        "resizable": true,
+        "visible": false,
+        "center": true
       }
     ],
     "security": {

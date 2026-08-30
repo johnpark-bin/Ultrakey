@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ⭐ "Ultrakey" 는 브랜드 고유명사라 번역 대상이 아니다 — index.html 과 같은 근거
+     (ultrakey-i18n 의 app_name_is_not_translated 테스트가 이 판단을 이미 뒷받침한다).
+     실제 창 제목은 tauri.conf.json 의 windows[].title 이 결정하며 이 <title> 은
+     그것과 일치시켜 둘 뿐이다. -->
+<title>Ultrakey</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    /* index.html 과 같은 이유로 불투명 시스템 색을 쓴다 — transparent 는
+       tauri.conf.json 에 transparent:true 가 없는 한 효과가 없고, 렌더 실패 시
+       창이 "텅 비어 보이는" 실패 모드를 더 나쁘게 만들 뿐이다. */
+    background: Canvas;
+    color: CanvasText;
+  }
+
+  #fatal { padding: 28px 32px; }
+  #fatal h1 { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+
+  .shell { display: flex; height: 100vh; }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 148px;
+    flex: 0 0 auto;
+    padding: 14px 8px;
+    gap: 2px;
+    background: color-mix(in srgb, currentColor 4%, transparent);
+    border-right: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .sidebar button {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font: inherit;
+    width: 100%;
+  }
+  .sidebar button[aria-selected="true"] {
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    font-weight: 600;
+  }
+  .sidebar button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .sidebar button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+
+  .panel { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; }
+  .tabpanel h1 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
+
+  .row { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+  .checkbox-row { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .checkbox-row.disabled { opacity: .55; cursor: default; }
+
+  select { font: inherit; }
+  select:disabled { opacity: .45; cursor: not-allowed; }
+
+  .hint { opacity: .65; font-size: 12px; margin: 2px 0 10px; }
+  .hint.why { font-style: italic; }
+  .warn { color: color-mix(in srgb, orange 70%, CanvasText); font-size: 12px; margin: 4px 0; }
+
+  hr { border: none; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); margin: 16px 0; }
+
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 15%, transparent);
+    margin-left: 4px;
+  }
+
+  .preview { font-weight: 600; font-size: 14px; min-width: 64px; }
+
+  /* ③ 문장 중간 삽입 렌더러 — 라벨 문장 뒤에 체크박스 여럿이 한 줄로 이어진다.
+     `Caps lock + [팝업] = ◀▼▲▶` 류의 정본 사례는 Presets 탭(범위 밖)에만 있으므로
+     여기서는 이 레이아웃 클래스만 재사용 가능하게 마련해 둔다. */
+  .inline-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .inline-row label { display: inline-flex; align-items: center; gap: 4px; }
+
+  .warnings p { margin: 4px 0; }
+
+  #notice {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    margin-bottom: 14px;
+    font-size: 12px;
+  }
+
+  #about { margin: 6px 0 14px; padding: 8px 12px; border-radius: 6px;
+    background: color-mix(in srgb, currentColor 6%, transparent); }
+  #about p { margin: 2px 0; word-break: break-all; }
+
+  button {
+    font: inherit;
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    background: color-mix(in srgb, currentColor 6%, transparent);
+    color: inherit;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.accent { font-weight: 600; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- 카탈로그를 가져오는 경로 자체가 죽었을 때만 쓰는 최후 수단 화면(index.html 과
+     동일한 방어적 부트스트랩 규약). 정상 경로에서는 항상 hidden. -->
+<div id="fatal" hidden>
+  <h1>Ultrakey</h1>
+  <p id="fatal-body"></p>
+</div>
+
+<div class="shell" id="shell">
+  <!-- ⭐ 탭 전환 시 창 크기(pt, preferences-ui.md §3.1 실측값) — 실제 리사이즈는
+       main.rs 의 tab_window_size()/settings_set_tab 이 소유한다. 여기서는
+       그 값이 무엇인지만 문서화한다: Seek 555×378 · Hyperkey 710×517 ·
+       Presets 825×527 · General 613×273. -->
+  <nav class="sidebar" role="tablist" aria-orientation="vertical" id="tablist">
+    <button role="tab" id="tab-seek" data-tab="seek" aria-selected="false" aria-controls="panel-seek" tabindex="-1"></button>
+    <button role="tab" id="tab-hyperkey" data-tab="hyperkey" aria-selected="false" aria-controls="panel-hyperkey" tabindex="-1"></button>
+    <button role="tab" id="tab-presets" data-tab="presets" aria-selected="false" aria-controls="panel-presets" tabindex="-1"></button>
+    <button role="tab" id="tab-general" data-tab="general" aria-selected="false" aria-controls="panel-general" tabindex="-1"></button>
+  </nav>
+
+  <main class="panel">
+    <div id="notice" hidden></div>
+
+    <!-- Seek 탭 — 자리만. 이번 범위(F-01~F-04)는 M3. -->
+    <section id="panel-seek" class="tabpanel" role="tabpanel" aria-labelledby="tab-seek" hidden>
+      <h1 id="seek-title"></h1>
+      <p id="seek-body"></p>
+    </section>
+
+    <!-- Hyperkey 탭 — hyperkey.md §4 의 배치 순서 그대로. -->
+    <section id="panel-hyperkey" class="tabpanel" role="tabpanel" aria-labelledby="tab-hyperkey" hidden>
+      <h1 id="hyperkey-heading"></h1>
+
+      <!-- 1. hyper 슬롯 — 체크박스 + 소스 키 팝업(35종). 체크박스가 꺼지면 팝업만
+           ① dimmed(select:disabled) 된다 — 값은 지우지 않고 보존한다(§4.2 실측). -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="hyper-enabled" data-key="hyperkey.hyper.enabled" />
+          <span id="hyper-label"></span>
+        </label>
+        <select id="hyper-source" data-key="hyperkey.hyper.source"></select>
+      </div>
+
+      <!-- 2. Include shift — 좌측에 현재 조합 미리보기. -->
+      <div class="row">
+        <span class="preview" id="hyper-preview"></span>
+        <label class="checkbox-row">
+          <input type="checkbox" id="include-shift" data-key="hyperkey.includeShiftInHyper" />
+          <span id="include-shift-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="include-shift-hint"></p>
+
+      <hr />
+
+      <!-- 5. meh 슬롯 -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="meh-enabled" data-key="hyperkey.meh.enabled" />
+          <span id="meh-label"></span>
+        </label>
+        <select id="meh-source" data-key="hyperkey.meh.source"></select>
+      </div>
+
+      <!-- 6. bleh 슬롯 -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="bleh-enabled" data-key="hyperkey.bleh.enabled" />
+          <span id="bleh-label"></span>
+        </label>
+        <select id="bleh-source" data-key="hyperkey.bleh.source"></select>
+      </div>
+
+      <hr />
+
+      <!-- 8. Apply modifiers to keypress events and: — ③ 인라인 렌더러(.inline-row).
+           라벨 문장 뒤에 체크박스 4개가 한 줄로 이어진다. -->
+      <p class="inline-row">
+        <span id="mouse-label"></span>
+        <label><input type="checkbox" id="mouse-click" data-key="hyperkey.mouseApply.click" /><span id="mouse-click-label"></span></label>
+        <label><input type="checkbox" id="mouse-drag" data-key="hyperkey.mouseApply.drag" /><span id="mouse-drag-label"></span></label>
+        <label><input type="checkbox" id="mouse-move" data-key="hyperkey.mouseApply.move" /><span id="mouse-move-label"></span></label>
+        <label><input type="checkbox" id="mouse-scroll" data-key="hyperkey.mouseApply.scroll" /><span id="mouse-scroll-label"></span></label>
+      </p>
+      <p class="hint" id="mouse-hint"></p>
+
+      <hr />
+
+      <!-- 10. 트랙패드 — 체크박스 + 영역 팝업(5종). -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="trackpad-enabled" data-key="hyperkey.trackpad.enabled" />
+          <span id="trackpad-label"></span>
+        </label>
+        <select id="trackpad-area" data-key="hyperkey.trackpad.area"></select>
+      </div>
+      <p class="hint" id="trackpad-hint"></p>
+      <p class="warn" id="trackpad-unimplemented"></p>
+
+      <!-- 11. ② 숨김 — trackpad.enabled 가 꺼지면 이 컨테이너 안의 두 체크박스
+           행은 DOM 에 존재조차 하지 않는다(display:none 이 아니다). JS 의
+           renderTrackpadExtra() 가 노드를 매번 새로 만들거나 통째로 지운다. -->
+      <div id="trackpad-extra"></div>
+
+      <div id="hyperkey-warnings" class="warnings" hidden></div>
+    </section>
+
+    <!-- Presets 탭 — 자리만. 16개 항목(F-08)은 M2 2차. -->
+    <section id="panel-presets" class="tabpanel" role="tabpanel" aria-labelledby="tab-presets" hidden>
+      <h1 id="presets-title"></h1>
+      <p id="presets-body"></p>
+    </section>
+
+    <!-- General 탭 — §4.4 의 7개 컨트롤 전부를 만들되, 버전 버튼만 동작한다.
+         나머지 6개는 disabled + 배지 + 사유 문구로 "왜 안 되는지"를 바로 보여준다. -->
+    <section id="panel-general" class="tabpanel" role="tabpanel" aria-labelledby="tab-general" hidden>
+      <h1 id="general-heading"></h1>
+
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <input type="checkbox" id="launch-on-login" disabled />
+          <span id="launch-on-login-label"></span>
+          <span class="badge" id="launch-on-login-badge"></span>
+        </label>
+        <!-- ⭐ §9 #12(v1.66 (66) 버튼의 클릭 동작)를 클론이 여기서 결정으로 채운다:
+             클릭하면 About 정보(번들 ID·로그 경로·설정 파일 경로)를 펼친다. -->
+        <button id="version-btn"></button>
+      </div>
+      <p class="hint why" id="launch-on-login-why"></p>
+
+      <div id="about" hidden>
+        <p><span id="about-bundle-id-label"></span>: <span id="about-bundle-id"></span></p>
+        <p><span id="about-log-path-label"></span>: <span id="about-log-path"></span></p>
+        <p><span id="about-settings-path-label"></span>: <span id="about-settings-path"></span></p>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <input type="checkbox" id="auto-update" disabled />
+          <span id="auto-update-label"></span>
+          <span class="badge" id="auto-update-badge"></span>
+        </label>
+      </div>
+      <p class="hint why" id="auto-update-why"></p>
+
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <input type="checkbox" id="hide-menu-bar-icon" disabled />
+          <span id="hide-menu-bar-icon-label"></span>
+          <span class="badge" id="hide-menu-bar-icon-badge"></span>
+        </label>
+      </div>
+      <p class="hint why" id="hide-menu-bar-icon-why"></p>
+
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <span id="menu-bar-icon-label"></span>
+          <select id="menu-bar-icon" disabled><option id="menu-bar-icon-opt"></option></select>
+          <span class="badge" id="menu-bar-icon-badge"></span>
+        </label>
+      </div>
+      <p class="hint why" id="menu-bar-icon-why"></p>
+
+      <div class="row">
+        <button id="remove-activation-btn" disabled></button>
+        <span class="badge" id="remove-activation-badge"></span>
+      </div>
+      <p class="hint why" id="remove-activation-why"></p>
+
+      <div class="row">
+        <button id="purchase-btn" class="accent" disabled></button>
+        <span class="badge" id="purchase-badge"></span>
+      </div>
+      <p class="hint why" id="purchase-why"></p>
+
+      <hr />
+
+      <!-- ⭐ 메뉴바(F-10)가 아직 없어 앱을 끝낼 다른 경로가 없다 — F-10 이 들어오면
+           이 버튼은 메뉴의 Quit 항목으로 옮기고 여기서는 뺀다. -->
+      <button id="quit-btn"></button>
+    </section>
+  </main>
+</div>
+
+<script type="module">
+// ⭐ index.html 과 같은 방어적 부트스트랩 패턴을 그대로 따른다 — 백지로 뜨는
+// 실패 모드를 다시 만들지 않는다. window.__TAURI__ 부재·bootstrap 실패·렌더 예외를
+// 전부 잡아 #fatal 에 진단 문구를 낸다.
+//
+// 아래 영어 하드코딩 문구는 D4("문자열은 전부 카탈로그에서")와 충돌하지 않는다 —
+// 카탈로그 자체를 가져오는 경로가 죽었을 때 쓰는 최후 수단이라 카탈로그에 기댈 수
+// 없다(index.html 의 동일 주석 참고).
+const $ = (id) => document.getElementById(id);
+
+let STRINGS = {};
+function t(key) {
+  return Object.prototype.hasOwnProperty.call(STRINGS, key) ? STRINGS[key] : key;
+}
+function tf(key, args) {
+  let template = t(key);
+  args.forEach((arg, i) => {
+    template = template.split(`{${i}}`).join(arg);
+  });
+  return template;
+}
+
+function showFatal(reason) {
+  $("shell").hidden = true;
+  const body = $("fatal-body");
+  if (body) body.textContent = reason;
+  $("fatal").hidden = false;
+}
+
+const tauri = window.__TAURI__;
+if (!tauri || !tauri.core) {
+  showFatal("Failed to load: window.__TAURI__ is unavailable (check withGlobalTauri in tauri.conf.json).");
+} else {
+  const { invoke } = tauri.core;
+
+  const TABS = ["seek", "hyperkey", "presets", "general"];
+  let activeTab = "hyperkey";
+
+  function applyStrings() {
+    $("tab-seek").textContent = t("settings.tab.seek");
+    $("tab-hyperkey").textContent = t("settings.tab.hyperkey");
+    $("tab-presets").textContent = t("settings.tab.presets");
+    $("tab-general").textContent = t("settings.tab.general");
+
+    $("seek-title").textContent = t("settings.placeholder.title");
+    $("seek-body").textContent = t("settings.placeholder.seek.body");
+    $("presets-title").textContent = t("settings.placeholder.title");
+    $("presets-body").textContent = t("settings.placeholder.presets.body");
+
+    $("hyperkey-heading").textContent = t("settings.hyperkey.heading");
+    $("hyper-label").textContent = t("settings.hyperkey.hyper.label");
+    $("include-shift-label").textContent = t("settings.hyperkey.include_shift");
+    $("include-shift-hint").textContent = t("settings.hyperkey.include_shift.hint");
+    $("meh-label").textContent = t("settings.hyperkey.meh.label");
+    $("bleh-label").textContent = t("settings.hyperkey.bleh.label");
+    $("mouse-label").textContent = t("settings.hyperkey.mouse.label");
+    $("mouse-click-label").textContent = t("settings.hyperkey.mouse.click");
+    $("mouse-drag-label").textContent = t("settings.hyperkey.mouse.drag");
+    $("mouse-move-label").textContent = t("settings.hyperkey.mouse.move");
+    $("mouse-scroll-label").textContent = t("settings.hyperkey.mouse.scroll");
+    $("mouse-hint").textContent = t("settings.hyperkey.mouse.hint");
+    $("trackpad-label").textContent = t("settings.hyperkey.trackpad.label");
+    $("trackpad-hint").textContent = t("settings.hyperkey.trackpad.hint");
+    $("trackpad-unimplemented").textContent = t("settings.hyperkey.trackpad.unimplemented");
+
+    const sourceLabel = t("settings.hyperkey.source_label");
+    for (const id of ["hyper-source", "meh-source", "bleh-source"]) {
+      $(id).setAttribute("aria-label", sourceLabel);
+    }
+
+    $("general-heading").textContent = t("settings.general.heading");
+    $("launch-on-login-label").textContent = t("settings.general.launch_on_login");
+    $("launch-on-login-why").textContent = t("settings.general.launch_on_login.why");
+    $("auto-update-label").textContent = t("settings.general.auto_update");
+    $("auto-update-why").textContent = t("settings.general.auto_update.why");
+    $("hide-menu-bar-icon-label").textContent = t("settings.general.hide_menu_bar_icon");
+    $("hide-menu-bar-icon-why").textContent = t("settings.general.hide_menu_bar_icon.why");
+    $("menu-bar-icon-label").textContent = t("settings.general.menu_bar_icon");
+    $("menu-bar-icon-why").textContent = t("settings.general.menu_bar_icon.why");
+    $("remove-activation-btn").textContent = t("settings.general.remove_activation");
+    $("remove-activation-why").textContent = t("settings.general.license.why");
+    $("purchase-btn").textContent = t("settings.general.purchase");
+    $("purchase-why").textContent = t("settings.general.license.why");
+    $("quit-btn").textContent = t("common.quit");
+
+    const badgeText = t("settings.badge.unimplemented");
+    for (const id of [
+      "launch-on-login-badge",
+      "auto-update-badge",
+      "hide-menu-bar-icon-badge",
+      "menu-bar-icon-badge",
+      "remove-activation-badge",
+      "purchase-badge",
+    ]) {
+      $(id).textContent = badgeText;
+    }
+    // `Menu bar icon` 팝업 2종은 라벨 없는 이미지 항목이라 원본에도 텍스트가 없다
+    // (preferences-ui.md §9 #6, 미확정). 카탈로그에 없는 문구를 지어내지 않고
+    // "구현 안 됨" 배지 문구를 자리표시자로 재사용한다.
+    $("menu-bar-icon-opt").textContent = badgeText;
+
+    $("about-bundle-id-label").textContent = t("settings.general.about.bundle_id");
+    $("about-log-path-label").textContent = t("settings.general.about.log_path");
+    $("about-settings-path-label").textContent = t("settings.general.about.settings_path");
+  }
+
+  function populateSourceSelects(sourceKeys) {
+    for (const id of ["hyper-source", "meh-source", "bleh-source"]) {
+      const select = $(id);
+      select.innerHTML = "";
+      for (const sk of sourceKeys) {
+        const opt = document.createElement("option");
+        opt.value = sk.value;
+        // ⭐ 키캡 각인(`caps lock`, `right option`, `F1`…)은 물리 키보드에 실제로
+        // 새겨진 표기이지 번역할 UI 문구가 아니다 — app.name 이 로케일과 무관한
+        // 것과 같은 근거(SourceKey::label() 자체가 "로컬라이즈하지 않는다"고
+        // 명시한다, keycode.rs 참고). 그래서 카탈로그를 거치지 않고 그대로 쓴다.
+        opt.textContent = sk.label;
+        select.append(opt);
+      }
+    }
+  }
+
+  function populateTrackpadAreaSelect(areas) {
+    const select = $("trackpad-area");
+    select.innerHTML = "";
+    for (const area of areas) {
+      const opt = document.createElement("option");
+      opt.value = area.value;
+      opt.textContent = t(area.labelKey);
+      select.append(opt);
+    }
+  }
+
+  function setSelectValue(id, value) {
+    $(id).value = value;
+  }
+
+  // ② 숨김 — trackpad.enabled 가 꺼지면 두 체크박스 행을 DOM 에서 완전히
+  // 제거한다(display:none 이 아니다). ① dimmed(트랙패드 팝업 자체는 이 함수가
+  // 다루지 않는다 — 트랙패드 영역 팝업은 dimmed 대상이 아니라 항상 조작 가능하다)
+  // 와 혼동하지 않도록 구현을 분리해 둔다.
+  function renderTrackpadExtra(trackpad) {
+    const host = $("trackpad-extra");
+    host.innerHTML = "";
+    if (!trackpad.enabled) return;
+
+    const changeIcon = document.createElement("label");
+    changeIcon.className = "checkbox-row";
+    const changeIconInput = document.createElement("input");
+    changeIconInput.type = "checkbox";
+    changeIconInput.dataset.key = "hyperkey.trackpad.changeMenuBarIcon";
+    changeIconInput.checked = trackpad.changeMenuBarIcon;
+    const changeIconLabel = document.createElement("span");
+    changeIconLabel.textContent = t("settings.hyperkey.trackpad.change_icon");
+    changeIcon.append(changeIconInput, changeIconLabel);
+
+    const haptic = document.createElement("label");
+    haptic.className = "checkbox-row";
+    const hapticInput = document.createElement("input");
+    hapticInput.type = "checkbox";
+    hapticInput.dataset.key = "hyperkey.trackpad.haptic";
+    hapticInput.checked = trackpad.haptic;
+    const hapticLabel = document.createElement("span");
+    hapticLabel.textContent = t("settings.hyperkey.trackpad.haptic");
+    haptic.append(hapticInput, hapticLabel);
+
+    host.append(changeIcon, haptic);
+  }
+
+  function renderWarnings(warnings) {
+    const host = $("hyperkey-warnings");
+    host.innerHTML = "";
+    host.hidden = warnings.length === 0;
+    for (const w of warnings) {
+      const p = document.createElement("p");
+      p.className = "warn";
+      const key = w.kind === "duplicate"
+        ? "settings.hyperkey.warning.duplicate"
+        : "settings.hyperkey.warning.unknown_key";
+      p.textContent = tf(key, [w.key]);
+      host.append(p);
+    }
+  }
+
+  function renderState(state) {
+    $("hyper-enabled").checked = state.hyperkey.hyper.enabled;
+    setSelectValue("hyper-source", state.hyperkey.hyper.source);
+    // ① dimmed — 체크박스가 꺼지면 팝업만 흐려지고 조작 불가. 값은 지우지 않는다.
+    $("hyper-source").disabled = !state.hyperkey.hyper.enabled;
+
+    $("include-shift").checked = state.hyperkey.includeShiftInHyper;
+    $("hyper-preview").textContent = state.hyperPreview;
+
+    $("meh-enabled").checked = state.hyperkey.meh.enabled;
+    setSelectValue("meh-source", state.hyperkey.meh.source);
+    $("meh-source").disabled = !state.hyperkey.meh.enabled;
+
+    $("bleh-enabled").checked = state.hyperkey.bleh.enabled;
+    setSelectValue("bleh-source", state.hyperkey.bleh.source);
+    $("bleh-source").disabled = !state.hyperkey.bleh.enabled;
+
+    $("mouse-click").checked = state.hyperkey.mouseApply.click;
+    $("mouse-drag").checked = state.hyperkey.mouseApply.drag;
+    $("mouse-move").checked = state.hyperkey.mouseApply.move;
+    $("mouse-scroll").checked = state.hyperkey.mouseApply.scroll;
+
+    $("trackpad-enabled").checked = state.hyperkey.trackpad.enabled;
+    setSelectValue("trackpad-area", state.hyperkey.trackpad.area);
+    renderTrackpadExtra(state.hyperkey.trackpad);
+
+    renderWarnings(state.warnings);
+
+    if (state.saveError) {
+      showNotice(tf("settings.save_failed", [state.saveError]));
+    }
+  }
+
+  function renderGeneral(meta) {
+    $("version-btn").textContent = tf("settings.general.version", [meta.version]);
+    $("about-bundle-id").textContent = meta.bundleId;
+    $("about-log-path").textContent = meta.logPath;
+    $("about-settings-path").textContent = meta.settingsFileExists && meta.settingsPath
+      ? meta.settingsPath
+      : t("settings.general.about.settings_absent");
+  }
+
+  function showNotice(text) {
+    const el = $("notice");
+    el.textContent = text;
+    el.hidden = false;
+  }
+
+  function activateTab(tab, { persist = true } = {}) {
+    activeTab = tab;
+    for (const name of TABS) {
+      const active = name === tab;
+      const btn = $(`tab-${name}`);
+      btn.setAttribute("aria-selected", String(active));
+      btn.tabIndex = active ? 0 : -1;
+      $(`panel-${name}`).hidden = !active;
+    }
+    // ⭐ 창 리사이즈는 여기서 직접 하지 않는다 — Rust 쪽 settings_set_tab 이
+    // on_main_thread 로 set_size 를 호출한다(D-E: 창 조작은 반드시 메인
+    // 스레드로 비동기 디스패치).
+    //
+    // ⭐ `persist` 는 리사이즈가 아니라 **ui.lastTab 저장 여부**를 가른다. 최초
+    // 렌더에서도 창 크기는 맞춰야 하지만(§3.1: 탭마다 크기가 다르다), 그때 저장까지
+    // 하면 **환경설정 창을 열기만 해도 settings.json 이 생겨** F-15 §8 의 "한 번도
+    // 건드리지 않으면 파일이 없다"가 첫 실행에서 바로 깨진다.
+    invoke("settings_set_tab", { tab, persist }).catch((err) => {
+      showFatal("Failed to switch tab: " + String(err));
+    });
+  }
+
+  $("tablist").addEventListener("keydown", (ev) => {
+    const idx = TABS.indexOf(activeTab);
+    let next = null;
+    if (ev.key === "ArrowDown" || ev.key === "ArrowRight") {
+      next = TABS[(idx + 1) % TABS.length];
+    } else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") {
+      next = TABS[(idx - 1 + TABS.length) % TABS.length];
+    }
+    if (next) {
+      ev.preventDefault();
+      activateTab(next);
+      $(`tab-${next}`).focus();
+    }
+  });
+
+  for (const name of TABS) {
+    $(`tab-${name}`).addEventListener("click", () => activateTab(name));
+  }
+
+  async function commit(key, value) {
+    try {
+      const state = await invoke("settings_set", { key, value });
+      renderState(state);
+    } catch (err) {
+      showFatal("Failed to save setting: " + String(err));
+    }
+  }
+
+  // 체크박스·팝업 전부를 data-key 속성 하나로 위임 처리한다 — 컨트롤마다
+  // 리스너를 따로 붙이면 41개(§7)에 달하는 컨트롤 각각에 중복 코드가 생긴다.
+  document.addEventListener("change", (ev) => {
+    const el = ev.target;
+    const key = el.dataset && el.dataset.key;
+    if (!key) return;
+    const value = el.type === "checkbox" ? el.checked : el.value;
+    commit(key, value);
+  });
+
+  $("version-btn").addEventListener("click", () => {
+    const about = $("about");
+    about.hidden = !about.hidden;
+  });
+
+  $("quit-btn").addEventListener("click", () => invoke("quit_app"));
+
+  async function boot() {
+    try {
+      const bootstrap = await invoke("settings_bootstrap");
+      STRINGS = bootstrap.strings;
+      applyStrings();
+      populateSourceSelects(bootstrap.state.sourceKeys);
+      populateTrackpadAreaSelect(bootstrap.state.trackpadAreas);
+      renderState(bootstrap.state);
+      renderGeneral(bootstrap.meta);
+      if (bootstrap.notice) {
+        showNotice(tf(bootstrap.notice.messageKey, [bootstrap.notice.arg]));
+      }
+      // 최초 렌더 — 리사이즈만 하고 저장하지 않는다(위 activateTab 주석 참고).
+      activateTab(bootstrap.state.lastTab || "hyperkey", { persist: false });
+    } catch (err) {
+      showFatal("Failed to render: " + String(err));
+    }
+  }
+
+  boot();
+}
+</script>
+</body>
+</html>

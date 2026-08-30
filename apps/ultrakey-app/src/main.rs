@@ -1,7 +1,8 @@
 //! Ultrakey — Tauri 앱 껍데기.
 //!
-//! ⭐ **M1 에서 이 크레이트가 하는 일은 배선(wiring)뿐이다.** 환경설정 UI 는 M2(F-09),
-//! 메뉴바는 M2·M3(F-10) 범위이며, 여기 있는 유일한 UI 는 F-11 권한 안내 모달이다.
+//! ⭐ M1 에서 이 크레이트는 배선(wiring)만 했다. M2 1차(F-09, 이슈 #13)부터
+//! 환경설정 창이 실재한다 — Seek·Presets 탭은 아직 자리만, Hyperkey·General 탭은
+//! 실제로 동작한다. 메뉴바(F-10)는 여전히 M2 2차 이후다.
 //!
 //! 배선 순서(`docs/dev/architecture.md` §2.1 의 스레드 배치 그대로):
 //!
@@ -10,8 +11,9 @@
 //! 2. 로케일 결정 → 문자열 카탈로그(D4: ko + en)
 //! 3. ⭐ Accessory 앱으로 전환 — Dock 아이콘·⌘Tab 미노출(`menu-bar-and-lifecycle.md`
 //!    §3, 원본 `LSUIElement = true` 실측에 대응)
-//! 4. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작
-//! 5. 엔진 사건 처리 — ⛔ 치명적 탭 생성 실패는 재시도가 아니라 **종료**다
+//! 4. ⭐ 설정 저장소 로드(F-15) — "부재 = 기본값" 규약으로 `HyperkeySettings` 조립
+//! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작 + (M2 1차 임시) 설정 창 표시
+//! 6. 엔진 사건 처리 — ⛔ 치명적 탭 생성 실패는 재시도가 아니라 **종료**다
 //!    (`key-remapping-engine.md` §3-a, §5#16)
 
 // `unsafe` 는 전부 `ultrakey-platform` 에만 있다.
@@ -19,14 +21,16 @@
 // 릴리스 빌드에서 콘솔 창을 띄우지 않는다(macOS 에서는 무해하지만 관례를 따른다).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use tauri::{Manager, State};
+use tauri::{LogicalSize, Manager, State};
 
 use ultrakey_core::gate::{AppGateController, AtomicAppGate};
-use ultrakey_core::settings::EngineConfig;
+use ultrakey_core::keycode::SourceKey;
+use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::{Engine, EngineEvent};
-use ultrakey_hyperkey::HyperkeySettings;
+use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::Catalog;
 use ultrakey_permissions::{
     dev_build_warning, onboarding_copy, open_accessibility_settings, out_of_sync_copy,
@@ -52,6 +56,323 @@ struct ModalCopy {
     quit: String,
 }
 
+/// F-15 §5(엣지 케이스)의 로드 경고 — 손상 복구/미래 스키마. 프런트엔드가
+/// 카탈로그로 문구를 조립할 수 있게 메시지 키 + 위치 인자 하나만 보낸다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Notice {
+    kind: &'static str,
+    message_key: &'static str,
+    arg: String,
+}
+
+fn notice_from_outcome(outcome: &LoadOutcome) -> Option<Notice> {
+    match outcome {
+        LoadOutcome::Fresh | LoadOutcome::Loaded { .. } => None,
+        LoadOutcome::Recovered { backup, .. } => Some(Notice {
+            kind: "recovered",
+            message_key: "settings.load_recovered",
+            arg: backup.display().to_string(),
+        }),
+        LoadOutcome::NewerSchema { found } => Some(Notice {
+            kind: "newerSchema",
+            message_key: "settings.load_newer_schema",
+            arg: found.to_string(),
+        }),
+    }
+}
+
+/// `TrackpadSettings` 를 그대로 내보내지 않고 감싸는 이유: 프런트엔드가 기대하는
+/// 필드 이름(`changeMenuBarIcon`·`haptic`)이 저장 계층의 필드 이름(`change_menu_bar_icon`·
+/// `haptic_feedback`)과 살짝 다르다(`preferences-ui.md` 지시 스펙, 이슈 #13). `SlotSettings`·
+/// `MouseApply` 는 이미 기대하는 이름 그대로라 감싸지 않고 재사용한다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TrackpadView {
+    enabled: bool,
+    area: TrackpadArea,
+    change_menu_bar_icon: bool,
+    haptic: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HyperkeyView {
+    hyper: SlotSettings,
+    include_shift_in_hyper: bool,
+    meh: SlotSettings,
+    bleh: SlotSettings,
+    mouse_apply: MouseApply,
+    trackpad: TrackpadView,
+}
+
+fn hyperkey_view(h: &HyperkeySettings) -> HyperkeyView {
+    HyperkeyView {
+        hyper: h.hyper.clone(),
+        include_shift_in_hyper: h.include_shift_in_hyper,
+        meh: h.meh.clone(),
+        bleh: h.bleh.clone(),
+        mouse_apply: h.mouse_apply,
+        trackpad: TrackpadView {
+            enabled: h.trackpad.enabled,
+            area: h.trackpad.area,
+            change_menu_bar_icon: h.trackpad.change_menu_bar_icon,
+            haptic: h.trackpad.haptic_feedback,
+        },
+    }
+}
+
+/// hyper 의 현재 조합 미리보기 문자열(`preferences-ui.md` "Hyperkey 탭" 항목 3).
+/// `HyperkeySettings::hyper_flags()` 가 이미 같은 판정을 갖고 있지만 그건
+/// `EventFlags` 비트마스크를 돌려준다 — 여기서는 사람이 읽는 기호가 필요하다.
+fn hyper_preview(h: &HyperkeySettings) -> String {
+    if h.include_shift_in_hyper {
+        "⌃⌥⌘⇧".to_string()
+    } else {
+        "⌃⌥⌘".to_string()
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SourceKeyView {
+    value: String,
+    label: String,
+    has_keycode: bool,
+}
+
+fn source_key_view(source: SourceKey) -> SourceKeyView {
+    // ⭐ `SourceKey` 는 variant 이름으로 직렬화된다("CapsLock") — 이 값이 곧
+    // `settings_set` 이 받는 값과 저장 형식이므로, 손으로 다시 나열해 어긋날
+    // 여지를 두지 않고 직렬화 결과를 그대로 재사용한다.
+    let value = serde_json::to_value(source)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    SourceKeyView {
+        value,
+        label: source.label().to_string(),
+        has_keycode: source.keycode().is_some(),
+    }
+}
+
+fn trackpad_area_label_key(area: TrackpadArea) -> &'static str {
+    match area {
+        TrackpadArea::TopLeft => "settings.hyperkey.area.top_left",
+        TrackpadArea::TopRight => "settings.hyperkey.area.top_right",
+        TrackpadArea::BottomLeft => "settings.hyperkey.area.bottom_left",
+        TrackpadArea::BottomRight => "settings.hyperkey.area.bottom_right",
+        TrackpadArea::Top => "settings.hyperkey.area.top",
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TrackpadAreaView {
+    value: String,
+    label_key: String,
+}
+
+fn trackpad_area_view(area: TrackpadArea) -> TrackpadAreaView {
+    TrackpadAreaView {
+        value: area.as_str().to_string(),
+        label_key: trackpad_area_label_key(area).to_string(),
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct WarningView {
+    kind: &'static str,
+    key: String,
+}
+
+fn warning_view(warning: SettingsWarning) -> WarningView {
+    match warning {
+        SettingsWarning::DuplicateSourceKey { source, .. } => WarningView {
+            kind: "duplicate",
+            key: source.label().to_string(),
+        },
+        SettingsWarning::UnknownKeycode { source, .. } => WarningView {
+            kind: "unknownKey",
+            key: source.label().to_string(),
+        },
+    }
+}
+
+/// 환경설정 창이 화면을 다시 그리는 데 필요한 전부. `settings_bootstrap`·
+/// `settings_set` 이 공통으로 돌려준다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SettingsState {
+    hyperkey: HyperkeyView,
+    hyper_preview: String,
+    source_keys: Vec<SourceKeyView>,
+    trackpad_areas: Vec<TrackpadAreaView>,
+    warnings: Vec<WarningView>,
+    last_tab: String,
+    /// 직전 `settings_set` 호출에서 저장이 실패했다면 그 사유(§3.7: 엔진 반영은
+    /// 이미 끝났고, 이건 UI 가 `settings.save_failed` 로 알리기만 하면 되는 정보다).
+    save_error: Option<String>,
+}
+
+fn build_settings_state(
+    hyperkey: &HyperkeySettings,
+    store: &SettingsStore,
+    save_error: Option<String>,
+) -> SettingsState {
+    let last_tab = store
+        .get::<String>(keys::UI_LAST_TAB)
+        .unwrap_or_else(|| "hyperkey".to_string());
+    SettingsState {
+        hyperkey: hyperkey_view(hyperkey),
+        hyper_preview: hyper_preview(hyperkey),
+        source_keys: SourceKey::all().iter().copied().map(source_key_view).collect(),
+        trackpad_areas: TrackpadArea::all()
+            .iter()
+            .copied()
+            .map(trackpad_area_view)
+            .collect(),
+        warnings: hyperkey.validate().into_iter().map(warning_view).collect(),
+        last_tab,
+        save_error,
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AppMeta {
+    version: String,
+    bundle_id: String,
+    log_path: String,
+    settings_path: Option<String>,
+    settings_file_exists: bool,
+}
+
+/// `open_log_file()` 이 실제로 여는 경로와 같은 계산이지만 파일을 열지는 않는다
+/// — About 패널에 "어디에 로그를 쓰는가"만 보여주면 된다.
+fn log_file_path_display() -> String {
+    match std::env::var_os("HOME") {
+        Some(home) => std::path::PathBuf::from(home)
+            .join("Library/Logs/Ultrakey/ultrakey.log")
+            .display()
+            .to_string(),
+        None => String::new(),
+    }
+}
+
+fn build_app_meta(app: &tauri::AppHandle, store: &SettingsStore) -> AppMeta {
+    AppMeta {
+        version: app.package_info().version.to_string(),
+        bundle_id: app.config().identifier.clone(),
+        log_path: log_file_path_display(),
+        settings_path: store.path().map(|p| p.display().to_string()),
+        settings_file_exists: store.path().map(|p| p.exists()).unwrap_or(false),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct SettingsBootstrap {
+    locale: String,
+    strings: BTreeMap<String, String>,
+    state: SettingsState,
+    meta: AppMeta,
+    notice: Option<Notice>,
+}
+
+/// hyper/meh/bleh 규칙에 영향을 주는 키인가.
+///
+/// ⭐ D-D(상위 세션 설계 결정): "규칙(`modifier_rules`)이 바뀌는 변경에는
+/// `Engine::force_reset_state()` 도 함께 호출한다." 마우스 적용 범위·트랙패드
+/// 설정은 물리 소스 키 자체를 바꾸지 않으므로(`to_modifier_rules()` 는 이 필드들을
+/// 읽지 않는다 — `ultrakey-hyperkey` 문서 주석 참고) stuck modifier 위험이 없어
+/// 대상에서 뺀다.
+fn key_affects_modifier_rules(key: &str) -> bool {
+    matches!(
+        key,
+        keys::HYPERKEY_HYPER_ENABLED
+            | keys::HYPERKEY_HYPER_SOURCE
+            | keys::HYPERKEY_INCLUDE_SHIFT_IN_HYPER
+            | keys::HYPERKEY_MEH_ENABLED
+            | keys::HYPERKEY_MEH_SOURCE
+            | keys::HYPERKEY_BLEH_ENABLED
+            | keys::HYPERKEY_BLEH_SOURCE
+    )
+}
+
+/// `hyperkey.md` §4 / `preferences-ui.md` §3.1 실측값(pt). 탭 전환 시 창을 이
+/// 크기로 리사이즈한다(D-E: 창 조작은 반드시 `on_main_thread` 로만).
+fn tab_window_size(tab: &str) -> Option<(u32, u32)> {
+    match tab {
+        "seek" => Some((555, 378)),
+        "hyperkey" => Some((710, 517)),
+        "presets" => Some((825, 527)),
+        "general" => Some((613, 273)),
+        _ => None,
+    }
+}
+
+fn build_engine_config(hyperkey: &HyperkeySettings) -> EngineConfig {
+    let mut config = EngineConfig::default();
+    config.rules.modifier_rules = hyperkey.to_modifier_rules();
+    config.mouse_apply = hyperkey.mouse_apply;
+    config
+}
+
+/// 개별 필드 하나를 갱신한다. `key` 는 이미 `keys::all()` 멤버십 검사를 통과했다고
+/// 가정한다(`validate_and_apply` 가 그 순서를 강제한다) — 그래도 이 함수가 모르는
+/// 키(`ui.lastTab` 등, `settings_set_tab` 전용)가 들어오면 안전하게 거부한다.
+fn apply_setting(
+    hyperkey: &mut HyperkeySettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        keys::HYPERKEY_HYPER_ENABLED => hyperkey.hyper.enabled = parse(value, key)?,
+        keys::HYPERKEY_HYPER_SOURCE => hyperkey.hyper.source = parse(value, key)?,
+        keys::HYPERKEY_INCLUDE_SHIFT_IN_HYPER => {
+            hyperkey.include_shift_in_hyper = parse(value, key)?
+        }
+        keys::HYPERKEY_MEH_ENABLED => hyperkey.meh.enabled = parse(value, key)?,
+        keys::HYPERKEY_MEH_SOURCE => hyperkey.meh.source = parse(value, key)?,
+        keys::HYPERKEY_BLEH_ENABLED => hyperkey.bleh.enabled = parse(value, key)?,
+        keys::HYPERKEY_BLEH_SOURCE => hyperkey.bleh.source = parse(value, key)?,
+        keys::HYPERKEY_MOUSE_APPLY_CLICK => hyperkey.mouse_apply.click = parse(value, key)?,
+        keys::HYPERKEY_MOUSE_APPLY_DRAG => hyperkey.mouse_apply.drag = parse(value, key)?,
+        keys::HYPERKEY_MOUSE_APPLY_MOVE => hyperkey.mouse_apply.r#move = parse(value, key)?,
+        keys::HYPERKEY_MOUSE_APPLY_SCROLL => hyperkey.mouse_apply.scroll = parse(value, key)?,
+        keys::HYPERKEY_TRACKPAD_ENABLED => hyperkey.trackpad.enabled = parse(value, key)?,
+        keys::HYPERKEY_TRACKPAD_AREA => hyperkey.trackpad.area = parse(value, key)?,
+        keys::HYPERKEY_TRACKPAD_CHANGE_MENU_BAR_ICON => {
+            hyperkey.trackpad.change_menu_bar_icon = parse(value, key)?
+        }
+        keys::HYPERKEY_TRACKPAD_HAPTIC => hyperkey.trackpad.haptic_feedback = parse(value, key)?,
+        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+    }
+    Ok(())
+}
+
+/// `settings_set` 커맨드의 1~2단계(키 검증 + 메모리 갱신)만 담당하는 순수 함수 —
+/// Tauri 상태·엔진·저장소 의존이 없어 유닛 테스트로 직접 부를 수 있다.
+fn validate_and_apply(
+    hyperkey: &mut HyperkeySettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("알 수 없는 설정 키: {key}"));
+    }
+    apply_setting(hyperkey, key, value)
+}
+
 struct AppState {
     catalog: Catalog,
     /// 엔진은 권한이 생긴 뒤에야 시작된다 — 그전에는 `None`.
@@ -60,6 +381,16 @@ struct AppState {
     #[allow(dead_code)] // M3(F-10)의 메뉴바 `Ignore <앱>` 이 이것을 쓴다.
     gate_controller: Arc<AppGateController>,
     monitor: Mutex<Option<PermissionMonitor>>,
+    /// F-15 저장 계층(`ultrakey_core::settings::SettingsStore`). 부팅 초기값은
+    /// `in_memory()` 자리표시자이고, `setup()` 안에서 실제 `app_data_dir()` 경로로
+    /// 교체된다 — `app_data_dir()` 은 실행 중인 앱 핸들이 있어야 얻을 수 있어
+    /// `main()` 앞부분(state 생성 시점)에는 아직 없다.
+    store: Mutex<SettingsStore>,
+    /// 메모리 정본. 탭 스레드/엔진 커맨드마다 store 를 다시 역직렬화하지 않도록
+    /// 캐시해 둔다 — `settings_set` 이 이 값과 store 를 함께 갱신한다.
+    hyperkey: Mutex<HyperkeySettings>,
+    /// 부트스트랩이 프런트엔드에 한 번만 알려줄 로드 경고(손상 복구/미래 스키마).
+    load_notice: Mutex<Option<Notice>>,
 }
 
 #[tauri::command]
@@ -116,6 +447,118 @@ fn open_settings() -> bool {
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// 환경설정 창 부트스트랩 — 카탈로그 전체 + 현재 설정 상태 + 앱 메타를 한 번에
+/// 돌려준다(`preferences-ui.md`, ModalCopy 문서 주석과 같은 "단일 카탈로그" 근거).
+#[tauri::command]
+fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) -> SettingsBootstrap {
+    let catalog = &state.catalog;
+    let hyperkey = state.hyperkey.lock().unwrap().clone();
+    let store = state.store.lock().unwrap();
+    let settings_state = build_settings_state(&hyperkey, &store, None);
+    let meta = build_app_meta(&app, &store);
+    drop(store);
+    let notice = state.load_notice.lock().unwrap().clone();
+
+    tracing::info!("settings_bootstrap 커맨드 호출됨");
+
+    SettingsBootstrap {
+        locale: catalog.locale().code().to_string(),
+        strings: catalog.entries(),
+        state: settings_state,
+        meta,
+        notice,
+    }
+}
+
+/// 컨트롤 하나가 바뀔 때마다 호출된다(§3.7 "적용 버튼 없음" — 즉시 반영).
+///
+/// ⭐ 순서를 반드시 지킨다:
+/// 1. `key` 가 `keys::all()` 에 있는지 검증.
+/// 2. 메모리 `HyperkeySettings` 갱신.
+/// 3. **엔진 반영** — 저장 성공 여부와 무관하게 먼저 한다(D-B: 로그아웃 시 graceful
+///    shutdown 이 실행되지 않는다는 M1 실측 근거 — 종료 시점에 뭔가를 flush 하는
+///    설계는 애초에 그 시점이 오지 않을 수 있다).
+/// 4. **저장** — 실패해도 3번은 이미 끝났다. 실패는 반환값(`saveError`)에 실어
+///    UI 가 `settings.save_failed` 로 알리게 한다.
+/// 5. 새 `SettingsState` 반환.
+#[tauri::command]
+fn settings_set(
+    state: State<'_, Arc<AppState>>,
+    _app: tauri::AppHandle,
+    key: String,
+    value: serde_json::Value,
+) -> Result<SettingsState, String> {
+    // 1) + 2)
+    let hyperkey_snapshot = {
+        let mut hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?;
+        validate_and_apply(&mut hyperkey, &key, &value)?;
+        hyperkey.clone()
+    };
+
+    // 3) 엔진 반영.
+    {
+        let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
+        if let Some(engine) = engine_guard.as_ref() {
+            engine.reconfigure(build_engine_config(&hyperkey_snapshot));
+            if key_affects_modifier_rules(&key) {
+                // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
+                engine.force_reset_state();
+            }
+        }
+        // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
+        // 갱신된 `state.hyperkey` 로 조립되므로 이 변경이 유실되지 않는다.
+    }
+
+    // 4) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(&key, &value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 5) 새 SettingsState.
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(&hyperkey_snapshot, &store, save_error))
+}
+
+/// 탭 전환 — 창 리사이즈(§3.1·§3.3, D-E) + (`persist` 일 때만) `ui.lastTab` 저장.
+///
+/// ⭐ **`persist` 인자가 왜 필요한가 — F-15 §8 수용 기준을 지키기 위해서다.**
+/// 프런트엔드는 창을 처음 그릴 때도 이 커맨드를 불러 "마지막 탭의 크기"로 창을
+/// 맞춰야 한다(§3.1: 탭마다 창 크기가 다르다). 그런데 그때도 `ui.lastTab` 을 쓰면
+/// **환경설정 창을 열기만 해도 `settings.json` 이 생긴다** — "설정을 한 번도 건드리지
+/// 않으면 저장 파일이 아예 생기지 않는다"(F-15 §8, §3.1)가 첫 실행에서 바로 깨진다.
+/// 그래서 최초 렌더는 `persist: false`(리사이즈만), 사용자가 실제로 탭을 누르거나
+/// 방향키로 옮긴 경우에만 `persist: true` 로 부른다.
+///
+/// 기각한 대안: "저장된 값과 다를 때만 쓴다" — 저장된 값이 **없을 때**(첫 실행)
+/// 기본 탭을 쓰게 되므로 같은 문제가 그대로 남는다. 구분해야 하는 것은 값의 차이가
+/// 아니라 **사용자의 의도적 조작인가**이고, 그것은 호출부만 알 수 있다.
+#[tauri::command]
+fn settings_set_tab(
+    state: State<'_, Arc<AppState>>,
+    app: tauri::AppHandle,
+    tab: String,
+    persist: bool,
+) -> Result<(), String> {
+    let size = tab_window_size(&tab).ok_or_else(|| format!("알 수 없는 탭: {tab}"))?;
+
+    if persist {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        if let Err(e) = store.set(keys::UI_LAST_TAB, &tab) {
+            tracing::error!(error = %e, "마지막 탭 저장 실패");
+        }
+    }
+
+    resize_settings_window(&app, size);
+    Ok(())
 }
 
 /// 로그 구독자를 세운다 — stderr 는 항상, 파일은 열 수 있을 때만 함께 남긴다.
@@ -226,6 +669,10 @@ fn main() {
         gate: gate.clone(),
         gate_controller,
         monitor: Mutex::new(None),
+        // setup() 이 실제 app_data_dir() 경로로 교체하기 전까지의 자리표시자.
+        store: Mutex::new(SettingsStore::in_memory()),
+        hyperkey: Mutex::new(HyperkeySettings::default()),
+        load_notice: Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -234,17 +681,47 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             modal_copy,
             open_settings,
-            quit_app
+            quit_app,
+            settings_bootstrap,
+            settings_set,
+            settings_set_tab,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // 4) ⭐ 설정 저장소 초기화(F-15 §3.1) — `app_data_dir()` 은 실행 중인
+            // 앱 핸들이 있어야 얻을 수 있어 `main()` 앞부분이 아니라 여기서 한다.
+            // ⛔ 디렉터리를 미리 만들지 않는다 — `SettingsStore::set()` 이 필요할
+            // 때(내부 `persist()` 가) `create_dir_all` 을 호출한다. "설정을 안
+            // 건드리면 파일이 안 생긴다"(§3.6 "부재 = 기본값")를 지키기 위함이다.
+            let settings_path = match app.path().app_data_dir() {
+                Ok(dir) => Some(dir.join("settings.json")),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "앱 데이터 디렉터리를 얻지 못함 — 설정을 메모리 전용으로 격하한다"
+                    );
+                    None
+                }
+            };
+            let (settings_store, load_outcome) = match settings_path {
+                Some(path) => SettingsStore::load(path),
+                None => (SettingsStore::in_memory(), LoadOutcome::Fresh),
+            };
+            let hyperkey_settings = HyperkeySettings::from_store(&settings_store);
+            for warning in hyperkey_settings.validate() {
+                tracing::warn!(?warning, "Hyperkey 설정 경고(부팅 시점)");
+            }
+            *state.hyperkey.lock().unwrap() = hyperkey_settings;
+            *state.load_notice.lock().unwrap() = notice_from_outcome(&load_outcome);
+            *state.store.lock().unwrap() = settings_store;
+
             let handle = app.handle().clone();
             let state_for_monitor = state.clone();
 
-            // 4) F-11 권한 감시. 전이가 오면 엔진을 켜거나 모달을 띄운다.
+            // 5) F-11 권한 감시. 전이가 오면 엔진을 켜거나 모달을 띄운다.
             let timings = EngineConfig::default().timings;
             let monitor = PermissionMonitor::start(
                 timings.permission_poll_onboarding_ms,
@@ -268,10 +745,27 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Tauri 앱을 초기화하지 못했다")
-        .run(|_app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                tracing::info!("종료 요청 — 엔진을 정리한다");
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                // ⭐ M2 1차 임시 조치 — 메뉴바(F-10)가 아직 없어 `quit_app` 커맨드가
+                // 유일한 명시적 종료 경로다(§5 항목 7: "창을 닫아도 앱은 종료되지
+                // 않는다"). `code` 가 `None` 이면 사용자가 마지막 창을 닫아 발생한
+                // 암묵적 종료 요청이고, `Some` 이면 `quit_app` 이 부른
+                // `AppHandle::exit()` 다(`tauri::App::exit` 문서 참고) — 전자만 막는다.
+                if code.is_none() {
+                    tracing::info!("창 닫힘으로 인한 종료 요청 — 계속 실행한다");
+                    api.prevent_exit();
+                } else {
+                    tracing::info!("종료 요청(quit_app) — 엔진을 정리한다");
+                }
             }
+            tauri::RunEvent::Reopen { .. } => {
+                // ⭐ M2 1차 임시 조치 — 메뉴바(F-10)가 없어 Dock 아이콘 재클릭이
+                // 설정 창을 다시 여는 유일한 경로다. F-10 이 `Settings…` 메뉴
+                // 항목을 넣으면 그 경로로 옮기고 여기서는 걷어낸다.
+                show_settings_window(app_handle);
+            }
+            _ => {}
         });
 }
 
@@ -282,6 +776,8 @@ fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to
         PermissionState::Granted => {
             hide_modal(handle);
             start_engine_if_needed(handle, state);
+            // ⭐ M2 1차 임시 조치 — `show_settings_window` 문서 주석 참고.
+            show_settings_window(handle);
         }
         PermissionState::Denied | PermissionState::OutOfSync | PermissionState::Unknown => {
             show_modal(handle);
@@ -301,19 +797,11 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         return;
     }
 
-    // ⭐ M1 의 규칙 테이블. 환경설정 UI 가 없으므로(M2/F-09) 기본값으로 시작한다 —
-    // 즉 hyper/meh/bleh 는 전부 비활성이고, 엔진은 "아무 리매핑도 없이 탭만 살아 있는"
-    // 상태로 돈다. 이것이 "M1 완료 판정" 첫 항목이 요구하는 상태다.
-    //
-    // ⚠️ 값을 바꿔 시험하려면 `HyperkeySettings` 를 여기서 구성하면 된다 — 설정 영속화는
-    // F-15(M2) 소관이라 M1 에는 저장 경로가 없다.
-    let hyperkey = HyperkeySettings::default();
-    for warning in hyperkey.validate() {
-        tracing::warn!(?warning, "Hyperkey 설정 경고");
-    }
-    let mut config = EngineConfig::default();
-    config.rules.modifier_rules = hyperkey.to_modifier_rules();
-    config.mouse_apply = hyperkey.mouse_apply;
+    // ⭐ M2 1차: store 에서 조립된 실제 사용자 설정을 쓴다 — M1 이 여기 두었던
+    // `HyperkeySettings::default()` 하드코딩은 이제 걷어낸다(환경설정 UI 가
+    // 생겼으므로 더 이상 유효하지 않은 전제였다).
+    let hyperkey = state.hyperkey.lock().unwrap().clone();
+    let config = build_engine_config(&hyperkey);
 
     let handle_for_events = handle.clone();
     match Engine::start(
@@ -354,11 +842,11 @@ fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
 ///
 /// ⛔ **왜 동기 호출이면 안 되는가 — 시스템 전체 입력이 멈춘다.**
 ///
-/// `WebviewWindow::show()`/`set_focus()`/`is_visible()` 류는 메인 스레드가 아닌 곳에서
-/// 부르면 **메인 스레드로 동기 디스패치하고 응답을 기다린다.** 그런데 이 함수의
-/// 호출자 중 하나는 **탭 전용 스레드**다 — `Engine::start` 에 넘긴 `on_event` 콜백이
-/// `EngineEvent::NotTrusted` 를 탭 스레드에서 부르고(`ultrakey-engine` 의
-/// `handle_recreate_tap`), 그것이 여기로 이어진다.
+/// `WebviewWindow::show()`/`set_focus()`/`set_size()`/`is_visible()` 류는 메인
+/// 스레드가 아닌 곳에서 부르면 **메인 스레드로 동기 디스패치하고 응답을 기다린다.**
+/// 그런데 이 함수의 호출자 중 하나는 **탭 전용 스레드**다 — `Engine::start` 에 넘긴
+/// `on_event` 콜백이 `EngineEvent::NotTrusted` 를 탭 스레드에서 부르고
+/// (`ultrakey-engine` 의 `handle_recreate_tap`), 그것이 여기로 이어진다.
 ///
 /// 탭 스레드는 `CGEventTap` 의 mach port 를 서비스하는 **유일한** 스레드다. 그 스레드가
 /// 메인 스레드를 기다리며 블록되면 그동안 탭이 이벤트를 처리하지 못하고, 활성 탭은
@@ -375,18 +863,23 @@ fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
 /// 반환**한다 — 호출 스레드는 아무것도 기다리지 않으므로 위 문제가 구조적으로 사라진다.
 /// 창 상태 진단 로그(이슈 #8 이 의존한다)는 클로저 **안**으로 옮겨 메인 스레드에서
 /// 찍는다 — 그러면 그 조회들은 스레드 왕복이 아니라 지역 호출이 된다.
+///
+/// ⭐ M2 1차(F-09)에서 **창 라벨을 인자로 일반화했다** — M1 은 `"permissions"` 에
+/// 고정되어 있었지만, 이제 `"settings"` 창도 같은 규약으로 조작해야 한다.
 fn on_main_thread(
     handle: &tauri::AppHandle,
+    window_label: &'static str,
     what: &'static str,
     action: impl FnOnce(&tauri::WebviewWindow) + Send + 'static,
 ) {
     let handle_for_closure = handle.clone();
     let dispatched = handle.run_on_main_thread(move || {
-        match handle_for_closure.get_webview_window("permissions") {
+        match handle_for_closure.get_webview_window(window_label) {
             Some(w) => {
-                tracing::info!(what, "permissions 창을 찾았다");
+                tracing::info!(window_label, what, "창을 찾았다");
                 action(&w);
                 tracing::info!(
+                    window_label,
                     what,
                     is_visible = ?w.is_visible(),
                     outer_position = ?w.outer_position(),
@@ -397,24 +890,224 @@ fn on_main_thread(
                 );
             }
             None => {
-                tracing::error!(what, "permissions 창을 찾지 못했다");
+                tracing::error!(window_label, what, "창을 찾지 못했다");
             }
         }
     });
     if let Err(e) = dispatched {
-        tracing::error!(what, error = %e, "메인 스레드로 디스패치하지 못했다");
+        tracing::error!(window_label, what, error = %e, "메인 스레드로 디스패치하지 못했다");
     }
 }
 
 fn show_modal(handle: &tauri::AppHandle) {
-    on_main_thread(handle, "show_modal", |w| {
+    on_main_thread(handle, "permissions", "show_modal", |w| {
         let _ = w.show();
         let _ = w.set_focus();
     });
 }
 
 fn hide_modal(handle: &tauri::AppHandle) {
-    on_main_thread(handle, "hide_modal", |w| {
+    on_main_thread(handle, "permissions", "hide_modal", |w| {
         let _ = w.hide();
     });
+}
+
+/// ⭐ M2 1차(F-09) 임시 조치 — 메뉴바(F-10)가 아직 없어 환경설정 창을 열 다른
+/// 경로가 없다. 그래서 이번 범위에 한해:
+/// - 권한이 `Granted` 로 전이하면(`on_permission_transition`) 여기로 창을 띄운다.
+/// - `RunEvent::Reopen`(Dock 아이콘 재클릭)에서도 여기로 다시 띄운다.
+///
+/// **F-10 이 `Settings…` 메뉴 항목을 넣으면 이 두 자동 오픈 경로는 걷어내고 메뉴
+/// 클릭으로만 연다.** 그때까지는 이 함수가 유일한 진입점이다.
+fn show_settings_window(handle: &tauri::AppHandle) {
+    on_main_thread(handle, "settings", "show_settings", |w| {
+        let _ = w.show();
+        let _ = w.set_focus();
+    });
+}
+
+fn resize_settings_window(handle: &tauri::AppHandle, size: (u32, u32)) {
+    let (width, height) = size;
+    on_main_thread(handle, "settings", "resize_settings", move |w| {
+        let _ = w.set_size(LogicalSize::new(width as f64, height as f64));
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // tab_window_size() — `preferences-ui.md` §3.1 실측값과 정확히 일치해야 한다.
+    #[test]
+    fn tab_window_size_matches_spec_values() {
+        assert_eq!(tab_window_size("seek"), Some((555, 378)));
+        assert_eq!(tab_window_size("hyperkey"), Some((710, 517)));
+        assert_eq!(tab_window_size("presets"), Some((825, 527)));
+        assert_eq!(tab_window_size("general"), Some((613, 273)));
+        assert_eq!(tab_window_size("bogus"), None);
+    }
+
+    // validate_and_apply() — keys::all() 에 없는 키는 거부된다.
+    #[test]
+    fn validate_and_apply_rejects_unknown_key() {
+        let mut hyperkey = HyperkeySettings::default();
+        let err = validate_and_apply(&mut hyperkey, "not.a.real.key", &serde_json::json!(true))
+            .unwrap_err();
+        assert!(err.contains("not.a.real.key"));
+        // 거부된 키는 메모리 상태를 건드리지 않는다.
+        assert_eq!(hyperkey, HyperkeySettings::default());
+    }
+
+    // validate_and_apply() — 알려진 키는 값을 실제로 갱신한다.
+    #[test]
+    fn validate_and_apply_updates_known_key() {
+        let mut hyperkey = HyperkeySettings::default();
+        validate_and_apply(
+            &mut hyperkey,
+            keys::HYPERKEY_HYPER_ENABLED,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(hyperkey.hyper.enabled);
+    }
+
+    // validate_and_apply() — 소스 키 팝업은 variant 이름 문자열로 갱신된다.
+    #[test]
+    fn validate_and_apply_updates_source_key() {
+        let mut hyperkey = HyperkeySettings::default();
+        validate_and_apply(
+            &mut hyperkey,
+            keys::HYPERKEY_MEH_SOURCE,
+            &serde_json::json!("RightOption"),
+        )
+        .unwrap();
+        assert_eq!(hyperkey.meh.source, SourceKey::RightOption);
+    }
+
+    // validate_and_apply() — 타입이 맞지 않으면 거부되고 메모리 상태는 그대로다.
+    #[test]
+    fn validate_and_apply_rejects_type_mismatch() {
+        let mut hyperkey = HyperkeySettings::default();
+        let err = validate_and_apply(
+            &mut hyperkey,
+            keys::HYPERKEY_HYPER_ENABLED,
+            &serde_json::json!("아니오"),
+        )
+        .unwrap_err();
+        assert!(err.contains(keys::HYPERKEY_HYPER_ENABLED));
+        assert_eq!(hyperkey, HyperkeySettings::default());
+    }
+
+    // validate_and_apply() — ui.lastTab 은 이 커맨드로 바꿀 수 없다(전용 커맨드가 따로 있다).
+    #[test]
+    fn validate_and_apply_rejects_ui_last_tab() {
+        let mut hyperkey = HyperkeySettings::default();
+        let err = validate_and_apply(
+            &mut hyperkey,
+            keys::UI_LAST_TAB,
+            &serde_json::json!("general"),
+        )
+        .unwrap_err();
+        assert!(err.contains(keys::UI_LAST_TAB));
+    }
+
+    // key_affects_modifier_rules() — hyper/meh/bleh 관련 키만 true.
+    #[test]
+    fn key_affects_modifier_rules_covers_only_slot_keys() {
+        assert!(key_affects_modifier_rules(keys::HYPERKEY_HYPER_ENABLED));
+        assert!(key_affects_modifier_rules(keys::HYPERKEY_HYPER_SOURCE));
+        assert!(key_affects_modifier_rules(
+            keys::HYPERKEY_INCLUDE_SHIFT_IN_HYPER
+        ));
+        assert!(key_affects_modifier_rules(keys::HYPERKEY_MEH_ENABLED));
+        assert!(key_affects_modifier_rules(keys::HYPERKEY_BLEH_SOURCE));
+        assert!(!key_affects_modifier_rules(keys::HYPERKEY_MOUSE_APPLY_CLICK));
+        assert!(!key_affects_modifier_rules(keys::HYPERKEY_TRACKPAD_ENABLED));
+        assert!(!key_affects_modifier_rules(keys::UI_LAST_TAB));
+    }
+
+    // build_engine_config() — HyperkeySettings 의 규칙·마우스 적용 범위를 그대로 옮긴다.
+    #[test]
+    fn build_engine_config_reflects_hyperkey_settings() {
+        let mut hyperkey = HyperkeySettings::default();
+        hyperkey.hyper.enabled = true;
+        hyperkey.mouse_apply.drag = true;
+
+        let config = build_engine_config(&hyperkey);
+        assert_eq!(config.rules.modifier_rules.len(), 1);
+        assert!(config.mouse_apply.drag);
+        assert!(config.mouse_apply.click); // 기본값 유지
+    }
+
+    // SettingsState 직렬화가 camelCase 인지 — 프런트엔드가 기대하는 필드 이름 계약.
+    #[test]
+    fn settings_state_serializes_camel_case() {
+        let hyperkey = HyperkeySettings::default();
+        let store = SettingsStore::in_memory();
+        let state = build_settings_state(&hyperkey, &store, Some("디스크 가득 참".to_string()));
+
+        let json = serde_json::to_value(&state).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("hyperPreview"));
+        assert!(obj.contains_key("sourceKeys"));
+        assert!(obj.contains_key("trackpadAreas"));
+        assert!(obj.contains_key("lastTab"));
+        assert!(obj.contains_key("saveError"));
+
+        let hyperkey_json = obj["hyperkey"].as_object().unwrap();
+        assert!(hyperkey_json.contains_key("includeShiftInHyper"));
+        assert!(hyperkey_json.contains_key("mouseApply"));
+        let trackpad_json = hyperkey_json["trackpad"].as_object().unwrap();
+        assert!(trackpad_json.contains_key("changeMenuBarIcon"));
+        assert!(trackpad_json.contains_key("haptic"));
+        assert!(!trackpad_json.contains_key("hapticFeedback"));
+
+        assert_eq!(obj["lastTab"], "hyperkey"); // 빈 스토어의 기본값
+        assert_eq!(obj["saveError"], "디스크 가득 참");
+    }
+
+    // source_key_view() — value 는 SourceKey 의 직렬화 값(variant 이름)과 일치한다.
+    #[test]
+    fn source_key_view_uses_serialized_variant_name() {
+        let view = source_key_view(SourceKey::CapsLock);
+        assert_eq!(view.value, "CapsLock");
+        assert_eq!(view.label, "caps lock");
+        assert!(view.has_keycode);
+
+        let unknown = source_key_view(SourceKey::F21);
+        assert!(!unknown.has_keycode);
+    }
+
+    // notice_from_outcome() — Fresh/Loaded 는 알림이 없고, Recovered/NewerSchema 는 있다.
+    #[test]
+    fn notice_from_outcome_only_for_recovered_and_newer_schema() {
+        assert!(notice_from_outcome(&LoadOutcome::Fresh).is_none());
+        assert!(notice_from_outcome(&LoadOutcome::Loaded { key_count: 3 }).is_none());
+
+        let recovered = notice_from_outcome(&LoadOutcome::Recovered {
+            backup: std::path::PathBuf::from("/tmp/settings.json.corrupt-1"),
+            reason: "파싱 실패".to_string(),
+        })
+        .unwrap();
+        assert_eq!(recovered.kind, "recovered");
+        assert_eq!(recovered.message_key, "settings.load_recovered");
+
+        let newer = notice_from_outcome(&LoadOutcome::NewerSchema { found: 99 }).unwrap();
+        assert_eq!(newer.kind, "newerSchema");
+        assert_eq!(newer.arg, "99");
+    }
+
+    // build_settings_state() — 빈 스토어에서도 hyperkey.validate() 의 경고가 그대로 실린다.
+    #[test]
+    fn build_settings_state_carries_validation_warnings() {
+        let mut hyperkey = HyperkeySettings::default();
+        hyperkey.hyper.enabled = true;
+        hyperkey.meh.enabled = true; // 기본 source 가 둘 다 CapsLock → 중복.
+        let store = SettingsStore::in_memory();
+
+        let state = build_settings_state(&hyperkey, &store, None);
+        assert_eq!(state.warnings.len(), 1);
+        assert_eq!(state.warnings[0].kind, "duplicate");
+        assert_eq!(state.warnings[0].key, "caps lock");
+    }
 }
