@@ -154,7 +154,7 @@
   "settings.presets.conflict.title.capsLockHomeRow": "基准键位与方向键重叠",
   "settings.presets.conflict.body": "开启这个选项将关闭:",
   "settings.presets.conflict.continue": "开启",
-  "settings.korean.heading": "韩语输入",
+  "settings.korean.heading": "韩语",
   "settings.korean.shift_space": "用 Shift + Space 切换输入源",
   "settings.korean.shift_space.hint": "仅当 macOS 的“选择上一个输入源”快捷键为 ⌃Space 时才生效。",
   "settings.korean.han_eng": "用韩/英键切换输入源",

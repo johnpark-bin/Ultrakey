@@ -154,7 +154,7 @@
   "settings.presets.conflict.title.capsLockHomeRow": "ホームロウが方向キーと重なっています",
   "settings.presets.conflict.body": "これをオンにすると、次はオフになります:",
   "settings.presets.conflict.continue": "オンにする",
-  "settings.korean.heading": "韓国語入力",
+  "settings.korean.heading": "韓国語",
   "settings.korean.shift_space": "Shift + Space で入力ソースを切り替える",
   "settings.korean.shift_space.hint": "macOS の「前の入力ソースを選択」ショートカットが ⌃Space の場合のみ動作します。",
   "settings.korean.han_eng": "韓/英キーで入力ソースを切り替える",

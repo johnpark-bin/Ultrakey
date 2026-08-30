@@ -414,6 +414,66 @@ mod tests {
         }
     }
 
+    /// ⭐ 이슈 #45 — 메뉴 탭 다국어화 가이드라인: 6개 탭 중 `Seek`·`Hyperkey`
+    /// 둘만 **원문(영문) 유지** 대상이다(§3.1.3 브랜드·기능 고유명사 비번역).
+    /// 사이드바 탭 라벨과 상세 헤딩 양쪽 전부에서, 다섯 카탈로그 전부를 확인한다
+    /// (`app_name_is_never_translated` 와 같은 형태의 재발 방지 장치).
+    #[test]
+    fn seek과_hyperkey_탭_라벨과_헤딩은_모든_로케일에서_원문_그대로다() {
+        for locale in Locale::all() {
+            let catalog = Catalog::for_locale(*locale);
+            for (key, original) in [
+                ("settings.tab.seek", "Seek"),
+                ("settings.seek.heading", "Seek"),
+                ("settings.tab.hyperkey", "Hyperkey"),
+                ("settings.hyperkey.heading", "Hyperkey"),
+            ] {
+                assert_eq!(
+                    catalog.get(key),
+                    original,
+                    "{} 카탈로그의 {key} 가 원문({original})과 다르다 — \
+                     Seek·Hyperkey 는 브랜드·기능 고유명사라 번역하지 않는다(이슈 #45)",
+                    locale.code()
+                );
+            }
+        }
+    }
+
+    /// ⭐ 이슈 #45 — 전 로케일에서 **탭 라벨 값 == 상세 헤딩 값**이다(이슈가
+    /// 해소한 "사이드바는 영문인데 상세 헤딩은 한국어" 어긋남의 재발 방지).
+    /// `Keyboards` 는 헤딩이 탭 라벨 키 자체를 재사용하므로(`settings.html` 의
+    //  근거 주석 참고 — 명세 §4.1 키 예산) 애초에 어긋날 구조가 없다.
+    /// ⚠️ `es` 의 `General` 처럼 공교롭게 영어와 철자가 같은 번역이 있으므로
+    /// "비영어 로케일이면 값이 영어와 달라야 한다"는 형태의 검사는 틀리다 —
+    /// 여기서 고정하는 불변식은 라벨↔헤딩 일치뿐이다.
+    #[test]
+    fn 탭_라벨과_상세_헤딩_값은_모든_로케일에서_같다() {
+        for locale in Locale::all() {
+            let value = raw_value(raw_for(*locale));
+            let obj = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{} 카탈로그 최상위는 객체여야 한다", locale.code()));
+            for tab in ["presets", "korean", "general"] {
+                let label = obj
+                    .get(&format!("settings.tab.{tab}"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("{} 카탈로그에 settings.tab.{tab} 이 없다", locale.code()));
+                let heading = obj
+                    .get(&format!("settings.{tab}.heading"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| {
+                        panic!("{} 카탈로그에 settings.{tab}.heading 이 없다", locale.code())
+                    });
+                assert_eq!(
+                    label, heading,
+                    "{} 카탈로그의 탭 라벨({label:?})과 상세 헤딩({heading:?})이 다르다 — \
+                     이슈 #45 로 전 탭의 라벨↔헤딩을 일치시켰다",
+                    locale.code()
+                );
+            }
+        }
+    }
+
     #[test]
     fn from_language_tag_matches_language_subtag_only() {
         assert_eq!(Locale::from_language_tag("ko"), Some(Locale::Ko));

@@ -154,7 +154,7 @@
   "settings.presets.conflict.title.capsLockHomeRow": "La fila base se solapa con las teclas de flecha",
   "settings.presets.conflict.body": "Activar esto desactivará:",
   "settings.presets.conflict.continue": "Activarlo",
-  "settings.korean.heading": "Entrada de coreano",
+  "settings.korean.heading": "Coreano",
   "settings.korean.shift_space": "Cambiar la fuente de entrada con Mayús + Espacio",
   "settings.korean.shift_space.hint": "Solo funciona mientras el atajo de macOS \"Seleccionar la fuente de entrada anterior\" sea ⌃Espacio.",
   "settings.korean.han_eng": "Cambiar la fuente de entrada con la tecla Han/Eng",
