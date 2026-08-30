@@ -2851,14 +2851,14 @@ fn reapply_global_shortcut(state: &Arc<AppState>, app: &tauri::AppHandle, seek: 
     let dispatched = app.run_on_main_thread(move || {
         let manager_guard = state.global_hotkey_manager.lock().unwrap();
         let Some(manager) = manager_guard.as_ref() else {
-            tracing::warn!("GlobalHotKeyManager 가 없다 — Seek 전역 단축키를 등록하지 못한다");
+            tracing::warn!("no GlobalHotKeyManager; cannot register the Seek global shortcut");
             return;
         };
         let mut registered = state.global_hotkey_registered.lock().unwrap();
         seek::apply_global_shortcut(manager, &mut registered, shortcut.as_ref());
     });
     if let Err(e) = dispatched {
-        tracing::error!(error = %e, "Seek 전역 단축키 재등록을 메인 스레드로 디스패치하지 못했다");
+        tracing::error!(error = %e, "failed to dispatch Seek global shortcut re-registration to the main thread");
     }
 }
 
@@ -2905,7 +2905,7 @@ fn settings_set_seek(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save settings");
                 Some(e.to_string())
             }
         }
@@ -3552,7 +3552,7 @@ fn main() {
                 }
                 Err(e) => tracing::error!(
                     error = %e,
-                    "GlobalHotKeyManager 를 만들지 못했다 — Seek 전역 단축키 경로가 동작하지 않는다"
+                    "failed to create GlobalHotKeyManager; the Seek global shortcut path will not work"
                 ),
             }
 
@@ -4474,7 +4474,7 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
     let seek_snapshot = match state.seek.lock() {
         Ok(s) => s.clone(),
         Err(e) => {
-            tracing::error!(error = %e, "seek 정본 잠금 실패 — 토글을 반영하지 못했다");
+            tracing::error!(error = %e, "failed to lock seek source of truth; could not apply toggle");
             return;
         }
     };
