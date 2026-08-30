@@ -721,6 +721,30 @@ hidutil property --get UserKeyMapping
 
 ⚠️ 3번은 명세가 명시적으로 다루지 않은 지점이다(관련 키 `keepExistingIohid` 가 실측으로 존재하나 의미는 `(미확정)`, §3-a2). 관찰 결과를 명세에 기록한다.
 
+### ⭐ A-bis. D-1 매핑의 소유권 (2026-08-30 신설, 이슈 #19)
+
+M1 에는 이 엔진이 설치하는 경로 B 규칙이 **0개**여서 위 1·3 이 서로 충돌하지 않았다.
+**D-1 이 그 전제를 바꿨다** — 이제 우리가 설치하는 매핑이 정확히 하나 있고
+(`caps lock 0x700000039 → F18 0x70000006D`), 그 값을 우리가 안다. 그래서 잔존 매핑을
+**우리 것 / 남의 것**으로 나눠 다뤄야 한다.
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | caps lock 프리셋을 하나 켠 뒤 `hidutil property --get UserKeyMapping` | `Src=30064771129`, `Dst=30064771181` 이 **나타난다** |
+| 2 | ⭐ 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 을 **켠다**, 그리고 다시 조회 | ⭐ **그 매핑이 즉시 사라진다.** 앱을 다시 띄울 필요가 없다 |
+| 3 | 다시 **끈다**, 조회 | 매핑이 다시 나타난다 |
+| 4 | 매핑이 걸린 채로 앱을 `kill -9` → `Synthesize Caps Lock Remap` 이 켜진 상태로 재실행 | 시작 시 재조정이 **우리 매핑을 걷어낸다**(부록 A #1). 로그: `우리가 설치한 D-1 매핑만 제거했다` |
+| 5 | ⭐ 사용자가 직접 건 **다른** 매핑(예: `hidutil property --set` 로 넣은 임의 쌍)이 함께 있는 상태에서 4 를 반복 | ⛔ **그 매핑은 그대로 남아 있어야 한다**(부록 A #3). 우리 서명과 일치하는 항목만 사라진다 |
+| 6 | 앱 정상 종료 후 조회 | 우리 매핑은 없고 남의 매핑은 남아 있다 |
+
+⛔ **2·4 가 이슈 #19 증상 B 의 회귀 방지 지점이다.** 이 둘이 깨지면 `caps lock → F18` 이
+커널에 남은 채 중재기는 그것을 caps lock 으로 되돌릴 alias 를 잃어, **물리 caps lock 이
+아무 규칙에도 걸리지 않고 앱 안에서 되돌릴 수단도 없다.** 사용자가 보고한 "아예 캡스락
+이벤트 자체가 캡처가 안됨" 이 그 상태다.
+
+⚠️ 5 를 실제로 해 보려면 사용자 시스템 전역 상태를 건드리게 된다 — **검증 후 반드시
+원래대로 돌려놓고, 무엇을 바꿨는지 기록**한다.
+
 ## 부록 B — F-10 앱별 비활성화 게이트 (인터페이스만, UI 는 M3)
 
 M1 에는 **메뉴바 UI 가 없다.** 게이트가 F-07 콜백의 계층 0 에서 읽히는 자리만 확정되어 있다([`architecture.md`](architecture.md) §2.3).
@@ -751,6 +775,47 @@ M1 에는 **메뉴바 UI 가 없다.** 게이트가 F-07 콜백의 계층 0 에�
 즉 이 기기에서 `Caps lock + W A S D` 를 검증하려면 **물리 왼쪽 control 을 누른 채 `W`** 를 누른다.
 ⛔ **사용자의 Karabiner 설정을 끄거나 바꾸지 않는다** — 그럴 필요가 없다는 것이 이 방법의 요점이다.
 
+---
+
+### ⭐ 6-0-bis. 어느 키를 눌러야 하는가 — Karabiner 상태 × D-1 (2026-08-30 신설, 이슈 #19)
+
+⛔ **위 표만 보고 검증하면 이슈 #19 를 다시 놓친다.** 위 표는 "Karabiner 가 켜져 있다"를
+전제로 쓰였는데, 사용자가 Karabiner 를 **끄면 눌러야 할 키가 정반대로 바뀐다.** 실제로
+이슈 #19 는 사용자가 Karabiner 를 끄고 물리 caps lock 을 직접 눌러 발견한 것이다.
+
+**먼저 Karabiner 가 실제로 도는지 확정한다.** 프로세스 목록만으로는 부족하다 — Karabiner 를
+꺼도 `Karabiner-Core-Service`·`Karabiner-VirtualHIDDevice-Daemon`·DriverKit 확장은 root
+데몬으로 **계속 살아 있다.** 판별 기준은 **가상 키보드가 HID 장치로 등록돼 있는가** 다.
+
+```sh
+# 1 이상이면 Karabiner 가 실제로 키를 가로채고 있다. 0 이면 꺼져 있다.
+ioreg -c IOHIDDevice -r -d1 | grep -c "Karabiner DriverKit VirtualHIDKeyboard"
+# 사용자 세션 프로세스(있으면 켜져 있다)
+pgrep -lf "Karabiner-Elements.app|console_user_server"
+```
+
+| Karabiner | 물리 caps lock 이 탭에 도착하는 모양 | 검증 시 눌러야 할 키 |
+| :--- | :--- | :--- |
+| **켜짐**(`caps_lock ↔ left_control`) | caps lock → (Karabiner) `left control` → 탭. **caps lock 은 영영 오지 않는다** | **물리 왼쪽 control** (그것이 `caps lock` 으로 바뀌어 도착) |
+| **꺼짐** + D-1 켜짐 | caps lock → (`hidutil`) **`F18`** → 탭. 중재기가 alias 로 caps lock 으로 되돌린다 | **물리 caps lock** |
+| **꺼짐** + D-1 꺼짐(`Synthesize Caps Lock Remap` ☑) | caps lock 이 `flagsChanged` 로만, **뗄 때는 오지 않는다**(래칭, §5 #20) | **물리 caps lock**. 단 홀드 계열은 원리적으로 토글처럼 동작한다 |
+
+⭐ **추측하지 말고 계측으로 확정한다 (이슈 #19 에서 신설).** 탭에 실제로 도착한 원본
+이벤트를 로그로 볼 수 있다:
+
+```sh
+open --env ULTRAKEY_TRACE_TAP=1 -n target/universal-apple-darwin/release/bundle/macos/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log | grep "탭 계측"
+```
+
+이 로그는 `raw_keycode`(도착한 그대로)·`raw_kind`·`raw_flags`·`resolved`(alias 환원 뒤)·
+`layer`·`disp`·`emitted`·`path_c` 를 한 줄로 남긴다. **caps lock 을 한 번 눌러 보고
+`raw_keycode` 가 `0x39`(caps lock)인지 `0x4F`(F18)인지 `0x3B`(left control)인지 먼저 확인한 뒤**
+아래 절차를 시작하라. 이 확인 없이 "동작하지 않는다"고 적으면 안 된다.
+
+⛔ **`cargo tauri dev` 나 `.app` 안의 바이너리 직접 실행으로는 안 된다** — TCC 가 부모
+프로세스 권한으로 판정한다. 반드시 `open` 으로 띄운다.
+
 ⭐ **D-1(caps lock 모멘터리 정규화, `architecture.md` §6.1)과의 상호작용도 여기서 관찰한다.**
 Ultrakey 가 설치하는 경로 B 매핑(`caps lock → F18`)은 `hidutil` 이므로 Karabiner 의 가상 HID
 키보드에도 적용된다 — 따라서 물리 `left control` → (Karabiner) `caps lock` → (hidutil) `F18` 로
@@ -761,6 +826,28 @@ Ultrakey 가 설치하는 경로 B 매핑(`caps lock → F18`)은 `hidutil` 이�
 hidutil property --get UserKeyMapping
 # 프리셋을 전부 끈 뒤 — (null) 로 돌아와야 한다
 ```
+
+### ⭐ 6-1-0. `Remap caps lock to:` — **대상이 modifier 키인 경우** (F-08.1, 이슈 #19 신설)
+
+⛔ **이 절이 없어서 이슈 #19 증상 A 를 놓쳤다.** `Remap caps lock to:` 의 대상 50종 중
+**8종이 modifier 키**다(`left/right control`·`shift`·`option`·`command`). macOS 는 modifier 의
+눌림을 `KeyDown` 이 아니라 **`flagsChanged` + flags 비트**로만 전달하므로
+(`../spec/key-remapping-engine.md` §5 #18), 대상이 modifier 일 때는 **다른 대상과 검증
+포인트가 다르다.** 방향키·`esc` 로만 확인하면 이 결함이 드러나지 않는다.
+
+관찰 수단은 [`tools/modifier-probe.html`](tools/modifier-probe.html)(Chrome).
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `Remap caps lock to:` ☑ `left control` 로 두고, 6-0-bis 표가 지정한 키를 **누른다** | 프로브에 `keydown` / `ControlLeft` 행이 찍히고 **`⌃` 열이 `T`** 다 |
+| 2 | 그대로 **뗀다** | `keyup` / `ControlLeft` 행이 찍히고 `⌃` 열이 `F` 로 돌아간다 |
+| 3 | ⭐ 눌림·뗌이 **둘 다 `keyup` 으로만** 찍히면 **실패다** | 이것이 이슈 #19 증상 A 다 — `KeyDown` 으로 합성해 control 비트가 한 번도 켜지지 않은 상태 |
+| 4 | ⭐ 그 키를 **누른 채 `C`** | `⌃C` 가 성립한다(프로브의 `⌃` 열이 `T` 인 `keydown c`). 합성 `flagsChanged` 한 번만으로는 여기서 실패한다 — 뒤따르는 키 이벤트에도 비트가 실려야 한다 |
+| 5 | 대상을 `esc` 로 바꾸고 1~2 반복 | `keydown`/`keyup` 의 `Escape` — modifier 가 아닌 대상은 종전대로 키 이벤트로 나가야 한다(과잉 교정 방지) |
+| 6 | 그 키를 누르는 동안 caps lock **잠금이 켜지지 않는다** | LED 가 꺼진 채이고 타이핑이 소문자다(F-08.1 "OS caps lock 잠금 상태는 발생하지 않음") |
+
+⭐ 계측 로그(`ULTRAKEY_TRACE_TAP=1`)로도 같은 것을 본다 — `emitted` 열이
+`FlagsChanged 0x3B 0x00040001` 이어야 하고, `KeyDown 0x3B 0x00000000` 이면 실패다.
 
 ### 6-1. 대표 프리셋 — `Caps lock + W A S D = ▲ ◀︎ ▼ ▶︎` (F-08.5)
 
@@ -783,7 +870,15 @@ hidutil property --get UserKeyMapping
 | 1 | 프리셋을 켠 뒤 같은 shift 키를 300ms 안에 두 번 탭 | 키보드의 caps lock **LED 가 켜지고** 이후 타이핑이 대문자로 나간다 |
 | 2 | `ioreg -c AppleHIDKeyboardEventDriverV2 \| grep -i HIDCapsLockState` 또는 `hidutil` 로 잠금 상태 확인 | `Yes` — **이벤트 flags 가 아니라 실제 HID 잠금 상태**가 바뀌어야 한다(경로 C) |
 | 3 | 한 번 더 두 번 탭 | 다시 꺼진다 |
-| 4 | shift 를 **한 번만** 탭 | 아무 일도 없다(double tap 간격 300ms 초과 시 유예된 quick press 도 없어야 한다 — F-08.11 이 꺼져 있다면) |
+| 4 | shift 를 **한 번만** 탭 | caps lock 은 토글되지 않는다. ⚠️ 아래 5·6 을 함께 본다 |
+| 5 | ⭐ **`Shift + a` 를 친다**(shift 를 누른 채 `a`) | **대문자 `A`** 가 나온다 |
+| 6 | ⭐ shift 를 한 번만 톡 누른 **직후** `a` 를 친다 | 소문자 `a` 가 나온다(앞의 탭이 뒤 글자에 영향을 주지 않는다) |
+
+⛔ **5·6 이 이 절의 핵심이다 — 이슈 #19 증상 C.** 이전 판에는 이 두 행이 없었고, 그래서
+"이 프리셋을 켜면 **shift 키가 통째로 죽는다**"는 결함이 검증을 통과했다. 명세는 F-08.8 이
+shift 를 무력화한다고 쓴 적이 없다(`../spec/power-user-presets.md` §3.2 F-08.8 행의 "부가
+효과" 열은 비어 있다). 프리셋이 **더하는** 제스처이지 **빼앗는** 것이 아니다.
+`Quick press … shift`(F-08.11, 6-3)에도 같은 확인이 필요하며 그쪽은 6-3 #3 이 이미 담당한다.
 
 ### 6-3. quick press 계열 — `Quick press left or right shift to input corresponding:` (F-08.11)
 
@@ -1036,6 +1131,140 @@ Ultrakey 의 탭은 그것을 물리 입력과 구분하지 않는다 — 즉 **
   이 사본은 권한을 요구하지 않으므로 TCC 목록에 항목을 남기지 않는다.
 - 촬영을 위해 잠시 종료했던 **기존 인스턴스(메인 체크아웃 빌드)가 다시 떠 있는 것을 확인**했다.
 - ⛔ **키체인·TCC·Launch Services 데이터베이스는 건드리지 않았다.**
+
+---
+
+## 📌 실측 결과 (2026-08-30, 이슈 #19 — 물리 caps lock 3증상)
+
+> 대상: `fix/physical-caps-lock-events`. 사용자가 Karabiner 를 끄고 물리 caps lock 을 직접
+> 눌러 보고한 세 증상(A 리매핑 down/up 오판정 · B quick press 미동작 · C double tap shift
+> 미동작)의 원인 확정과 수정 검증.
+
+### ⚠️ 관찰 방법과 그 한계 — 먼저 읽는다
+
+이번 회차는 **사람이 물리 키를 누르지 못하는 조건**에서 수행했다. 그래서 두 층으로 나눠
+검증하고, **각각이 무엇을 증명하고 무엇을 증명하지 못하는지** 분명히 적는다.
+
+| 층 | 수단 | 증명하는 것 | ⛔ 증명하지 **못**하는 것 |
+| :--- | :--- | :--- | :--- |
+| 커널 매핑(경로 B) | `hidutil property --get UserKeyMapping` + 기동 로그 | `caps lock → F18` 매핑의 설치·제거가 설정과 일치한다 | 물리 키를 눌렀을 때 커널이 실제로 F18 을 낸다는 것 |
+| 탭 이후 전 구간 | `examples/key_poke` 로 **F18 을 직접 주입** + `ULTRAKEY_TRACE_TAP=1` 계측 | 탭 도착 → alias 환원 → 중재 → 합성/방출 → 경로 C 까지 전부 | 위와 같음 — 주입은 HID 층 **위**에서 들어가므로 커널 매핑을 지나지 않는다 |
+
+⭐ 이 분해 자체는 `examples/key_poke` 모듈 문서가 이미 정한 방법이다 — "`caps lock → F18`
+매핑이 걸린 상태를 흉내 내려면 이 도구에 **F18 을 직접** 넣어야 한다(그것이 커널 매핑이
+하는 일이다)."
+
+⛔ **그러므로 "물리 caps lock 키를 실제로 눌러서 확인했다"고는 쓰지 않는다.** 그 한 단계는
+아래 "⬜ 수행하지 못한 것" 에 남긴다.
+
+⚠️ **Karabiner-Elements 는 이 회차 중에 켜졌다 꺼졌다 했다.** 조사 시작 시점에는 가상 HID
+키보드가 등록돼 있었고(켜짐), 몇 분 뒤 사라졌다가(꺼짐), 검증 도중 다시 등록됐다.
+⛔ **사용자의 Karabiner 설정은 읽기만 했고 바꾸지 않았다.** 주입 방식 검증은 Karabiner
+계층을 지나지 않으므로 이 변동에 영향받지 않는다.
+
+### ✅ 통과한 것 — 증상별 원인과 실측
+
+**증상 B — 경로 B 커널 매핑이 엔진 설정과 어긋난 채 남는다.**
+
+고장 상태를 이 기기에서 **그대로 발견**했다: `settings.json` 은 `synthesizeCapsLockRemap:
+true`(= D-1 꺼짐, `caps_lock_alias = None`)인데 커널에는 `caps lock → F18` 이 남아 있었다.
+계측이 그 결과를 문자 그대로 보여준다 — 물리 caps lock 이 되었을 F18 이 아무에게도
+해석되지 않고 통과만 한다:
+
+```
+raw_kind=KeyDown raw_keycode=0x4F ... resolved=0x4F alias_active=false
+layer=Passthrough disp=Pass emitted=[] effects=[]
+```
+
+원인 둘. (1) `Advanced ▸ Synthesize Caps Lock Remap` 메뉴 토글이 `SettingsStore` 에만 쓰고
+`AppState::presets`·엔진을 갱신하지 않았다 — 이전 회차 로그가 증거다(`05:39:52` 토글
+`value=true` → `05:40:49` 경로 B 재적용이 여전히 `count=1`). (2) `reconcile_on_start` 가
+`desired` 가 비었을 때 잔존 매핑을 지우지 않았다(M1 의 "출처를 판별할 수 없다" 전제가
+D-1 이후로는 거짓이다).
+
+수정 후 기동 로그와 조회:
+
+```
+경로 B 시작 시 재조정 — 이번 설정은 매핑을 요구하지 않으므로
+우리가 설치한 D-1 매핑만 제거했다(남의 매핑은 그대로 둔다) ours=1 foreign=0
+$ hidutil property --get UserKeyMapping
+( )
+```
+
+그리고 `Quick press caps lock to execute: caps lock`(F-08.2) 기능 자체:
+
+```
+seq=45 raw_kind=KeyUp raw_keycode=0x4F ... resolved=0x39 alias_active=true
+layer=PresetCombo disp=Consume effects=[ToggleCapsLock] path_c=성공(전:off 후:on)
+```
+
+**증상 A — modifier 대상 리매핑을 `KeyDown`/`KeyUp` 으로 내보냈다.**
+
+`Remap caps lock to: left control`, D-1 켬. F18 주입:
+
+```
+seq=409 KeyDown 0x4F → resolved=0x39 alias_active=true
+        emitted=[FlagsChanged 0x3B 0x20840001]     ← control(0x40000) + 좌측 구분(0x1)
+seq=410 KeyDown 0x50(F19) → disp=PassWithFlags disp_flags=0x20840001
+seq=411 KeyUp   0x50      → disp=PassWithFlags disp_flags=0x20840001
+seq=412 KeyUp   0x4F → emitted=[FlagsChanged 0x3B 0x20800000]   ← control 해제
+```
+
+수정 전이라면 `emitted=[KeyDown 0x3B 0x00000000]` 이고 `disp_flags` 는 `0x0` 이었다 —
+control 비트가 한 번도 켜지지 않으므로 받는 앱은 눌림을 보지 못한다(사용자 보고의
+"다운·업이 전부 업으로 잡힌다"). ⭐ `seq=410/411` 이 핵심이다: **유지 중 다른 키에도
+비트가 실려야** `⌃C` 가 성립한다. 합성 `flagsChanged` 한 번만으로는 부족하다.
+
+**증상 C — 보류한 원본을 끝내 내보내지 않아 shift 가 죽었다.**
+
+`Double tap shift = caps lock` 만 켠 구성. shift 의 `flagsChanged` 주입:
+
+```
+seq=9  FlagsChanged 0x38 → disp=Pass        ← shift 가 통과한다(수정 전이면 Consume)
+seq=15 FlagsChanged 0x38 → disp=Pass
+seq=28 FlagsChanged 0x38 → disp=Pass effects=[ToggleCapsLock] path_c=성공(전:off 후:on)
+seq=36 FlagsChanged 0x38 → disp=Pass effects=[ToggleCapsLock] path_c=성공(전:on 후:off)
+```
+
+`disp=Pass` 와 `effects=[ToggleCapsLock]` 이 **한 줄에 함께** 있는 것이 이 수정의 요점이다 —
+프리셋은 제스처를 **더하는** 것이지 그 키를 **빼앗는** 것이 아니다.
+
+**경로 C 자체** — `IOHIDGet/SetModifierLockState`(selector `1`)가 이 기기에서 정상 동작한다.
+독립 확인: selector `0`·`4`~`8` 은 `kIOReturnUnsupported`(`0xE00002C2`)로 거부되고 `1`·`2`·`3`
+만 받아들여진다. 위 `path_c=성공(전:off 후:on)` / `(전:on 후:off)` 가 양방향을 보여준다.
+
+**계측이 잡아낸 명세대로의 동작 하나.** 검증 도중 quick press 가 발화하지 않은 회차가
+있었는데, 계측을 보니 F18 의 down 과 up 사이에 **다른 키의 keyDown 이 끼어들어 있었다**
+(사용자가 그때 키보드를 쓰고 있었다). §3-c 표 3행·P2 가 요구하는 대로 quick press 후보에서
+정확히 빠진 것이다 — 결함이 아니다. **계측이 없었다면 이것을 "가끔 안 먹는다"로 오진했을
+것이다.**
+
+### ⬜ 수행하지 못한 것 — 그대로 적는다
+
+- ⛔ **물리 caps lock·shift 키를 사람이 실제로 눌러 확인하지 못했다.** 이 회차를 수행한
+  주체가 물리 키를 누를 수 없다. 주입(`key_poke`)은 HID 층 **위**로 들어가므로
+  **"물리 caps lock 을 누르면 커널이 F18 을 낸다"는 한 단계만은 검증되지 않았다.**
+  나머지 전 구간(탭 도착 이후)은 위 계측으로 검증했다.
+- ⛔ **브라우저 프로브(`tools/modifier-probe.html`)로 "다른 앱이 받은 이벤트"를 보지
+  못했다.** 브라우저 자동화 확장이 연결돼 있지 않았다. 대신 `disp=PassWithFlags
+  disp_flags=0x20840001`(seq=410/411)로 **탭이 다음 앱에 넘기는 flags** 를 직접 확인했다.
+- ⬜ 부록 A-bis #5(사용자가 직접 건 **다른** 매핑을 보존하는가)는 **자동 테스트로만**
+  확인했다(`path_b.rs` 의 `cleanup_removes_only_our_d1_mapping_and_keeps_foreign_ones` ·
+  `reconcile_with_desired_preserves_foreign_mappings`). 사용자 시스템 전역 상태를 실제로
+  더럽히지 않기 위해 실기기에서는 수행하지 않았다.
+- ⬜ 6-6(Secure Input 구간에서 경로 B 가 어떻게 동작하는가)은 이번에도 확인하지 않았다 —
+  `power-user-presets.md` §9 #10 의 `(미확정)` 이 그대로 남는다.
+
+### 검증 후 되돌린 것
+
+| 무엇 | 어떻게 |
+| :--- | :--- |
+| `settings.json` | 시작 전 원본을 복사해 두고, 검증 뒤 **바이트 그대로 복원**했다(`capsLockRemap=true` · `capsQuickPress=true` · `doubleTapShiftToCaps=false` · `synthesizeCapsLockRemap=true`) |
+| `hidutil` 커널 매핑 | 복원한 설정(`synthesize=true` → alias 없음)에 맞춰 앱이 스스로 비웠다 — 최종 `( )`. ⚠️ **검증 시작 시점에 남아 있던 잔존 `caps lock → F18` 은 일부러 되돌리지 않았다.** 그것이 이번에 고친 결함 그 자체이고, 되살리면 물리 caps lock 이 다시 죽는다 |
+| caps lock 잠금 상태 | 검증 중 경로 C 로 토글했으나 **꺼짐(원래 상태)으로 되돌려 놓았다** |
+| 실행 중이던 Ultrakey | 검증 조건(잔존 매핑 보존)을 위해 `kill -9` 로 종료했다. 지금은 **이 브랜치의 서명 빌드**가 대신 실행 중이다 |
+| Karabiner-Elements | ⛔ **읽기만 했다. 아무것도 바꾸지 않았다** |
+| 키체인·시스템 설정·Accessibility | ⛔ **건드리지 않았다** (기존 서명 주체가 같아 권한이 그대로 승계됐다) |
 
 ---
 
