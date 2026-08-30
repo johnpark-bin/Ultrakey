@@ -47,7 +47,11 @@ impl PathBManager {
         let current = self.backend.read_current()?;
 
         if current.is_empty() {
-            tracing::debug!("경로 B 시작 시 재조정 — 잔존 매핑이 없다");
+            // ⭐ `info!` 다(`debug!` 아님). F-15 §3.1.1 결정 2 가 "정리의 정본은 종료가
+            // 아니라 기동" 이라고 못박았고, `docs/dev/manual-verification.md` 부록 A 가
+            // 이 재조정이 매 기동마다 실제로 돌았는지를 **기본 로그 레벨에서** 확인한다.
+            // 조용한 성공은 "돌았는데 깨끗했다"와 "아예 안 돌았다"를 구분해 주지 못한다.
+            tracing::info!("경로 B 시작 시 재조정 — 잔존 매핑이 없다");
             return Ok(ReconcileReport {
                 had_residual_mapping: false,
                 residual: Vec::new(),
