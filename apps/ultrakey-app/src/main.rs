@@ -1520,16 +1520,49 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
     ))
 }
 
-/// F-17 §3.5.1 — `시스템 설정 열기` 버튼. `(추정)` URL 스킴(명세 §3.5.1·§9) — 실패해도
-/// 앱은 죽지 않고 프런트에 `Err` 로만 알린다(`settings.html` 의
+/// F-17 §3.5.1 — `시스템 설정 열기` 버튼.
+///
+/// ⭐ 이슈 #31 ③(a) — **Function Keys 패널로 바로 들어간다.** 예전 URL
+/// (`com.apple.preference.keyboard`)은 Ventura 이전 이름이라 지금은 Keyboard
+/// 최상단만 열렸다 — 사용자 보고: "시스템 세팅스를 열었을 때 해당 메뉴로 바로
+/// 진입하지 않는다". 아래 URL 은 Karabiner-Elements 의
+/// `Open System Settings > Function Keys…` 버튼이 쓰는 것과 같은 문자열이고,
+/// 이 머신의 `/Applications/Karabiner-Elements.app` 바이너리 `strings` 에서도
+/// 그대로 확인했다. 확장자 번들 ID `com.apple.Keyboard-Settings.extension` 은
+/// 이 머신의 `Keyboard-Settings.appex` `Info.plist` 로 교차 확인했다.
+const KEYBOARD_FUNCTION_KEYS_SETTINGS_URL: &str =
+    "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys";
+
+/// 실패해도 앱은 죽지 않고 프런트에 `Err` 로만 알린다(`settings.html` 의
 /// `keyboards-open-system-settings-btn` 리스너가 `.catch()` 로 받는다).
 #[tauri::command]
 fn open_keyboard_settings() -> Result<(), String> {
-    if bundle::open_url("x-apple.systempreferences:com.apple.preference.keyboard") {
+    if bundle::open_url(KEYBOARD_FUNCTION_KEYS_SETTINGS_URL) {
         Ok(())
     } else {
         Err("키보드 시스템 설정을 열지 못했다".to_string())
     }
+}
+
+/// ⭐ 이슈 #31 ③(b) — `Use F1, F2, etc. keys as standard function keys` 의 **현재**
+/// 값만 따로 읽는다. 사용자 보고: "그 메뉴에서 옵션을 껐음에도 울트라키에서 옵션의
+/// 변경 상태를 인지하지 못하는 상황. 그래서 항상 on 으로 표현되는 것 같거든."
+///
+/// 값 자체는 `settings_bootstrap`/`settings_set` 이 돌려주는 `state.perDevice`
+/// 안에도 들어 있지만, 그 경로는 **설정을 건드릴 때만** 갱신된다 — 사용자가 시스템
+/// 설정 앱에서 토글을 바꾼 것은 우리 쪽에 아무 일도 일으키지 않는다. 그래서
+/// 프런트가 이 커맨드만 따로 주기적으로 부른다(§3.5.1).
+///
+/// ⚠️ **변경 알림이 아니라 폴링이다.** macOS 가 이 값의 변경을 알려 주는 공개
+/// 알림을 우리가 확인하지 못했다(`Keyboard-Settings.appex` 바이너리에
+/// `com.apple.keyboard.fnstatedidchange` 문자열이 보이지만, 그것이 실제로
+/// 분산 알림으로 게시되는지는 확인하지 못했다 — ⛔ 추측으로 배선하지 않는다).
+/// Karabiner-Elements 도 같은 값을 3초 주기로 폴링한다. 폴링 비용은 IOKit
+/// 레지스트리 프로퍼티 1회 읽기라 무시할 만하고, 프런트는 Keyboards 탭이 보일
+/// 때만 호출한다.
+#[tauri::command]
+fn keyboard_fn_state() -> Option<bool> {
+    fn_state::f_keys_are_standard()
 }
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
@@ -2163,6 +2196,7 @@ fn main() {
             general_set_launch_on_login,
             general_set_hide_menu_bar_icon,
             open_keyboard_settings,
+            keyboard_fn_state,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.

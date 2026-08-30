@@ -971,12 +971,42 @@ fn extract_js_function<'a>(html: &'a str, signature: &str) -> &'a str {
 #[test]
 fn settings_html_이_settings_unset과_open_keyboard_settings를_invoke한다() {
     let html = read_settings_html();
-    for command in ["settings_unset", "open_keyboard_settings"] {
+    for command in ["settings_unset", "open_keyboard_settings", "keyboard_fn_state"] {
         assert!(
             html.contains(&format!("invoke(\"{command}\"")),
             "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
         );
     }
+}
+
+/// ⭐ 이슈 #31 ③ — macOS `Use F1, F2…` 연동 두 가지.
+///
+/// (a) `시스템 설정 열기` 는 Keyboard 최상단이 아니라 **Function Keys 패널**로
+///     바로 들어가야 한다. 사용자 보고: "시스템 세팅스를 열었을 때 해당 메뉴로
+///     바로 진입하지 않는다".
+/// (b) 그 토글의 **현재 값**을 주기적으로 다시 읽어야 한다 — 사용자가 시스템
+///     설정 앱에서 바꾼 것은 우리 쪽에 아무 일도 일으키지 않기 때문이다.
+#[test]
+fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys"),
+        "open_keyboard_settings 가 Function Keys 패널 딥링크를 쓰지 않는다(이슈 #31 ③a)"
+    );
+    assert!(
+        !main_rs.contains("x-apple.systempreferences:com.apple.preference.keyboard"),
+        "Ventura 이전 URL 이 남아 있다 — Keyboard 최상단만 열린다(이슈 #31 ③a)"
+    );
+
+    let html = read_settings_html();
+    assert!(
+        html.contains("setInterval(refreshMacosFnStateBadge"),
+        "settings.html 이 macOS Function Keys 토글을 주기적으로 다시 읽지 않는다(이슈 #31 ③b)"
+    );
+    assert!(
+        html.contains("syncFnStatePolling()"),
+        "탭 전환이 폴링 시작/중지와 연결돼 있지 않다 — 다른 탭에서도 계속 돈다"
+    );
 }
 
 /// 명세 §4.1 표의 24개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 23개)가
