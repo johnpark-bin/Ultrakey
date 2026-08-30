@@ -22,9 +22,9 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 
 | 등급 | 역할 | Claude Code | Codex | opencode |
 | :--- | :--- | :--- | :--- | :--- |
-| **상** | **평가자(호출 세션)** — 중급 모델이 낸 **계획 초안·구현 산출물을 리뷰·교정**. 갈림길의 **최종 확정만** 직접 | Fable 5 > Opus 5 | Sol | Deepseek Pro 0813 |
-| **중** | **계획 초안 + 구현** — 분석·설계·계획 **초안** 작성, 명세를 코드로, 테스트, 반복 수정. **기본 작업 주체. 가장 많이 돌린다** | Sonnet 5 | Terra | Deepseek Flash 0731 (Effort High) |
-| **하** | **탐색** — 코드·파일 검색, 사실 확인, 단순 자료조사 | Haiku | Luna | Deepseek Flash 0731 (Effort Low) |
+| **상** | **평가자(호출 세션)** — 중급 모델이 낸 **계획 초안·구현 산출물을 리뷰·교정**. 갈림길의 **최종 확정만** 직접 | Fable 5 > Opus 5 | Sol | DeepSeek V4 Pro 0813 > Qwen3.8 Max |
+| **중** | **계획 초안 + 구현** — 분석·설계·계획 **초안** 작성, 명세를 코드로, 테스트, 반복 수정. **기본 작업 주체. 가장 많이 돌린다** | Sonnet 5 | Terra | DeepSeek V4 Flash 0731 (Effort High) > Qwen3.8 Flash (Effort High) |
+| **하** | **탐색** — 코드·파일 검색, 사실 확인, 단순 자료조사 | Haiku | Luna | DeepSeek V4 Flash 0731 (Effort Low) > Qwen3.8 Flash (Effort Low) |
 
 **운용 원칙**
 
@@ -46,7 +46,7 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 | opencode | `.opencode/agent/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model: provider/id` · `options.reasoningEffort`) |
 
 모델 식별자의 근거와 확인 방법은 각 설정 파일의 주석에 적어 두었다.
-표의 약칭은 이러하다 — `Sol`/`Terra`/`Luna` 는 Codex 모델 ID `gpt-5.6-{sol,terra,luna}`, opencode 의 `Effort High/Low` 는 `options.reasoningEffort`(`high`/`low`), Claude Code 의 `Sonnet 5`/`Haiku` 는 `sonnet`/`haiku` 에일리어스다.
+표의 약칭은 이러하다 — `Sol`/`Terra`/`Luna` 는 Codex 모델 ID `gpt-5.6-{sol,terra,luna}`, opencode 의 `Effort High/Low` 는 `options.reasoningEffort`(`high`/`low`), Claude Code 의 `Sonnet 5`/`Haiku` 는 `sonnet`/`haiku` 에일리어스다. `A > B` 는 1순위가 A, 2순위(폴백)가 B 다 — 설정 파일은 1순위 모델을 고정한다.
 ⭐ 상급(평가자)은 **호출 세션의 모델**이어서 별도 에이전트 파일이 없다 — `ultrakey-plan` 은 초안을 잡는 **중급** 에이전트다.
 
 ## 3. 작업 규약
