@@ -22,7 +22,7 @@
 | `ultrakey-overlay` | **F-03** | Seek 오버레이 UI 의 **순수 로직** — 다중 디스플레이 좌표 변환, ⭐ **연결선의 디스플레이 경계 클리핑**(Liang–Barsky), 렌더 모델 산출, 상한 정책(§4.2), ⭐ **증분 수신 세션**(F-02 결정 S-6 의 소비자). 렌더링 계층은 `OverlayRenderer` 트레이트로 분리해 교체 가능하다(`platform-constraints.md` §4.3) | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-seek-session` | **F-01** | Seek **활성화·세션 상태 머신**의 순수 로직 — 활성화 경로 3종의 모드 판정, 세션 생명주기(Opening→Ready→Querying→Selected→Confirming), 세션 중 키 라우팅(물리 키코드 기준), F-04 로 넘길 `ConfirmedMatch`/`ClickExecutor` 경계. ⭐ 질의 버퍼·필터링·순환·200개 상한은 **다시 만들지 않고** `ultrakey-overlay::OverlaySession` 을 소유(compose)한다 | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-permissions` | F-11 | `AXIsProcessTrusted` 폴링, 권한 상태 머신, out-of-sync 진단, 시스템 설정 딥링크 | 간접 | ✅ |
-| `ultrakey-i18n` | F-14 (A) / D4 | 문자열 카탈로그(ko + en), 로케일 결정, OS 버전별 어휘 교체 | ❌ 없음 | ❌ 불필요 |
+| `ultrakey-i18n` | F-14 (A) / D4 · ⭐ **D6 추가(이슈 #39)** | 문자열 카탈로그(**`en`·`ko`·`zh`·`es`·`ja` 5종**), 로케일 결정, OS 버전별 어휘 교체, 언어 선택 UI 용 endonym. ⭐ **UI 문자열 전용이다** — 로그 문구는 이 크레이트를 타지 않고 코드 안의 영어 리터럴로 남는다(`localization-and-input-sources.md` §3.1.6). 그 분리는 `apps/ultrakey-app/tests/log_string_discipline.rs` 가 소스를 읽어 강제한다 | ❌ 없음 | ❌ 불필요 |
 | `apps/ultrakey-app` | F-09·F-10 의 껍데기 | Tauri 앱. M1 에서는 권한 안내 모달 + 배선(wiring)만 | 간접 | ✅ |
 
 ### 왜 이 경계인가 — 기각한 대안
