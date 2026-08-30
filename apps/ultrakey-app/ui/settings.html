@@ -112,6 +112,27 @@
   button:disabled { opacity: .5; cursor: not-allowed; }
   button.accent { font-weight: 600; }
 
+  h2.group {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; opacity: .6; margin: 4px 0 8px;
+  }
+
+  input[type="range"] { width: 200px; }
+
+  /* 충돌 대화상자 오버레이 — 창 안에서만 뜨는 모달. */
+  #conflict-overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, CanvasText 35%, transparent);
+  }
+  #conflict-overlay .dialog {
+    background: Canvas; color: CanvasText; border-radius: 10px; padding: 18px 20px;
+    max-width: 420px; box-shadow: 0 8px 32px color-mix(in srgb, CanvasText 30%, transparent);
+  }
+  #conflict-overlay h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+  #conflict-overlay p { margin: 0 0 8px; }
+  #conflict-overlay ul { margin: 0 0 14px; padding-left: 18px; opacity: .75; font-size: 12px; }
+  #conflict-overlay .dialog-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -223,10 +244,163 @@
       <div id="hyperkey-warnings" class="warnings" hidden></div>
     </section>
 
-    <!-- Presets 탭 — 자리만. 16개 항목(F-08)은 M2 2차. -->
+    <!-- Presets 탭 — power-user-presets.md §3.2 / preferences-ui.md §4.3 의 16개 항목을
+         캡스락 7 · 시프트 4 · 삭제 3 · 기타 2 의 4개 그룹으로, 배치 순서 그대로.
+         종속 표현 3종(preferences-ui.md §3.8)이 전부 여기 나온다:
+           ① dimmed  — 체크박스가 꺼지면 그 항목의 팝업만 흐려진다(값은 보존)
+           ② 숨김    — caps lock 커널 매핑 안내는 매핑이 실제로 설치됐을 때만
+                       DOM 에 존재한다(#presets-caps-alias, JS 가 노드를 만들거나 지운다)
+           ③ 문장 중간 삽입 — `Caps lock +` [팝업] `= ◀▼▲▶`(중간) ·
+                       `Caps lock + home row = ` [팝업](끝에 부착) -->
     <section id="panel-presets" class="tabpanel" role="tabpanel" aria-labelledby="tab-presets" hidden>
-      <h1 id="presets-title"></h1>
-      <p id="presets-body"></p>
+      <h1 id="presets-heading"></h1>
+
+      <!-- ② 숨김 — D-1(architecture.md §6.1)이 실제로 커널 매핑을 설치했을 때만 나타난다. -->
+      <div id="presets-caps-alias"></div>
+
+      <!-- ── 그룹 1: caps lock (7개) ── -->
+      <h2 class="group" id="presets-group-caps"></h2>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-remap" data-key="presets.capsLockRemap.enabled" />
+          <span id="p-caps-remap-label"></span>
+        </label>
+        <select id="p-caps-remap-target" data-key="presets.capsLockRemap.target"></select>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-quick" data-key="presets.capsQuickPress.enabled" />
+          <span id="p-caps-quick-label"></span>
+        </label>
+        <select id="p-caps-quick-action" data-key="presets.capsQuickPress.action"></select>
+      </div>
+
+      <!-- 슬라이더 — 체크박스가 아닌 유일한 컨트롤. 250~2000ms, step 50(architecture.md §6.6). -->
+      <div class="row">
+        <span id="p-quick-duration-label"></span>
+        <input type="range" id="p-quick-duration" min="250" max="2000" step="50"
+               data-key="presets.quickPressDurationMs" data-kind="number" />
+        <span class="preview" id="p-quick-duration-value"></span>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-space" data-key="presets.capsSpaceEnter" />
+          <span id="p-caps-space-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-wasd" data-key="presets.capsWasdArrows" />
+          <span id="p-caps-wasd-label"></span>
+        </label>
+      </div>
+
+      <!-- ③ 문장 중간 삽입 — 팝업이 라벨 문장 사이에 낀다. -->
+      <p class="inline-row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-hjkl" data-key="presets.capsHjklArrows.enabled" />
+          <span id="p-caps-hjkl-prefix"></span>
+        </label>
+        <select id="p-caps-hjkl-set" data-key="presets.capsHjklArrows.keySet"></select>
+        <span id="p-caps-hjkl-suffix"></span>
+      </p>
+
+      <!-- ③ 문장 끝 부착 — 같은 규약이지만 삽입 위치가 다르다(§3.2 F-08.7). -->
+      <p class="inline-row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-caps-home" data-key="presets.capsHomeRow.enabled" />
+          <span id="p-caps-home-label"></span>
+        </label>
+        <select id="p-caps-home-scheme" data-key="presets.capsHomeRow.scheme"></select>
+      </p>
+
+      <hr />
+
+      <!-- ── 그룹 2: shift (4개) ── -->
+      <h2 class="group" id="presets-group-shift"></h2>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-double-shift" data-key="presets.doubleTapShiftToCaps" />
+          <span id="p-double-shift-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-both-shift" data-key="presets.leftRightShiftToCaps" />
+          <span id="p-both-shift-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-shift-caps" data-key="presets.shiftCapsToCaps" />
+          <span id="p-shift-caps-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-shift-brackets" data-key="presets.shiftQuickPressBrackets.enabled" />
+          <span id="p-shift-brackets-label"></span>
+        </label>
+        <select id="p-shift-brackets-pair" data-key="presets.shiftQuickPressBrackets.pair"></select>
+      </div>
+
+      <hr />
+
+      <!-- ── 그룹 3: delete (3개) ── -->
+      <h2 class="group" id="presets-group-delete"></h2>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-hyper-delete" data-key="presets.hyperDeleteToForward" />
+          <span id="p-hyper-delete-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-remap-delete" data-key="presets.deleteToForward" />
+          <span id="p-remap-delete-label"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-shift-delete" data-key="presets.shiftDeleteToForward" />
+          <span id="p-shift-delete-label"></span>
+        </label>
+      </div>
+
+      <!-- ② 숨김 — forward delete 3종이 다 켜지면 진짜 backspace 를 낼 수단이 사라진다
+           (§5 엣지 10). 그 상태일 때만 경고 노드가 DOM 에 존재한다. -->
+      <div id="presets-delete-warning"></div>
+
+      <hr />
+
+      <!-- ── 그룹 4: 기타 (2개) ── -->
+      <h2 class="group" id="presets-group-other"></h2>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-paste-plain" data-key="presets.pasteWithoutFormatting.enabled" />
+          <span id="p-paste-plain-label"></span>
+        </label>
+        <select id="p-paste-plain-trigger" data-key="presets.pasteWithoutFormatting.trigger"></select>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="p-home-end" data-key="presets.homeEndOnLines" />
+          <span id="p-home-end-label"></span>
+        </label>
+      </div>
     </section>
 
     <!-- General 탭 — §4.4 의 7개 컨트롤 전부를 만들되, 버전 버튼만 동작한다.
@@ -235,10 +409,9 @@
       <h1 id="general-heading"></h1>
 
       <div class="row">
-        <label class="checkbox-row disabled">
-          <input type="checkbox" id="launch-on-login" disabled />
+        <label class="checkbox-row">
+          <input type="checkbox" id="launch-on-login" data-key="general.launchOnLogin" />
           <span id="launch-on-login-label"></span>
-          <span class="badge" id="launch-on-login-badge"></span>
         </label>
         <!-- ⭐ §9 #12(v1.66 (66) 버튼의 클릭 동작)를 클론이 여기서 결정으로 채운다:
              클릭하면 About 정보(번들 ID·로그 경로·설정 파일 경로)를 펼친다. -->
@@ -262,10 +435,9 @@
       <p class="hint why" id="auto-update-why"></p>
 
       <div class="row">
-        <label class="checkbox-row disabled">
-          <input type="checkbox" id="hide-menu-bar-icon" disabled />
+        <label class="checkbox-row">
+          <input type="checkbox" id="hide-menu-bar-icon" data-key="general.hideMenuBarIcon" />
           <span id="hide-menu-bar-icon-label"></span>
-          <span class="badge" id="hide-menu-bar-icon-badge"></span>
         </label>
       </div>
       <p class="hint why" id="hide-menu-bar-icon-why"></p>
@@ -291,13 +463,24 @@
       </div>
       <p class="hint why" id="purchase-why"></p>
 
-      <hr />
-
-      <!-- ⭐ 메뉴바(F-10)가 아직 없어 앱을 끝낼 다른 경로가 없다 — F-10 이 들어오면
-           이 버튼은 메뉴의 Quit 항목으로 옮기고 여기서는 뺀다. -->
-      <button id="quit-btn"></button>
     </section>
   </main>
+</div>
+
+<!-- ⭐ 설정 충돌 대화상자(architecture.md §6.5). 네이티브 시트가 아니라 창 안의
+     오버레이로 만든다 — 환경설정 창이 이 상태를 소유하고, 문구를 카탈로그에서
+     가져오며, 자동화 테스트가 DOM 으로 확인할 수 있기 때문이다.
+     ⚠️ 문구는 우리 것이다. 원본의 대화상자 문자열을 옮기지 않는다. -->
+<div id="conflict-overlay" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="conflict-title">
+    <h2 id="conflict-title"></h2>
+    <p id="conflict-body"></p>
+    <ul id="conflict-list"></ul>
+    <div class="dialog-buttons">
+      <button id="conflict-cancel"></button>
+      <button id="conflict-continue" class="accent"></button>
+    </div>
+  </div>
 </div>
 
 <script type="module">
@@ -346,8 +529,32 @@ if (!tauri || !tauri.core) {
 
     $("seek-title").textContent = t("settings.placeholder.title");
     $("seek-body").textContent = t("settings.placeholder.seek.body");
-    $("presets-title").textContent = t("settings.placeholder.title");
-    $("presets-body").textContent = t("settings.placeholder.presets.body");
+    $("presets-heading").textContent = t("settings.presets.heading");
+    $("presets-group-caps").textContent = t("settings.presets.group.caps_lock");
+    $("presets-group-shift").textContent = t("settings.presets.group.shift");
+    $("presets-group-delete").textContent = t("settings.presets.group.delete");
+    $("presets-group-other").textContent = t("settings.presets.group.other");
+    $("p-caps-remap-label").textContent = t("settings.presets.caps_remap");
+    $("p-caps-quick-label").textContent = t("settings.presets.caps_quick_press");
+    $("p-quick-duration-label").textContent = t("settings.presets.quick_press_duration");
+    $("p-caps-space-label").textContent = t("settings.presets.caps_space_enter");
+    $("p-caps-wasd-label").textContent = t("settings.presets.caps_wasd");
+    // ③ 문장 중간 삽입 — 라벨이 팝업 앞뒤로 쪼개진다.
+    $("p-caps-hjkl-prefix").textContent = t("settings.presets.caps_hjkl.prefix");
+    $("p-caps-hjkl-suffix").textContent = t("settings.presets.caps_hjkl.suffix");
+    // ③ 문장 끝 부착 — 팝업이 라벨 뒤에 붙는다.
+    $("p-caps-home-label").textContent = t("settings.presets.caps_home_row");
+    $("p-double-shift-label").textContent = t("settings.presets.double_tap_shift");
+    $("p-both-shift-label").textContent = t("settings.presets.left_right_shift");
+    $("p-shift-caps-label").textContent = t("settings.presets.shift_caps");
+    $("p-shift-brackets-label").textContent = t("settings.presets.shift_quick_press");
+    $("p-hyper-delete-label").textContent = t("settings.presets.hyper_delete");
+    $("p-remap-delete-label").textContent = t("settings.presets.remap_delete");
+    $("p-shift-delete-label").textContent = t("settings.presets.shift_delete");
+    $("p-paste-plain-label").textContent = t("settings.presets.paste_plain");
+    $("p-home-end-label").textContent = t("settings.presets.home_end_lines");
+    $("conflict-cancel").textContent = t("common.cancel");
+    $("conflict-continue").textContent = t("settings.presets.conflict.continue");
 
     $("hyperkey-heading").textContent = t("settings.hyperkey.heading");
     $("hyper-label").textContent = t("settings.hyperkey.hyper.label");
@@ -383,13 +590,10 @@ if (!tauri || !tauri.core) {
     $("remove-activation-why").textContent = t("settings.general.license.why");
     $("purchase-btn").textContent = t("settings.general.purchase");
     $("purchase-why").textContent = t("settings.general.license.why");
-    $("quit-btn").textContent = t("common.quit");
 
     const badgeText = t("settings.badge.unimplemented");
     for (const id of [
-      "launch-on-login-badge",
       "auto-update-badge",
-      "hide-menu-bar-icon-badge",
       "menu-bar-icon-badge",
       "remove-activation-badge",
       "purchase-badge",
@@ -436,6 +640,110 @@ if (!tauri || !tauri.core) {
 
   function setSelectValue(id, value) {
     $(id).value = value;
+  }
+
+  // ⭐ 팝업 항목 라벨 규약 — 키캡 각인(`esc`·`left control`·`F1`·`( )`)은 물리 키보드에
+  // 새겨진 표기이지 번역할 UI 문구가 아니므로 Rust 가 준 `label` 을 그대로 쓴다
+  // (populateSourceSelects 의 같은 판단). 반대로 서술형 항목(`nothing (disable it)` 류,
+  // 스킴 이름, ⌘ 변형)은 Rust 가 `labelKey` 를 함께 주고 여기서 카탈로그를 거친다.
+  function fillSelect(id, options) {
+    const select = $(id);
+    select.innerHTML = "";
+    for (const o of options) {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.labelKey ? t(o.labelKey) : o.label;
+      select.append(opt);
+    }
+  }
+
+  function populatePresetSelects(opts) {
+    fillSelect("p-caps-remap-target", opts.capsRemapTargets);
+    fillSelect("p-caps-quick-action", opts.capsQuickActions);
+    fillSelect("p-caps-hjkl-set", opts.arrowKeySets);
+    fillSelect("p-caps-home-scheme", opts.homeRowSchemes);
+    fillSelect("p-shift-brackets-pair", opts.bracketPairs);
+    fillSelect("p-paste-plain-trigger", opts.pasteTriggers);
+  }
+
+  // ② 숨김 — 조건이 성립할 때만 노드를 만든다. ① dimmed 와 달리 DOM 에서 사라진다.
+  function renderHiddenNote(hostId, show, textKey, className) {
+    const host = $(hostId);
+    host.innerHTML = "";
+    if (!show) return;
+    const p = document.createElement("p");
+    p.className = className;
+    p.textContent = t(textKey);
+    host.append(p);
+  }
+
+  function renderPresets(state) {
+    const p = state.presets;
+
+    // ① dimmed — 체크박스가 꺼지면 그 항목의 팝업만 흐려진다. 값은 지우지 않는다.
+    const pairs = [
+      ["p-caps-remap", "p-caps-remap-target", p.capsLockRemap.enabled, p.capsLockRemap.target],
+      ["p-caps-quick", "p-caps-quick-action", p.capsQuickPress.enabled, p.capsQuickPress.action],
+      ["p-caps-hjkl", "p-caps-hjkl-set", p.capsHjklArrows.enabled, p.capsHjklArrows.keySet],
+      ["p-caps-home", "p-caps-home-scheme", p.capsHomeRow.enabled, p.capsHomeRow.scheme],
+      ["p-shift-brackets", "p-shift-brackets-pair", p.shiftQuickPressBrackets.enabled, p.shiftQuickPressBrackets.pair],
+      ["p-paste-plain", "p-paste-plain-trigger", p.pasteWithoutFormatting.enabled, p.pasteWithoutFormatting.trigger],
+    ];
+    for (const [boxId, selectId, enabled, value] of pairs) {
+      $(boxId).checked = enabled;
+      setSelectValue(selectId, value);
+      $(selectId).disabled = !enabled;
+    }
+
+    for (const [id, value] of [
+      ["p-caps-space", p.capsSpaceEnter],
+      ["p-caps-wasd", p.capsWasdArrows],
+      ["p-double-shift", p.doubleTapShiftToCaps],
+      ["p-both-shift", p.leftRightShiftToCaps],
+      ["p-shift-caps", p.shiftCapsToCaps],
+      ["p-hyper-delete", p.hyperDeleteToForward],
+      ["p-remap-delete", p.deleteToForward],
+      ["p-shift-delete", p.shiftDeleteToForward],
+      ["p-home-end", p.homeEndOnLines],
+    ]) {
+      $(id).checked = value;
+    }
+
+    $("p-quick-duration").value = String(p.quickPressDurationMs);
+    $("p-quick-duration-value").textContent =
+      tf("settings.presets.quick_press_duration.value", [p.quickPressDurationMs]);
+
+    // ② 숨김 2종.
+    renderHiddenNote("presets-caps-alias", state.capsLockAliasActive,
+      "settings.presets.caps_alias.note", "hint");
+    // §5 엣지 10 — 진짜 backspace 를 낼 수단이 사라진 상태를 사용자에게 알린다.
+    renderHiddenNote("presets-delete-warning", p.deleteToForward,
+      "settings.presets.delete_warning", "warn");
+  }
+
+  // ⭐ 충돌 대화상자(architecture.md §6.5) — Rust 가 `pendingConflict` 를 돌려주면
+  // 설정을 아직 적용하지 않은 상태다. 사용자가 `계속` 을 고르면 상대 설정을 끄고
+  // 적용하고, `취소` 하면 아무것도 바꾸지 않은 채 화면만 원래대로 되돌린다.
+  let pendingConflict = null;
+
+  function showConflict(conflict) {
+    pendingConflict = conflict;
+    $("conflict-title").textContent = t("settings.presets.conflict.title." + conflict.kind);
+    $("conflict-body").textContent = t("settings.presets.conflict.body");
+    const list = $("conflict-list");
+    list.innerHTML = "";
+    for (const labelKey of conflict.disableLabelKeys) {
+      const li = document.createElement("li");
+      li.textContent = t(labelKey);
+      list.append(li);
+    }
+    $("conflict-overlay").hidden = false;
+    $("conflict-continue").focus();
+  }
+
+  function hideConflict() {
+    pendingConflict = null;
+    $("conflict-overlay").hidden = true;
   }
 
   // ② 숨김 — trackpad.enabled 가 꺼지면 두 체크박스 행을 DOM 에서 완전히
@@ -511,7 +819,15 @@ if (!tauri || !tauri.core) {
     setSelectValue("trackpad-area", state.hyperkey.trackpad.area);
     renderTrackpadExtra(state.hyperkey.trackpad);
 
+    renderPresets(state);
+    // F-10 — 이제 실제로 동작하는 두 항목(나머지 General 컨트롤은 F-12/F-13 범위라 여전히 비활성).
+    $("launch-on-login").checked = state.general.launchOnLogin;
+    $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;
     renderWarnings(state.warnings);
+
+    if (state.pendingConflict) {
+      showConflict(state.pendingConflict);
+    }
 
     if (state.saveError) {
       showNotice(tf("settings.save_failed", [state.saveError]));
@@ -589,16 +905,56 @@ if (!tauri || !tauri.core) {
     const el = ev.target;
     const key = el.dataset && el.dataset.key;
     if (!key) return;
-    const value = el.type === "checkbox" ? el.checked : el.value;
+    let value;
+    if (el.type === "checkbox") {
+      value = el.checked;
+    } else if (el.dataset.kind === "number") {
+      // 슬라이더는 문자열을 주므로 숫자로 바꿔 보낸다 — Rust 쪽이 u64 로 받는다.
+      value = Number(el.value);
+    } else {
+      value = el.value;
+    }
     commit(key, value);
+  });
+
+  // 드래그 중에는 저장하지 않고 값 라벨만 실시간으로 갱신한다(§3.7). 저장은
+  // 손을 뗄 때 발생하는 `change` 한 번뿐이다 — 컨트롤 단위 즉시 write-through
+  // 규약(F-15 §3.1.1)을 지키면서도 드래그마다 파일을 쓰지는 않는다.
+  $("p-quick-duration").addEventListener("input", (ev) => {
+    $("p-quick-duration-value").textContent =
+      tf("settings.presets.quick_press_duration.value", [Number(ev.target.value)]);
+  });
+
+  $("conflict-cancel").addEventListener("click", async () => {
+    hideConflict();
+    // 아무것도 적용하지 않았으므로 서버 상태를 다시 그려 체크박스를 되돌린다.
+    try {
+      const bootstrap = await invoke("settings_bootstrap");
+      renderState(bootstrap.state);
+    } catch (err) {
+      showFatal("Failed to render: " + String(err));
+    }
+  });
+
+  $("conflict-continue").addEventListener("click", async () => {
+    const conflict = pendingConflict;
+    hideConflict();
+    if (!conflict) return;
+    try {
+      const state = await invoke("settings_resolve_conflict", {
+        key: conflict.key,
+        value: conflict.value,
+      });
+      renderState(state);
+    } catch (err) {
+      showFatal("Failed to save setting: " + String(err));
+    }
   });
 
   $("version-btn").addEventListener("click", () => {
     const about = $("about");
     about.hidden = !about.hidden;
   });
-
-  $("quit-btn").addEventListener("click", () => invoke("quit_app"));
 
   async function boot() {
     try {
@@ -607,6 +963,7 @@ if (!tauri || !tauri.core) {
       applyStrings();
       populateSourceSelects(bootstrap.state.sourceKeys);
       populateTrackpadAreaSelect(bootstrap.state.trackpadAreas);
+      populatePresetSelects(bootstrap.state.presetOptions);
       renderState(bootstrap.state);
       renderGeneral(bootstrap.meta);
       if (bootstrap.notice) {

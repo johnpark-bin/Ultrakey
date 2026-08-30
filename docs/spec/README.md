@@ -146,13 +146,25 @@ F-14(A) 현지화        ── 횡단. 원본에 없는 클론 고유 선택지
 7. **F-09 환경설정 UI** — `Hyperkey`·`General` 탭만. `Seek`·`Presets` 탭은 자리만 만들고 비운다. ⭐ 종속 표현 3종(dimmed / 숨김 / 문장 중간 삽입), 탭별 창 리사이즈, 팝업 선택지 전량
 8. **F-05 Hyperkey 배선** — UI 에서 켜고 끈 값이 실제로 엔진에 반영된다. `main.rs` 의 하드코딩된 `HyperkeySettings::default()` 를 없앤다
 
-#### M2 2차 — 프리셋과 메뉴바
+#### M2 2차 — 프리셋과 메뉴바 (이슈 #15) — ✅ **완료 (2026-08-30)**
 
 9. **F-08 Power User Presets** — 16종 전수 + 상호작용 중재 + ⭐ **충돌 감지 대화상자 3종**
 10. **F-10 메뉴바·수명주기** — 상주 앱, 메뉴 구조, ⭐ **앱별 비활성화 UI**, `unauthorizedMenu`, `Launch on login`
 
 > ✅ M2 1차 완료 판정: 환경설정 창에서 hyper 키를 켜면 재빌드 없이 `⌃⌥⌘⇧` 가 합성되고, 설정을 한 번도 건드리지 않은 상태에서 **저장 파일이 아예 생기지 않는다.**
 > ✅ M2 완료 판정: 원본 Hyperkey 앱과 동등한 기능을 환경설정으로 켜고 끌 수 있다.
+
+⭐ **M2 2차가 명세를 바꾼 것 — 반드시 함께 읽어라**
+
+| 무엇이 바뀌었나 | 어디에 |
+| :--- | :--- |
+| ⭐ **결정 D-1 — caps lock 모멘터리 정규화.** caps lock 은 래칭 키라 뗌 이벤트가 오지 않고, 그래서 캡스락 그룹 7종이 경로 A 만으로는 성립하지 않는다. caps lock 의존 규칙이 하나라도 켜지면 경로 B 로 `caps lock → F18` 커널 매핑을 설치하고 중재기가 F18 을 caps lock 으로 되돌려 판정한다 | [`../dev/architecture.md` §6.1](../dev/architecture.md) · `key-remapping-engine.md` §5 #20 |
+| ⭐ **중재 규칙표 P1~P12** — R1~R8 을 코드가 따를 수 있는 형태로 확정. v1.20·v1.62 회귀 방지의 실제 구현 지점 | [`../dev/architecture.md` §6.4](../dev/architecture.md) |
+| **`Advanced ▸ Synthesize Caps Lock Remap` 을 "기각" 에서 "재현" 으로 뒤집었다** — D-1 이 커널 매핑을 기본 경로로 올렸으므로 끄는 수단이 반드시 함께 있어야 한다 | `menu-bar-and-lifecycle.md` §3.3 |
+| **팝업 계수 정정** — `Quick press caps lock to execute:` 는 49종이 아니라 **48종 + 구분선 1** 이다(근거 문서가 구분선을 함께 셌다) | `power-user-presets.md` §9.1-bis · `preferences-ui.md` §4.3 |
+| **`(미확정)` 8개 자리에서 이 구현이 고른 값과 근거** — 홈로우 11키 매핑, `Home`/`End` 출력, 슬라이더 step, 토글 3계열 우선순위, Colemak/Dvorak·`Apply hyper to arrows`·Windows 키보드 미구현 결정 | `power-user-presets.md` §9.1-bis |
+
+⚠️ **실기기 검증의 한계도 함께 기록되어 있다** — 검증 기기의 Karabiner-Elements 가 경로 B 보다 아래에서 caps lock 을 바꾸고 있어 **물리 caps lock 으로의 검증 자체가 성립하지 않는다.** 무엇을 확인했고 무엇을 확인하지 못했는지는 [`../dev/manual-verification.md` "실측 결과 (M2 2차)"](../dev/manual-verification.md) 에 항목별로 구분해 적었다.
 
 ### M3 — Seek (F-02 → F-03 → F-01 → F-04)
 

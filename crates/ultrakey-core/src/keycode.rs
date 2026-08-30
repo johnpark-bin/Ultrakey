@@ -27,9 +27,26 @@ impl KeyCode {
     pub const ANSI_A: KeyCode = KeyCode(0x00);
     pub const ANSI_S: KeyCode = KeyCode(0x01);
     pub const ANSI_D: KeyCode = KeyCode(0x02);
+    pub const ANSI_F: KeyCode = KeyCode(0x03);
+    pub const ANSI_H: KeyCode = KeyCode(0x04);
+    pub const ANSI_G: KeyCode = KeyCode(0x05);
     pub const ANSI_W: KeyCode = KeyCode(0x0D);
     pub const ANSI_V: KeyCode = KeyCode(0x09);
+    pub const ANSI_J: KeyCode = KeyCode(0x26);
+    pub const ANSI_K: KeyCode = KeyCode(0x28);
+    pub const ANSI_L: KeyCode = KeyCode(0x25);
+    pub const ANSI_I: KeyCode = KeyCode(0x22);
     pub const ANSI_SEMICOLON: KeyCode = KeyCode(0x29);
+    pub const ANSI_QUOTE: KeyCode = KeyCode(0x27);
+    pub const ANSI_SLASH: KeyCode = KeyCode(0x2C);
+    pub const SPACE: KeyCode = KeyCode(0x31);
+    pub const RETURN: KeyCode = KeyCode(0x24);
+    pub const TAB: KeyCode = KeyCode(0x30);
+    pub const ESCAPE: KeyCode = KeyCode(0x35);
+    pub const HOME: KeyCode = KeyCode(0x73);
+    pub const END: KeyCode = KeyCode(0x77);
+    pub const PAGE_UP: KeyCode = KeyCode(0x74);
+    pub const PAGE_DOWN: KeyCode = KeyCode(0x79);
     pub const F1: KeyCode = KeyCode(0x7A);
     pub const F2: KeyCode = KeyCode(0x78);
     pub const F3: KeyCode = KeyCode(0x63);
@@ -58,6 +75,12 @@ impl KeyCode {
     pub const RIGHT_ARROW: KeyCode = KeyCode(0x7C);
     pub const DELETE: KeyCode = KeyCode(0x33);
     pub const FORWARD_DELETE: KeyCode = KeyCode(0x75);
+    /// `kVK_Mute`.
+    pub const MUTE: KeyCode = KeyCode(0x4A);
+    /// `kVK_VolumeUp`.
+    pub const VOLUME_UP: KeyCode = KeyCode(0x48);
+    /// `kVK_VolumeDown`.
+    pub const VOLUME_DOWN: KeyCode = KeyCode(0x49);
 }
 
 /// hyper/meh/bleh·Seek 소스 키 팝업에 실제로 나열되는 35종(`hyperkey.md` §4, 표시 순서 그대로).

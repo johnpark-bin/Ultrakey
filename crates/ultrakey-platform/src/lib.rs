@@ -20,6 +20,7 @@ pub mod event_tap;
 pub mod hid_lock;
 pub mod hid_mapping;
 pub mod hotplug;
+pub mod login_item;
 pub mod runloop;
 pub mod secure_input;
 pub mod text_input_source;

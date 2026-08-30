@@ -5,6 +5,7 @@
 //! 디스크에서 조립되는 방식을 담당한다 — "부재 = 기본값" 규약의 실제 구현이다.
 //! `keys`는 그 저장소가 쓰는 문자열 키 상수를 모아 둔다.
 
+use crate::keycode::KeyCode;
 use crate::rules::RuleTable;
 
 pub mod keys;
@@ -87,6 +88,11 @@ pub struct EngineConfig {
     pub rules: RuleTable,
     pub mouse_apply: MouseApply,
     pub timings: Timings,
+    /// D-1 caps lock 모멘터리 정규화(`docs/dev/architecture.md` §6.1). `Some(kc)` 면
+    /// 중재기가 진입 즉시 이 keycode(경로 B 로 설치된 `hidutil` 대체 키, 보통 F18)를
+    /// `KeyCode::CAPS_LOCK` 으로 되돌려 판정한다. caps lock 에 의존하는 규칙이 하나도
+    /// 없으면 `None` — 물리 caps lock 이 그대로(`FlagsChanged` 로만) 도착한다.
+    pub caps_lock_alias: Option<KeyCode>,
 }
 
 #[cfg(test)]

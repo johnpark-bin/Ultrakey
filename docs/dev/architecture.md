@@ -196,3 +196,163 @@ impl AppGateController {
 | 설정 영속화("부재 = 기본값") | `ultrakey-core::settings` 의 타입만. 파일 저장 없음 | M2 / F-15 |
 | 메뉴바 UI | `AppGateController` 만. `NSStatusItem` 없음 | M2·M3 / F-10 |
 | 문자 출력형 리매핑 | `ultrakey-layout` 의 역방향 테이블은 완성. 이를 쓰는 규칙이 없음 | M2 / F-08 |
+
+---
+
+## 6. ⭐ F-08 프리셋 중재 설계 (M2 2차 / 이슈 #15)
+
+> 이 절은 **이 세션이 직접 설계한 것**이다. `power-user-presets.md` §3.3 이 R1~R8 로 남긴 상호작용
+> 규칙을 실제 코드가 따를 수 있는 형태로 확정하고, 명세가 `(미확정)` 으로 남긴 자리에서 이 구현이
+> 무엇을 골랐는지와 기각한 대안을 기록한다. 원본이 v1.20·v1.62 에서 실제로 겪은 회귀가 전부
+> 이 영역이므로, 규칙을 코드에 흩어 두지 않고 여기 한 장에 모은다.
+
+### 6.1 ⭐ 선결 문제 — caps lock 은 래칭 키다 (§5 #20 의 해법)
+
+M2 1차 실측이 확정한 사실: **caps lock 은 누를 때만 `flagsChanged` 를 보내고 뗄 때는 보내지
+않는다.** 그래서 `key-remapping-engine.md` §5 #18 의 down/up 환원이 "1번째 누름 = down,
+2번째 누름 = up" 으로 해석해 hyper 가 홀드가 아니라 **토글**로 동작한다.
+
+**프리셋 16종 중 7종이 caps lock 을 "눌린 채 유지" 조건으로 쓴다**(F-08.1·2·4·5·6·7·10).
+즉 이 문제를 풀지 않으면 F-08 수용 기준의 절반이 실기기에서 성립할 수 없다. §5 #20 이
+"해법은 경로 B, 배정은 F-08(M2 2차) 소관" 이라고 넘긴 자리가 여기다.
+
+> **결정 D-1 — caps lock 모멘터리 정규화.**
+> caps lock 에 의존하는 규칙이 **하나라도** 켜져 있으면, 경로 B(`hidutil` HID `UserKeyMapping`)로
+> `caps lock → F18` 커널 매핑을 설치한다. 그러면 탭에는 **정상적인 down/up 쌍을 갖는 F18** 이
+> 도착한다. 중재기는 진입 즉시 이 keycode 를 caps lock 으로 되돌려(`EngineConfig::caps_lock_alias`)
+> 이후 모든 판정을 물리 caps lock 기준으로 수행한다.
+>
+> - **왜 F18 인가**: `SourceKey` 35종에 들어 있어 keycode 가 확정돼 있고(`0x4F`), 실물 키보드
+>   대부분에 물리 키가 없어 사용자의 기존 입력과 충돌할 여지가 가장 작다. Karabiner 류가 같은
+>   목적으로 관용적으로 쓰는 키이기도 하다.
+> - **어떤 규칙이 이 조건을 켜는가**: F-08.1·F-08.2·F-08.4·F-08.5·F-08.6·F-08.7·F-08.10 중
+>   하나라도 켜짐, 또는 hyper/meh/bleh 소스 키가 caps lock.
+> - **경로 C 와 충돌하지 않는다**: "진짜 caps lock 토글"(F-08.8/9/10)은 키 합성이 아니라
+>   `IOHIDSetModifierLockState` 로 내므로, caps lock 키가 F18 로 리매핑돼 있어도 그대로 동작한다.
+> - **되돌릴 수단을 남긴다**: 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 을 재현한다
+>   (§6.7). 켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다 — 래칭 문제는 남지만, 다른 HID 계층
+>   도구와 충돌하는 환경에서 사용자가 커널 매핑을 끌 수 있어야 한다.
+>   ⭐ `menu-bar-and-lifecycle.md` §3.3 이 이 항목을 "기각(1차 릴리스 범위 밖)" 으로 판정하며
+>   "필요해지면 F-08 이 재검토" 라고 남겼는데, D-1 이 커널 매핑을 제품 기본 경로로 올렸으므로
+>   **재검토 결과 재현으로 뒤집는다.** 사용자 시스템 전역에 남는 변경에는 반드시 끄는 수단이
+>   함께 있어야 한다는 것이 근거다.
+>
+> **기각한 대안**
+> - ① *경로 A 에서 시간 기반으로 뗌을 추정한다* — "누른 채 유지"와 "톡 누르고 뗌"을 구분할 수
+>   없다. §5 #20 이 이미 같은 이유로 기각했다.
+> - ② *caps lock 프리셋을 포기하고 모멘터리 키만 지원한다* — 16종 중 7종을 버리는 것이고,
+>   원본의 캡스락 그룹 전체가 사라진다. F-08 §8 수용 기준을 충족할 수 없다.
+> - ③ *`Remap caps lock to:`(F-08.1)만 경로 B 로 직접 매핑한다*(caps lock → left control 등) —
+>   Secure Input 구간에서도 동작한다는 장점이 있으나(§5 엣지 7), F-08.1 은 **quick press 판정에
+>   종속**된다(R1). 정적 커널 매핑은 시간 조건을 표현할 수 없으므로 R1 을 구현할 수 없다.
+>   따라서 caps lock 관련 매핑은 **한 종류(→F18)로 통일하고 조건 판정은 전부 경로 A** 에서 한다.
+
+⚠️ **검증 기기에서는 이 경로를 실측할 수 없다.** Karabiner-Elements 가 `caps_lock ↔ left_control`
+을 **경로 B 보다도 아래**(가상 HID 장치)에서 맞바꾸고 있어, 우리의 `hidutil` 매핑이 볼 caps lock
+자체가 도착하지 않는다. `manual-verification.md` 의 사전 확인 절이 이 조건을 먼저 확인하게 한다.
+
+### 6.2 정본 상태 확장 — 어떤 키가 추적되는가
+
+M1 은 `KeyStateTable` 의 quick press 슬롯을 **`modifier_rules` 의 소스 키로만** 구성했다.
+M2 는 여기에 **프리셋이 FSM 을 필요로 하는 키**를 합집합으로 더한다.
+
+| 슬롯에 등록되는 키 | 왜 |
+| :--- | :--- |
+| hyper/meh/bleh 소스 키 | 계층 2 hold 판정(M1 그대로) |
+| caps lock (F-08.1 또는 F-08.2 가 켜짐) | quick press ↔ hold 리매핑 배타 판정(R1) |
+| left shift / right shift (F-08.8 또는 F-08.11 이 켜짐) | quick press 문자 출력, double tap 판정 |
+
+`MAX_TRACKED_KEYS = 8` 은 최악의 경우(hyper·meh·bleh 3 + caps lock + 좌우 shift = 6)에도 여유가 있다.
+
+⭐ **M1 이 뚫어만 두고 배선하지 않은 구멍을 여기서 막는다.** `QuickPressState::on_other_key_down`
+(§3-c 표 3행, **v1.62 예방의 핵심**)은 M1 에서 **한 번도 호출되지 않았다** — `has_quick_press_action`
+이 항상 `false` 여서 `PendingDown` 상태 자체가 생기지 않았기 때문에 드러나지 않았을 뿐이다.
+M2 는 `has_quick_press_action` 을 실제로 채우므로, **추적 대상이 아닌 키의 keyDown 이 도착할 때마다
+모든 슬롯에 `on_other_key_down` 을 돌리는 배선**을 반드시 함께 넣는다.
+
+### 6.3 프리셋 16종의 경로·계층 배정
+
+| ID | 프리셋 | 계층 | 경로 | 비고 |
+| :--- | :--- | :---: | :---: | :--- |
+| F-08.1 | `Remap caps lock to:` | 2/3 (FSM hold) | A | R1 로 F-08.2 와 배타. `nothing (disable it)` 은 소비만 하고 아무것도 내지 않는다 |
+| F-08.2 | `Quick press caps lock to execute:` | 2/3 (FSM quick press) | A (+C) | 출력이 `caps lock` 이면 경로 C 로 실제 잠금 토글. `Seek` 는 M3 — 지금은 효과만 발행하고 로그 |
+| F-08.3 | `Quick press duration` | — | — | `Timings::quick_press_duration_ms` |
+| F-08.4 | `Caps lock + space = enter` | 3 | A | |
+| F-08.5 | `Caps lock + W A S D` | 3 | A | |
+| F-08.6 | `Caps lock + [H J K L / I J K L]` | 3 | A | |
+| F-08.7 | `Caps lock + home row` | 3 | A (+유니코드) | symbol row 는 문자 출력, function row 는 키코드 출력 |
+| F-08.8 | `Double tap shift = caps lock` | 2/3 (FSM double tap) | C | |
+| F-08.9 | `Left shift + right shift = caps lock` | 3 | C | |
+| F-08.10 | `Shift + caps lock = caps lock` | 3 | C | R3 로 F-08.2 를 무효화 |
+| F-08.11 | `Quick press left or right shift …` | 2/3 (FSM quick press) | A (유니코드) | |
+| F-08.12 | `Hyper + delete = forward delete` | 3 | A | **논리 hyper 신호**를 구독(R4) |
+| F-08.13 | `Remap delete to forward delete` | 4 | A | |
+| F-08.14 | `Shift + delete = forward delete` | 3 | A | |
+| F-08.15 | `Remap paste (⌘+V) …` | 3 | A | `Hyper key` 선택 시 논리 hyper 신호 구독 |
+| F-08.16 | `Home & end operate on lines` | 4 | A | |
+
+### 6.4 ⭐ 중재 규칙표 P1~P12 — 이 구현이 확정한 것
+
+계층 3 안에서 여러 규칙이 같은 이벤트에 반응할 수 있다. **평가 순서를 규칙 ID 로 고정**해
+입력 순서에 의존하지 않게 한다(`RuleTable` 을 정렬된 상태로 만들어 넘긴다).
+
+| # | 규칙 | 명세 근거 |
+| :--- | :--- | :--- |
+| **P1** | **추적 키 자신의 이벤트는 FSM 하나가 결정한다.** `HoldStart` → 계층 2 modifier 합성 + F-08.1 대상 키 down. `HoldEnd` → modifier off + 대상 키 up. `QuickPress` → F-08.2/F-08.11 액션. `DoubleTap` → F-08.8 액션. FSM 이 이 넷 중 **정확히 하나**만 방출하므로 R1 이 자동으로 성립한다 | R1 |
+| **P2** | **추적 대상이 아닌 키의 keyDown 이 오면, 모든 슬롯에 `on_other_key_down` 을 돌린다.** `PendingDown` 이던 슬롯은 즉시 `HoldConfirmed` 가 되고 quick press 후보에서 빠진다 | R1·v1.62, §3-c 표 3행 |
+| **P3** | **조합 판정은 정본 눌림 테이블(`is_pressed`)만 본다.** `ev.flags` 의 modifier 비트로 판정하지 않는다 — 좌/우 shift 가 같은 비트(`0x20000`)를 공유해 구분이 불가능하고, caps lock 의 `alphaShift` 는 눌림이 아니라 잠금을 뜻한다 | §5 #18·§8 |
+| **P4** | **계층 2 는 계층 3 을 막지 않는다.** caps lock 이 hyper 소스이면서 동시에 조합 트리거인 구성에서, caps lock 의 hold 확정과 조합 조건 성립은 **같은 판정 패스의 같은 상태 테이블**에서 읽힌다. 계층 2 가 소비하는 것은 **소스 키 자신의 이벤트**뿐이고, 트리거 키(W 등)의 이벤트는 계층 3 에 그대로 도달한다 | R2·v1.20 |
+| **P5** | **조합이 낸 출력에는 hyper 합성 flags 를 얹지 않는다.** 방출 이벤트의 flags = `ev.flags` − `active_synth_flags()` − `alphaShift`. 근거: `Caps lock + W = ▲` 의 의도는 방향키이지 `⌃⌥⌘⇧▲` 가 아니다. `Apply hyper to arrows` 체크박스의 존재가 "기본은 안 얹는다"를 방증한다 — 그 체크박스는 **표시 조건이 `(미확정)`** 이므로 구현하지 않고 §9 로 승계한다 | R2, §3.2 조건부 항목 |
+| **P6** | **조합의 트리거가 된 추적 키는 `Suppressed` 로 전이한다.** 그 눌림에서는 quick press·double tap 을 내지 않는다. F-08.10(shift+caps lock)이 F-08.2 를 무효화하는 것이 이 규칙의 구현이다 | R3·v1.62 |
+| **P7** | **F-08.9(좌우 shift 동시)가 F-08.8(double tap shift)보다 우선한다.** 발화 시 좌·우 shift FSM 을 **둘 다** `Suppressed` 로 만들어, "양쪽 shift 를 빠르게 두 번" 제스처가 토글을 두 번 내 서로 상쇄되는 §5 엣지 1 을 원천 차단한다. **기각한 대안 — 시간 디바운스**: 임계값이 또 하나의 `(미확정)` 상수가 되고, 억제로 이미 해소되는 문제에 타이머를 더할 이유가 없다 | §5 엣지 1, §9 #8 |
+| **P8** | **F-08.12·F-08.15(`Hyper key`)는 논리 hyper 신호를 구독한다.** 소스 키 종류를 보지 않고 `ModifierKind::Hyper` 인 슬롯이 `HoldConfirmed` 인지만 본다. globe 든 caps lock 이든 동일하게 발화한다 | R4·v1.60 |
+| **P9** | **문자 출력형(F-08.7 symbol row, F-08.11 괄호)은 유니코드 문자로 낸다.** `CGEventKeyboardSetUnicodeString` 으로 목표 문자를 직접 얹어 레이아웃과 무관하게 같은 글자가 나가게 한다. 반대로 **입력 판정은 언제나 물리 키코드**다 — 두 원칙이 프리셋마다 다르게 적용되는 것이 §5 엣지 5 가 경고한 지점이다 | R5·v1.51/v1.52 |
+| **P10** | **forward delete 3종(F-08.12/13/14)은 배타적이지 않다.** 셋 다 켜지면 F-08.13 만으로 이미 delete 가 항상 forward delete 이므로 나머지 둘은 관측 가능한 차이를 만들지 않는다. 이것을 막지 않고 **사실로 문서화**한다 — 진짜 backspace 를 낼 수단이 사라지는 것은 F-08.13 단독의 결과다 | R6, §5 엣지 10 |
+| **P11** | **caps lock 토글 3종(F-08.8/9/10)의 출력은 전부 경로 C** (`IOHIDSetModifierLockState`)다. 키 합성이 아니다 — D-1 로 caps lock 키가 F18 로 리매핑돼 있어도 이 경로는 영향받지 않는다 | §3.2 F-08.8/9/10, §6 |
+| **P12** | **설정 충돌은 대화형 배타 선택으로 해소한다**(자동 우선순위가 아니다). §6.5 | R8 |
+
+### 6.5 충돌 감지 대화상자 3종
+
+| # | 내부 ID | 트리거 | 배타 대상 |
+| :--- | :--- | :--- | :--- |
+| 1 | `CapsLockAlreadyRemapped` | `Remap caps lock to:` 를 켜려는데 hyper/meh/bleh 소스가 이미 caps lock (또는 그 반대) | 상대 설정을 끈다 |
+| 2 | `CapsLockArrows` | `Caps lock + W A S D` 와 `Caps lock + [H J K L]` 중 꺼진 쪽을 켜려 함 | 켜져 있던 쪽을 끈다 |
+| 3 | `CapsLockHomeRow` | `Caps lock + home row` 와 방향키 프리셋(F-08.5·F-08.6) 중 한쪽을 켜려 함 | 상대를 끈다 |
+
+**#3 의 근거**: home row 집합(`A S D F G H J K L ; '`)은 WASD 의 `A S D` 와 HJKL 의 `H J K L` 을
+**실제로 포함**한다. 같은 물리 키가 두 규칙의 트리거가 되므로 조용히 한쪽만 이기면 사용자는
+"왜 안 먹지"를 스스로 디버깅해야 한다 — 원본이 전용 대화상자를 둔 이유가 이것이다.
+
+⭐ **F-08.4(`Caps lock + space`)는 어느 그룹과도 충돌하지 않는다** — `space` 는 위 세 집합 어디에도
+없다. 그래서 배타 대상에서 뺀다.
+
+⭐ **caps lock 조합 프리셋(F-08.4~7)과 "hyper 소스 = caps lock" 은 충돌로 다루지 않는다.**
+F-08 §8 이 "두 구성이 동시에 성립해야 한다"를 **수용 기준으로 명시**했기 때문이다(R2/v1.20 회귀
+방지). 대화상자 #1 의 배타 대상은 `Remap caps lock to:`(F-08.1) 쪽뿐이다.
+
+⚠️ **버튼 구성·문구는 원본을 관찰하지 못했다**(F-08 §9 #6). 이 구현은 우리 문구로 2버튼
+(`계속`·`취소`)을 쓰고, 원본 문구를 그대로 옮기지 않는다. 정확한 트리거 쌍이 원본과 같은지는
+`(미확정)` 으로 남긴다.
+
+### 6.6 명세가 `(미확정)` 으로 남긴 자리에서 이 구현이 고른 값
+
+| 항목 | 채택값 | 근거 | 명세 상태 |
+| :--- | :--- | :--- | :--- |
+| `Caps lock + home row` 의 `A` 외 매핑 | 홈로우 11키(`A S D F G H J K L ; '`)를 숫자행 시프트 기호에 **순서대로** — `! @ # $ % ^ & * ( ) _` / 함수행에 순서대로 — `F1`…`F11` | §3.2 F-08.7 이 확정한 "홈로우를 다른 행에 순서대로 매핑" 일반 규칙 + 실측 예시 두 개(`A = !`, `A = F1`)를 그대로 연장한 것이다. 지어낸 것이 아니라 **두 실측점을 잇는 유일한 자연스러운 보간**이다 | F-08 §9 #2 |
+| `Home & end operate on lines` 의 출력 | `Home → ⌘←`, `End → ⌘→` | macOS 에서 `Home`/`End` 는 문서 처음/끝, `⌘←`/`⌘→` 는 **줄** 처음/끝이다. 라벨의 "operate on lines" 가 정확히 이 차이를 가리킨다 | F-08 §9 #7 `(추정)` |
+| `Quick press duration` 슬라이더 step | 50 ms | 250~2000 범위를 35칸으로 나눈다. 실측된 것은 범위와 현재값(1000)뿐이고 step 은 미확정이므로, **기본값 1000 이 눈금에 정확히 떨어지는** 값 중 가장 세밀한 것을 골랐다 | F-08 §9 #1 |
+| double tap 최대 간격 | 300 ms | M1 이 이미 고른 값을 그대로 쓴다(§4) | §4 `(추정)` |
+| Colemak/Dvorak 변형 | **구현하지 않는다** | WASD·HJKL 은 §5 엣지 5 가 확정했듯 **물리 위치 기반**이다. 레이아웃 변형 키(`wasdArrowColemak` 등)가 실행 파일에 있다는 사실만으로 "자동 적용"을 단정할 수 없고(팝업 부재로부터의 해석), 물리 위치 기반 판정과 정면으로 어긋난다 | F-08 §9 #3 |
+| `Apply hyper to arrows` | **구현하지 않는다** | 표시 조건 자체가 `(미확정)` 이다. P5 가 정한 기본 동작(hyper flags 를 얹지 않음)이 이 체크박스가 꺼진 상태에 해당한다 | F-08 §9 #4 |
+| Windows 키보드 리매핑 | **구현하지 않는다** | 라벨·표시 조건 둘 다 `(미확정)` | F-08 §9 #5 |
+| 경로 C 토글을 콜백 안에서 직접 실행 | **한다** | `IOHIDSetModifierLockState` 는 mach 메시지 한 번이라 마이크로초 단위이고, **사용자가 실제로 제스처를 했을 때만** 실행된다(매 이벤트가 아니다). 탭 타임아웃 예산 대비 무시할 만하다. **기각한 대안 — 워커 스레드로 큐잉**: 무한 큐 `send` 가 오히려 콜백 안에서 할당을 유발할 수 있어(§2.2 금지 목록) 얻는 것보다 잃는 것이 크다. 실측에서 타임아웃이 관측되면 이 자리 하나만 바꾸면 된다 | 신규 |
+
+### 6.7 F-10 이 M2 2차에서 채우는 것
+
+| 항목 | 결정 |
+| :--- | :--- |
+| 메뉴 구성 | `Ignore <앱>` · (구분선) · `Settings…` · `About` · `Advanced ▸ (Synthesize Caps Lock Remap / Relaunch)` · `Quit Ultrakey`. `Purchase`(F-12)·`Check for Updates…`(F-13)는 **범위 밖이라 넣지 않는다** — 자리만 비운다 |
+| `Advanced` 하위 | 로깅 뷰어 6종은 명세대로 **기각**. `Relaunch After Wake`/`Delay …`/`Relaunch on Keyboard Connected` 는 이미 엔진이 자동으로 하는 일이라 사용자 노출 스위치를 두지 않는다 — 수동 `Relaunch` 하나만 자가 진단 수단으로 남긴다(§3.3 판단 그대로) |
+| `unauthorizedMenu` | 권한 없음 상태에서 메뉴 전체를 2항목(`상태 안내`(비활성) · `권한 허용…`)으로 교체 |
+| `Launch on login` | macOS 13+ `SMAppService.mainApp`. macOS 12 는 `~/Library/LaunchAgents` plist 폴백. **원본의 헬퍼 앱(`SuperkeyLauncher.app`) + `SMLoginItemSetEnabled` 패턴은 기각**(§7 기각한 대안 3 이 이미 그 방향을 제시했다) — 헬퍼 번들을 하나 더 서명·배포·핑퐁 관리해야 하는데 얻는 것이 없다. 등록 실패는 **상한 있는 재시도**(0.2s 간격 5회)로 흡수하고 실패를 사용자에게 알린다 |
+| 앱별 비활성화 | M1 의 `AppGateController` 를 그대로 쓴다. `NSWorkspaceDidActivateApplicationNotification` 은 이미 `workspace.rs` 가 `SystemEvent::FrontAppChanged` 로 올려주고 있다 — **새 인터페이스를 만들지 않는다.** 목록은 `general.disabledApps` 로 영속화하고, 콜백 임계 경로는 `AtomicBool` 하나만 읽는다(§2.2 불변 조건 유지) |

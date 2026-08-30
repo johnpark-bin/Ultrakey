@@ -1,0 +1,16 @@
+[package]
+name = "ultrakey-presets"
+description = "F-08 Power User Presets — 16종 프리셋 규칙 정의"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+# "부재 = 기본값" serde 표현(F-15 선행)을 왕복 테스트로 검증하기 위해서만 쓴다.
+serde_json = { workspace = true }

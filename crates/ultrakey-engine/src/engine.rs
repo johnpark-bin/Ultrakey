@@ -15,7 +15,7 @@ use std::time::Instant;
 use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use ultrakey_core::arbitration::{Arbiter, Disposition, Outcome, SynthEvent};
+use ultrakey_core::arbitration::{Arbiter, Disposition, Effect, Outcome, SynthEvent};
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
 use ultrakey_core::settings::EngineConfig;
@@ -124,12 +124,6 @@ impl Engine {
 
         #[cfg(target_os = "macos")]
         {
-            let shared = SharedState::new(config, gate);
-            let on_event: Arc<dyn Fn(EngineEvent) + Send + Sync> = Arc::from(on_event);
-            let tap_state = Arc::new(AtomicTapState::new(TapState::NotInstalled));
-            let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
-                Arc::new(ArcSwapOption::empty());
-
             // 경로 B — ⭐ **정리의 정본은 종료가 아니라 기동이다**(F-15
             // `settings-store-and-integrity.md` §3.1.1 결정 2). M1 실기기 검증에서
             // **로그아웃 시 graceful shutdown 경로가 아예 실행되지 않는 것**이 관찰됐고
@@ -138,13 +132,21 @@ impl Engine {
             // 종료 시 정리한다"는 설계는 가장 흔한 종료 경로에서 그냥 동작하지 않는다 —
             // 그래서 종료 정리는 부가적 최적화로 격하하고, **매 기동마다 무조건 재조정**한다.
             //
-            // ⭐ M2 1차 시점에도 `desired` 는 여전히 빈 목록이다 — hyper/meh/bleh 는
-            // 전부 경로 A(`CGEventTap`)로 처리되고, 경로 B 로 배정되는 규칙은 F-08(M2 2차)
-            // 이 처음 만든다. 그때 이 인자만 채우면 되도록 호출 자리를 지금 확정해 둔다.
+            // ⭐ M2 — `config` 가 이미 D-1 caps lock alias 를 요구할 수 있다(예: 지난
+            // 실행에서 caps lock 프리셋을 켜 둔 채 재시작). `desired` 를 `config` 에서
+            // 계산해 넘긴다 — M1 시절 하드코딩됐던 빈 목록을 걷어낸다. `config` 를
+            // `SharedState::new` 로 옮기기 *전에* 계산해야 한다(그 호출이 값을 소비한다).
+            let desired = crate::path_b::desired_mappings_for(&config);
             let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend)));
-            if let Err(e) = path_b.reconcile_on_start(&[]) {
+            if let Err(e) = path_b.reconcile_on_start(&desired) {
                 tracing::warn!(error = %e, "경로 B 시작 시 재조정 확인에 실패했다");
             }
+
+            let shared = SharedState::new(config, gate);
+            let on_event: Arc<dyn Fn(EngineEvent) + Send + Sync> = Arc::from(on_event);
+            let tap_state = Arc::new(AtomicTapState::new(TapState::NotInstalled));
+            let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
+                Arc::new(ArcSwapOption::empty());
 
             let (ready_tx, ready_rx) = bounded::<TapThreadHandshake>(1);
 
@@ -196,7 +198,17 @@ impl Engine {
 
     /// 설정을 교체한다 — `ArcSwap` 원자적 교체 후 탭 스레드에 `Reconfigure` 명령을 보내
     /// `Arbiter` 내부 quick press 슬롯 캐시를 다시 구성하게 한다.
+    ///
+    /// ⭐ M2/D-1 — 경로 B(`hidutil`) 설치·정리도 여기서 동기적으로 수행한다. 호출자는
+    /// 항상 메인(Tauri 커맨드) 스레드다 — **탭 스레드가 아니다.** `hidutil` 서브프로세스
+    /// 호출은 §2.2 가 콜백 임계 경로에서 금지하는 블로킹 I/O 그 자체이지만, 이 메서드는
+    /// 그 경로 밖에서만 불린다(architecture.md §6.6 이 확정한 "설정이 바뀔 때마다
+    /// 재계산해서 Engine::reconfigure 경로로 반영"의 구현).
     pub fn reconfigure(&self, config: EngineConfig) {
+        let desired = crate::path_b::desired_mappings_for(&config);
+        if let Err(e) = self.path_b.apply(&desired) {
+            tracing::warn!(error = %e, "경로 B(D-1 caps lock alias) 재적용 실패");
+        }
         self.shared.config.store(Arc::new(config));
         self.commands.send(EngineCommand::Reconfigure);
     }
@@ -305,6 +317,74 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
     }
 }
 
+/// P11 — 경로 C(`IOHIDSetModifierLockState`) caps lock 토글. 현재 상태를 읽어
+/// 반전해 쓴다. `docs/dev/architecture.md` §6.6 결정: **콜백 안에서 직접 실행한다**
+/// — mach 메시지 한 번이라 마이크로초 단위이고, 사용자가 실제로 제스처를 완료했을
+/// 때만(매 이벤트가 아니라) 실행되므로 탭 타임아웃 예산 대비 무시할 만하다.
+/// 기각한 대안(워커 스레드로 큐잉)은 무한 큐 `send` 가 오히려 콜백 안에서 할당을
+/// 유발할 수 있어 얻는 것보다 잃는 것이 크다는 것이 §6.6 의 결론이다.
+///
+/// ⛔ 실패해도 여기서는 로깅하지 않는다(§2.2 — 콜백 임계 경로에서 동기 로깅 금지).
+/// caps lock 상태를 읽거나 쓰지 못하는 것은 하드웨어/커널 이상 같은 드문 상황에서도
+/// 반복될 수 있어, 이 자리에서 로그를 남기면 로그 폭주로 이어질 수 있다.
+fn toggle_caps_lock_via_path_c() {
+    if let Some(current) = ultrakey_platform::hid_lock::caps_lock_state() {
+        let _ = ultrakey_platform::hid_lock::set_caps_lock_state(!current);
+    }
+}
+
+/// `Outcome::effects()` 실행 — 콜백 **안**에서 부른다(`proxy` 가 있다).
+///
+/// `Effect::TypeChar` 는 `SyntheticEvent::unicode` 로 down+up 한 쌍을 합성해
+/// `post_to_tap` 으로 낸다(architecture.md §6.4 P9). `Effect::OpenSeek` 은 M3(F-01)
+/// 범위 — 위임 지시서가 명시적으로 요구한 대로 `tracing::info!` 로만 남기고
+/// 아무것도 하지 않는다.
+///
+/// ⚠️ 이 `tracing::info!` 자체는 §2.2 의 "콜백 안 동기 로깅 금지"의 글자 그대로는
+/// 어긋난다 — 하지만 `toggle_caps_lock_via_path_c` 에 이미 적용한 것과 같은 근거
+/// (사용자가 실제로 quick press 를 완료했을 때만 드물게 발생, 매 이벤트 비용이
+/// 아니다)로 둔 **의도적 예외**다. M3 가 이 자리를 실제 기능으로 채우면 그때
+/// 다시 검토한다.
+fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) {
+    for effect in outcome.effects() {
+        match effect {
+            Effect::ToggleCapsLock => toggle_caps_lock_via_path_c(),
+            Effect::TypeChar(c) => {
+                if let Some(down) = SyntheticEvent::unicode(*c, true) {
+                    down.post_to_tap(proxy);
+                }
+                if let Some(up) = SyntheticEvent::unicode(*c, false) {
+                    up.post_to_tap(proxy);
+                }
+            }
+            Effect::OpenSeek => {
+                tracing::info!("Seek 열기 요청 수신 — M3(F-01) 범위, 아직 구현되지 않음");
+            }
+        }
+    }
+}
+
+/// `Outcome::effects()` 실행 — 콜백 **밖**(커맨드 perform·타이머)에서 부른다.
+/// 탭 콜백이 아니므로 로깅 제약이 없다.
+fn apply_effects_outside_tap(outcome: &Outcome) {
+    for effect in outcome.effects() {
+        match effect {
+            Effect::ToggleCapsLock => toggle_caps_lock_via_path_c(),
+            Effect::TypeChar(c) => {
+                if let Some(down) = SyntheticEvent::unicode(*c, true) {
+                    down.post();
+                }
+                if let Some(up) = SyntheticEvent::unicode(*c, false) {
+                    up.post();
+                }
+            }
+            Effect::OpenSeek => {
+                tracing::info!("Seek 열기 요청 수신 — M3(F-01) 범위, 아직 구현되지 않음");
+            }
+        }
+    }
+}
+
 fn build_callback(
     cell: RunLoopConfined<TapThreadState>,
     commands: CommandChannel,
@@ -344,22 +424,30 @@ fn on_tap_event(
 
     let mut st = cell.borrow_mut();
 
+    // ⭐ M2 — `cfg` 를 여기서 한 번만 읽는다. `Arbiter::force_reset` 이 `&EngineConfig`
+    // 를 받도록 바뀌었으므로(force_reset 이 프리셋 hold_remap 대상까지 알아야
+    // stuck modifier 를 정확히 정리할 수 있다) 0-c/0-d 게이트도 이 값이 필요하다.
+    // `ArcSwap::load_full` 은 원자적 포인터 로드 + `Arc` 참조 카운트 증가일 뿐이라
+    // 힙 할당·락이 없다 — 콜백 임계 경로에서 불러도 안전하다(architecture.md §2.2).
+    let cfg = st.shared.config.load_full();
+
     // 0-c: 앱별 비활성화 게이트(F-10, 계층 0, §3-f).
     if st.shared.gate.is_remapping_disabled() {
-        let reset = st.arbiter.force_reset();
+        let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
+        apply_effects_in_tap(&reset, proxy);
         return TapAction::Pass;
     }
 
     // 0-d: Secure Input(§5 엣지 6) — 경로 A 에만 적용된다.
     if st.secure_input.is_enabled() {
-        let reset = st.arbiter.force_reset();
+        let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
+        apply_effects_in_tap(&reset, proxy);
         return TapAction::Pass;
     }
 
     // ──── 여기부터 ultrakey-core 의 순수 함수 ────
-    let cfg = st.shared.config.load_full();
     let now = Millis(start.elapsed().as_millis() as u64);
     let input = InputEvent {
         kind,
@@ -385,6 +473,7 @@ fn on_tap_event(
     }
 
     apply_outcome_in_tap(&outcome, proxy);
+    apply_effects_in_tap(&outcome, proxy);
     match outcome.disposition() {
         Disposition::Pass => TapAction::Pass,
         Disposition::PassWithFlags(f) => {
@@ -404,6 +493,7 @@ fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
         st.arbiter.on_tick(&cfg, now)
     };
     apply_outcome_outside_tap(&outcome);
+    apply_effects_outside_tap(&outcome);
 }
 
 /// `EngineCommand::RecoverTap` — §3-a `Disabled` 전이의 재활성화 시도.
@@ -575,9 +665,11 @@ fn drain_commands(
             EngineCommand::ForceResetState => {
                 let outcome = {
                     let mut st = cell.borrow_mut();
-                    st.arbiter.force_reset()
+                    let cfg = st.shared.config.load_full();
+                    st.arbiter.force_reset(&cfg)
                 };
                 apply_outcome_outside_tap(&outcome);
+                apply_effects_outside_tap(&outcome);
                 tracing::info!(
                     "절전/잠금/Secure Input 대응 — 상태를 강제로 리셋했다(stuck modifier 방지)"
                 );
@@ -591,9 +683,19 @@ fn drain_commands(
                 tracing::info!("설정 변경을 반영해 Arbiter 를 재구성했다");
             }
             EngineCommand::ReapplyHidMapping => {
-                let path_b = cell.borrow().path_b.clone();
-                match path_b.apply(&[]) {
-                    Ok(()) => tracing::info!("경로 B 재적용을 완료했다(M1: 등록된 규칙 0개)"),
+                // ⭐ M2/D-1 — 더 이상 하드코딩된 빈 매핑이 아니다. 현재 설정에서
+                // 요구하는 매핑(caps lock alias 가 켜져 있으면 F18)을 다시 계산해
+                // 재적용한다. 핫플러그(외장 키보드 연결)가 드물게만 이 경로를 타므로,
+                // 이 커맨드 perform 콜백(탭 이벤트 콜백 자체는 아니다) 안에서
+                // hidutil 서브프로세스를 동기 호출해도 §2.2 가 금지하는 "매 이벤트
+                // 임계 경로"에는 해당하지 않는다 — M1 부터 이어진 판단이다.
+                let (path_b, cfg) = {
+                    let st = cell.borrow();
+                    (st.path_b.clone(), st.shared.config.load_full())
+                };
+                let desired = crate::path_b::desired_mappings_for(&cfg);
+                match path_b.apply(&desired) {
+                    Ok(()) => tracing::info!(count = desired.len(), "경로 B 재적용을 완료했다"),
                     Err(e) => tracing::warn!(error = %e, "경로 B 재적용에 실패했다"),
                 }
             }

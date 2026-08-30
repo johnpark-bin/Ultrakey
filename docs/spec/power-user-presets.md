@@ -68,7 +68,7 @@ F-08 은 이 16개 프리셋 각각의 **입력 조건과 출력 이벤트**, �
 | ID | 원문 라벨 | 그룹 | 입력 조건 | 출력 | 팝업/슬라이더 선택지 | 기본값 (실측: defaults + AX 트리) | 출처 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | F-08.1 | `Remap caps lock to:` | caps lock | 물리 caps lock 키다운, 단 F-07 이 quick press 로 판정하지 **않은** 입력(§3.3 규칙 R1) | 선택된 키의 키다운을 눌려 있는 동안 유지, 뗄 때 키업. OS caps lock 잠금 상태(LED·대문자 고정)는 발생하지 않음 — 완전 대체. ⭐ **이벤트 합성이 아니라 커널 레벨 `hidutil` HID `UserKeyMapping`(`HIDKeyboardModifierMappingSrc`/`Dst`, `IOHIDServiceClientSetProperty`)으로 구현될 수 있다**(실측: 번들 문자열·심볼, app-bundle-analysis.md §3.2-3). 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 이 이 HID 매핑 대신 이벤트 합성으로 대체하는 스위치로 보인다 `(미확정 — 라벨로부터의 해석)` | **50종 전량 확인**(표시 순서, 실측: AX 트리): `esc` · `nothing (disable it)` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`~`F24`. ⭐ 이 팝업이 **출력 키 선택**(대상 키)이며 Hyperkey/Seek 탭의 **소스 키 선택** 팝업과 열거형 자체가 다르다는 이전 판의 추정이 **맞았다** — 확정. `nothing (disable it)` 이라는 명시적 무효화 선택지가 있다(캡스락을 완전히 죽이는 용도) | **☐**(전체) / 팝업 표시값 `left control` | app-bundle-analysis.md §2.1, §3.2-3, §6.3; superkey-inventory.md §3.3 그룹1 |
-| F-08.2 | `Quick press caps lock to execute:` | caps lock | F-07 이 caps lock 을 quick press 로 판정(§3.3 규칙 R1) | 선택된 키의 키다운+키업을 합성해 발행. ⭐ **단, 선택지가 `Seek` 인 경우 키 합성이 아니라 F-01(seek-activation-and-session.md) 이 정의하는 Seek 세션을 연다** — `Seek` 탭의 단축키·키 리맵 두 활성화 경로 외의 **세 번째 활성화 경로** | **49종 전량 확인**(표시 순서, 실측: AX 트리): ⭐ **`Seek`**(첫 항목) · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`~`F20` · `/`(v1.62 추가) | **☐**(전체) / 팝업 표시값 `caps lock` | app-bundle-analysis.md §2.1, §6.3; superkey-inventory.md §3.3 그룹1, §2.1 |
+| F-08.2 | `Quick press caps lock to execute:` | caps lock | F-07 이 caps lock 을 quick press 로 판정(§3.3 규칙 R1) | 선택된 키의 키다운+키업을 합성해 발행. ⭐ **단, 선택지가 `Seek` 인 경우 키 합성이 아니라 F-01(seek-activation-and-session.md) 이 정의하는 Seek 세션을 연다** — `Seek` 탭의 단축키·키 리맵 두 활성화 경로 외의 **세 번째 활성화 경로** | **48종 전량 확인**(표시 순서, 실측: AX 트리 — 근거 문서의 "49종" 은 구분선을 함께 센 수다, §9.1-bis): ⭐ **`Seek`**(첫 항목) · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`~`F20` · `/`(v1.62 추가) | **☐**(전체) / 팝업 표시값 `caps lock` | app-bundle-analysis.md §2.1, §6.3; superkey-inventory.md §3.3 그룹1, §2.1 |
 | F-08.3 | `Quick press duration` | caps lock | (설정값, 트리거 없음) | F-08.2 의 quick press 판정 임계값을 F-07 에 제공 | 슬라이더. ⭐ **최소 250 ms · 최대 2000 ms 확정**(`AXSlider min=250 max=2000`, 실측: AX 트리). 눈금 간격(step)은 `(미확정)` — `key-remapping-engine.md` 가 "8칸, 200–1600ms, 간격 200ms" 로 역산한 이전 추정은 **틀렸다**, 정정 | **☐**(체크박스 없음, 값 자체는) `1000 ms`(현재값, 실측: AX `AXSlider value=1000`) | app-bundle-analysis.md §6.3; superkey-inventory.md §3.3 그룹1, §7 |
 | F-08.4 | `Caps lock + space = enter` | caps lock | 물리 caps lock 다운 유지 중 `space` 다운 | `Enter`(⏎) 키다운/키업 | 없음(단순 체크박스) | **☐** | app-bundle-analysis.md §2.1, §6.3; superkey-inventory.md §3.3 그룹1 |
 | F-08.5 | `Caps lock + W A S D = ▲ ◀︎ ▼ ▶︎` | caps lock | 캡스락 유지 중 `W`/`A`/`S`/`D` 각각 다운 | `W`→▲, `A`→◀, `S`→▼, `D`→▶ 방향키 키다운/키업. ⭐ v1.20 에서 "caps lock 이 hyper 키로 리매핑된 상태에서 동작 안 함" 버그 이력(§3.3 상호작용 표 R2) | **없음**(실측: AX 트리 — WASD 항목에는 팝업이 아예 없다). 그러나 실행 파일에는 `wasdArrowColemak`·`wasdArrowDvorak` 키가 있다 → 레이아웃 변형은 팝업 선택이 아니라 **감지된 키보드 레이아웃에 따라 자동 적용**되는 것으로 보인다 `(미확정 — 팝업 부재로부터의 해석)`. F-14(입력 소스 독립성) 참조 | **☐**(라벨 원문도 정정: 화살표 사이 공백·variation selector 포함, 실측: AX 트리) | app-bundle-analysis.md §2.1, §6.3; superkey-inventory.md §3.3 그룹1, §2.2 |
@@ -110,7 +110,7 @@ F-08 은 이 16개 프리셋 각각의 **입력 조건과 출력 이벤트**, �
 | 이름(원문 라벨) | 타입 | 기본값 (실측: defaults + AX 트리) | 유효 범위 | 출처 |
 | :--- | :--- | :--- | :--- | :--- |
 | `Remap caps lock to:` | 체크박스 + 팝업 | **☐** / 팝업 표시값 `left control` | 출력 키 열거형 **50종 확정**(§3.2 F-08.1) | app-bundle-analysis.md §2.1, §6.3 |
-| `Quick press caps lock to execute:` | 체크박스 + 팝업 | **☐** / 팝업 표시값 `caps lock` | 출력 후보 **49종 확정**, 첫 항목 `Seek`(§3.2 F-08.2) | app-bundle-analysis.md §2.1, §6.3 |
+| `Quick press caps lock to execute:` | 체크박스 + 팝업 | **☐** / 팝업 표시값 `caps lock` | 출력 후보 **48종 확정**(구분선 제외), 첫 항목 `Seek`(§3.2 F-08.2) | app-bundle-analysis.md §2.1, §6.3 |
 | `Quick press duration` | 슬라이더 | 현재값 `1000 ms`, **최소 250 ms · 최대 2000 ms 확정** | 간격(step) `(미확정)`(§9) | app-bundle-analysis.md §6.3 |
 | `Caps lock + space = enter` | 체크박스 | **☐** | ☑/☐ | app-bundle-analysis.md §2.1, §6.3 |
 | `Caps lock + W A S D = ▲ ◀︎ ▼ ▶︎` | 체크박스 | **☐** | ☑/☐. 팝업 없음(§3.2 F-08.5) | app-bundle-analysis.md §2.1, §6.3 |
@@ -188,13 +188,38 @@ F-08 의 16개 규칙 각각은 "물리 키코드 조합을 감지하면 정해�
 
 - ~~16개 프리셋의 출고 기본값~~ → **전부 ☐ 로 확정**. app-bundle-analysis.md §2.1(defaults 전량) + §6.3(AX 트리) — 본 문서 §3.2, §4.
 - ~~`Remap caps lock to:` 팝업의 출력 키 전체 열거형~~ → **50종 확정**. app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.1.
-- ~~`Quick press caps lock to execute:` 출력 후보 전체 목록~~ → **49종 확정**(첫 항목 `Seek`, 끝 항목 `/`). app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.2.
+- ~~`Quick press caps lock to execute:` 출력 후보 전체 목록~~ → **48종 확정**(첫 항목 `Seek`, 끝 항목 `/`). ⭐ 근거 문서의 "49종" 은 구분선을 함께 센 수다 — §9.1-bis 참조. app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.2.
 - ~~`Quick press duration` 슬라이더의 최소·최대~~ → **250 ms / 2000 ms 확정**(간격은 §9.2 로 존속). app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.3.
 - ~~`Caps lock + [H J K L]` 인라인 팝업의 대체 후보~~ → **`H J K L` · `I J K L` 2종 확정**. app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.6.
 - ~~`Caps lock + home row` 인라인 팝업의 대체 스킴~~ → **`symbol row (A = !)` · `function row (A = F1)` 2종 확정**(각 키 정확한 매핑은 §9.2 로 존속). app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.7.
 - ~~`Quick press left or right shift` 출력 문자 쌍 후보~~ → **`( )`·`[ ]`·`{ }`·`< >` 4종 확정**. app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.11.
 - ~~`Remap paste (⌘+V)` 팝업의 의미~~ → **물리 ⌘ 선택 위젯이라는 추정이 확정되었고, `Hyper key` 라는 4번째 선택지도 확인됨**. app-bundle-analysis.md §6.3 — 본 문서 §3.2 F-08.15.
 - ~~caps lock 잠금 상태(LED) 토글이 `IOHIDSetModifierLockState` 류 API 를 필요로 하는지~~ → **필요함, `IOHIDGetModifierLockState`/`IOHIDSetModifierLockState` 로 확정**. app-bundle-analysis.md §3.2-2 — 본 문서 §3.2 F-08.8/9/10, §6, §7.
+
+### 9.1-bis ⭐ M2 2차 구현이 내린 결정 (2026-08-30, 이슈 #15)
+
+아래는 **해소(사실 확정)가 아니라 결정**이다 — 원본을 더 관찰해서 알아낸 것이 아니라, 이 클론이
+근거를 대고 고른 값이다. 그래서 §9.1(실측으로 해소됨)과 분리해 적는다. 전문은
+[`../dev/architecture.md` §6](../dev/architecture.md) 에 있다.
+
+| 질문(§9.2) | 이 구현이 고른 것 | 근거 |
+| :--- | :--- | :--- |
+| #2 `Caps lock + home row` 의 `A` 외 매핑 | 홈로우 11키(`A S D F G H J K L ; '`)를 **숫자행 시프트 기호에 순서대로** — `! @ # $ % ^ & * ( ) _` / 함수행에 순서대로 — `F1`…`F11` | §3.2 F-08.7 이 확정한 **"홈로우를 다른 행에 순서대로 매핑"이라는 일반 규칙**에, 실측된 두 점(`A = !`·`A = F1`)을 얹으면 이 배열이 유일한 자연스러운 보간이다. 지어낸 것이 아니다. ⚠️ **원본이 실제로 같은 배열인지는 여전히 미확인** |
+| #7 `Home & end operate on lines` 의 출력 | `Home → ⌘←` · `End → ⌘→` | macOS 에서 `Home`/`End` 는 **문서** 처음/끝, `⌘←`/`⌘→` 는 **줄** 처음/끝이다. 라벨의 "operate on lines" 가 정확히 이 차이를 가리킨다 |
+| #1 `Quick press duration` 슬라이더 step | 50 ms | 실측된 것은 범위(250~2000)와 현재값(1000)뿐이다. 기본값 1000 이 눈금에 정확히 떨어지는 값 중 가장 세밀한 것을 골랐다 |
+| #8 캡스락 토글 3계열의 겹치는 제스처 | **F-08.9(좌우 동시)가 F-08.8(double tap)보다 우선**하고, 발화 시 좌·우 shift 상태 머신을 **둘 다 억제**해 중복 토글을 원천 차단한다 | 동시성(서로 다른 두 키가 겹쳐 눌림)이 반복성(한 키를 두 번)보다 **더 구체적인 조건**이다. **기각한 대안 — 시간 디바운스**: 임계값이 또 하나의 `(미확정)` 상수가 되는데, 억제만으로 이미 해소된다 |
+| #3 Colemak/Dvorak 변형 | **구현하지 않는다** | WASD·HJKL 은 §5 엣지 5 가 확정했듯 **물리 위치 기반**이다. "레이아웃에 따라 자동 적용"은 팝업 부재로부터의 해석일 뿐이고, 물리 위치 기반 판정과 정면으로 어긋난다 |
+| #4 `Apply hyper to arrows` | **구현하지 않는다** | 표시 조건 자체가 `(미확정)`. 이 구현의 기본 동작(조합 출력에 hyper flags 를 얹지 않음, `architecture.md` §6.4 P5)이 그 체크박스가 꺼진 상태에 해당한다 |
+| #5 Windows 키보드 리매핑 | **구현하지 않는다** | 라벨·표시 조건 둘 다 `(미확정)` |
+| #6 충돌 대화상자의 트리거 쌍·버튼 구성 | 트리거 쌍 3종을 `architecture.md` §6.5 로 확정하고, 문구는 **우리 것을 쓴다**(원본 문자열을 옮기지 않는다). 버튼은 2개(`계속`·`취소`) | 원본의 버튼 구성을 관찰하지 못했으므로 재현이 아니라 설계다. ⭐ **caps lock 조합 프리셋과 "hyper 소스 = caps lock" 은 충돌로 다루지 않는다** — §8 이 "동시에 성립해야 한다"를 수용 기준으로 못박았기 때문이다(R2/v1.20) |
+
+⭐ **§5 #20(caps lock 래칭)이 이 문서의 전제를 바꿨다.** M2 1차 실기기 검증에서 **caps lock 은
+누를 때만 `flagsChanged` 를 보내고 뗄 때는 보내지 않는다**는 것이 실측됐다
+(`key-remapping-engine.md` §5 #20). 이 문서의 캡스락 그룹 7종은 전부 "caps lock 이 눌린 채
+유지" 를 조건으로 하므로, 경로 A 만으로는 **7종 전부가 실기기에서 성립하지 않는다.**
+이 구현은 `architecture.md` §6.1 **결정 D-1** 로 이를 푼다 — caps lock 의존 규칙이 하나라도
+켜지면 경로 B 로 `caps lock → F18` 커널 매핑을 설치하고, 중재기가 F18 을 caps lock 으로
+되돌려 판정한다. **되돌리는 수단**은 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 이다.
 
 ### 9.2 남은 질문
 

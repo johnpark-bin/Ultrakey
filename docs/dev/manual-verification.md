@@ -1,6 +1,7 @@
-# M1 수동 검증 절차
+# 수동 검증 절차 (M1 · M2)
 
-> **이 문서의 목적**: `docs/spec/README.md` 의 **"✅ M1 완료 판정" 5개 항목**을 각각 어떻게 확인하는지 적는다.
+> **이 문서의 목적**: `docs/spec/README.md` 의 **"✅ M1 완료 판정" 5개 항목**(항목 1~5)과,
+> **M2 2차가 더한 F-08 프리셋·F-10 메뉴바**(항목 6·7, 이슈 #15)를 각각 어떻게 확인하는지 적는다.
 > 자동화할 수 있는 것은 이미 `cargo test` 에 들어가 있다(§0). 여기 남은 것은 **실제 이벤트 탭·실제 TCC 권한·실제 절전 복귀가 필요해 자동화할 수 없는 것들**이다.
 
 ---
@@ -396,6 +397,25 @@ mach 메시지 속도로 무한 반복된다. 게다가 `tap.is_enabled()` 가 �
 **M1 에서 검증 가능한 범위까지는 통과했다** — 재기동했을 때 카탈로그 로드 → 권한 판정 → 엔진 `Active`
 복귀가 정상이다. `Launch on login` 구현 시 이 항목을 다시 판정한다.
 
+#### 📌 재판정 (2026-08-30, M2 2차 / 이슈 #15) — 🟡 **부분 통과. "범위 밖" 은 해소됐다**
+
+⭐ **이 항목을 "M1 범위 밖" 으로 만든 원인이 사라졌다.** `Launch on login`(F-10 / General 탭)이
+구현되었고, 실기기에서 다음을 확인했다.
+
+| 확인한 것 | 결과 |
+| :--- | :--- |
+| 출고 기본값 | **☐**(꺼짐) — §8 수용 기준대로 |
+| 체크박스를 켜면 로그인 항목으로 등록되는가 | ✅ `System Events` 의 로그인 항목 목록에 `Ultrakey` 가 나타난다 |
+| 껐을 때 해제되는가 | ✅ 목록에서 사라진다 |
+| 어느 경로를 탔는가 | ✅ `SMAppService`(macOS 26). `~/Library/LaunchAgents` 에 plist 가 생기지 **않았다** — macOS 12 폴백이 잘못 발동하지 않았다는 뜻이다 |
+
+⬜ **여전히 수행하지 않은 것: 실제 로그아웃 → 로그인 왕복.** 이 검증 회차는 사용자의 세션 안에서
+진행됐고, 로그아웃은 사용자의 작업을 끊는 되돌리기 어려운 조작이라 수행하지 않았다.
+**따라서 "재부팅 후 수동 개입 없이 리매핑이 동작한다" 는 여전히 미확인이다** — 등록까지만
+확인했고 그다음은 확인하지 못했다. 다음 회차에서 사용자가 직접 로그아웃·로그인해 마무리해야 한다.
+
+⚠️ macOS 12 의 LaunchAgent 폴백 경로는 **이 기기에서 확인할 수 없다**(macOS 26.5.2). 미검증으로 남긴다.
+
 ⚠️ 부수 관찰: 로그아웃 시 **graceful shutdown 경로가 실행되지 않는다**(`종료 요청` 로그 0건).
 M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(null)` 로 깨끗했지만,
 **M2 에서 실제 리매핑 규칙이 생기면 종료 정리가 아예 돌지 않는 경로가 된다.** 다음 기동 시 정리하는
@@ -451,9 +471,12 @@ M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(nu
 
 ---
 
-## ⚠️ 항목 2·3 사전 확인 — 다른 HID 계층 리매퍼가 있는가 (2026-08-30 신설)
+## ⚠️ 항목 2·3·**6** 사전 확인 — 다른 HID 계층 리매퍼가 있는가 (2026-08-30 신설, M2 2차에서 항목 6 으로 확대)
 
 ⭐ **이것을 먼저 보지 않으면 검증 결과를 오독한다.** M2 1차 검증에서 실제로 그랬다.
+
+⭐ **M2 2차에서 적용 범위가 넓어졌다** — F-08 프리셋 16종 중 **7종이 caps lock 을 쓰므로**, 이 절은
+항목 6(프리셋) 검증에도 **반드시** 선행한다. 프리셋 쪽의 대처 방법은 항목 2·3 과 방향이 다르다 — §6-0 참조.
 
 `CGEventTap`(경로 A)은 **HID 드라이버보다 위**에 있다. 그래서 Karabiner-Elements 처럼 가상 HID 장치로 키를 바꾸는 도구가 깔려 있으면, **Ultrakey 는 원본 키코드를 볼 기회 자체가 없다** — 이미 바뀐 키가 도착한다.
 
@@ -704,6 +727,241 @@ M1 에는 **메뉴바 UI 가 없다.** 게이트가 F-07 콜백의 계층 0 에�
 
 검증 가능한 것: 단위 테스트(`ultrakey-core` `gate`)와, 최전면 앱 전환 시 로그에 `frontAppId`/`frontAppName` 갱신이 남는지.
 검증 불가능한 것: `Ignore <앱이름>` 을 실제로 켜고 끄는 것 — **M3 에서 UI 와 함께 검증한다.**
+
+---
+
+## 항목 6 — F-08 Power User Presets (M2 2차 / 이슈 #15 신설)
+
+> 근거 명세: `../spec/power-user-presets.md` §8 · `architecture.md` §6
+
+### ⚠️ 6-0. 프리셋 전용 사전 확인 — Karabiner 등 HID 계층 리매퍼
+
+⭐ **위 "항목 2·3 사전 확인" 절을 프리셋에도 그대로 적용한다.** 오히려 여기가 더 중요하다 —
+**16종 중 7종이 caps lock 을 쓰는데**(F-08.1·2·4·5·6·7·10), 검증 기기의 Karabiner-Elements 가
+`caps_lock ↔ left_control` 을 맞바꿔 두고 있어 **물리 caps lock 을 눌러도 탭에는 `left control`
+이 도착한다.** 사전 확인 명령 4개를 먼저 돌린다(위 절).
+
+**프리셋 검증에서의 대처 — 항목 2·3 과 반대 방향이다.**
+
+| 상황 | 항목 2·3(hyper) | 항목 6(프리셋) |
+| :--- | :--- | :--- |
+| 무엇을 바꾸는가 | **설정**을 바꾼다 — hyper 소스를 `left control` 로 지정 | ⛔ **바꿀 수 없다.** 프리셋의 소스 키는 caps lock 으로 **고정**이다(팝업이 없다) |
+| 그래서 어떻게 하는가 | 물리 caps lock 을 그대로 누른다 | **물리 `left control` 을 누른다** — Karabiner 가 그것을 `caps lock` 키코드로 바꿔 보내므로, 탭에는 프리셋이 기다리는 caps lock 이 도착한다 |
+
+즉 이 기기에서 `Caps lock + W A S D` 를 검증하려면 **물리 왼쪽 control 을 누른 채 `W`** 를 누른다.
+⛔ **사용자의 Karabiner 설정을 끄거나 바꾸지 않는다** — 그럴 필요가 없다는 것이 이 방법의 요점이다.
+
+⭐ **D-1(caps lock 모멘터리 정규화, `architecture.md` §6.1)과의 상호작용도 여기서 관찰한다.**
+Ultrakey 가 설치하는 경로 B 매핑(`caps lock → F18`)은 `hidutil` 이므로 Karabiner 의 가상 HID
+키보드에도 적용된다 — 따라서 물리 `left control` → (Karabiner) `caps lock` → (hidutil) `F18` 로
+도착할 것으로 **예상**된다. 이것이 실제로 그런지는 아래 6-1 에서 확인한다.
+
+```sh
+# 프리셋을 켠 뒤 — Ultrakey 가 설치한 매핑이 보여야 한다
+hidutil property --get UserKeyMapping
+# 프리셋을 전부 끈 뒤 — (null) 로 돌아와야 한다
+```
+
+### 6-1. 대표 프리셋 — `Caps lock + W A S D = ▲ ◀︎ ▼ ▶︎` (F-08.5)
+
+관찰 수단은 항목 2 와 같은 [`tools/modifier-probe.html`](tools/modifier-probe.html)(Chrome)이다 —
+**다른 앱이 실제로 받은 이벤트**를 보여준다.
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `Presets` 탭에서 `Caps lock + W A S D` 만 켠다 | `hidutil property --get UserKeyMapping` 에 `caps lock → F18` 매핑이 나타난다(D-1) |
+| 2 | 프로브에서 caps lock 소스 키(이 기기에서는 물리 왼쪽 control)를 **누른 채** `W` | `ArrowUp` 이 도착한다. `w` 도, `Control+w` 도 아니다 |
+| 3 | 같은 방식으로 `A`·`S`·`D` | `ArrowLeft`·`ArrowDown`·`ArrowRight` |
+| 4 | 소스 키를 뗀 뒤 `W` | 평범한 `w` 가 도착한다(조합이 풀렸다) |
+| 5 | ⭐ 소스 키를 **누른 채 유지**하고 `W` 를 세 번 | 세 번 다 `ArrowUp`. **한 번씩 걸러 나오면 D-1 이 동작하지 않은 것이다**(래칭, §5 #20) |
+| 6 | 프리셋을 끄고 `hidutil property --get UserKeyMapping` | `(null)` — 매핑이 정리된다 |
+
+### 6-2. `Double tap shift = caps lock` (F-08.8) — 경로 C
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 프리셋을 켠 뒤 같은 shift 키를 300ms 안에 두 번 탭 | 키보드의 caps lock **LED 가 켜지고** 이후 타이핑이 대문자로 나간다 |
+| 2 | `ioreg -c AppleHIDKeyboardEventDriverV2 \| grep -i HIDCapsLockState` 또는 `hidutil` 로 잠금 상태 확인 | `Yes` — **이벤트 flags 가 아니라 실제 HID 잠금 상태**가 바뀌어야 한다(경로 C) |
+| 3 | 한 번 더 두 번 탭 | 다시 꺼진다 |
+| 4 | shift 를 **한 번만** 탭 | 아무 일도 없다(double tap 간격 300ms 초과 시 유예된 quick press 도 없어야 한다 — F-08.11 이 꺼져 있다면) |
+
+### 6-3. quick press 계열 — `Quick press left or right shift to input corresponding:` (F-08.11)
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 프리셋을 켜고 팝업을 `( )` 로 둔 뒤, **왼쪽** shift 를 톡 눌렀다 뗀다 | `(` 가 입력된다 |
+| 2 | **오른쪽** shift 를 톡 눌렀다 뗀다 | `)` 가 입력된다 |
+| 3 | shift 를 누른 채 다른 글자를 친다 | 평범한 대문자가 나가고 괄호는 나오지 않는다(P2 — 다른 키가 눌리는 순간 quick press 후보에서 빠진다) |
+| 4 | ⭐ 입력 소스를 한글(2벌식)로 바꾸고 1·2 반복 | **같은 괄호 문자**가 나온다(R5 / v1.51 회귀 방지 — 출력은 유니코드 문자로 고정) |
+
+### 6-4. ⭐ 회귀 방지 2종 — v1.20 · v1.62
+
+이것이 **이 검증에서 가장 중요한 두 항목**이다. 원본이 실제로 겪은 회귀다.
+
+| # | 구성 | 조작 | 기대 |
+| :--- | :--- | :--- | :--- |
+| v1.20 | `Hyperkey` 탭에서 hyper 소스 = caps lock **그리고** `Caps lock + W A S D` ☑ | 소스 키를 누른 채 `W` | `ArrowUp` 이 나온다. ⭐ **`⌃⌥⌘⇧` 가 얹히지 않는다**(`architecture.md` §6.4 P5). 프로브의 modifier 열이 전부 `F` 여야 한다 |
+| v1.62 | `Shift + caps lock = caps lock` ☑ **그리고** `Quick press caps lock to execute: caps lock` ☑ | shift 를 누른 채 caps lock 소스 키를 톡 눌렀다 뗀다 | caps lock 잠금이 **정확히 한 번** 토글된다. quick press 출력이 겹쳐 나와 두 번 토글되면 실패다 |
+
+### 6-5. 충돌 감지 대화상자 3종 (`architecture.md` §6.5)
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | hyper 소스를 caps lock 으로 둔 채 `Remap caps lock to:` 를 켠다 | `CapsLockAlreadyRemapped` 대화상자. `계속` 을 누르면 hyper 소스 쪽이 꺼진다. `취소` 를 누르면 체크박스가 원래대로 돌아온다 |
+| 2 | `Caps lock + W A S D` 를 켠 상태에서 `Caps lock + [H J K L]` 을 켠다 | `CapsLockArrows` 대화상자. `계속` 시 WASD 가 꺼진다 |
+| 3 | 위 둘 중 하나가 켜진 상태에서 `Caps lock + home row` 를 켠다 | `CapsLockHomeRow` 대화상자 |
+| 4 | ⭐ hyper 소스 = caps lock 인 상태에서 `Caps lock + W A S D` 를 켠다 | **대화상자가 뜨지 않는다.** 두 구성은 동시에 성립해야 한다(R2 수용 기준) |
+
+### 6-6. Secure Input (F-08 §8 마지막 항목)
+
+암호 필드(예: 시스템 설정의 잠금 해제 창)에 포커스를 준 채 프리셋을 발동시킨다.
+
+| 경로 | 기대 |
+| :--- | :--- |
+| 경로 A 프리셋 15종 | 발화하지 않는다. 원본 키가 그대로 그 필드에 도달한다 |
+| ⭐ 경로 B(D-1 의 `caps lock → F18` 커널 매핑) | **`(미확정)`** — `power-user-presets.md` §5 엣지 7 / §9 #10 이 남긴 질문이다. **관찰 결과를 그대로 기록하고, 관찰하지 못했으면 못했다고 적는다** |
+
+---
+
+## 항목 7 — F-10 메뉴바 · 수명주기 (M2 2차 / 이슈 #15 신설)
+
+> 근거 명세: `../spec/menu-bar-and-lifecycle.md` §8 · `architecture.md` §6.7
+
+### 7-a. 메뉴바 상주와 메뉴 구조
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 앱 실행 | Dock 아이콘이 없고 `⌘Tab` 목록에도 없다. 메뉴바에 아이콘이 뜬다 |
+| 2 | 아이콘 클릭 | `Ignore <최전면 앱>` · 구분선 · `Settings…` · `About` · `Advanced ▸` · `Quit Ultrakey` |
+| 3 | 다른 앱을 최전면으로 바꾸고 메뉴를 다시 연다 | `Ignore …` 라벨이 **그 앱 이름으로 갱신**된다 |
+| 4 | `Settings…` | 환경설정 창이 열린다 |
+| 5 | `Advanced ▸` | `Synthesize Caps Lock Remap` · `Relaunch` 두 항목 |
+
+### 7-b. 앱별 비활성화
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 프리셋 하나를 켜고 그것이 동작함을 확인한다 | 동작한다 |
+| 2 | 그 앱이 최전면인 상태에서 `Ignore <그 앱>` 클릭 | 항목에 체크가 들어간다 |
+| 3 | 같은 프리셋을 다시 시도 | ⭐ **발화하지 않는다** — 원본 키가 그대로 나간다(계층 0 문지기) |
+| 4 | 다른 앱으로 전환해 같은 프리셋 | 다시 발화한다 |
+| 5 | `Ignore …` 를 다시 클릭 | 체크가 풀리고 1번 상태로 돌아온다 |
+| 6 | 앱을 재시작 | 무시 목록이 **유지된다**(`general.disabledApps` 즉시 write-through) |
+
+### 7-c. `unauthorizedMenu`
+
+시스템 설정에서 Accessibility 권한을 껐다가 다시 켠다(⚠️ 껐다면 반드시 되돌리고 PR 에 기록한다).
+
+| # | 상태 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 권한 회수 직후 메뉴를 연다 | 메뉴 전체가 **2항목**(상태 안내 + 권한 허용)으로 교체된다 |
+| 2 | 권한을 다시 부여 | 메뉴가 정상 구성으로 되돌아온다 |
+
+### 7-d. ⭐ `Launch on login` — 1-b #6 을 다시 판정하는 항목
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `General` 탭의 `Launch on login` 출고 기본값 | **☐**(꺼짐) — §8 수용 기준 |
+| 2 | 체크박스를 켠다 | `~/Library/Application Support/.../settings.json` 에 `general.launchOnLogin: true` 가 **즉시** 나타난다 |
+| 3 | 시스템 설정 ▸ 일반 ▸ 로그인 항목 | Ultrakey 가 목록에 나타난다 |
+| 4 | ⭐ **로그아웃 → 로그인** | 앱이 **자동으로 기동**하고, 수동 개입 없이 리매핑이 동작한다 → **이것이 항목 1-b #6 의 재판정이다** |
+| 5 | 체크박스를 끄고 3 을 다시 본다 | 목록에서 사라진다 |
+
+⚠️ **macOS 12 경로(LaunchAgent plist 폴백)는 이 기기에서 확인할 수 없다** — 검증 기기는 macOS 26 이다.
+`SMAppService` 경로만 실측하고, macOS 12 경로는 **미검증으로 남긴다.**
+
+### 7-e. 단일 인스턴스
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 앱이 뜬 상태에서 Finder 로 다시 실행 | 두 번째 프로세스가 즉시 종료된다. `ps aux \| grep Ultrakey` 에 하나만 남는다 |
+| 2 | 키를 눌러 본다 | 이벤트가 **두 번 처리되지 않는다** |
+
+---
+
+## 📌 실측 결과 (2026-08-30, M2 2차 / 이슈 #15)
+
+### ⚠️ 관찰 방법과 그 한계 — 먼저 읽어라
+
+이 회차는 **사람이 물리 키를 누르는 대신** `crates/ultrakey-platform/examples/key_poke.rs` 로
+키 이벤트를 합성해 세션에 넣었다. 그 도구는 자기 합성 마커(`ULTRAKEY_MAGIC`)를 **심지 않으므로**
+Ultrakey 의 탭은 그것을 물리 입력과 구분하지 않는다 — 즉 **경로 A(탭 → 중재 → 합성 → 대상 앱)
+전 구간이 실제 앱을 상대로 검증됐다.** modifier 키는 `fc:`(flagsChanged) 형태로 넣어
+`key-remapping-engine.md` §5 #18 이 말하는 **실제 이벤트 형태**를 재현했다.
+
+⛔ **그러나 이 방법으로 검증되지 않는 것이 있다. 통과했다고 적지 않는다.**
+
+| 검증되지 않은 것 | 왜 |
+| :--- | :--- |
+| **경로 B 커널 매핑이 실제 물리 키에 적용되는가** | 합성 이벤트는 HID 층보다 위에서 주입되므로 `hidutil` 매핑을 지나지 않는다. 이 회차는 `caps lock → F18` 매핑이 **설치·정리되는 것**만 확인했고, 물리 caps lock 이 실제로 F18 로 도착하는지는 확인하지 못했다 |
+| **caps lock 래칭이 실제로 해소되는가**(§5 #20) | 위와 같은 이유. D-1 의 핵심 효과가 바로 이것인데 **미확인이다** |
+| 검증 기기 특유의 조건 | Karabiner-Elements 가 `caps_lock ↔ left_control` 을 **경로 B 보다 아래**에서 맞바꾸고 있어, 물리 caps lock 검증 자체가 이 기기에서는 성립하지 않는다(§6-0) |
+
+⭐ 대신 **`F18` 을 직접 넣어** "커널 매핑이 이미 caps lock 을 F18 로 바꿔 보낸 뒤" 의 상태를
+재현했다 — 그것이 D-1 이 만들려는 상태다. 아래 프리셋 결과는 전부 그 전제 위에 있다.
+
+### ✅ 통과한 것
+
+| 항목 | 결과 · 증거 |
+| :--- | :--- |
+| **D-1 경로 B 설치·정리** | `Caps lock + W A S D` 를 켜자 `hidutil property --get UserKeyMapping` 에 `Src=30064771129`(caps lock) → `Dst=30064771181`(F18) 가 나타났고, 앱을 정상 종료하자 비워졌다. 설정 파일에는 건드린 키 **하나만** 쓰였다("부재 = 기본값" 유지) |
+| **6-1 F-08.5 `Caps lock + W A S D`** | 3행 문서의 3행 끝에서 `F18 + W` 를 두 번 → 마커가 **1행**에 들어갔다(`1111`). ▲ 가 실제로 두 번 합성됐다는 뜻이다. 소스 키를 뗀 뒤의 `W` 는 평범한 문자로 들어갔다 |
+| **F-08.4 `Caps lock + space = enter`** | `AB` 뒤에서 `F18 + Space` → 문서가 `AB\n1` 이 됐다. space 가 소비되고 Enter 가 합성됐다 |
+| **6-2 F-08.8 `Double tap shift = caps lock`** ⭐ | **`flagsChanged` 형태**로 좌 shift 를 두 번 탭 → `ioreg` 의 `HIDCapsLockState` 가 `No→Yes→No` 로 **정확히 한 번씩** 바뀌었다. 경로 C(`IOHIDSetModifierLockState`)가 실제로 동작한다 |
+| **R1 (F-08.1 ↔ F-08.2 배타)** | 둘 다 켠 상태에서 caps lock 소스 키를 150ms 톡 누름 → 잠금 토글(quick press). 길게 눌러 다른 키와 조합 → 조합 발화. 같은 눌림이 두 규칙 중 하나에만 소비된다 |
+| **6-4 v1.20 회귀** ⭐ | hyper 소스 = caps lock **이면서** `Caps lock + W A S D` ☑ 인 구성에서, 소스 키를 누른 채 `W` 두 번 → ▲ 가 두 번 났고 **hyper 조합이 얹히지 않았다**(P5). 원본이 v1.20 에서 깨졌던 바로 그 구성이다 |
+| **6-4 v1.62 회귀** ⭐ | `Shift + caps lock = caps lock` 과 `Quick press caps lock` 을 둘 다 켠 상태에서 shift 를 누른 채 caps lock 을 톡 → 잠금이 **정확히 한 번** 토글됐다(`Yes→No`). 두 규칙이 겹쳐 발화했다면 두 번 토글돼 제자리로 돌아왔을 것이다 |
+| **6-5 충돌 대화상자 3종** | 셋 다 실기기에서 떴다. `Caps Lock is already spoken for` → 배타 대상 `Hyper key source` / `Two Caps Lock arrow layouts at once` → `Caps Lock + W A S D…` / `The home row overlaps the arrow keys` → `Caps Lock + W A S D…`. `계속` 을 누르면 상대가 꺼지고 원래 값이 적용됐고, `취소` 는 아무것도 바꾸지 않았다 |
+| **6-5 항목 4 (R2 예외)** | hyper 소스 = caps lock 인 상태에서 `Caps lock + W A S D` 를 켤 때 **대화상자가 뜨지 않았다**. 두 구성은 동시에 성립해야 한다 |
+| **7-a 메뉴 구조** | AX 로 판독: `Ignore <앱>` · 구분선 · `Settings…` · `About` · `Advanced ▸ (Synthesize Caps Lock Remap · Relaunch)` · 구분선 · `Quit Ultrakey`. 최전면 앱을 바꾸자 라벨이 `Ignore Finder` 로 실시간 갱신됐다 |
+| **7-b 앱별 비활성화** | TextEdit 이 최전면일 때 `Ignore TextEdit` 클릭 → `general.disabledApps` 에 즉시 기록. 그 상태에서 `F18 + W` 가 **발화하지 않고 원본 `w` 가 그대로 들어갔다**(계층 0 문지기). 다시 클릭해 해제하니 프리셋이 되살아났다 |
+| **7-d `Launch on login`** | 위 1-b #6 재판정 참조(등록·해제 확인, 로그아웃 왕복 미수행) |
+| **7-e 단일 인스턴스** | `open -n` 으로 두 번째 프로세스를 띄우자 `같은 번들 ID 로 이미 실행 중인 인스턴스가 있다 …` 로그와 함께 즉시 종료됐고, 남은 인스턴스는 1개였다 |
+| **정상 종료** | 메뉴 `Quit Ultrakey` → 엔진 정리 후 프로세스 종료. **경로 B 매핑도 함께 비워졌다** |
+| **탭별 창 리사이즈** | Presets 825×527 · Hyperkey 710×517 · General 613×273 — `preferences-ui.md` §3.1 실측값과 일치 |
+| **종속 표현 ② 숨김** | 경로 B 매핑이 설치된 동안에만 "Caps Lock is remapped in the kernel right now…" 안내 행이 DOM 에 나타났다(매핑이 없을 때 찍은 스크린샷에는 없다) |
+
+### 증거 스크린샷
+
+| 파일 | 무엇 |
+| :--- | :--- |
+| [`screenshots/issue-15-presets-tab.png`](screenshots/issue-15-presets-tab.png) | Presets 탭 16종 4그룹. ② 숨김 안내(커널 매핑)와 ③ 문장 중간·끝 삽입 팝업이 함께 보인다 |
+| [`screenshots/issue-15-conflict-caps-remapped.png`](screenshots/issue-15-conflict-caps-remapped.png) | 충돌 #1 — 배타 대상이 `Hyper key source` 로 **올바르게** 표시된다(수정 후) |
+| [`screenshots/issue-15-conflict-caps-arrows.png`](screenshots/issue-15-conflict-caps-arrows.png) | 충돌 #2 — WASD ↔ HJKL |
+| [`screenshots/issue-15-conflict-home-row.png`](screenshots/issue-15-conflict-home-row.png) | 충돌 #3 — home row ↔ 방향키 |
+| [`screenshots/issue-15-general-launch-on-login.png`](screenshots/issue-15-general-launch-on-login.png) | General 탭 613×273. `Start Ultrakey at login` 이 활성이고, 아직 범위 밖인 자동 업데이트만 비활성이다 |
+
+### ⬜ 수행하지 못한 것 — 통과했다고 적지 않는다
+
+| 항목 | 왜 |
+| :--- | :--- |
+| **물리 caps lock 으로의 검증 전반** | §6-0 — 이 기기의 Karabiner 가 경로 B 보다 아래에서 caps lock 을 바꾼다. 합성 F18 로 우회했고, 그 한계는 위 표에 적었다 |
+| **`unauthorizedMenu`(7-c)** | Accessibility 권한 회수·재부여가 필요한데, 재부여에 사용자 인증이 걸려 실패하면 앱이 동작 불능 상태로 남는다. **위험 대비 얻는 것이 작다고 판단해 수행하지 않았다** |
+| **6-3 F-08.11 괄호 quick press** | 미수행 |
+| **6-6 Secure Input** | 미수행. 경로 B 가 Secure Input 구간에서 어떻게 되는지는 `power-user-presets.md` §9.2 #10 의 `(미확정)` 그대로 남는다 |
+| **나머지 프리셋 9종**(F-08.1·6·7·9·12·13·14·15·16)의 실동작 | 미수행. 판정 로직은 단위 테스트로 덮여 있으나 **실기기 확인은 하지 않았다** |
+| **macOS 12 LaunchAgent 폴백** | 기기가 macOS 26.5.2 라 확인 불가 |
+
+### 🐛 이 검증이 잡은 결함
+
+⭐ **충돌 대화상자가 배타 대상을 잘못 가리켰다.** `Caps Lock is already spoken for` 대화상자가
+"이걸 켜면 **`Send this key instead of Caps Lock:`** 를 끕니다" 라고, **지금 켜려는 설정 자신**을
+꺼야 할 대상으로 표시했다. `conflicts.rs` 가 `to_disable` 에 `PRESETS_CAPS_LOCK_REMAP_ENABLED`
+를 넣고 있었기 때문이다. 배타 대상은 **caps lock 을 이미 점유한 hyper/meh/bleh 슬롯**이어야 한다.
+
+- 단위 테스트는 이 버그를 잡지 못했다 — 테스트가 코드와 같은 상수를 기대값으로 썼기 때문이다.
+  **"무엇이 옳은가"가 아니라 "코드가 무엇을 하는가"를 검증하고 있었다.**
+- 고친 뒤 `caps_modifier_slot_keys()` 를 도입해 실행 시점에 배타 대상을 계산하고, 반대 방향
+  (hyper 슬롯을 켤 때 `Remap caps lock to:` 가 이미 켜져 있는 경우)도 대칭으로 처리했다.
+- 회귀 테스트를 **동작 기준으로** 다시 썼다(`caps_lock_already_remapped_disables_the_modifier_slot_not_itself`).
+
+### 검증 후 되돌린 것
+
+- `settings.json` 을 **검증 전 상태로 복원**했다(hyperkey 3키 + `ui.lastTab` 만 존재).
+- caps lock 잠금 상태를 `No` 로, `hidutil` 매핑을 빈 상태로 되돌렸다.
+- 검증을 위해 잠시 종료했던 **기존 인스턴스(메인 체크아웃 빌드)를 다시 띄웠다.**
+- ⛔ **키체인·시스템 설정·사용자의 Karabiner 설정은 건드리지 않았다.** Accessibility 권한도
+  토글하지 않았다(위 7-c 참조).
 
 ---
 

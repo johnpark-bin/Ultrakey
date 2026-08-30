@@ -208,7 +208,7 @@
 | # | 그룹 | 라벨 원문 | 컨트롤 | 선택지 | 기본값 | 소유 | 저장 키 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | caps lock | `Remap caps lock to:` | 체크박스 + 팝업(50종, §4.3.1) | 아래 표 | ☐ / `left control` | F-08 | `capsLockRemapped` |
-| 2 | caps lock | `Quick press caps lock to execute:` | 체크박스 + 팝업(49종, §4.3.1) | 아래 표 | ☐ / `caps lock` | F-08 | — |
+| 2 | caps lock | `Quick press caps lock to execute:` | 체크박스 + 팝업(48종 + 구분선, §4.3.1) | 아래 표 | ☐ / `caps lock` | F-08 | — |
 | 3 | caps lock | `Quick press duration` | 슬라이더 + 값 라벨 | 250~2000ms | 1000ms | F-08 | `quickPressTimeout` |
 | 4 | caps lock | `Caps lock + space = enter` | 체크박스 | — | ☐ | F-08 | `capsSpaceEnter` |
 | 5 | caps lock | `Caps lock + W A S D = ▲◀▼▶` | 체크박스 | — | ☐ | F-08 | `capsWasdArrows` |
@@ -239,7 +239,7 @@
 | 팝업 | 선택지(표시 순서) |
 | :--- | :--- |
 | `Remap caps lock to:` (50종) | `esc` · `nothing (disable it)` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F24` |
-| `Quick press caps lock to execute:` (49종) | `Seek` · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · `/` |
+| `Quick press caps lock to execute:` (48종 + 구분선 1) | `Seek` · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · `/` |
 
 ⭐ `Quick press caps lock to execute:` 의 첫 항목이 `Seek` 다 — quick press 로 Seek 세션을 여는 **세 번째 활성화 경로**(단축키 레코더·`Remap key to Seek:` 리매핑에 이어)가 존재한다. F-01 이 이 사실을 §3(활성화 경로)에 반영해야 한다 — F-09 는 여기서 팝업 선택지로서만 기록한다.
 

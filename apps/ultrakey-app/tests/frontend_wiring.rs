@@ -45,6 +45,19 @@ fn read_en_catalog() -> serde_json::Value {
         .unwrap_or_else(|e| panic!("resources/i18n/en.json 파싱 실패({path:?}): {e}"))
 }
 
+fn read_ko_catalog() -> serde_json::Value {
+    let path = manifest_dir().join("../../resources/i18n/ko.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("resources/i18n/ko.json 을 읽지 못했다({path:?}): {e}"));
+    serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("resources/i18n/ko.json 파싱 실패({path:?}): {e}"))
+}
+
+fn read_main_rs() -> String {
+    let path = manifest_dir().join("src/main.rs");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("src/main.rs 을 읽지 못했다({path:?}): {e}"))
+}
+
 /// ⭐ `window.__TAURI__` 를 참조하면서 `withGlobalTauri` 가 꺼져 있으면(또는
 /// 아예 없으면) 웹뷰가 백지가 된다 — 실제로 이번에 발생한 사고 그대로다.
 /// Tauri v2 는 `app.withGlobalTauri` 가 `true` 일 때만 그 전역을 주입하고,
@@ -218,8 +231,18 @@ fn flatten_catalog(value: &serde_json::Value) -> BTreeSet<String> {
 /// `settings.html` 이 존재하고, 4개 커맨드 이름을 전부 invoke 한다.
 #[test]
 fn settings_html_이_존재하고_4개_커맨드를_전부_invoke_한다() {
+    // ⭐ F-08/F-10 통합(이슈 #15) — 메뉴바에 `Quit` 이 생겨 설정 창은 더 이상
+    // `quit_app` 을 invoke 하지 않는다. 대신 F-08 이 `settings_resolve_conflict`
+    // (충돌 대화상자 `계속` 버튼)를 새로 추가했다. `quit_app` 커맨드 자체는
+    // main.rs 에 남아 있다(메뉴 `Quit Ultrakey` 가 여전히 쓴다) — 이 목록은
+    // "settings.html 이 부르는 커맨드"만의 목록이다.
     let html = read_settings_html();
-    for command in ["settings_bootstrap", "settings_set", "settings_set_tab", "quit_app"] {
+    for command in [
+        "settings_bootstrap",
+        "settings_set",
+        "settings_set_tab",
+        "settings_resolve_conflict",
+    ] {
         assert!(
             html.contains(&format!("invoke(\"{command}\"")),
             "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
@@ -270,13 +293,28 @@ fn settings_html_의_settings_점_리터럴은_전부_카탈로그_키다() {
         "settings.html 에서 \"settings.*\" 리터럴을 하나도 찾지 못했다 — 추출 로직이 깨졌을 수 있다"
     );
 
-    let missing: Vec<_> = settings_keys
-        .iter()
-        .filter(|k| !known_keys.contains(k.as_str()))
-        .collect();
+    // ⭐ F-08 충돌 대화상자(`showConflict`)는 `t("settings.presets.conflict.title." +
+    // conflict.kind)` 처럼 문자열 결합으로 키를 완성한다(`kind` 가
+    // `capsLockAlreadyRemapped` 류 런타임 값이기 때문). 이 추출기는 순수 정적
+    // 스캔이라 결합 결과를 알 수 없다 — `.` 로 끝나는 리터럴은 완성된 키가 아니라
+    // "결합 접두사"로 보고, 정확한 일치 대신 그 접두사로 시작하는 키가 카탈로그에
+    // 하나라도 있는지만 확인한다(오탐 없이 접두사 자체의 오타는 여전히 잡는다).
+    let (prefixes, exact): (Vec<_>, Vec<_>) = settings_keys.iter().partition(|k| k.ends_with('.'));
+
+    let missing: Vec<_> = exact.iter().filter(|k| !known_keys.contains(k.as_str())).collect();
     assert!(
         missing.is_empty(),
         "settings.html 이 참조하는 다음 카탈로그 키가 resources/i18n/en.json 에 없다: {missing:?}"
+    );
+
+    let missing_prefixes: Vec<_> = prefixes
+        .iter()
+        .filter(|p| !known_keys.iter().any(|k| k.starts_with(p.as_str())))
+        .collect();
+    assert!(
+        missing_prefixes.is_empty(),
+        "settings.html 이 문자열 결합으로 참조하는 다음 접두사로 시작하는 카탈로그 키가 \
+         resources/i18n/en.json 에 하나도 없다: {missing_prefixes:?}"
     );
 }
 
@@ -352,4 +390,88 @@ fn 최초_렌더는_탭을_저장하지_않고_리사이즈만_한다() {
         "최초 렌더의 activateTab 은 persist: false 로 불러야 한다 — 창을 열기만 해도 \
          settings.json 이 생기면 F-15 §8 이 깨진다"
     );
+}
+
+// ⭐ F-10(menu-bar-and-lifecycle.md) — 메뉴바(NSStatusItem) 재발 방지 테스트.
+//
+// 프런트엔드(HTML/JS)와 달리 트레이 메뉴는 `src/main.rs` 안에서 전부 조립된다
+// (`ultrakey-app` 은 라이브러리 타깃이 없어 이 통합 테스트가 그 내부 함수를 직접
+// 부를 수 없다 — `settings.html`/`index.html` 을 다루는 위 테스트들과 같은 이유로
+// 소스 텍스트를 정적으로 스캔한다).
+
+/// `"menu.` 로 시작하는 큰따옴표 문자열 리터럴만 걸러낸다. `menu_ids` 모듈이
+/// 문자열 리터럴 자체를 상수로 한 번만 선언하고 나머지 코드는 그 상수를
+/// 참조하므로, 이 집합은 (a) `menu_ids::*` 상수 정의 자체 + (b) 상수를 두지 않은
+/// 나머지 소수의 카탈로그 키(`menu.ignore_app.none` 등)로 이루어진다.
+fn menu_dot_literals_in_main_rs() -> BTreeSet<String> {
+    let main_rs = read_main_rs();
+    let no_comments = strip_line_comments(&main_rs);
+    extract_double_quoted_literals(&no_comments)
+        .into_iter()
+        .filter(|s| s.starts_with("menu."))
+        .collect()
+}
+
+/// (a) `main.rs` 의 `"menu.*"` 리터럴이 전부 실재하는 카탈로그 키다(en 기준).
+#[test]
+fn main_rs_의_menu_점_리터럴은_전부_en_카탈로그_키다() {
+    let en = read_en_catalog();
+    let known_keys = flatten_catalog(&en);
+
+    let menu_keys = menu_dot_literals_in_main_rs();
+    assert!(
+        !menu_keys.is_empty(),
+        "src/main.rs 에서 \"menu.*\" 리터럴을 하나도 찾지 못했다 — 추출 로직이 깨졌을 수 있다"
+    );
+
+    let missing: Vec<_> = menu_keys.iter().filter(|k| !known_keys.contains(k.as_str())).collect();
+    assert!(
+        missing.is_empty(),
+        "src/main.rs 가 참조하는 다음 트레이 메뉴 카탈로그 키가 resources/i18n/en.json 에 없다: {missing:?}"
+    );
+}
+
+/// (b) 트레이 메뉴가 참조하는 i18n 키가 en·ko 양쪽에 모두 있다. `ultrakey-i18n` 의
+/// `en_ko_key_sets_are_identical` 이 카탈로그 전체에 대해 이미 이걸 검증하지만,
+/// 여기서는 "메뉴가 실제로 쓰는 키 집합"을 자체적으로 다시 좁혀서 확인한다 —
+/// 이 테스트만 보고도 메뉴 관련 키 누락을 바로 알 수 있어야 한다.
+#[test]
+fn main_rs_의_menu_점_리터럴은_en_ko_양쪽_카탈로그에_모두_있다() {
+    let en_keys = flatten_catalog(&read_en_catalog());
+    let ko_keys = flatten_catalog(&read_ko_catalog());
+
+    let menu_keys = menu_dot_literals_in_main_rs();
+    assert!(!menu_keys.is_empty());
+
+    let missing_en: Vec<_> = menu_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
+    let missing_ko: Vec<_> = menu_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+
+    assert!(missing_en.is_empty(), "en.json 에 없는 메뉴 키: {missing_en:?}");
+    assert!(missing_ko.is_empty(), "ko.json 에 없는 메뉴 키: {missing_ko:?}");
+}
+
+/// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
+/// `Settings…` · `About` · `Advanced ▸ (Synthesize Caps Lock Remap / Relaunch)` ·
+/// `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을 전부 갖추고 있는지
+/// 이름만으로 재확인한다. `Purchase`(F-12)·`Check for Updates…`(F-13)가 실수로
+/// 다시 들어오면(범위 밖) 이 테스트가 아니라 코드 리뷰에서 걸러야 하지만, 적어도
+/// 필수 항목이 빠지는 회귀는 여기서 잡는다.
+#[test]
+fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
+    let main_rs = read_main_rs();
+    for id in [
+        "menu.ignore_app",
+        "menu.settings",
+        "menu.about",
+        "menu.advanced",
+        "menu.advanced.synthesize_caps_remap",
+        "menu.advanced.relaunch",
+        "menu.quit",
+        "menu.unauthorized.authorize",
+    ] {
+        assert!(
+            main_rs.contains(&format!("\"{id}\"")),
+            "src/main.rs 에 메뉴 항목 id \"{id}\" 리터럴이 없다 — menu_ids 모듈에서 빠졌을 수 있다"
+        );
+    }
 }
