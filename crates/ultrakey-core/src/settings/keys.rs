@@ -148,6 +148,14 @@ pub const SEEK_REMAP_KEY: &str = "seek.remapKey";
 pub const SEEK_EXECUTE_ON_CLOSE: &str = "seek.executeOnClose";
 /// `Semicolon highlights next match`(명세 §4 저장 키 `semicolonCycleSeek`). 부재 = ☐.
 pub const SEEK_SEMICOLON_CYCLE: &str = "seek.semicolonCycle";
+/// `Focus window before clicking`(F-04 §4). 기본 ☐(부재 = `false`).
+pub const SEEK_FOCUS_WINDOW_BEFORE_CLICKING: &str = "seek.focusWindowBeforeClicking";
+/// `Change click modes with modifier keys`(F-04 §4).
+/// ⚠️ **기본값 ☑(부재 = `true`)** — Seek 탭에서 유일하게 출고 기본값이 켜진
+/// 항목이다(명세 §4). F-16 의 `KOREAN_DISABLE_IN_REMOTE_DESKTOP` 과 같은
+/// "부재 = true" 주석 관례를 그대로 따른다 — `unwrap_or_default()` 를 쓰면
+/// 부재가 `false` 로 읽혀 실측 기본값을 조용히 어기게 된다.
+pub const SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS: &str = "seek.changeClickModesWithModifiers";
 
 // ── F-17 키보드별 설정(`per-device-settings.md` §3.3~3.4, D-17-2) —
 // `ultrakey_core::perdevice` 가 소비한다 ──
@@ -233,6 +241,8 @@ pub fn all() -> &'static [&'static str] {
         SEEK_REMAP_KEY,
         SEEK_EXECUTE_ON_CLOSE,
         SEEK_SEMICOLON_CYCLE,
+        SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
+        SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS,
         PER_DEVICE_MANAGED,
     ]
 }

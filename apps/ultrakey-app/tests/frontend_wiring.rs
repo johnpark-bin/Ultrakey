@@ -1317,9 +1317,11 @@ fn extract_hex_const_value(text: &str, needle: &str) -> u64 {
         .unwrap_or_else(|e| panic!("`{needle}` 뒤의 16진수 파싱 실패: {e}"))
 }
 
-/// `Seek` 탭 버튼·패널과 3개 `data-key` 가 전부 `settings.html` 에 존재한다.
+/// `Seek` 탭 버튼·패널과 5개 `data-key` 가 전부 `settings.html` 에 존재한다.
+/// ⭐ F-04(이슈 #44) — `seek.focusWindowBeforeClicking`·`seek.changeClickModes
+/// WithModifiers` 체크박스 2개가 추가됐다(3 → 5).
 #[test]
-fn settings_html_에_seek_탭_버튼_패널_3개_data_key가_있다() {
+fn settings_html_에_seek_탭_버튼_패널_5개_data_key가_있다() {
     let html = read_settings_html();
 
     assert!(
@@ -1331,7 +1333,13 @@ fn settings_html_에_seek_탭_버튼_패널_3개_data_key가_있다() {
         "settings.html 에 Seek 탭 패널(id=\"panel-seek\")이 없다"
     );
 
-    for data_key in ["seek.remapKey", "seek.executeOnClose", "seek.semicolonCycle"] {
+    for data_key in [
+        "seek.remapKey",
+        "seek.executeOnClose",
+        "seek.semicolonCycle",
+        "seek.focusWindowBeforeClicking",
+        "seek.changeClickModesWithModifiers",
+    ] {
         assert!(
             html.contains(&format!("data-key=\"{data_key}\"")),
             "settings.html 에 data-key=\"{data_key}\" 컨트롤이 없다"

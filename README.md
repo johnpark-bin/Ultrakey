@@ -58,6 +58,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `ultrakey-hyperkey` | F-05 | hyper · meh · bleh |
 | `ultrakey-seek-session` | **F-01** | Seek 활성화·세션 상태 머신의 순수 로직 — 활성화 3경로 · 세션 생명주기 · 세션 중 키 라우팅 · F-04 경계. macOS 비의존 |
 | `ultrakey-overlay` | **F-03** | Seek 오버레이의 순수 로직 — 좌표 변환 · 연결선 클리핑 · 증분 수신 세션. macOS 비의존 |
+| `ultrakey-click` | **F-04** | Seek 클릭 실행의 순수 로직 — 클릭 모드 7종 해석 · 지점·계획·경로·화면 밖 판정. macOS 비의존 |
 | `ultrakey-permissions` | F-11 | 권한 온보딩과 복구 |
 | `ultrakey-i18n` | F-14 (A) / D4 | 문자열 카탈로그 (ko + en) |
 | `apps/ultrakey-app` | F-09 · F-10 껍데기 | Tauri 앱 |

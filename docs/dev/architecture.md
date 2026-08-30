@@ -14,13 +14,14 @@
 | 크레이트 | 대응 명세 | 역할 | `unsafe` | macOS 필요 |
 | :--- | :--- | :--- | :---: | :---: |
 | `ultrakey-core` | F-07 의 **판정 부분**, F-10 게이트 상태, F-15 선행 | 정본 키 상태 테이블, quick press 상태 머신, 중재 우선순위 표, 규칙 테이블, 설정 타입, 키코드 enum | ❌ 없음 | ❌ 불필요 |
-| `ultrakey-platform` | 전 기능의 플랫폼 경계 | **모든 `unsafe` FFI 가 여기에만 있다.** CGEvent/EventTap, IOKit(경로 B·C·핫플러그), Carbon HIToolbox(TIS/UCKeyTranslate), AX, NSWorkspace, Secure Input, CFRunLoop. ⭐ **F-02 추가(이슈 #30)**: `screen_capture`(`CGDisplayCreateImage`) · `image_preprocess`(CoreImage) · `vision_ocr`(Vision) · `ax_text`(AX 트리 순회) · `screen_recording`(권한). ⭐ **F-03 추가(이슈 #34)**: `overlay_window`(`ns_window()` 경유 window level · collection behavior · ⭐ 키 윈도우가 될 수 없게 만드는 표적 스위즐) · `screens`(`NSScreen` 열거 · `backingScaleFactor` · 핫플러그 알림 · 외관/축소된 모션) | ✅ 전량 | ✅ |
+| `ultrakey-platform` | 전 기능의 플랫폼 경계 | **모든 `unsafe` FFI 가 여기에만 있다.** CGEvent/EventTap, IOKit(경로 B·C·핫플러그), Carbon HIToolbox(TIS/UCKeyTranslate), AX, NSWorkspace, Secure Input, CFRunLoop. ⭐ **F-02 추가(이슈 #30)**: `screen_capture`(`CGDisplayCreateImage`) · `image_preprocess`(CoreImage) · `vision_ocr`(Vision) · `ax_text`(AX 트리 순회) · `screen_recording`(권한). ⭐ **F-03 추가(이슈 #34)**: `overlay_window`(`ns_window()` 경유 window level · collection behavior · ⭐ 키 윈도우가 될 수 없게 만드는 표적 스위즐) · `screens`(`NSScreen` 열거 · `backingScaleFactor` · 핫플러그 알림 · 외관/축소된 모션). ⭐ **F-04 추가(이슈 #44)**: `click_synthesis`(마우스 클릭·커서 워프·디스플레이 경계) | ✅ 전량 | ✅ |
 | `ultrakey-engine` | F-07 의 **인프라 부분** | 전용 스레드 런루프, 탭 생명주기 FSM, 워치독, 절전·깨어남·세션 훅, 핫플러그 재적용, 경로 B/C 관리자 | 간접 | ✅ |
 | `ultrakey-layout` | F-14 (B) | 입력 소스 독립 판정 — ASCII 폴백, 정/역방향 테이블, 캐시 무효화 | 간접 | ✅ (테스트는 ❌) |
 | `ultrakey-hyperkey` | F-05 | hyper·meh·bleh 규칙 정의와 비트마스크 합성. **엔진에 규칙만 등록한다** | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-seek` | **F-02** | Seek 텍스트 후보 검출의 **순수 로직** — 좌표 변환(§3.2.3), 후보 정규화, 두 소스 병합(§3.4), 질의 매칭(§3.6). macOS 의존은 `detect` 모듈 하나에 `#[cfg]` 로 가둬 두어 나머지는 어디서나 테스트된다 | ❌ 없음 | 부분 (`detect` 만) |
 | `ultrakey-overlay` | **F-03** | Seek 오버레이 UI 의 **순수 로직** — 다중 디스플레이 좌표 변환, ⭐ **연결선의 디스플레이 경계 클리핑**(Liang–Barsky), 렌더 모델 산출, 상한 정책(§4.2), ⭐ **증분 수신 세션**(F-02 결정 S-6 의 소비자). 렌더링 계층은 `OverlayRenderer` 트레이트로 분리해 교체 가능하다(`platform-constraints.md` §4.3) | ❌ 없음 | ❌ 불필요 |
-| `ultrakey-seek-session` | **F-01** | Seek **활성화·세션 상태 머신**의 순수 로직 — 활성화 경로 3종의 모드 판정, 세션 생명주기(Opening→Ready→Querying→Selected→Confirming), 세션 중 키 라우팅(물리 키코드 기준), F-04 로 넘길 `ConfirmedMatch`/`ClickExecutor` 경계. ⭐ 질의 버퍼·필터링·순환·200개 상한은 **다시 만들지 않고** `ultrakey-overlay::OverlaySession` 을 소유(compose)한다 | ❌ 없음 | ❌ 불필요 |
+| `ultrakey-seek-session` | **F-01** | Seek **활성화·세션 상태 머신**의 순수 로직 — 활성화 경로 3종의 모드 판정, 세션 생명주기(Opening→Ready→Querying→Selected→Confirming), 세션 중 키 라우팅(물리 키코드 기준), F-04 로 넘길 `ConfirmedMatch`/`ClickExecutor`/`ClickSettings` 경계(F-04 추가, 이슈 #44). ⭐ 질의 버퍼·필터링·순환·200개 상한은 **다시 만들지 않고** `ultrakey-overlay::OverlaySession` 을 소유(compose)한다 | ❌ 없음 | ❌ 불필요 |
+| `ultrakey-click` | **F-04** | Seek 클릭 실행의 **순수 로직**(이슈 #44) — 클릭 모드 7종 해석(modifier 스냅샷 → 모드), 모드별 클릭 지점 계산, 프리미티브 시퀀스 계획(클릭 수·clickState·워프 복귀·⌘C), AX 경로 판정(좁은 조건 + 실패 3분기), 화면 밖 판정. macOS 비의존 → 전부 단위 테스트 가능 | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-permissions` | F-11 | `AXIsProcessTrusted` 폴링, 권한 상태 머신, out-of-sync 진단, 시스템 설정 딥링크 | 간접 | ✅ |
 | `ultrakey-i18n` | F-14 (A) / D4 · ⭐ **D6 추가(이슈 #39)** | 문자열 카탈로그(**`en`·`ko`·`zh`·`es`·`ja` 5종**), 로케일 결정, OS 버전별 어휘 교체, 언어 선택 UI 용 endonym. ⭐ **UI 문자열 전용이다** — 로그 문구는 이 크레이트를 타지 않고 코드 안의 영어 리터럴로 남는다(`localization-and-input-sources.md` §3.1.6). 그 분리는 `apps/ultrakey-app/tests/log_string_discipline.rs` 가 소스를 읽어 강제한다 | ❌ 없음 | ❌ 불필요 |
 | `apps/ultrakey-app` | F-09·F-10 의 껍데기 | Tauri 앱. M1 에서는 권한 안내 모달 + 배선(wiring)만 | 간접 | ✅ |
@@ -34,6 +35,7 @@
 | **F-05 를 별도 크레이트로** | 규칙 제공자(rule provider) 자리를 M1 에서 하나 만들어 두면, M2 의 F-08(Presets 16종)이 `ultrakey-presets` 로 **같은 자리에 나란히** 들어온다. 형태가 이미 있으면 위임 지시가 짧아진다 | `ultrakey-core` 안의 모듈로 흡수 — F-08 이 들어올 때 core 가 비대해지고, 두 위임이 같은 크레이트를 고치게 된다 |
 | **F-14 (B) 를 `ultrakey-engine` 이 아니라 별도 크레이트로** | 레이아웃 테이블 구축은 `UCKeyTranslate` 호출을 트레이트로 주입하면 **가짜 레이아웃으로 단위 테스트가 된다**. 엔진 안에 두면 그 이음매가 사라진다 | 엔진의 모듈로 — 명세가 별도 파일인데 코드만 합치면 M5 의 F-14(A) 위임이 갈 곳이 애매해진다 |
 | **Tauri 를 앱 크레이트 하나에만 의존시킨다** | 엔진·판정 로직이 Tauri 를 모르면 `cargo test -p ultrakey-core` 가 webview 툴체인 없이 돈다. 또한 F-03(오버레이)이 렌더링 계층을 교체 가능하게 분리해야 한다는 `platform-constraints.md` P3 요구와도 일관된다 | 엔진이 `AppHandle` 을 직접 들고 emit — 테스트 불가, 그리고 콜백 스레드가 Tauri 상태를 만지게 되어 §2 의 동시성 규약이 깨진다 |
+| **F-04 를 순수 결과 크레이트(`ultrakey-click`) + platform FFI 모듈(`click_synthesis`) + 앱 오케스트레이션(`click_executor`) 셋으로 나눈다** (이슈 #44) | F-02(`ultrakey-seek` + platform/ax_text·screen_capture)·F-03(`ultrakey-overlay` + platform/overlay_window)·F-01(`ultrakey-seek-session` + app/seek.rs) 와 **동형의 정착 패턴**이다 — 명세 1개 = 크레이트(또는 크레이트 안 모듈) 1개 규약의 실질("한 위임이 순수 로직 크레이트를 배타 소유")을 지킨다. 순수 로직을 독립 크레이트로 분리해야 다른 위임(F-01/F-02/F-03 후속)과 병렬 수정 충돌이 없다. **기각한 대안**: ① `ultrakey-seek-session` 흡수 — F-01 크레이트가 F-04 판정까지 소유하면 위임이 묶이고 seek-session 은 ClickExecutor **호출자**라 로직을 되먹이는 의존이 생긴다. ② `ultrakey-overlay` 흡수 — 좌표 기하만으로는 성립하나 오버레이는 F-03 렌더 모델이 핵심이고 클릭 모드 7종은 별개 도메인. ③ `ultrakey-core` 흡수 — 이미 설정·판정이 모인 크레이트라 더 키우지 않는다. ④ `event.rs` 에 마우스 합성 추가 — 키보드 합성에 하중이 걸린 파일이라 F-04 의 unsafe 표면을 한 파일에서 검토할 수 있도록 `click_synthesis.rs` 로 분리 |
 
 ---
 
@@ -182,6 +184,9 @@ impl AppGateController {
 | `Quick press duration` 기본값 | 1000 ms | **실측 확정**(§4, AX 트리: 최소 250·최대 2000·현재 1000) | 추정 아님 |
 | 권한 폴링 주기 | 온보딩 중 500 ms / 배경 5000 ms | F-11 §9 #8 `(미확정)` | 온보딩 중에는 사용자가 시스템 설정에서 돌아온 직후를 기다리므로 짧게. 배경에서는 권한 회수 감지용이라 길어도 된다 |
 | `IsSecureEventInputEnabled()` 확인 시점 | **매 콜백** | §9 #12 `(미확정)` | 명세가 "매 콜백 확인을 전제로 서술(오버헤드가 작다는 가정)". 이 가정을 실측하지 못했으므로 **캐시로 전환 가능한 트레이트 뒤에 두었다** — 측정 후 교체 지점이 한 곳이다 |
+| F-04 `Focus window before clicking` — `isActive` 폴링 간격 | 20 ms | §5 #9 `(미확정)` — 이슈 #44(D8) | 폴링은 사건 발생 시 조기 종료하는 **조건부 대기**라 고정 딜레이 금지(§5 #9)를 지킨다. ±1프레임 이내로 오버헤드 무시 가능 |
+| 상동 — 폴링 상한 | 300 ms (20ms × 15회) | 상동 — 이슈 #44(D8) | 상한 초과 시 폴링을 멈추고 클릭을 그대로 진행(첫 클릭이 활성화에 소모되는 macOS 기본 동작으로 열화). 안전판이지 클릭의 전제 조건이 아니다 |
+| F-04 `AXWindow` 조상 탐색 깊이 상한 | 10 | 상동 — 이슈 #44(J4) | 버튼→도구모음→창이 보통 2~3 단계. 브라우저 DOM 미러 같은 병적 트리 방어값 |
 
 ---
 
@@ -192,6 +197,7 @@ impl AppGateController {
 | 자리 | 형태 | 언제 |
 | :--- | :--- | :--- |
 | ~~계층 1 — Seek 세션~~ | ⭐ **해소(M3 / 이슈 #38).** `SharedState::seek_session_active` 를 `apps/ultrakey-app/src/seek.rs` 의 워커가 세션 개폐 때마다 게시하고, 중재기가 그 값으로 계층 1 을 판정해 키를 `Effect::SeekKey` 로 F-01 에 라우팅한다 | ✅ M3 |
+| ~~F-04 — Seek 클릭 실행~~ | ⭐ **해소(M3 / 이슈 #44).** `ultrakey-click`(순수 판정) + `ultrakey-platform::click_synthesis`(unsafe FFI) + `apps/ultrakey-app/src/click_executor.rs`(오케스트레이션 — Focus 전환·AX press·좌표 폴백)로 F-04 경계가 채워졌다. `seek.rs` 의 `NullClickExecutor` 자리를 실 구현이 교체했다 | ✅ M3 |
 | 계층 3 — Preset 조합 | `RuleTable::combo_rules: Vec<ComboRule>` (항상 비어 있음) | M2 / F-08 |
 | 계층 4 — 단순 리매핑 | `RuleTable::simple_remaps` (항상 비어 있음) | M2 / F-08 |
 | 경로 B 규칙 배정 | `HidMappingBackend` 트레이트 + `hidutil` 구현체 | M2 / F-08 |

@@ -1,0 +1,12 @@
+[package]
+name = "ultrakey-click"
+description = "F-04 Seek 클릭 실행의 순수 로직 — 클릭 모드 7종 해석 · 지점·계획·경로·화면 밖 판정"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ultrakey-core = { workspace = true }
+ultrakey-seek = { workspace = true }

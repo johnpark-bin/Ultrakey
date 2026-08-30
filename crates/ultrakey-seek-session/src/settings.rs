@@ -20,7 +20,12 @@ use crate::config::SeekConfig;
 
 /// `Seek` 탭 설정의 저장 표현. `SeekConfig`(런타임 판정용)와 달리 사용자가 고른
 /// 값 그대로를 들고 있다.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// ⚠️ **`Default` 는 파생이 아니라 수동 구현이다** — [`SeekSettings::
+/// change_click_modes_with_modifiers`] 는 Seek 탭에서 유일하게 출고 기본값이
+/// 켜진(☑) 항목이라, 파생 `Default`(전부 false)로는 실측 기본값을 표현할 수
+/// 없다(A4, 명세 §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeekSettings {
     /// `Toggle Seek with shortcut:` — 미설정이면 `None`(버튼 라벨 `Record Shortcut`,
     /// 실측 출고 기본값).
@@ -32,6 +37,27 @@ pub struct SeekSettings {
     pub execute_on_close: bool,
     /// `Semicolon highlights next match`(저장 키 `semicolonCycleSeek`). 기본 ☐.
     pub semicolon_cycles: bool,
+    /// `Focus window before clicking`(저장 키 `seek.focusWindowBeforeClicking`,
+    /// F-04 §4). 기본 ☐.
+    pub focus_window_before_clicking: bool,
+    /// `Change click modes with modifier keys`(저장 키
+    /// `seek.changeClickModesWithModifiers`, F-04 §4). ⚠️ **기본 ☑** — Seek 탭에서
+    /// 유일하게 출고 기본값이 켜진 항목(명세 §4). ☑ 기본값 선례:
+    /// `KoreanSettings::disable_in_remote_desktop`(부재 = true 주석 관례).
+    pub change_click_modes_with_modifiers: bool,
+}
+
+impl Default for SeekSettings {
+    fn default() -> Self {
+        Self {
+            toggle_shortcut: None,
+            remap_key: None,
+            execute_on_close: false,
+            semicolon_cycles: false,
+            focus_window_before_clicking: false,
+            change_click_modes_with_modifiers: true,
+        }
+    }
 }
 
 /// 전역 단축키 하나 — 웹 `KeyboardEvent.code` + modifier 비트.
@@ -122,6 +148,15 @@ impl SeekSettings {
             remap_key: store.get(keys::SEEK_REMAP_KEY),
             execute_on_close: store.get(keys::SEEK_EXECUTE_ON_CLOSE).unwrap_or_default(),
             semicolon_cycles: store.get(keys::SEEK_SEMICOLON_CYCLE).unwrap_or_default(),
+            focus_window_before_clicking: store
+                .get(keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING)
+                .unwrap_or_default(),
+            // ⚠️ 부재 = true. 다른 필드처럼 `unwrap_or_default()` 를 쓰면 부재가
+            // `false` 로 읽혀 실측 출고 기본값(☑)을 조용히 어기게 된다 —
+            // `KOREAN_DISABLE_IN_REMOTE_DESKTOP` 의 "부재 = true" 주석 관례를 따른다.
+            change_click_modes_with_modifiers: store
+                .get(keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS)
+                .unwrap_or(true),
         }
     }
 
@@ -217,6 +252,10 @@ mod tests {
         assert_eq!(s.remap_key, None);
         assert!(!s.execute_on_close);
         assert!(!s.semicolon_cycles);
+        // ⭐ F-04 추가(이슈 #44, 명세 §4 실측) — Focus window ☐,
+        // Change click modes ☑(Seek 탭 유일).
+        assert!(!s.focus_window_before_clicking);
+        assert!(s.change_click_modes_with_modifiers);
     }
 
     #[test]
@@ -257,6 +296,29 @@ mod tests {
 
         let s = SeekSettings::from_store(&store);
         assert_eq!(s.remap_key, Some(SourceKey::CapsLock));
+    }
+
+    /// ⭐ F-04(이슈 #44, A4) — 새 키 2종: `focusWindowBeforeClicking` 는 부재 =
+    /// false, `changeClickModesWithModifiers` 는 **부재 = true**(☑ 기본값).
+    #[test]
+    fn from_store_reads_focus_window_and_change_click_modes() {
+        let mut store = SettingsStore::in_memory();
+        let s = SeekSettings::from_store(&store);
+        assert!(!s.focus_window_before_clicking, "부재 = ☐");
+        assert!(
+            s.change_click_modes_with_modifiers,
+            "부재 = ☑(Seek 탭 유일한 켜짐 기본값)"
+        );
+
+        store
+            .set(keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING, &true)
+            .unwrap();
+        store
+            .set(keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS, &false)
+            .unwrap();
+        let flipped = SeekSettings::from_store(&store);
+        assert!(flipped.focus_window_before_clicking);
+        assert!(!flipped.change_click_modes_with_modifiers);
     }
 
     // ── display() ───────────────────────────────────────────────────────────
@@ -339,6 +401,7 @@ mod tests {
             remap_key: Some(SourceKey::CapsLock),
             execute_on_close: true,
             semicolon_cycles: true,
+            ..SeekSettings::default()
         };
         let config = s.to_config(false);
         assert!(config.global_shortcut.is_some());

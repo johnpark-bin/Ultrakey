@@ -4,7 +4,7 @@
 //! 있다 — 이 파일이 하는 일은 그 머신을 **워커 전용 스레드**에 얹고, 세 활성화
 //! 경로(전역 단축키·리매핑 키·quick press caps lock)·세션 중 키·F-02 검출 결과를
 //! [`SeekSignal`] 채널로 받아 머신에 먹이고, 나온 [`SessionEffect`] 를 실제
-//! 오버레이(F-03)·클릭(F-04, 아직 없음)에 실행하는 조립이다.
+//! 오버레이(F-03)·클릭(F-04, `click_executor.rs`)에 실행하는 조립이다.
 //!
 //! ## 스레드 모양
 //!
@@ -63,7 +63,7 @@ use ultrakey_overlay::renderer::OverlayRenderer;
 use ultrakey_seek::{detect_candidates, CandidateSource, DetectionParams, TextCandidate};
 use ultrakey_seek_session::keys::{classify, SessionKey};
 use ultrakey_seek_session::{
-    ActivationPath, ClickExecutor, NullClickExecutor, SeekConfig, SeekSessionMachine, SessionEffect,
+    ActivationPath, ClickExecutor, ClickSettings, SeekConfig, SeekSessionMachine, SessionEffect,
 };
 
 use crate::overlay::{
@@ -114,8 +114,10 @@ pub enum SeekSignal {
     /// 디스플레이 구성이 바뀌었다(핫플러그, §5 #6).
     DisplaysChanged,
     /// 설정이 바뀌었다 — 열려 있는 세션의 모드는 바꾸지 않는다
-    /// (`SeekSessionMachine::set_config` 계약).
-    ConfigChanged(SeekConfig),
+    /// (`SeekSessionMachine::set_config` 계약). F-04 클릭 설정(`ClickSettings`)
+    /// 은 같은 저장 갱신에서 태어나므로(A6 — 단일 소스 → 단일 신호 원칙)
+    /// 함께 실어 보낸다.
+    ConfigChanged(SeekConfig, ClickSettings),
     /// 워커를 끝낸다. 지금은 어디서도 보내지 않는다(앱은 프로세스 종료로 끝난다) —
     /// 워커 루프(`run_worker`)를 유한하게 만들 수 있는 신호가 이것뿐이라는 것을
     /// 이음매로 남겨 둔다(향후 유닛 테스트·정상 종료 경로가 쓸 자리).
@@ -487,6 +489,7 @@ pub fn spawn(
     shared: Arc<SharedState>,
     surface_state: Arc<Mutex<SurfaceState>>,
     initial_config: SeekConfig,
+    initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) -> Sender<SeekSignal> {
@@ -505,6 +508,7 @@ pub fn spawn(
                 shared,
                 surface_state,
                 initial_config,
+                initial_click_settings,
                 stored_origin,
                 persist_origin,
             );
@@ -524,6 +528,7 @@ fn run_worker(
     shared: Arc<SharedState>,
     surface_state: Arc<Mutex<SurfaceState>>,
     initial_config: SeekConfig,
+    initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) {
@@ -535,9 +540,13 @@ fn run_worker(
             move |x, y| persist_origin(x, y)
         }),
     );
-    // ⛔ F-04(실제 클릭 합성)는 아직 이 저장소에 구현이 없다 — `ClickExecutor`
-    // 이음매만 배선하고, 실제 클릭은 F-04 위임이 이 자리를 교체한다.
-    let executor: Box<dyn ClickExecutor + Send> = Box::new(NullClickExecutor::default());
+    // ⭐ F-04(이슈 #44) — `NullClickExecutor` 자리를 실 구현으로 교체한다.
+    // executor 는 이 워커가 단독 소유하므로 설정은 `configure` 호출로만
+    // 바뀐다(락 없음).
+    let executor: Box<dyn ClickExecutor + Send> = Box::new(crate::click_executor::ClickExecutor::new(
+        app.clone(),
+        initial_click_settings,
+    ));
 
     let env = WorkerEnv {
         app,
@@ -552,7 +561,10 @@ fn run_worker(
         match signal {
             SeekSignal::Shutdown => break,
 
-            SeekSignal::ConfigChanged(config) => controller.machine.set_config(config),
+            SeekSignal::ConfigChanged(config, click_settings) => {
+                controller.machine.set_config(config);
+                controller.executor.configure(click_settings);
+            }
 
             SeekSignal::DisplaysChanged => {
                 let effects = controller.machine.displays_changed();
