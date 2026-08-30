@@ -48,6 +48,7 @@ use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, Setti
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::Catalog;
+use ultrakey_korean::KoreanSettings;
 use ultrakey_presets::{
     ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
     QuickPressCapsAction, RemapCapsTarget,
@@ -459,6 +460,30 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
     }
 }
 
+/// `Korean` 탭 5개 항목 — F-16(`docs/spec/korean-input.md` §4.2). `presets_view` 와
+/// 같은 형식. ⭐ `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 값 자체는
+/// 그대로 실어 보낸다 — UI 가 `disabled` 로 dimmed 하는 것뿐이지 저장은 정상 동작한다
+/// (D-K8, 2단계 활성화는 다음 작업의 범위).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct KoreanView {
+    shift_space_switches_input_source: bool,
+    han_eng_switches_input_source: bool,
+    hanja_key_converts_hanja: bool,
+    won_key_types_backtick: bool,
+    disable_in_remote_desktop: bool,
+}
+
+fn korean_view(k: &KoreanSettings) -> KoreanView {
+    KoreanView {
+        shift_space_switches_input_source: k.shift_space_switches_input_source,
+        han_eng_switches_input_source: k.han_eng_switches_input_source,
+        hanja_key_converts_hanja: k.hanja_key_converts_hanja,
+        won_key_types_backtick: k.won_key_types_backtick,
+        disable_in_remote_desktop: k.disable_in_remote_desktop,
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GeneralView {
@@ -637,6 +662,8 @@ struct SettingsState {
     /// caps_alias.note` 힌트를 UI 가 이 값으로 보인다).
     caps_lock_alias_active: bool,
     general: GeneralView,
+    /// F-16 `Korean` 탭.
+    korean: KoreanView,
     /// 값을 아직 적용하지 않은 충돌(architecture.md §6.5) — `Some` 이면 그 앞의
     /// `settings_set` 호출은 아무것도 저장·반영하지 않았다.
     pending_conflict: Option<PendingConflictView>,
@@ -645,6 +672,7 @@ struct SettingsState {
 fn build_settings_state(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
+    korean: &KoreanSettings,
     store: &SettingsStore,
     save_error: Option<String>,
     pending_conflict: Option<PendingConflictView>,
@@ -674,6 +702,7 @@ fn build_settings_state(
         preset_options: preset_options_view(),
         caps_lock_alias_active: caps_lock_alias.is_some(),
         general: general_view(store),
+        korean: korean_view(korean),
         pending_conflict,
     }
 }
@@ -746,14 +775,32 @@ fn tab_window_size(tab: &str) -> Option<(u32, u32)> {
         "seek" => Some((555, 378)),
         "hyperkey" => Some((710, 517)),
         "presets" => Some((825, 527)),
+        // ⭐ **실측으로 확정했다**(명세 §9 #5 가 "구현 후 실제 렌더링 크기 측정"
+        // 으로 남긴 자리). 이 탭의 마크업을 실제로 렌더해 잰 값:
+        //   panel-korean scrollHeight = 416px · .panel 상하 패딩 = 40px ·
+        //   타이틀바 = 28px  →  필요한 창 높이 = 484
+        // 너비 613 은 항목이 한 줄에 들어가는 General 과 같아 그대로 쓴다.
+        // ⚠️ 처음 잡았던 잠정치 400 은 **약 84px 모자라** 내용이 잘렸다 —
+        // 지어낸 값을 쓰지 않는다는 규범이 실제로 값을 바꾼 사례다.
+        //
+        // ⓘ 관찰: 같은 방법으로 재면 `presets`(내용 690px, 창 527)와
+        // `general`(내용 408px, 창 273)은 **내용이 창보다 크다.** 그 둘은
+        // SuperKey v1.66 을 실측한 원본 창 크기를 그대로 쓰는 자리라
+        // (preferences-ui.md §3.1) 클론의 마크업이 더 길어진 결과다.
+        // ⛔ 이번 범위에서 고치지 않는다 — F-16 이 만든 문제가 아니다.
+        "korean" => Some((613, 484)),
         "general" => Some((613, 273)),
         _ => None,
     }
 }
 
-/// hyperkey + presets 두 설정 묶음을 합쳐 `EngineConfig` 하나로 조립하는 단일
-/// 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이 함수를 거친다.
-fn build_engine_config(hyperkey: &HyperkeySettings, presets: &PresetSettings) -> EngineConfig {
+/// hyperkey + presets + korean 세 설정 묶음을 합쳐 `EngineConfig` 하나로 조립하는
+/// 단일 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이 함수를 거친다.
+fn build_engine_config(
+    hyperkey: &HyperkeySettings,
+    presets: &PresetSettings,
+    korean: &KoreanSettings,
+) -> EngineConfig {
     let mut config = EngineConfig::default();
     config.rules.modifier_rules = hyperkey.to_modifier_rules();
     config.mouse_apply = hyperkey.mouse_apply;
@@ -765,6 +812,9 @@ fn build_engine_config(hyperkey: &HyperkeySettings, presets: &PresetSettings) ->
     config.rules.simple_remaps = preset_rules.simple_remaps;
     config.rules.source_actions = preset_rules.source_actions;
     config.caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
+    // F-16 — `korean.disableInRemoteDesktop` 은 여기 들어오지 않는다(엔진 설정이
+    // 아니라 게이트다, D-K3) — `gate_controller.set_korean_exclusion_enabled` 이 따로 처리한다.
+    config.rules.korean_rules = korean.to_rules();
 
     config
 }
@@ -933,6 +983,8 @@ struct AppState {
     hyperkey: Mutex<HyperkeySettings>,
     /// F-08 Presets 탭의 메모리 정본. `hyperkey` 와 같은 캐시 규약을 쓴다.
     presets: Mutex<PresetSettings>,
+    /// F-16 `Korean` 탭의 메모리 정본. `hyperkey`/`presets` 와 같은 캐시 규약을 쓴다.
+    korean: Mutex<KoreanSettings>,
     /// 부트스트랩이 프런트엔드에 한 번만 알려줄 로드 경고(손상 복구/미래 스키마).
     load_notice: Mutex<Option<Notice>>,
     // ── F-10 메뉴바 상주(M2 2차) ──────────────────────────────────────────
@@ -1019,8 +1071,9 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     let catalog = &state.catalog;
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
+    let korean = *state.korean.lock().unwrap();
     let store = state.store.lock().unwrap();
-    let settings_state = build_settings_state(&hyperkey, &presets, &store, None, None);
+    let settings_state = build_settings_state(&hyperkey, &presets, &korean, &store, None, None);
     let meta = build_app_meta(&app, &store);
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
@@ -1041,8 +1094,9 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
 fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String> {
     let hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean = *state.korean.lock().map_err(|e| e.to_string())?;
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(build_settings_state(&hyperkey, &presets, &store, None, None))
+    Ok(build_settings_state(&hyperkey, &presets, &korean, &store, None, None))
 }
 
 /// hyperkey.* 변경 뒤 `Engine::reconfigure` + (필요하면) `force_reset_state` 를
@@ -1052,17 +1106,19 @@ fn reconfigure_engine(
     state: &Arc<AppState>,
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
+    korean: &KoreanSettings,
     force_reset: bool,
 ) -> Result<(), String> {
     let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
     if let Some(engine) = engine_guard.as_ref() {
-        engine.reconfigure(build_engine_config(hyperkey, presets));
+        engine.reconfigure(build_engine_config(hyperkey, presets, korean));
         if force_reset {
             engine.force_reset_state();
         }
     }
     // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
-    // 갱신된 `state.hyperkey`/`state.presets` 로 조립되므로 이 변경이 유실되지 않는다.
+    // 갱신된 `state.hyperkey`/`state.presets`/`state.korean` 으로 조립되므로 이
+    // 변경이 유실되지 않는다.
     Ok(())
 }
 
@@ -1103,6 +1159,10 @@ fn settings_set(
         return settings_set_preset(&state, &key, &value);
     }
 
+    if key.starts_with("korean.") {
+        return settings_set_korean(&state, &key, &value);
+    }
+
     settings_set_hyperkey(&state, &key, &value)
 }
 
@@ -1127,10 +1187,12 @@ fn settings_set_hyperkey(
         if let Some(conflict) = ultrakey_presets::detect_modifier_slot_conflict(&presets_before) {
             let pending = pending_conflict_view(conflict, key, value);
             let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+            let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
+                &korean_snapshot,
                 &store,
                 None,
                 Some(pending),
@@ -1145,6 +1207,7 @@ fn settings_set_hyperkey(
         hyperkey.clone()
     };
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
 
     // 3) 엔진 반영.
     // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
@@ -1152,6 +1215,7 @@ fn settings_set_hyperkey(
         state,
         &hyperkey_snapshot,
         &presets_snapshot,
+        &korean_snapshot,
         key_affects_modifier_rules(key),
     )?;
 
@@ -1169,7 +1233,14 @@ fn settings_set_hyperkey(
 
     // 5) 새 SettingsState.
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(build_settings_state(&hyperkey_snapshot, &presets_snapshot, &store, save_error, None))
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
 }
 
 /// 이 `hyperkey.*` 키를 켜면 그 슬롯이 caps lock 을 점유하게 되는가 —
@@ -1211,10 +1282,12 @@ fn settings_set_preset(
             ultrakey_presets::detect_conflict(&presets_before, &caps_slots, key, new_value)
         {
             let pending = pending_conflict_view(conflict, key, value);
+            let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
+                &korean_snapshot,
                 &store,
                 None,
                 Some(pending),
@@ -1228,11 +1301,12 @@ fn settings_set_preset(
         validate_and_apply_preset(&mut presets, key, value)?;
         *presets
     };
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
 
     // 3) 엔진 반영 — presets.* 변경은 항상 규칙 테이블을 바꾼다(단순 슬라이더도
     // `quick_press_duration_ms` 를 통해 FSM 타이밍에 영향을 준다) — 언제나
     // force_reset 한다.
-    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, true)?;
+    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true)?;
 
     // 4) 저장.
     let save_error = {
@@ -1248,7 +1322,117 @@ fn settings_set_preset(
 
     // 5)
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(build_settings_state(&hyperkey_snapshot, &presets_snapshot, &store, save_error, None))
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
+}
+
+/// `settings_set` 의 `korean.*` 경로(F-16) — 충돌 감지가 없다는 점만 `settings_set_preset`
+/// 과 다르다(korean-input.md 는 다른 설정과 배타 관계가 없다, 위임 지시서 §W-2 3).
+///
+/// 순서: 1) `key` 검증 + 메모리 갱신 2) **엔진 반영**(규칙 테이블이 바뀌므로 항상
+/// force_reset — `settings_set_preset` 과 같은 이유) 3) ⭐ `korean.disableInRemoteDesktop`
+/// 이 바뀌었다면 `gate_controller.set_korean_exclusion_enabled` 도 함께 호출한다 —
+/// 이 설정은 엔진 규칙이 아니라 게이트다(D-K3, 잊기 쉬운 지점). 4) 저장 5) 새 `SettingsState`.
+fn settings_set_korean(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+
+    // 1)
+    let korean_snapshot = {
+        let mut korean = state.korean.lock().map_err(|e| e.to_string())?;
+        validate_and_apply_korean(&mut korean, key, value)?;
+        *korean
+    };
+
+    // 2) 엔진 반영 — korean.* 변경은 항상 규칙 테이블을 바꾼다.
+    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true)?;
+
+    // 3) ⭐ 항목 5 는 게이트다 — 엔진 설정이 아니다(D-K3).
+    if key == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP {
+        state
+            .gate_controller
+            .set_korean_exclusion_enabled(korean_snapshot.disable_in_remote_desktop);
+    }
+
+    // 4) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 5)
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
+}
+
+/// `settings_set_korean` 의 1~2단계(키 검증 + 메모리 갱신)만 담당하는 순수 함수 —
+/// `validate_and_apply`/`validate_and_apply_preset` 과 같은 형식.
+fn apply_korean_setting(
+    korean: &mut KoreanSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        k if k == keys::KOREAN_SHIFT_SPACE_SWITCHES_INPUT_SOURCE => {
+            korean.shift_space_switches_input_source = parse(value, key)?
+        }
+        k if k == keys::KOREAN_HAN_ENG_SWITCHES_INPUT_SOURCE => {
+            korean.han_eng_switches_input_source = parse(value, key)?
+        }
+        k if k == keys::KOREAN_HANJA_KEY_CONVERTS_HANJA => {
+            korean.hanja_key_converts_hanja = parse(value, key)?
+        }
+        k if k == keys::KOREAN_WON_KEY_TYPES_BACKTICK => {
+            korean.won_key_types_backtick = parse(value, key)?
+        }
+        k if k == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP => {
+            korean.disable_in_remote_desktop = parse(value, key)?
+        }
+        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+    }
+    Ok(())
+}
+
+fn validate_and_apply_korean(
+    korean: &mut KoreanSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("알 수 없는 설정 키: {key}"));
+    }
+    apply_korean_setting(korean, key, value)
 }
 
 /// 충돌 대화상자의 `계속` 버튼 — `settings_set_preset` 이 돌려준 `pendingConflict`
@@ -1460,6 +1644,7 @@ fn main() {
         store: Mutex::new(SettingsStore::in_memory()),
         hyperkey: Mutex::new(HyperkeySettings::default()),
         presets: Mutex::new(PresetSettings::default()),
+        korean: Mutex::new(KoreanSettings::default()),
         load_notice: Mutex::new(None),
         tray: Mutex::new(None),
         ignore_item: Mutex::new(None),
@@ -1513,6 +1698,10 @@ fn main() {
             *state.hyperkey.lock().unwrap() = hyperkey_settings;
             // ⭐ F-08 Presets — hyperkey 와 같은 "부재 = 기본값" 조립 규약.
             *state.presets.lock().unwrap() = PresetSettings::from_store(&settings_store);
+            // ⭐ F-16 Korean — 같은 규약. `disable_in_remote_desktop` 만 부재 시 `true`
+            // 로 읽힌다(D-K9 각주, `KoreanSettings::from_store` 가 처리한다).
+            let korean_settings = KoreanSettings::from_store(&settings_store);
+            *state.korean.lock().unwrap() = korean_settings;
             *state.load_notice.lock().unwrap() = notice_from_outcome(&load_outcome);
             // ⭐ F-10 §3.4 — 앱별 비활성화 목록을 여기서 복원한다. `settings_store` 를
             // `state.store` 로 옮기기 *전에* 이 지역 변수에서 직접 읽는다(둘 다 아직
@@ -1521,6 +1710,18 @@ fn main() {
                 .get(settings_keys::GENERAL_DISABLED_APPS)
                 .unwrap_or_default();
             state.gate_controller.set_disabled_apps(disabled_apps);
+            // ⭐ F-16 D-K3 — 한국어 전용 앱 제외 게이트. 목록은 `ultrakey-korean` 이
+            // 소유하고(`default_excluded_bundle_ids`) 여기서 주입만 한다. 활성 여부는
+            // `korean.disableInRemoteDesktop`(기본 `true`) 그대로 반영한다.
+            state.gate_controller.set_korean_excluded_apps(
+                ultrakey_korean::default_excluded_bundle_ids()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            );
+            state
+                .gate_controller
+                .set_korean_exclusion_enabled(korean_settings.disable_in_remote_desktop);
             *state.store.lock().unwrap() = settings_store;
 
             let handle = app.handle().clone();
@@ -1624,7 +1825,8 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     // 조립한다 — D-1 caps lock alias 가 이미 필요한 상태로 기동할 수 있다.
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
-    let config = build_engine_config(&hyperkey, &presets);
+    let korean = *state.korean.lock().unwrap();
+    let config = build_engine_config(&hyperkey, &presets, &korean);
 
     let handle_for_events = handle.clone();
     match Engine::start(
@@ -2068,9 +2270,16 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
             return;
         }
     };
+    let korean_snapshot = match state.korean.lock() {
+        Ok(k) => *k,
+        Err(e) => {
+            tracing::error!(error = %e, "korean 정본 잠금 실패 — 토글을 반영하지 못했다");
+            return;
+        }
+    };
     // `force_reset = true` — alias 가 바뀌면 추적 키 집합(F18 ↔ caps lock)이 통째로
     // 바뀌므로, 규칙 변경과 같은 이유로 stuck modifier 위험이 있다(D-D).
-    if let Err(e) = reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, true) {
+    if let Err(e) = reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, true) {
         tracing::error!(error = %e, "Synthesize Caps Lock Remap 을 엔진에 반영하지 못했다");
     }
 
@@ -2228,6 +2437,7 @@ mod tests {
         assert_eq!(tab_window_size("seek"), Some((555, 378)));
         assert_eq!(tab_window_size("hyperkey"), Some((710, 517)));
         assert_eq!(tab_window_size("presets"), Some((825, 527)));
+        assert_eq!(tab_window_size("korean"), Some((613, 484)));
         assert_eq!(tab_window_size("general"), Some((613, 273)));
         assert_eq!(tab_window_size("bogus"), None);
     }
@@ -2318,7 +2528,7 @@ mod tests {
         hyperkey.hyper.enabled = true;
         hyperkey.mouse_apply.drag = true;
 
-        let config = build_engine_config(&hyperkey, &PresetSettings::default());
+        let config = build_engine_config(&hyperkey, &PresetSettings::default(), &KoreanSettings::default());
         assert_eq!(config.rules.modifier_rules.len(), 1);
         assert!(config.mouse_apply.drag);
         assert!(config.mouse_apply.click); // 기본값 유지
@@ -2331,7 +2541,7 @@ mod tests {
         let hyperkey = HyperkeySettings::default();
         let presets = PresetSettings { caps_space_enter: true, quick_press_duration_ms: 500, ..PresetSettings::default() };
 
-        let config = build_engine_config(&hyperkey, &presets);
+        let config = build_engine_config(&hyperkey, &presets, &KoreanSettings::default());
         assert_eq!(config.rules.combo_rules.len(), 1);
         assert_eq!(config.timings.quick_press_duration_ms, 500);
     }
@@ -2342,11 +2552,11 @@ mod tests {
     fn build_engine_config_computes_d1_caps_lock_alias() {
         let hyperkey = HyperkeySettings::default();
 
-        let none_needed = build_engine_config(&hyperkey, &PresetSettings::default());
+        let none_needed = build_engine_config(&hyperkey, &PresetSettings::default(), &KoreanSettings::default());
         assert_eq!(none_needed.caps_lock_alias, None);
 
         let needs_alias = PresetSettings { caps_space_enter: true, ..PresetSettings::default() };
-        let with_alias = build_engine_config(&hyperkey, &needs_alias);
+        let with_alias = build_engine_config(&hyperkey, &needs_alias, &KoreanSettings::default());
         assert_eq!(with_alias.caps_lock_alias, Some(KeyCode::F18));
 
         let synthesize_on = PresetSettings {
@@ -2354,8 +2564,19 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        let with_synthesize = build_engine_config(&hyperkey, &synthesize_on);
+        let with_synthesize = build_engine_config(&hyperkey, &synthesize_on, &KoreanSettings::default());
         assert_eq!(with_synthesize.caps_lock_alias, None);
+    }
+
+    // build_engine_config() — F-16: korean.* 이 규칙 테이블에 실제로 반영된다.
+    #[test]
+    fn build_engine_config_reflects_korean_settings() {
+        let korean = KoreanSettings {
+            shift_space_switches_input_source: true,
+            ..KoreanSettings::default()
+        };
+        let config = build_engine_config(&HyperkeySettings::default(), &PresetSettings::default(), &korean);
+        assert_eq!(config.rules.korean_rules.len(), 1);
     }
 
     // caps_is_modifier_source() — hyper/meh/bleh 중 활성화된 슬롯만 본다.
@@ -2519,15 +2740,54 @@ mod tests {
         assert!(err.contains("알 수 없는"));
     }
 
+    // ── F-16 korean.* — validate_and_apply_korean ───────────────────────────────
+
+    #[test]
+    fn validate_and_apply_korean_updates_known_key() {
+        let mut korean = KoreanSettings::default();
+        validate_and_apply_korean(
+            &mut korean,
+            keys::KOREAN_SHIFT_SPACE_SWITCHES_INPUT_SOURCE,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(korean.shift_space_switches_input_source);
+    }
+
+    /// ⚠️ 항목 5 는 기본값이 `true` 다 — 끄는 방향으로도 정확히 반영되는지 확인한다
+    /// (명세 §4.2 각주, D-K9 — 구현·리뷰 양쪽에서 놓치기 쉬운 지점).
+    #[test]
+    fn validate_and_apply_korean_can_turn_off_remote_desktop_exclusion() {
+        let mut korean = KoreanSettings::default();
+        assert!(korean.disable_in_remote_desktop);
+        validate_and_apply_korean(
+            &mut korean,
+            keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP,
+            &serde_json::json!(false),
+        )
+        .unwrap();
+        assert!(!korean.disable_in_remote_desktop);
+    }
+
+    #[test]
+    fn validate_and_apply_korean_rejects_unknown_key() {
+        let mut korean = KoreanSettings::default();
+        let err = validate_and_apply_korean(&mut korean, "korean.doesNotExist", &serde_json::json!(true))
+            .unwrap_err();
+        assert!(err.contains("알 수 없는"));
+    }
+
     // SettingsState 직렬화가 camelCase 인지 — 프런트엔드가 기대하는 필드 이름 계약.
     #[test]
     fn settings_state_serializes_camel_case() {
         let hyperkey = HyperkeySettings::default();
         let presets = PresetSettings::default();
+        let korean = KoreanSettings::default();
         let store = SettingsStore::in_memory();
         let state = build_settings_state(
             &hyperkey,
             &presets,
+            &korean,
             &store,
             Some("디스크 가득 참".to_string()),
             None,
@@ -2610,7 +2870,14 @@ mod tests {
         hyperkey.meh.enabled = true; // 기본 source 가 둘 다 CapsLock → 중복.
         let store = SettingsStore::in_memory();
 
-        let state = build_settings_state(&hyperkey, &PresetSettings::default(), &store, None, None);
+        let state = build_settings_state(
+            &hyperkey,
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &store,
+            None,
+            None,
+        );
         assert_eq!(state.warnings.len(), 1);
         assert_eq!(state.warnings[0].kind, "duplicate");
         assert_eq!(state.warnings[0].key, "caps lock");

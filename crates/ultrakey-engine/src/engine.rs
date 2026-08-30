@@ -512,15 +512,11 @@ fn on_tap_event(
         flags: event.flags(),
         autorepeat: event.is_autorepeat(),
     };
-    let seek_active = st.shared.seek_session_active.load(Ordering::Acquire);
-    // TODO(F-16 배선): 다음 작업이 SharedState 의 원자값에서 읽어 채운다
-    // (korean_app_excluded ← AppGate::is_korean_disabled, korean_ime ←
-    // AtomicKoreanImeGate::load). 지금은 seek_active 만 기존 값을 넘기고 나머지는
-    // `GateSnapshot::default()` — `korean_ime` 가 `Unknown` 이므로 fail-closed 로
-    // F-16 규칙이 아직 발화하지 않는다.
+    // ⭐ 원자값 3개 로드뿐이다 — 락·할당·로깅 없음(architecture.md §2.2).
     let gates = GateSnapshot {
-        seek_active,
-        ..Default::default()
+        seek_active: st.shared.seek_session_active.load(Ordering::Acquire),
+        korean_app_excluded: st.shared.gate.is_korean_disabled(),
+        korean_ime: st.shared.korean_ime.load(),
     };
     let outcome = st.arbiter.arbitrate(&cfg, &input, gates, now);
 

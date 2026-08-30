@@ -4192,6 +4192,7 @@ dependencies = [
  "ultrakey-engine",
  "ultrakey-hyperkey",
  "ultrakey-i18n",
+ "ultrakey-korean",
  "ultrakey-permissions",
  "ultrakey-platform",
  "ultrakey-presets",

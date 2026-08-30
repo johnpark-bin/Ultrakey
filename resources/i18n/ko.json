@@ -36,6 +36,7 @@
   "settings.tab.seek": "Seek",
   "settings.tab.hyperkey": "Hyperkey",
   "settings.tab.presets": "Presets",
+  "settings.tab.korean": "Korean",
   "settings.tab.general": "General",
   "settings.placeholder.title": "아직 만들지 않음",
   "settings.placeholder.seek.body": "Seek 탭은 아직 만들지 않았다 — M3 에서 만들 예정이다.",
@@ -121,5 +122,18 @@
   "settings.presets.conflict.title.capsLockArrows": "Caps Lock 방향키가 둘이다",
   "settings.presets.conflict.title.capsLockHomeRow": "홈로우가 방향키와 겹친다",
   "settings.presets.conflict.body": "이것을 켜면 다음을 끈다:",
-  "settings.presets.conflict.continue": "켜기"
+  "settings.presets.conflict.continue": "켜기",
+  "settings.korean.heading": "한국어 입력",
+  "settings.korean.shift_space": "Shift + Space 로 입력 소스 변경",
+  "settings.korean.shift_space.hint": "macOS 시스템 설정의 '입력 소스 선택' 단축키가 ⌃Space 여야 동작한다.",
+  "settings.korean.han_eng": "한/영 키로 입력 소스 변경",
+  "settings.korean.han_eng.why": "이 키의 키코드가 아직 확인되지 않았다 — 한국어 106키 물리 키보드로 실측해야 켤 수 있다.",
+  "settings.korean.hanja": "한자 키로 한자 변환",
+  "settings.korean.hanja.why": "이 키의 키코드가 아직 확인되지 않았다. 확정되면 한국어 입력기가 활성일 때만 적용된다.",
+  "settings.korean.won_backtick": "₩ 키로 백틱(`) 입력",
+  "settings.korean.won_backtick.hint": "한국어 입력기가 활성일 때만 적용되고, 수정자를 함께 누른 조합(⌘` 등)에는 개입하지 않는다.",
+  "settings.korean.remote_desktop": "원격 데스크톱 클라이언트에서 한국어 키 처리 끄기",
+  "settings.korean.remote_desktop.hint": "원격 데스크톱·화면 공유·가상 머신 창 안에서는 키를 그대로 넘겨, 대상 시스템의 입력기가 처리하게 한다. 목록에 없는 앱은 메뉴바의 '무시하기' 로 대응한다.",
+  "settings.korean.not_working.hint": "이 기능이 동작하지 않는다면 Karabiner-Elements 같은 다른 키 리매핑 도구가 같은 키를 먼저 바꾸고 있을 수 있다. 그 도구에서 해당 규칙을 끄고 다시 시도한다.",
+  "settings.korean.right_command.hint": "오른쪽 command 를 ⌃⌥⌘ 로 쓰려면 Hyperkey 탭에서 hyper 소스를 right command 로 고르고 'hyper 조합에 shift 포함' 을 끈다 — 그것이 정확히 ⌃⌥⌘ 다."
 }

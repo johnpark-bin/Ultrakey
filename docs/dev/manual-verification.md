@@ -1268,6 +1268,206 @@ seq=36 FlagsChanged 0x38 → disp=Pass effects=[ToggleCapsLock] path_c=성공(�
 
 ---
 
+## 항목 7 — F-16 한국어 입력 지원 1단계 (M2 3차 / 이슈 #25 신설)
+
+> 근거 명세: `../spec/korean-input.md` §8 · §3.3 · §3.5
+
+### 7-0. 사전 확인 — 이 항목만의 전제 3가지
+
+```sh
+# 1) ⭐ 한국어 입력기가 설치돼 있는가 — 없으면 F-16.4 를 확인할 수 없다.
+#    ⛔ 없다고 해서 시스템 설정에서 임의로 추가하지 마라. 확인 못 했다고 적고 넘긴다.
+swift docs/dev/tools/tis-language-probe.swift korean
+
+# 2) ⭐ "입력 소스 선택" 단축키가 ⌃Space 인가 — F-16.1 의 전제다(명세 §5 #4).
+#    parameters = (32, 49, 262144) 이면 space(49) + control(0x40000) 이다.
+/usr/libexec/PlistBuddy -c "Print :AppleSymbolicHotKeys:60" \
+  ~/Library/Preferences/com.apple.symbolichotkeys.plist
+
+# 3) HID 계층 리매퍼 — 항목 2·3 사전 확인과 같다. Karabiner 가 켜져 있으면
+#    명세 §3.6 표대로 F-16 은 **전부 무동작**한다(그것이 정상이다).
+ioreg -c IOHIDDevice -r -d1 | grep -c "Karabiner DriverKit VirtualHIDKeyboard"
+```
+
+⚠️ **다른 Ultrakey 인스턴스가 떠 있으면 새 빌드가 즉시 종료된다** — 번들 ID 단일
+인스턴스 가드(`menu-bar-and-lifecycle.md` §5 항목 1) 때문이다. 먼저 확인하고 종료한다.
+
+```sh
+pgrep -lf 'Ultrakey.app/Contents/MacOS'
+osascript -e 'tell application id "app.ultrakey.Ultrakey" to quit'
+```
+
+⛔ **설정 파일을 손대기 전에 반드시 백업한다.** 이 항목은 `korean.*` 설정을 켜야
+하는데, 그 파일에는 사용자의 실제 설정이 들어 있다.
+
+```sh
+D=~/Library/Application\ Support/app.ultrakey.Ultrakey
+cp "$D/settings.json" /tmp/settings.json.backup
+# … 검증 후 …
+cp /tmp/settings.json.backup "$D/settings.json"
+shasum "$D/settings.json" /tmp/settings.json.backup   # ⭐ 두 해시가 같아야 한다
+```
+
+### ⭐ 7-1. F-14 선행 결함이 실제로 고쳐졌는가 — **로그 한 줄로 판정된다**
+
+이것을 **가장 먼저** 확인한다. 여기가 틀리면 아래 전부가 의미 없다(명세 §3.3).
+
+```sh
+open --env ULTRAKEY_TRACE_TAP=1 -n target/universal-apple-darwin/release/bundle/macos/Ultrakey.app
+grep '입력 소스 갱신' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+**한국어 입력기를 켠 상태**에서 다음 모양이 나와야 한다:
+
+```
+used_ascii_fallback=true
+source_id="com.apple.keylayout.ABC"                          ← 폴백 교체 *이후* (기존 필드)
+original_source_id="com.apple.inputmethod.Korean.2SetKorean" ← 교체 *이전* 원본 (신규 필드)
+first_language="ko"  korean_ime=Active
+```
+
+⭐ **`source_id` 와 `original_source_id` 가 서로 다르다는 것이 곧 결함과 그 수정의
+증거다.** F-16 이 `source_id` 로 판정했다면 `ABC` 를 보고 항상 거짓을 냈을 것이다.
+
+⭐ **이 줄이 앱 기동 직후에 나오는지도 함께 본다.** 입력 소스를 바꾸지 않았는데도
+나와야 한다 — 기존 구현은 **알림이 올 때만** 재구축해서, 기동 직후에는 게이트가
+`Unknown` 인 채로 fail-closed 되어 F-16.4 가 영영 발화하지 않았다.
+
+#### ✅ 실측 결과 (2026-08-30, 이슈 #25 / PR) — **통과**
+
+위 모양 그대로 관찰됐다. 기동 직후 1회 게시도 확인했다(로그 시각이 `엔진 시작됨` 보다 앞선다).
+
+### 7-2. 규칙 발화 — ⭐ 탭 계측으로 판정한다
+
+⭐ **사람이 키를 누르지 않고도 확인할 수 있다.** `key_poke` 가 마커 없는 이벤트를
+합성해 세션에 넣으면 경로 A 가 물리 입력과 구분하지 않고 받는다(그 도구의 한계는
+`crates/ultrakey-platform/examples/key_poke.rs` 모듈 문서 참고).
+
+```sh
+cargo build -p ultrakey-platform --example key_poke
+# ⭐ modifier 는 반드시 `fc:`(flagsChanged)로 만든다 — KeyDown 으로 흉내 내면
+#    M1 이 안고 머지됐던 바로 그 구멍을 재현한다.
+./target/debug/examples/key_poke tap:0x32 sleep:300                                  # ① ₩
+./target/debug/examples/key_poke fc:0x37:0x100008 sleep:80 tap:0x32 sleep:80 fc:0x37:0x0  # ② ⌘+`
+./target/debug/examples/key_poke fc:0x38:0x20002 sleep:80 tap:0x31 sleep:80 fc:0x38:0x0   # ③ ⇧+space
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log | grep '탭 계측'
+```
+
+| # | 입력 | 기대 `layer` / `disp` / `emitted` |
+| :--- | :--- | :--- |
+| ① | `KeyDown 0x32` (한국어 IME 활성, modifier 없음) | `KoreanInput` / `Consume` / `KeyDown 0x32 0x80020` |
+| ② | `KeyDown 0x32` + command | `Passthrough` / `Pass` / `[]` — ⭐ **개입하지 않는다** |
+| ③ | `KeyDown 0x31` + shift | `KoreanInput` / `Consume` / `KeyDown 0x31 0x40001` — ⭐ **shift 가 빠지고 control 만 남는다** |
+| ④ | `KeyDown 0x32` (**영문** 입력기) | `Passthrough` / `Pass` / `[]` |
+
+`emitted` 의 flags 는 macOS 헤더 값이다: `0x80020` = `kCGEventFlagMaskAlternate`(0x80000) |
+`NX_DEVICELALTKEYMASK`(0x20), `0x40001` = `kCGEventFlagMaskControl`(0x40000) |
+`NX_DEVICELCTLKEYMASK`(0x1).
+
+⭐ **keyUp 도 함께 본다** — ①·③ 은 `KeyUp` 도 같은 keycode/flags 로 치환되어야 한다
+(명세 §3.3·§5 #9 의 "치환 중" 래치). 짝이 맞지 않으면 modifier 가 걸린 채 남는다.
+
+#### ✅ 실측 결과 (2026-08-30) — **①②③④ 전부 통과**
+
+keyUp 치환(래치)도 ①·③ 양쪽에서 확인했다.
+
+### ⭐ 7-3. 실제로 무슨 글자가 나오는가 — **대조군이 있어야 증명된다**
+
+7-2 는 "우리가 무엇을 내보냈는가" 까지만 증명한다. **받는 앱에 실제로 무엇이
+찍히는가**는 별개다 — 명세 §5 #5·§9 #2 가 `⌥`+grave 가 정말 백틱인지를 `(추정)` 으로
+남겨 두었다.
+
+```sh
+osascript -e 'tell application "TextEdit" to activate' \
+          -e 'tell application "TextEdit" to set text of document 1 to ""'
+./target/debug/examples/key_poke tap:0x32 sleep:600
+osascript -e 'tell application "TextEdit" to get text of document 1' | od -c
+```
+
+| # | 조건 | 기대 결과 |
+| :--- | :--- | :--- |
+| A | 한국어 IME + 기능 **ON** + modifier 없음 | `` ` `` (U+0060) |
+| B | 한국어 IME + 기능 **ON** + `⇧` | `~` — 개입하지 않는다 |
+| C | ⭐ **대조군**: 한국어 IME + 기능 **OFF** + modifier 없음 | `₩` (U+20A9) |
+
+⛔ **C 를 건너뛰지 마라.** C 가 없으면 A 의 백틱이 우리 치환의 결과인지, 아니면 그
+입력기가 원래 백틱을 내는지 구분할 수 없다 — 그것은 검증이 아니라 관찰일 뿐이다.
+
+#### ✅ 실측 결과 (2026-08-30) — **A `` ` `` · B `~` · C `₩`, 전부 기대대로**
+
+⭐ 이로써 명세 §9 #2 가 `(추정)` 으로 남겼던 "한국어 입력 소스에서 `⌥`+grave 가
+백틱인가" 가 **실측으로 해소됐다.**
+
+### 7-4. `Shift + Space` 가 실제로 입력 소스를 바꾸는가
+
+7-2 ③ 이 `⌃Space` 를 내보낸 것까지는 증명했다. macOS 가 그것을 **단축키로 인식했는지**는
+입력 소스가 실제로 바뀌었는지로 판정한다 — 로그가 그것을 보여준다.
+
+```sh
+grep '입력 소스 갱신' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+③ 직후에 새 줄이 나오고 `original_source_id`·`korean_ime` 가 뒤집혀야 한다.
+⭐ **양방향으로 확인한다** — 한 번 더 보내 원래 입력 소스로 돌아오는지까지 본다.
+
+#### ✅ 실측 결과 (2026-08-30) — **통과, 양방향**
+
+`Korean.2SetKorean`(`korean_ime=Active`) ↔ `keylayout.ABC`(`Inactive`) 전환을 확인했다.
+게이트가 전환마다 다시 게시되는 것도 같은 로그로 확인된다.
+
+### 7-5. `Korean` 탭 UI
+
+⭐ **탭이 실제로 그려졌는지는 `ui.lastTab` 로 확인할 수 있다.** `settings.json` 의
+`ui.lastTab` 을 `"korean"` 으로 두고 앱을 띄우면, 프런트엔드가 부팅 중
+`activateTab("korean")` → `settings_set_tab` 을 부른다. 탭이 `TABS` 배열이나 DOM 에
+없으면 그 자리에서 예외가 나 `showFatal` 로 빠지고 **리사이즈 로그가 아예 남지 않는다.**
+
+```sh
+grep -E 'settings_bootstrap|resize_settings|알 수 없는 탭' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+⚠️ **`창 조작 후 상태` 의 `outer_size` 는 판정에 쓰지 마라** — 그 값은 리사이즈가
+반영되기 전 상태를 찍는다(`ui.lastTab=seek` 로 띄워도 710×517 이 찍힌다). 판정은
+"`resize_settings` 줄이 남았는가" 로 한다.
+
+**눈으로 볼 것**(메뉴바 → `설정…`):
+
+- [ ] 탭 순서가 `Seek · Hyperkey · Presets · **Korean** · General` 이다
+- [ ] `한/영`·`한자` 두 항목이 **dimmed 이고 `아직` 배지와 사유 문구가 붙어 있다**
+      — ⭐ **왜 비활성인지가 드러나야 한다**(명세 §5 #1: "결함이 아니라 정직한 상태")
+- [ ] `원격 데스크톱 …` 항목이 **기본으로 켜져 있다** — F-16 중 유일하게 기본 ☑ 다
+- [ ] 내용이 창에 다 들어간다(잘리지 않는다)
+
+#### ✅ 실측 결과 (2026-08-30) — **통과. 단, 관찰 경로에 한계가 있다**
+
+`ui.lastTab="korean"` 부팅에서 `settings_bootstrap` → `resize_settings` 가 오류 없이
+남았다 — 탭 버튼·패널·`settings_set_tab("korean")` 이 전부 배선되어 있다는 뜻이다.
+
+⚠️ **환경설정 창 자체를 앱 안에서 눈으로 보지는 못했다** — 그 창은 메뉴바에서만 열리고,
+자동으로 열려면 System Events 자동화 권한이 필요해 **TCC 상태를 바꾸게 된다**(금지).
+대신 `ui/settings.html` 을 브라우저에서 같은 부트스트랩 페이로드로 렌더해 위 4개 항목을
+전부 눈으로 확인했다. **같은 마크업·같은 CSS 지만 앱의 웹뷰는 아니다** — 이 구분을
+지운 채 "확인했다" 고 적지 않는다.
+
+⭐ 그 렌더로 **창 크기를 실측했다**: 내용 416px + `.panel` 상하 패딩 40px + 타이틀바
+28px = **613 × 484**. 명세 §9 #5 가 남긴 자리를 이 값으로 채웠다.
+
+### ⛔ 7-6. 이 항목으로 확인할 수 **없는** 것
+
+- **2단계(한/영 `0x68` · 한자 `0x66`)** — ⭐ **한국어 106키 물리 키보드가 없다.**
+  keycode 는 근거 3중으로 확정됐지만(명세 §3.2) 실기기 확인은 불가능하다.
+  키보드가 확보되면 명세 §3.2 "해소 이전의 기록" 의 절차 1~6 을 수행한다.
+  ⚠️ `key_poke` 로 `0x68`/`0x66` 을 합성하면 **우리 쪽 경로**(탭 → 규칙 → 방출)는
+  확인되지만, **실제 하드웨어가 그 keycode 를 보내는가**는 확인되지 않는다 — 이 둘을
+  구분해 적어라.
+- **원격 데스크톱 제외 게이트의 실제 앱 동작** — 목록의 클라이언트가 이 기기에 설치돼
+  있지 않다(`com.apple.ScreenSharing` 만 있다). 게이트 판정 자체는 단위 테스트가 덮는다.
+- **서드파티 한국어 입력기**(구름 입력기 등)의 `languages[0]` — 설치돼 있지 않다.
+- **IME 조합 중 개입의 영향**(명세 §5 #8·§9 #9) — 자음만 입력한 조합 중 상태에서
+  `` ` `` 를 눌러 조합이 깨지는지는 사람이 직접 타이핑해야 관찰할 수 있다.
+
+---
+
 ## 결과 기록
 
 각 항목을 수행한 뒤 **통과 여부와 관찰한 것**을 이슈 #5 또는 후속 이슈에 남긴다.

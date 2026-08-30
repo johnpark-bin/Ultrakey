@@ -11,6 +11,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use ultrakey_core::gate::AtomicAppGate;
+use ultrakey_core::korean::AtomicKoreanImeGate;
 use ultrakey_core::settings::EngineConfig;
 use ultrakey_layout::LayoutResolver;
 
@@ -24,11 +25,17 @@ use ultrakey_layout::LayoutResolver;
 ///   갱신하는 곳이 없어 항상 `false` 다 — M3(F-01)가 이 자리를 채운다.
 /// - `layout` — F-14(B) 레이아웃 테이블. 콜백이 임계 경로에서 읽어야 할 때를 대비해
 ///   `LayoutResolver` 자체가 이미 무잠금 `ArcSwap` 을 내부에 두고 있다(`ultrakey-layout`).
+/// - `korean_ime` — F-16 한국어 입력기 활성 판정(`docs/spec/korean-input.md` §3.3).
+///   메인 스레드가 입력 소스 변경 알림(및 기동 시 1회 초기화, `system_hooks.rs::
+///   refresh_input_source`)을 받을 때마다 `classify_input_source_languages` 로 판정한
+///   값을 게시하고, 콜백은 이 원자값을 O(1) 로드만 한다. 기본값 `Unknown` 은 fail-closed
+///   다 — 게시가 아직 한 번도 일어나지 않았어도 F-16 규칙이 오발화하지 않는다.
 pub struct SharedState {
     pub config: ArcSwap<EngineConfig>,
     pub gate: Arc<AtomicAppGate>,
     pub seek_session_active: AtomicBool,
     pub layout: Arc<LayoutResolver>,
+    pub korean_ime: AtomicKoreanImeGate,
 }
 
 impl SharedState {
@@ -38,6 +45,7 @@ impl SharedState {
             gate,
             seek_session_active: AtomicBool::new(false),
             layout: Arc::new(LayoutResolver::new()),
+            korean_ime: AtomicKoreanImeGate::new(),
         })
     }
 }
