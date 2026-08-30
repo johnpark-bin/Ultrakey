@@ -8,7 +8,7 @@
 use crate::flags::EventFlags;
 use crate::keycode::KeyCode;
 use crate::quickpress::QuickPressState;
-use crate::rules::{ModifierKind, RuleTable};
+use crate::rules::{ModifierKind, RuleAction, RuleTable};
 
 /// 동시에 추적 가능한 quick press 소스 키의 최대 개수. M1 은 hyper/meh/bleh 최대 3개뿐이라
 /// 8개면 여유롭다 — 필요해지면 이 상수만 올리면 된다.
@@ -184,14 +184,35 @@ impl KeyStateTable {
         }
 
         for sa in &rules.source_actions {
+            // ⭐ hold_remap 대상이 **modifier 키**면 그 키의 flags 를 이 슬롯의
+            // `rule_flags` 로 삼는다 (2026-08-30, 이슈 #19 증상 A).
+            //
+            // `Remap caps lock to: left control` 은 "caps lock 을 누르고 있는 동안
+            // left control 이 눌려 있다"는 뜻이다. 합성 `flagsChanged` 를 한 번 내는
+            // 것만으로는 부족하다 — 그 뒤에 지나가는 **다른 키 이벤트에도** control
+            // 비트가 실려 있어야 앱이 `⌃C` 를 본다. hyper/meh/bleh 가 이미 그 일을
+            // `active_synth_flags()` → `Disposition::PassWithFlags` 로 하고 있으므로,
+            // hold_remap 도 같은 기구에 태운다. 이것이 없으면 조합키로서 쓸모가 없다.
+            let hold_remap_flags = match sa.hold_remap {
+                Some(RuleAction::Key { keycode, .. }) => {
+                    keycode.modifier_flags().unwrap_or(EventFlags::NONE)
+                }
+                _ => EventFlags::NONE,
+            };
+
             if let Some(existing) = new_slots[..n].iter_mut().flatten().find(|s| s.key == sa.key) {
                 existing.has_quick_press = sa.quick_press.is_some();
                 existing.has_double_tap = sa.double_tap.is_some();
+                // 같은 키가 hyper/meh/bleh 소스이기도 하면 그쪽 flags 가 우선한다 —
+                // 그 조합은 UI 충돌 감지가 막지만, 여기서도 조용히 덮어쓰지 않는다.
+                if existing.kind.is_none() {
+                    existing.rule_flags = hold_remap_flags;
+                }
             } else if n < MAX_TRACKED_KEYS {
                 let preserved_state = self.machine(sa.key);
                 new_slots[n] = Some(MachineSlot {
                     key: sa.key,
-                    rule_flags: EventFlags::NONE,
+                    rule_flags: hold_remap_flags,
                     kind: None,
                     has_quick_press: sa.quick_press.is_some(),
                     has_double_tap: sa.double_tap.is_some(),
@@ -348,9 +369,37 @@ mod tests {
         assert!(!t.has_double_tap(KeyCode::CAPS_LOCK));
     }
 
-    /// 프리셋 전용 추적 키(modifier 아님)는 `slot_flags_for` 가 `NONE` 을 낸다.
+    /// hold_remap 대상이 **modifier 가 아닌** 키(`esc` 등)면 `slot_flags_for` 는 `NONE`.
     #[test]
-    fn register_sources_preset_only_key_has_no_modifier_flags() {
+    fn register_sources_non_modifier_hold_remap_has_no_flags() {
+        let mut t = KeyStateTable::new();
+        let mut rules = RuleTable::default();
+        rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key {
+                keycode: KeyCode::ESCAPE,
+                flags: EventFlags::NONE,
+            }),
+        });
+        t.register_sources(&rules);
+
+        assert_eq!(t.slot_flags_for(KeyCode::CAPS_LOCK), EventFlags::NONE);
+        assert!(!t.has_quick_press(KeyCode::CAPS_LOCK));
+        assert!(!t.has_double_tap(KeyCode::CAPS_LOCK));
+    }
+
+    /// ⭐ hold_remap 대상이 **modifier 키**면 그 flags 를 슬롯이 들고 있어야 한다
+    /// (2026-08-30, 이슈 #19 증상 A). 그래야 `active_synth_flags()` → `PassWithFlags`
+    /// 로 **뒤따르는 다른 키 이벤트에도** control 비트가 실린다 — 그것이 없으면
+    /// `Remap caps lock to: left control` 로 `⌃C` 를 만들 수 없다.
+    ///
+    /// 기대값의 출처는 구현 상수가 아니라 macOS 헤더다:
+    ///   kCGEventFlagMaskControl = 0x00040000 (`CGEventTypes.h`)
+    ///   NX_DEVICELCTLKEYMASK    = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`)
+    #[test]
+    fn register_sources_modifier_hold_remap_carries_target_flags() {
         let mut t = KeyStateTable::new();
         let mut rules = RuleTable::default();
         rules.source_actions.push(SourceKeyActions {
@@ -364,9 +413,11 @@ mod tests {
         });
         t.register_sources(&rules);
 
-        assert_eq!(t.slot_flags_for(KeyCode::CAPS_LOCK), EventFlags::NONE);
-        assert!(!t.has_quick_press(KeyCode::CAPS_LOCK));
-        assert!(!t.has_double_tap(KeyCode::CAPS_LOCK));
+        assert_eq!(t.slot_flags_for(KeyCode::CAPS_LOCK).0, 0x0004_0001);
+
+        // 그리고 hold 가 확정되면 그 flags 가 실제로 active 로 합산돼야 한다.
+        t.set_machine(KeyCode::CAPS_LOCK, QuickPressState::HoldConfirmed);
+        assert_eq!(t.active_synth_flags().0, 0x0004_0001);
     }
 
     /// `is_kind_active` — 소스 키 종류(caps lock/globe)와 무관하게 `HoldConfirmed` 인

@@ -25,6 +25,37 @@ impl EventFlags {
     /// `kCGEventFlagMaskSecondaryFn` — globe/fn 키.
     pub const SECONDARY_FN: EventFlags = EventFlags(0x800000);
 
+    // ── 좌/우 구분 비트(device-dependent masks) ────────────────────────────────
+    //
+    // ⭐ 왜 필요한가 (2026-08-30, 이슈 #19). 위의 `SHIFT`/`CONTROL`/`ALTERNATE`/
+    // `COMMAND` 는 **좌우를 구분하지 않는** 일반 마스크다. macOS 가 실제로 보내는
+    // modifier `flagsChanged` 이벤트에는 그 일반 비트와 **함께** 어느 쪽 키인지를
+    // 나타내는 device-dependent 비트가 항상 실려 온다. 우리가 modifier 를 합성해
+    // 내보낼 때 일반 비트만 얹으면, 좌우를 구분해 읽는 수신자(브라우저의
+    // `KeyboardEvent.code`, 좌우를 구분하는 앱 단축키)에게는 **실물과 다른 모양**의
+    // 이벤트가 된다. `docs/spec/key-remapping-engine.md` §5 #18 이 입력 판정에서
+    // "좌/우 shift 가 같은 비트를 공유해 구분할 수 없다"고 지적한 바로 그 문제의
+    // **출력 쪽 대응**이다 — 입력에서는 정본 눌림 테이블로 우회했고, 출력에서는
+    // 이 비트를 실어 해결한다.
+    //
+    // 값의 출처: `IOKit/hidsystem/IOLLEvent.h` 의 `NX_DEVICE*KEYMASK` 상수.
+    /// `NX_DEVICELCTLKEYMASK`.
+    pub const DEVICE_LEFT_CONTROL: EventFlags = EventFlags(0x00000001);
+    /// `NX_DEVICELSHIFTKEYMASK`.
+    pub const DEVICE_LEFT_SHIFT: EventFlags = EventFlags(0x00000002);
+    /// `NX_DEVICERSHIFTKEYMASK`.
+    pub const DEVICE_RIGHT_SHIFT: EventFlags = EventFlags(0x00000004);
+    /// `NX_DEVICELCMDKEYMASK`.
+    pub const DEVICE_LEFT_COMMAND: EventFlags = EventFlags(0x00000008);
+    /// `NX_DEVICERCMDKEYMASK`.
+    pub const DEVICE_RIGHT_COMMAND: EventFlags = EventFlags(0x00000010);
+    /// `NX_DEVICELALTKEYMASK`.
+    pub const DEVICE_LEFT_OPTION: EventFlags = EventFlags(0x00000020);
+    /// `NX_DEVICERALTKEYMASK`.
+    pub const DEVICE_RIGHT_OPTION: EventFlags = EventFlags(0x00000040);
+    /// `NX_DEVICERCTLKEYMASK`.
+    pub const DEVICE_RIGHT_CONTROL: EventFlags = EventFlags(0x00002000);
+
     /// hyper (`Include shift in hyper key` ☑, 기본) = `⌃⌥⌘⇧`.
     ///
     /// ⭐ 실측: `~/Library/Preferences/com.knollsoft.Superkey.plist` 의

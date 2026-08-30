@@ -136,6 +136,37 @@ impl Outcome {
     }
 }
 
+/// ⭐ D-1 caps lock 모멘터리 정규화(architecture.md §6.1). `cfg.caps_lock_alias` 가
+/// 설정돼 있고 이 keycode 가 그 alias(보통 F18, 경로 B `hidutil` 매핑의 대상)와
+/// 일치하면 `KeyCode::CAPS_LOCK` 을 반환한다.
+///
+/// ⚠️ 이렇게 되돌린 keycode 는 **판정**(눌림 테이블 갱신, modifier/조합/quick press
+/// 매칭)에만 쓰인다. 이후 로직이 방출하는 합성 이벤트의 keycode 는 각 규칙이 스스로
+/// 정한다 — 예를 들어 조합·hold_remap 이 합성하는 이벤트의 keycode 는 대상 키(target
+/// key) 자신이지 caps lock 이 아니다. 유일하게 caps lock 자신의 keycode 로 나가는
+/// 것은 hyper/meh/bleh modifier 합성 `FlagsChanged`(`rule.source == KeyCode::
+/// CAPS_LOCK`)뿐이며, 이는 D-1 이전에도 이미 그랬던 동작이라 alias 유무와 무관하게
+/// 일관적이다.
+///
+/// 모듈 수준 자유 함수로 뽑아 둔 이유 — 이슈 #19 진단 계측(`ultrakey-engine::trace`)이
+/// 판정과 **같은 함수**로 resolved keycode 를 계산해야 한다(아래
+/// [`resolve_caps_lock_alias_for_trace`]). `Arbiter::resolve_caps_lock_alias` 안에
+/// 로직을 묻어 두면 계측이 자기 사본을 새로 만들게 되고, 그러면 계측이 실제 판정과
+/// 다른 답을 낼 수 있다 — 계측이 거짓말을 하게 된다.
+fn resolve_caps_lock_alias_keycode(cfg: &EngineConfig, keycode: KeyCode) -> KeyCode {
+    match cfg.caps_lock_alias {
+        Some(alias) if keycode == alias => KeyCode::CAPS_LOCK,
+        _ => keycode,
+    }
+}
+
+/// ⭐ 계측 전용 공개 헬퍼(이슈 #19 물리 caps lock 버그 진단, `ultrakey-engine::trace`).
+/// [`resolve_caps_lock_alias_keycode`] 를 그대로 노출할 뿐 새 로직을 만들지 않는다 —
+/// 이 함수가 판정이 실제로 쓰는 것과 다른 값을 내면 계측 자체가 거짓말이 된다.
+pub fn resolve_caps_lock_alias_for_trace(cfg: &EngineConfig, keycode: KeyCode) -> KeyCode {
+    resolve_caps_lock_alias_keycode(cfg, keycode)
+}
+
 /// 중재 엔진 하나의 인스턴스. 탭 스레드가 배타 소유한다(`docs/dev/architecture.md` §2.2).
 pub struct Arbiter {
     pub state: KeyStateTable,
@@ -166,24 +197,10 @@ impl Arbiter {
         }
     }
 
-    /// ⭐ D-1 caps lock 모멘터리 정규화(architecture.md §6.1). `cfg.caps_lock_alias` 가
-    /// 설정돼 있고 이 이벤트의 keycode 가 그 alias(보통 F18, 경로 B `hidutil` 매핑의
-    /// 대상)와 일치하면 `KeyCode::CAPS_LOCK` 으로 되돌린 사본을 반환한다.
-    ///
-    /// ⚠️ 이렇게 되돌린 keycode 는 **판정**(눌림 테이블 갱신, modifier/조합/quick press
-    /// 매칭)에만 쓰인다. 이 함수가 반환하는 이벤트를 기준으로 이후 로직이 방출하는
-    /// 합성 이벤트의 keycode 는 각 규칙이 스스로 정한다 — 예를 들어 조합·hold_remap 이
-    /// 합성하는 이벤트의 keycode 는 대상 키(target key) 자신이지 caps lock 이 아니다.
-    /// 유일하게 caps lock 자신의 keycode 로 나가는 것은 hyper/meh/bleh modifier 합성
-    /// `FlagsChanged`(`rule.source == KeyCode::CAPS_LOCK`)뿐이며, 이는 D-1 이전에도
-    /// 이미 그랬던 동작이라 alias 유무와 무관하게 일관적이다.
     fn resolve_caps_lock_alias(cfg: &EngineConfig, ev: &InputEvent) -> InputEvent {
-        match cfg.caps_lock_alias {
-            Some(alias) if ev.keycode == alias => InputEvent {
-                keycode: KeyCode::CAPS_LOCK,
-                ..*ev
-            },
-            _ => *ev,
+        InputEvent {
+            keycode: resolve_caps_lock_alias_keycode(cfg, ev.keycode),
+            ..*ev
         }
     }
 
@@ -350,6 +367,15 @@ impl Arbiter {
         kind: EventKind,
         now: Millis,
     ) -> Outcome {
+        // ⭐ 원본을 소비할 것인가, 통과시킬 것인가 (2026-08-30, 이슈 #19 증상 C).
+        // 대체 출력이 없는 추적 키(F-08.8/F-08.11 만 켠 shift)는 원본을 그대로
+        // 흘려보내야 한다 — 근거는 [`Self::has_substitute_output`] 문서에 있다.
+        let base_disposition = if Self::has_substitute_output(cfg, ev.keycode) {
+            Disposition::Consume
+        } else {
+            Disposition::Pass
+        };
+
         match kind {
             EventKind::KeyDown => {
                 // P6 — 이 키가 조합의 트리거이기도 하면 조합이 먼저다. FSM 을 건드리기 전에
@@ -368,7 +394,7 @@ impl Arbiter {
                 let (next, event) = prev.on_key_down(now, ev.autorepeat, &qp_cfg);
                 self.state.set_machine(ev.keycode, next);
 
-                let mut out = Outcome::consume(Layer::HyperModifier);
+                let mut out = Outcome::new(Layer::HyperModifier, base_disposition);
                 match event {
                     Some(QuickPressEvent::HoldStart) => {
                         self.emit_hold_start(cfg, ev.keycode, ev.flags, &mut out);
@@ -398,7 +424,7 @@ impl Arbiter {
                 let (next, event) = prev.on_key_up(now, &qp_cfg);
                 self.state.set_machine(ev.keycode, next);
 
-                let mut out = Outcome::consume(Layer::HyperModifier);
+                let mut out = Outcome::new(Layer::HyperModifier, base_disposition);
                 match event {
                     Some(QuickPressEvent::HoldEnd) => {
                         self.emit_hold_end(cfg, ev.keycode, ev.flags, &mut out);
@@ -441,6 +467,8 @@ impl Arbiter {
     /// 둘 다 있을 수 있다(한 키가 동시에 modifier 소스이자 hold_remap 대상인 구성은
     /// 설정 UI 가 충돌로 막지만, 이 함수 자체는 어느 조합이든 안전하게 처리한다).
     fn emit_hold_start(&self, cfg: &EngineConfig, key: KeyCode, base_flags: EventFlags, out: &mut Outcome) {
+        let mut substituted = false;
+
         if let Some(rule) = cfg.rules.modifier_rule_for(key) {
             let flags = Self::strip_caps_lock_bit(cfg, base_flags | self.state.active_synth_flags());
             out.push(SynthEvent {
@@ -449,15 +477,37 @@ impl Arbiter {
                 flags,
             });
             out.layer = Layer::HyperModifier;
+            substituted = true;
         }
+
         if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
-            Self::push_key_down(out, action);
+            match Self::modifier_target_of(action) {
+                // ⭐ 대상이 modifier 키다 — `FlagsChanged` + 해당 비트로 낸다(이슈 #19 증상 A).
+                Some((target, mf)) => {
+                    let flags = Self::strip_caps_lock_bit(
+                        cfg,
+                        base_flags | self.state.active_synth_flags() | mf,
+                    );
+                    out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode: target, flags });
+                }
+                None => Self::push_key_down(out, action),
+            }
             out.layer = Layer::PresetCombo;
+            // `RuleAction::Nothing`(`nothing (disable it)`)도 "대체됨"이다 — 사용자가
+            // 그 키를 명시적으로 죽이기로 고른 것이므로 원본을 되살리면 안 된다.
+            substituted = true;
         }
+
+        // 대체 출력이 없는 키(F-08.8/F-08.11 만 켠 shift)는 애초에 원본을 소비하지
+        // 않았으므로(`has_substitute_output`) 여기서 낼 것이 없다 — hold 확정은 FSM
+        // 상태 전이일 뿐이고 사용자에게는 그냥 shift 를 누르고 있는 것이다.
+        let _ = substituted;
     }
 
     /// `key` 의 hold 가 해제됐을 때의 효과 — `emit_hold_start` 의 대응.
     fn emit_hold_end(&self, cfg: &EngineConfig, key: KeyCode, base_flags: EventFlags, out: &mut Outcome) {
+        let mut substituted = false;
+
         if let Some(rule) = cfg.rules.modifier_rule_for(key) {
             // 이 규칙의 flags 는 벗기되, 다른 조합이 여전히 active 라면 그 flags 는
             // 유지한다(공유 비트가 있는 hyper/meh/bleh 조합 중 하나만 놓아도 나머지가
@@ -470,10 +520,107 @@ impl Arbiter {
                 flags,
             });
             out.layer = Layer::HyperModifier;
+            substituted = true;
         }
+
         if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
-            Self::push_key_up(out, action);
+            match Self::modifier_target_of(action) {
+                Some((target, mf)) => {
+                    // 이 규칙의 비트만 벗기되, 여전히 active 인 다른 슬롯이 같은
+                    // modifier 를 들고 있으면(예: 두 키가 모두 left control 로 리매핑된
+                    // 구성) 그 비트는 살려 둔다 — 위 modifier_rule 분기와 같은 규약이다.
+                    let remaining = self.state.active_synth_flags();
+                    let flags = Self::strip_caps_lock_bit(cfg, (base_flags & !mf) | remaining);
+                    out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode: target, flags });
+                }
+                None => Self::push_key_up(out, action),
+            }
             out.layer = Layer::PresetCombo;
+            substituted = true;
+        }
+
+        let _ = substituted;
+    }
+
+    /// ⭐ 이 액션의 대상이 **modifier 키**이면 `(대상 keycode, 그 키의 눌림 flags)`
+    /// (2026-08-30, 이슈 #19 증상 A).
+    ///
+    /// **왜 필요한가.** macOS 는 modifier 키의 눌림/뗌을 `KeyDown`/`KeyUp` 이 아니라
+    /// `kCGEventFlagsChanged` 와 그 이벤트의 flags 비트로만 표현한다 —
+    /// `key-remapping-engine.md` §5 #18 이 **입력 쪽에서** 이미 확정한 사실이고,
+    /// [`Arbiter::normalize_kind`] 가 그것을 근거로 존재한다. 그런데 **출력 쪽**은 그
+    /// 대칭을 지키지 않고 있었다: `Remap caps lock to: left control`(F-08.1)이
+    /// `left control` 의 `KeyDown`(flags 0)을 합성해 내보내면, 받는 앱 입장에서는
+    /// control 비트가 한 번도 켜진 적이 없으므로 **control 이 눌린 것으로 보지 않는다.**
+    /// 사용자 실측의 "키 다운·키 업이 모두 키 업으로 잡힌다"가 이 모양이다.
+    ///
+    /// 대상이 modifier 가 아니면(`esc`·`tab`·방향키 등) `None` — 그쪽은 종전대로
+    /// `KeyDown`/`KeyUp` 이 옳다.
+    fn modifier_target_of(action: RuleAction) -> Option<(KeyCode, EventFlags)> {
+        match action {
+            RuleAction::Key { keycode, .. } => keycode.modifier_flags().map(|f| (keycode, f)),
+            _ => None,
+        }
+    }
+
+    /// ⭐ 이 추적 키의 **원본 이벤트를 대체할 출력이 있는가** (2026-08-30, 이슈 #19 증상 C).
+    ///
+    /// `key-remapping-engine.md` §3-c 는 소스 키의 원본 keyDown 을 `PendingDown` 동안
+    /// **보류**하라고 정한다. 그런데 구현은 그 보류를 **모든** 추적 키에 적용하면서,
+    /// 대체 출력이 없는 키에서는 보류한 것을 끝내 내보내지 않았다 — 즉 보류가 아니라
+    /// **폐기**였다. 그 결과 `Double tap shift = caps lock`(F-08.8)이나
+    /// `Quick press … shift`(F-08.11)를 켜는 순간 **shift 키가 통째로 죽었다**
+    /// (`Shift+a` 가 소문자로 나간다). 명세 어디에도 그 프리셋이 shift 를 무력화한다는
+    /// 서술이 없다 — `power-user-presets.md` §3.2 F-08.8 행의 "부가 효과" 열은 비어 있다.
+    ///
+    /// **판정 규칙과 그 근거.** §3-c 가 낙관적 통과를 기각한 이유는 **오직 하나**,
+    /// "이미 도착한 keyDown(예: 실제 caps lock 토글)을 되돌릴 방법이 없다" 는 것이다 —
+    /// 즉 **되돌릴 수 없는 부작용**이 보류의 유일한 존재 이유다. 그러니 원본을 대체할
+    /// 출력도 없고 원본 자체에 부작용도 없는 키(shift)는 보류할 이유가 없다. 같은 문서가
+    /// 이미 같은 형태의 예외를 두고 있다 — "소스 키에 quick press 액션이 등록되어 있지
+    /// 않으면 keyDown 즉시 `HoldConfirmed` 로 전이한다(보류하지 않는다). 근거: 보류는
+    /// 모호성을 해소하기 위한 **비용**이다." 여기서도 같다: 보류가 사는 것이 없다.
+    ///
+    /// 그래서 **대체 출력이 있는 키만 원본을 소비하고, 없는 키는 원본을 그대로 통과**
+    /// 시킨다. 프리셋은 제스처를 **더하는** 것이지 그 키를 **빼앗는** 것이 아니다.
+    ///
+    /// - hyper/meh/bleh 소스 → 합성 `flagsChanged` 가 원본을 대신한다.
+    /// - `hold_remap` 이 있는 키(F-08.1) → 리매핑된 키가 원본을 대신한다.
+    ///   `RuleAction::Nothing`(`nothing (disable it)`)도 여기 든다 — 사용자가 그 키를
+    ///   명시적으로 죽이기로 고른 것이다.
+    /// - **caps lock 은 언제나 여기 든다.** 근거 셋. (1) D-1 이 켜져 있으면 원본은
+    ///   물리적으로 `F18` 이라(`architecture.md` §6.1) 통과시켜도 어떤 앱에도 의미가
+    ///   없고 쓰레기 이벤트만 늘어난다. (2) caps lock 의 원래 기능은 **잠금 토글**이고,
+    ///   그것이 §3-c 가 보류의 근거로 든 바로 그 "되돌릴 수 없는 부작용"이다.
+    ///   (3) 사용자가 caps lock 프리셋을 켠 시점에 그 키는 이미 용도가 바뀌었다.
+    ///
+    /// 기각한 대안 — *보류했다가 확정 시점에 원본의 사본을 합성해 방출한다*: 문면상
+    /// "보류" 에 더 가깝지만, (a) 합성 사본은 원본과 동일한 이벤트가 아니고(디바이스
+    /// 정보·자동반복 플래그 등이 빠진다), (b) `CGEventTapPostEvent` 로 낸 사본과 그
+    /// 뒤에 통과시키는 키 이벤트의 **순서 보장이 명확하지 않다**. 원본을 그대로
+    /// 흘려보내면 두 문제가 모두 없다.
+    fn has_substitute_output(cfg: &EngineConfig, key: KeyCode) -> bool {
+        key == KeyCode::CAPS_LOCK
+            || cfg.rules.modifier_rule_for(key).is_some()
+            || cfg
+                .rules
+                .source_actions_for(key)
+                .is_some_and(|sa| sa.hold_remap.is_some())
+    }
+
+    /// `RuleAction::Key` 하나를 "눌렀다 뗌" 한 쌍으로 방출한다 — 대상이 modifier 면
+    /// `FlagsChanged` 쌍으로, 아니면 `KeyDown`/`KeyUp` 쌍으로.
+    /// quick press·double tap·조합이 모두 이 함수 하나를 쓴다(모양이 갈라지지 않게).
+    fn push_key_action(out: &mut Outcome, keycode: KeyCode, flags: EventFlags) {
+        match keycode.modifier_flags() {
+            Some(mf) => {
+                out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode, flags: flags | mf });
+                out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode, flags: flags & !mf });
+            }
+            None => {
+                out.push(SynthEvent { kind: EventKind::KeyDown, keycode, flags });
+                out.push(SynthEvent { kind: EventKind::KeyUp, keycode, flags });
+            }
         }
     }
 
@@ -496,10 +643,7 @@ impl Arbiter {
     /// 각자의 방출 형태로 옮긴다(architecture.md §6.4 P9·P11).
     fn push_full_action(out: &mut Outcome, action: RuleAction) {
         match action {
-            RuleAction::Key { keycode, flags } => {
-                out.push(SynthEvent { kind: EventKind::KeyDown, keycode, flags });
-                out.push(SynthEvent { kind: EventKind::KeyUp, keycode, flags });
-            }
+            RuleAction::Key { keycode, flags } => Self::push_key_action(out, keycode, flags),
             RuleAction::Text(c) => out.push_effect(Effect::TypeChar(c)),
             RuleAction::ToggleCapsLock => out.push_effect(Effect::ToggleCapsLock),
             RuleAction::OpenSeek => out.push_effect(Effect::OpenSeek),
@@ -562,9 +706,7 @@ impl Arbiter {
                 // P5 — 조합이 낸 출력에는 hyper 합성 flags 와 caps lock 잠금 비트를 얹지
                 // 않는다. `Caps lock + W = ▲` 의 의도는 방향키이지 `⌃⌥⌘⇧▲` 가 아니다.
                 let base = ev.flags & !self.state.active_synth_flags() & !EventFlags::CAPS_LOCK;
-                let flags = base | action_flags;
-                out.push(SynthEvent { kind: EventKind::KeyDown, keycode, flags });
-                out.push(SynthEvent { kind: EventKind::KeyUp, keycode, flags });
+                Self::push_key_action(out, keycode, base | action_flags);
             }
             RuleAction::Text(c) => out.push_effect(Effect::TypeChar(c)),
             RuleAction::ToggleCapsLock => out.push_effect(Effect::ToggleCapsLock),
@@ -649,6 +791,7 @@ impl Arbiter {
         for idx in 0..self.state.slot_count() {
             let (key, _rule_flags, state) = self.state.slot_at(idx);
             if matches!(state, QuickPressState::HoldConfirmed) {
+                let mut substituted = false;
                 if cfg.rules.modifier_rule_for(key).is_some() {
                     out.push(SynthEvent {
                         kind: EventKind::FlagsChanged,
@@ -656,11 +799,26 @@ impl Arbiter {
                         flags: EventFlags::NONE,
                     });
                     out.layer = Layer::HyperModifier;
+                    substituted = true;
                 }
                 if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
-                    Self::push_key_up(&mut out, action);
+                    // ⭐ 대상이 modifier 면 "비어 있는 flags 의 flagsChanged" 로 놓아야
+                    // 한다 — `KeyUp` 을 내면 받는 앱은 애초에 눌린 적이 없다고 보므로
+                    // stuck modifier 가 그대로 남는다(이슈 #19 증상 A 와 같은 뿌리).
+                    match Self::modifier_target_of(action) {
+                        Some((target, _mf)) => out.push(SynthEvent {
+                            kind: EventKind::FlagsChanged,
+                            keycode: target,
+                            flags: EventFlags::NONE,
+                        }),
+                        None => Self::push_key_up(&mut out, action),
+                    }
                     out.layer = Layer::PresetCombo;
+                    substituted = true;
                 }
+                // 대체 출력이 없는 키는 원본을 통과시켜 왔으므로(§`has_substitute_output`)
+                // 여기서 되돌릴 합성 이벤트가 없다 — 물리 키의 실제 뗌이 그 역할을 한다.
+                let _ = substituted;
             }
         }
 
@@ -1210,6 +1368,31 @@ mod tests {
         assert_eq!(out.disposition(), Disposition::Pass);
     }
 
+    /// 이슈 #19 계측용 공개 헬퍼가 내부 판정과 같은 답을 낸다는 것을 못박는 테스트 —
+    /// 이 헬퍼가 흔들리면 `ultrakey-engine::trace` 의 `resolved_keycode` 필드가 실제
+    /// 판정과 다른 값을 찍어 계측 자체가 거짓말을 하게 된다.
+    #[test]
+    fn resolve_caps_lock_alias_for_trace_matches_internal_resolution() {
+        let mut cfg = hyper_config();
+        cfg.caps_lock_alias = Some(KeyCode::F18);
+
+        assert_eq!(
+            resolve_caps_lock_alias_for_trace(&cfg, KeyCode::F18),
+            KeyCode::CAPS_LOCK
+        );
+        // alias 가 아닌 keycode 는 그대로다.
+        assert_eq!(
+            resolve_caps_lock_alias_for_trace(&cfg, KeyCode::ANSI_A),
+            KeyCode::ANSI_A
+        );
+
+        cfg.caps_lock_alias = None;
+        assert_eq!(
+            resolve_caps_lock_alias_for_trace(&cfg, KeyCode::F18),
+            KeyCode::F18
+        );
+    }
+
     // ── M2/F-08 — 계층 3 조합(ComboRule), R1~R4, P5~P9 ───────────────────────────────────
 
     /// R4/P8 — `Hyper + delete = forward delete`: hyper 소스가 caps lock 이든 globe 든
@@ -1322,7 +1505,15 @@ mod tests {
     }
 
     /// P2 — quick press 액션이 등록된 키가 `PendingDown` 인 동안 다른 키가 눌리면 즉시
-    /// `HoldConfirmed` 가 되고, hold_remap 대상 키의 `KeyDown` 이 방출된다.
+    /// `HoldConfirmed` 가 되고, hold_remap 대상이 눌린 것으로 표현된다.
+    ///
+    /// ⭐ **기대값을 정정했다 (2026-08-30, 이슈 #19).** 이전 판은
+    /// `LEFT_CONTROL` 의 `EventKind::KeyDown` 을 기대했다 — 그것은 **코드가 무엇을
+    /// 하는가**를 그대로 옮겨 적은 것이지 **무엇이 옳은가**가 아니었다(PR #17 이
+    /// 지적한 함정). macOS 는 modifier 키의 눌림을 `KeyDown` 으로 전달하지 않는다
+    /// (`key-remapping-engine.md` §5 #18) — 그래서 `KeyDown` 을 내보내면 받는 앱은
+    /// control 이 눌린 것으로 보지 않고, 사용자 실측의 "다운·업이 전부 업으로 잡힌다"가
+    /// 나온다. 옳은 기대값은 **control 비트를 실은 `FlagsChanged`** 다.
     #[test]
     fn p2_other_key_down_confirms_pending_hold_and_emits_hold_remap() {
         let mut cfg = EngineConfig::default();
@@ -1340,11 +1531,26 @@ mod tests {
         // 다른 키(A)의 keyDown — P2 에 의해 즉시 HoldConfirmed 로 확정돼야 한다.
         let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
         assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
-        // hold_remap 대상(LEFT_CONTROL)의 KeyDown 이 A 의 처리에 실려 나와야 한다.
-        assert!(
-            a_down.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_CONTROL && e.kind == EventKind::KeyDown),
-            "P2 로 확정된 hold_remap 의 KeyDown 이 없다: {:?}",
-            a_down.emitted()
+        // hold_remap 대상(LEFT_CONTROL)이 "눌린 것"으로 A 의 처리에 실려 나와야 한다.
+        // ⭐ 기대값의 출처는 구현 상수가 아니라 macOS 헤더다:
+        //   kCGEventFlagMaskControl = 0x00040000 (`CGEventTypes.h`)
+        //   NX_DEVICELCTLKEYMASK    = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`)
+        const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
+        let held = a_down
+            .emitted()
+            .iter()
+            .find(|e| e.keycode == KeyCode::LEFT_CONTROL)
+            .unwrap_or_else(|| panic!("hold_remap 대상이 방출되지 않았다: {:?}", a_down.emitted()));
+        assert_eq!(
+            held.kind,
+            EventKind::FlagsChanged,
+            "modifier 대상은 FlagsChanged 로 나가야 한다(§5 #18) — KeyDown 은 눌림으로 인식되지 않는다"
+        );
+        assert_eq!(
+            held.flags.0 & LEFT_CONTROL_HELD,
+            LEFT_CONTROL_HELD,
+            "control 비트(일반 + 좌측 구분)가 실려 있어야 한다: {:#010X}",
+            held.flags.0
         );
     }
 
@@ -1482,5 +1688,392 @@ mod tests {
         let w_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), false, Millis(1210));
         assert_eq!(w_down.layer(), Layer::PresetCombo);
         assert_eq!(w_down.emitted()[0].keycode, KeyCode::UP_ARROW);
+    }
+
+    // ── ⭐ D-1(caps lock → F18)이 켜진 구성 — 이슈 #19 ────────────────────────────────────
+    //
+    // `docs/dev/architecture.md` §6.1(D-1): caps lock 에 의존하는 프리셋이 하나라도 켜지면
+    // 경로 B 가 `caps lock → F18` 커널 매핑을 설치한다. 그래서 탭에는 물리 caps lock 이
+    // 아니라 **F18 이, 그것도 `KeyDown`/`KeyUp` 정상 쌍으로** 도착한다. 아래 테스트들은
+    // 전부 이 모양(F18 의 KeyDown/KeyUp)을 입력으로 재현한다 — `caps_lock_alias: None` 에
+    // `KeyCode::CAPS_LOCK` 을 직접 넣는 이전 테스트들은 이 경로를 한 번도 통과하지 않았고,
+    // 그것이 이슈 #19 가 테스트를 뚫고 나간 이유다.
+
+    /// D-1 이 켜진 최소 구성 — `caps_lock_alias: Some(F18)`, 규칙은 각 테스트가 채운다.
+    fn d1_cfg() -> EngineConfig {
+        EngineConfig { caps_lock_alias: Some(KeyCode::F18), ..EngineConfig::default() }
+    }
+
+    /// `kVK_ANSI_C = 0x08`(`Carbon/HIToolbox/Events.h`). `keycode.rs` 의 35종 소스 키
+    /// 목록 밖이라 이름 상수가 없다 — ⌃C 조합의 예시로 A 가 아닌 다른 문자 키를 고른
+    /// 것뿐이고, 판정 로직에서 이 키 자체가 특별한 의미를 갖지는 않는다.
+    const ANSI_C: KeyCode = KeyCode(0x08);
+
+    /// `Remap caps lock to: left control` 이 D-1 아래에서 실제로 도착하는 F18 의
+    /// KeyDown/KeyUp 을 옳게 처리한다: 대상이 modifier(`left control`)이므로 `FlagsChanged`
+    /// 로 나가야 한다(§5 #18) — `KeyDown` 으로 내면 받는 앱은 control 이 눌린 것으로 보지
+    /// 않는다(사용자 실측 "다운·업이 전부 업으로 잡힌다").
+    #[test]
+    fn d1_f18_arrives_as_keydown_and_remaps_to_left_control_as_flags_changed() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        // quick press 액션이 없으므로 keyDown 즉시 hold 확정된다.
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
+        // ⭐ macOS 는 modifier 의 눌림을 `KeyDown` 으로 전달하지 않는다
+        // (`key-remapping-engine.md` §5 #18) — `KeyDown` 으로 내면 받는 앱은 control 이
+        // 눌린 것으로 보지 않고, 그것이 사용자 실측의 "다운·업이 전부 업으로 잡힌다" 다.
+        assert_eq!(down.emitted()[0].kind, EventKind::FlagsChanged);
+        // 기대값의 출처는 macOS 헤더다: kCGEventFlagMaskControl = 0x00040000
+        // (`CGEventTypes.h`), NX_DEVICELCTLKEYMASK = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`).
+        const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
+        assert_eq!(down.emitted()[0].flags.0 & LEFT_CONTROL_HELD, LEFT_CONTROL_HELD);
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), false, Millis(50));
+        assert_eq!(up.emitted().len(), 1);
+        assert_eq!(up.emitted()[0].kind, EventKind::FlagsChanged);
+        assert_eq!(up.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
+        assert_eq!(up.emitted()[0].flags.0 & LEFT_CONTROL_HELD, 0);
+    }
+
+    /// 합성 `FlagsChanged` 한 번만으로는 `⌃C` 가 만들어지지 않는다 — 뒤따르는 다른 키
+    /// 이벤트에도 control 비트가 실려야 한다(`keystate.rs` 의 `register_sources` 가
+    /// hold_remap 대상의 flags 를 슬롯에 실어 `active_synth_flags()` 로 흘려보내는 이유).
+    #[test]
+    fn d1_left_control_remap_is_carried_onto_following_key_events() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let c_down = arb.arbitrate(&cfg, &key_down(ANSI_C, EventFlags::NONE), false, Millis(10));
+
+        const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
+        match c_down.disposition() {
+            Disposition::PassWithFlags(f) => {
+                assert_eq!(
+                    f.0 & LEFT_CONTROL_HELD,
+                    LEFT_CONTROL_HELD,
+                    "합성 flagsChanged 한 번만으로는 ⌃C 가 만들어지지 않는다 — 뒤따르는 키 이벤트에도 비트가 실려야 한다"
+                );
+            }
+            other => panic!("PassWithFlags 가 아니다: {other:?}"),
+        }
+    }
+
+    /// F-08.2 — quick press caps lock 은 경로 C(`Effect::ToggleCapsLock`)로 나가고, 키
+    /// 이벤트는 합성하지 않는다(`power-user-presets.md` §8: "Quick press duration 이내에
+    /// 캡스락을 눌렀다 떼면 …").
+    #[test]
+    fn d1_quick_press_caps_lock_toggles_lock_via_path_c() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: Some(RuleAction::ToggleCapsLock),
+            double_tap: None,
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), false, Millis(100));
+
+        assert_eq!(up.effects(), &[Effect::ToggleCapsLock]);
+        assert!(up.emitted().is_empty());
+        assert_eq!(up.disposition(), Disposition::Consume);
+    }
+
+    /// D-1 이 켜진 구성에서 hold 확정이 원본 F18 을 되살리지 않는다. 근거 — (1) 원본은
+    /// 물리적으로 F18 이라 되살려도 어떤 앱에도 의미가 없다(`architecture.md` §6.1).
+    /// (2) caps lock 의 원래 기능(잠금 토글)은 `key-remapping-engine.md` §3-c 가 "되돌릴
+    /// 수 없는 부작용"의 대표 예로 든 바로 그 동작이다 — 되살리면 안 된다.
+    #[test]
+    fn d1_long_press_caps_lock_does_not_revive_the_original_f18() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: Some(RuleAction::ToggleCapsLock),
+            double_tap: None,
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let tick = arb.on_tick(&cfg, Millis(1100));
+
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
+        assert!(
+            tick.emitted().is_empty(),
+            "hold 확정이 원본 F18 을 되살렸다 — D-1 구성에서 그것은 아무 앱에도 의미가 없다"
+        );
+    }
+
+    /// P3·`architecture.md` §6.4 — caps lock 조합은 F18 도착 시에도 정상 발화하고, 방출
+    /// flags 에는 caps lock 잠금 비트(`alphaShift`, P5)가 실리지 않는다.
+    #[test]
+    fn d1_caps_lock_combo_matches_on_f18_arrival() {
+        let mut cfg = d1_cfg();
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(5),
+            hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
+            trigger: KeyCode::ANSI_W,
+            action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE },
+        });
+        // CAPS_LOCK 을 추적 키로 만들어야 F18 도착이 `handle_tracked_key_event` 를 탄다.
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Nothing),
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let w_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), false, Millis(10));
+
+        assert_eq!(w_down.disposition(), Disposition::Consume);
+        assert_eq!(w_down.emitted().len(), 2);
+        assert_eq!(w_down.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(w_down.emitted()[0].keycode, KeyCode::UP_ARROW);
+        assert_eq!(w_down.emitted()[1].kind, EventKind::KeyUp);
+        // P5 — caps lock 잠금 비트(kCGEventFlagMaskAlphaShift = 0x00010000)가 새어 나오면
+        // 안 된다.
+        const CAPS_LOCK_BIT: u64 = 0x0001_0000;
+        for e in w_down.emitted() {
+            assert_eq!(e.flags.0 & CAPS_LOCK_BIT, 0, "조합 출력에 caps lock 잠금 비트가 실렸다");
+        }
+    }
+
+    /// `architecture.md` §6.1 — "중재기는 진입 즉시 이 keycode 를 caps lock 으로 되돌려
+    /// 이후 모든 판정을 물리 caps lock 기준으로 수행한다": D-1 이 켜진 경로(F18 의
+    /// KeyDown/KeyUp)와 꺼진 경로(물리 caps lock 의 FlagsChanged 두 번)는 같은 제스처에
+    /// 대해 완전히 같은 결과를 내야 한다.
+    #[test]
+    fn d1_and_non_d1_paths_agree_on_the_same_gesture() {
+        let mut cfg_d1 = hyper_config();
+        cfg_d1.caps_lock_alias = Some(KeyCode::F18);
+        let mut arb_d1 = Arbiter::new(&cfg_d1);
+        let d1_down = arb_d1.arbitrate(&cfg_d1, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let d1_up = arb_d1.arbitrate(&cfg_d1, &key_up(KeyCode::F18, EventFlags::NONE), false, Millis(50));
+
+        let cfg_no_d1 = hyper_config(); // caps_lock_alias: None (기본값)
+        let mut arb_no_d1 = Arbiter::new(&cfg_no_d1);
+        let no_d1_down =
+            arb_no_d1.arbitrate(&cfg_no_d1, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        let no_d1_up =
+            arb_no_d1.arbitrate(&cfg_no_d1, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(50));
+
+        assert_eq!(d1_down.disposition(), no_d1_down.disposition());
+        assert_eq!(d1_down.emitted(), no_d1_down.emitted());
+        assert_eq!(d1_down.effects(), no_d1_down.effects());
+
+        assert_eq!(d1_up.disposition(), no_d1_up.disposition());
+        assert_eq!(d1_up.emitted(), no_d1_up.emitted());
+        assert_eq!(d1_up.effects(), no_d1_up.effects());
+    }
+
+    /// 과잉 교정 방지 — 대상이 modifier 가 아니면(`esc`) 종전대로 `KeyDown` 으로 나가야
+    /// 한다. 이슈 #19 수정이 "modifier 대상만 FlagsChanged" 조건을 놓쳐 전부 FlagsChanged
+    /// 로 바꿔버리는 회귀를 막는다.
+    #[test]
+    fn non_modifier_remap_target_still_uses_key_down_and_key_up() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE }),
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(down.emitted()[0].keycode, KeyCode::ESCAPE);
+    }
+
+    /// `KeyUp` 을 내면 stuck modifier 가 남는다(증상 A 와 같은 뿌리) — `force_reset` 도
+    /// modifier 대상은 `FlagsChanged`(빈 flags)로 놓아야 한다.
+    #[test]
+    fn force_reset_releases_modifier_hold_remap_as_flags_changed() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
+        });
+        let mut arb = Arbiter::new(&cfg);
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
+
+        let out = arb.force_reset(&cfg);
+        const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
+        let released = out
+            .emitted()
+            .iter()
+            .find(|e| e.keycode == KeyCode::LEFT_CONTROL)
+            .unwrap_or_else(|| panic!("hold_remap 해제 이벤트가 방출되지 않았다: {:?}", out.emitted()));
+        assert_eq!(
+            released.kind,
+            EventKind::FlagsChanged,
+            "KeyUp 을 내면 stuck modifier 가 남는다(이슈 #19 증상 A 와 같은 뿌리)"
+        );
+        assert_eq!(released.flags.0 & LEFT_CONTROL_HELD, 0);
+    }
+
+    /// quick press 액션의 대상이 modifier 키(`left command`)면 down+up 이 둘 다
+    /// `FlagsChanged` 쌍으로 나가야 한다.
+    /// (`kCGEventFlagMaskCommand = 0x00100000`, `NX_DEVICELCMDKEYMASK = 0x00000008`)
+    #[test]
+    fn quick_press_target_that_is_a_modifier_is_emitted_as_flags_changed_pair() {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: Some(RuleAction::Key { keycode: KeyCode::LEFT_COMMAND, flags: EventFlags::NONE }),
+            double_tap: None,
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), false, Millis(0));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), false, Millis(100));
+
+        const LEFT_COMMAND_HELD: u64 = 0x0010_0008;
+        assert_eq!(up.emitted().len(), 2);
+        for e in up.emitted() {
+            assert_eq!(e.kind, EventKind::FlagsChanged);
+            assert_eq!(e.keycode, KeyCode::LEFT_COMMAND);
+        }
+        assert_eq!(up.emitted()[0].flags.0 & LEFT_COMMAND_HELD, LEFT_COMMAND_HELD);
+        assert_eq!(up.emitted()[1].flags.0 & LEFT_COMMAND_HELD, 0);
+    }
+
+    // ── 증상 C — shift 가 죽지 않는다 ─────────────────────────────────────────────────────
+    //
+    // ⚠️ shift 는 modifier 이므로 입력은 `FlagsChanged` 로 만든다(`KeyDown` 이 아니다) —
+    // 그것이 M1 이 놓쳤던 바로 그 구멍이다.
+
+    /// `double tap shift = caps lock` — 두 번의 `FlagsChanged`(down→up) 뒤 300ms 안에
+    /// 다시 down 이 오면 double tap 이 성립한다(기본 `double_tap_interval_ms = 300`).
+    #[test]
+    fn double_tap_shift_toggles_caps_lock() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::LEFT_SHIFT,
+            quick_press: None,
+            double_tap: Some(RuleAction::ToggleCapsLock),
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(0));
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(50));
+        let second_down =
+            arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(100));
+
+        assert_eq!(second_down.effects(), &[Effect::ToggleCapsLock]);
+    }
+
+    /// ⭐ 이번 버그의 핵심 회귀 방지 — **설계 정정판**(2026-08-30). `Arbiter::
+    /// has_substitute_output` 의 판정을 따른다: shift 는 caps lock 이 아니고, modifier
+    /// 소스도 아니고, hold_remap 대상도 없으므로 대체 출력이 없다 — 그런 키는 원본을
+    /// **애초에 소비하지 않고 그대로 통과**시킨다(`Disposition::Pass`). `key-
+    /// remapping-engine.md` §3-c 가 보류(소비 후 재방출)를 요구하는 유일한 근거는
+    /// "되돌릴 수 없는 부작용"(caps lock 잠금 토글이 그 예)인데, shift 홀로는 그런
+    /// 부작용이 없다 — 그러니 보류할 이유가 없다(`has_substitute_output` 문서 참고).
+    /// `power-user-presets.md` §3.2 F-08.8 행의 "부가 효과" 열도 비어 있다(shift 를
+    /// 무력화한다는 서술이 없다).
+    #[test]
+    fn double_tap_shift_preset_does_not_kill_the_shift_key() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::LEFT_SHIFT,
+            quick_press: None,
+            double_tap: Some(RuleAction::ToggleCapsLock),
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        let shift_down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(0));
+        assert_eq!(
+            shift_down.disposition(),
+            Disposition::Pass,
+            "shift 가 통째로 삼켜진다 — `Double tap shift = caps lock` 을 켜면 Shift+a 가 소문자로 나간다"
+        );
+
+        // 뒤따르는 다른 키(A)의 keyDown 도 shift 를 막지 않아야 한다 — dispatch_other_key_down
+        // 이 대체 출력 없는 슬롯을 HoldConfirmed 로 전이시키더라도 아무것도 합성하지 않는다.
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
+        assert_eq!(
+            a_down.disposition(),
+            Disposition::Pass,
+            "shift 가 통째로 삼켜진다 — `Double tap shift = caps lock` 을 켜면 Shift+a 가 소문자로 나간다"
+        );
+    }
+
+    /// §3-c 표 7행 — "유예됐던 단일 quick press 액션을 지금 방출"이라 했는데 방출할
+    /// 액션이 없다(double tap 전용 키). ⭐ **설계 정정판**: 원본을 애초에 통과시켜
+    /// 왔으므로(`has_substitute_output` == false) 되살릴 것 자체가 없다 — down/up 모두
+    /// `Disposition::Pass` 였고, 타임아웃 시점에도 `on_tick` 은 아무것도 합성하지 않는다.
+    #[test]
+    fn single_shift_tap_passes_through_and_emits_nothing_on_timeout() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::LEFT_SHIFT,
+            quick_press: None,
+            double_tap: Some(RuleAction::ToggleCapsLock),
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(0));
+        assert_eq!(down.disposition(), Disposition::Pass);
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(50));
+        assert_eq!(up.disposition(), Disposition::Pass);
+
+        let tick = arb.on_tick(&cfg, Millis(400)); // double tap 간격(300ms) 초과
+        assert!(tick.emitted().is_empty(), "원본이 이미 통과했으므로 되살릴 것이 없다: {:?}", tick.emitted());
+        assert!(tick.effects().is_empty());
+    }
+
+    /// `force_reset` 은 대체 출력이 없는 키(shift)에 대해서는 아무것도 방출하지 않는다 —
+    /// 원본을 통과시켜 왔으므로 물리 키의 실제 뗌이 해제를 담당하고, 우리가 합성할
+    /// "해제 이벤트"가 애초에 존재하지 않는다(`has_substitute_output` 문서 참고).
+    #[test]
+    fn force_reset_emits_nothing_for_keys_without_substitute_output() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::LEFT_SHIFT,
+            quick_press: None,
+            double_tap: Some(RuleAction::ToggleCapsLock),
+            hold_remap: None,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(0));
+        arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
+        assert_eq!(arb.state.machine(KeyCode::LEFT_SHIFT), QuickPressState::HoldConfirmed);
+
+        let out = arb.force_reset(&cfg);
+        assert!(
+            !out.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_SHIFT),
+            "원본을 통과시켜 온 키인데 force_reset 이 LEFT_SHIFT 이벤트를 합성해 냈다: {:?}",
+            out.emitted()
+        );
     }
 }
