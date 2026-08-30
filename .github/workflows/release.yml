@@ -1,0 +1,142 @@
+# Ultrakey 릴리즈 파이프라인 — 이슈 #50.
+#
+# 트리거는 `v*` 태그 푸시 단일이다(명시적 버전링).
+#   check   태그↔버전 일치 + test + clippy (게이트)
+#   build   universal 빌드 + DMG. 서명·공증 시크릿이 있으면 서명+공증+스테이플,
+#           없으면 미서명 통과 + 경고(실패하지 않는다)
+#   release 직전 릴리즈 태그~현재 태그 커밋 로그를 추출해 드래프트 릴리즈 생성
+#
+# 서명·공증은 Tauri 번들러가 자체 처리한다(임시 키체인 생성·서명·공증·스테이플).
+# 게이트 설계 근거는 docs/dev/code-signing.md §8 과 이슈 #50 계획 코멘트 참조.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  check:
+    name: tag↔version + test + clippy
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: 태그 ↔ 버전 일치 확인
+        run: |
+          set -euo pipefail
+          CONFIG_VERSION="$(jq -r '.version' apps/ultrakey-app/tauri.conf.json)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$CONFIG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::태그 ${GITHUB_REF_NAME} 와 tauri.conf.json version(${CONFIG_VERSION}) 이 다릅니다 — 버전을 먼저 올리고 다시 태그하세요"
+            exit 1
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  build:
+    name: universal build + DMG (서명 게이트)
+    needs: check
+    runs-on: macos-15
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.build.outputs.signed }}
+      notarized: ${{ steps.build.outputs.notarized }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: rustup 타깃 추가
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: tauri-cli 설치 (npm 사전 빌드 바이너리)
+        run: npm install --global @tauri-apps/cli@2.11.4
+      - name: universal 빌드 + DMG (서명·공증 시크릿 주입)
+        id: build
+        # 시크릿 미설정 시 이 매핑은 빈 문자열이 된다 — 아래 가드가 빈 값을
+        # 환경에서 제거한다. 게이트 설계 근거: 이슈 #50 계획 코멘트 결정 3.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # tauri-bundler 는 환경 변수의 "존재"(var_os) 로 서명 여부를 판정한다 —
+          # 빈 문자열도 존재로 잡아 빈 인증서 임포트를 시도해 실패한다. 또한 공증
+          # 자격이 부분적으로만 있으면(APPLE_ID+APPLE_PASSWORD 있고 Team ID 없음) MissingTeamId
+          # 로 하드 실패한다. 그래서 불완전한 그룹은 빌드 직전에 환경에서 제거한다.
+          # 근거: tauri-apps/tauri crates/tauri-bundler/src/bundle/macos/{sign,app}.rs
+          SIGNED=false
+          NOTARIZED=false
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; then
+            SIGNED=true
+          else
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+            echo "::warning::서명 시크릿 미설정/불완전 — 미서명으로 빌드합니다 (실패 아님)"
+          fi
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            NOTARIZED=true
+          else
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            echo "::warning::공증 시크릿 미설정/불완전 — 공증 없이 진행합니다"
+          fi
+          echo "signed=${SIGNED}" >> "$GITHUB_OUTPUT"
+          echo "notarized=${NOTARIZED}" >> "$GITHUB_OUTPUT"
+          tauri --version
+          tauri build --target universal-apple-darwin
+      - name: DMG 산출물 확인
+        run: |
+          set -euo pipefail
+          test -n "$(find target/universal-apple-darwin/release/bundle -name '*.dmg' | head -n1)" \
+            || { echo "::error::DMG 산출물이 없습니다"; exit 1; }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ultrakey-dmg
+          path: target/universal-apple-darwin/release/bundle/**/*.dmg
+
+  release:
+    name: 드래프트 릴리즈
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # 릴리즈 노트 범위(직전 태그~현재) 계산용 전체 이력
+      - uses: actions/download-artifact@v8
+        with:
+          name: ultrakey-dmg
+      - name: 릴리즈 노트 추출 + 드래프트 릴리즈 생성
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ needs.build.outputs.signed }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # 직전 릴리즈 태그 = 현재 태그의 조상 중 최근의 v* 태그.
+          # 첫 릴리즈(직전 태그 없음) 는 전체 이력으로 폴백한다.
+          PREV_TAG="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
+          {
+            if [ "$SIGNED" != "true" ]; then
+              printf '> ⚠️ **미서명 빌드** — 서명·공증 시크릿이 설정되지 않았습니다. 배포 전 서명된 빌드로 교체하세요.\n\n'
+            fi
+            if [ -n "$PREV_TAG" ]; then
+              git log --no-merges --pretty=format:'* %s' "${PREV_TAG}..${TAG}"
+            else
+              git log --no-merges --pretty=format:'* %s'
+            fi
+            printf '\n'
+          } > notes.md
+          DMG_PATH="$(find . -path '*/bundle/*' -name '*.dmg' | head -n1)"
+          test -n "$DMG_PATH" || { echo "::error::아티팩트 다운로드 후 DMG 를 찾지 못했습니다"; exit 1; }
+          gh release create "$TAG" \
+            --draft \
+            --title "Ultrakey $TAG" \
+            --verify-tag \
+            --notes-file notes.md \
+            "$DMG_PATH"

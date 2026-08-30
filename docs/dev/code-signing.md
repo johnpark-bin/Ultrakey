@@ -137,3 +137,37 @@ open <산출 .app>   (또는 Finder 에서 직접 실행)
 | 아키텍처 | Universal (`x86_64` + `arm64`) | ✅ 동일 — `cargo tauri build --target universal-apple-darwin` + `lipo` |
 
 ⭐ 여기서 확인해야 할 것 하나: **TCC 권한은 entitlement 로 선언되지 않는다.** Accessibility·Screen Recording·Input Monitoring 은 `entitlements.plist` 어디에도 나타나지 않으며, "어떤 권한이 필요한가" 는 번들 메타데이터가 아니라 **실제로 링크·호출하는 API** 로만 판정된다(`platform-constraints.md` §0.1). `com.apple.security.cs.allow-jit` 은 WebKit(Sparkle·Paddle 이 링크) 이 요구하는 것으로 보이나 확정되지 않았다(`(미확정)`).
+
+---
+
+## 8. 릴리즈 파이프라인 시크릿 (CI)
+
+`.github/workflows/release.yml`(이슈 #50)은 `v*` 태그 푸시를 트리거로 유니버설 DMG 빌드를 실행한다. 서명·공증 시크릿이 있으면 Tauri 번들러가 **임시 키체인을 스스로 생성·서명·공증·스테이플**까지 처리하므로 §2 같은 수동 키체인 단계가 필요 없다. 시크릿이 없으면 **미서명 빌드로 통과한다(경고만, 실패하지 않는다)**. 그 결과물로 드래프트 릴리즈를 만든다.
+
+서명·공증은 전부 Tauri 번들러가 **환경 변수에서 읽어** 수행하고, 워크플로는 시크릿을 환경에 주입하고 불완전한 그룹을 걸러내는 일만 한다. 설정해야 하는 시크릿은 다섯 개다.
+
+| 시크릿 | 용도 | 준비 절차 |
+| :--- | :--- | :--- |
+| `APPLE_CERTIFICATE` | **Developer ID Application** `.p12`(인증서 + 개인 키) 의 base64 | 키체인 접근 → 내 인증서 → Developer ID Application 인증서(+개인 키) 우클릭 → 내보내기(`.p12`, 비밀번호 지정) → `openssl base64 -in cert.p12 -out cert.b64`(Tauri 공식 문서 절차) → 파일 내용 전체를 시크릿으로 |
+| `APPLE_CERTIFICATE_PASSWORD` | 위 단계에서 지정한 `.p12` 내보내기 비밀번호 | 위 절차의 그 비밀번호 그대로 |
+| `APPLE_ID` | 공증에 쓰는 Apple 계정 이메일 | Apple ID 이메일 그대로 |
+| `APPLE_PASSWORD` | ⚠️ **앱 전용 암호(app-specific password)** — 계정 암호나 2FA 코드가 아니다 | https://support.apple.com/HT204397 에서 생성 |
+| `APPLE_TEAM_ID` | 개발자 멤버십 페이지의 Team ID | https://developer.apple.com/account#MembershipDetailsCard |
+
+⭐ **그룹 규칙: 두 시크릿 그룹은 각각 전부 아니면 전무(all-or-nothing)다.** 서명 그룹은 `APPLE_CERTIFICATE` + `APPLE_CERTIFICATE_PASSWORD` 이고, 공증 그룹은 `APPLE_ID` + `APPLE_PASSWORD` + `APPLE_TEAM_ID` 다. 파이프라인은 불완전한 그룹을 감지해 **경고와 함께 환경에서 제거**한다(실패하지 않는다). 결과 상태는 세 가지다:
+
+- **다섯 개 모두 설정** → 서명 + 공증
+- **서명 그룹만 설정** → 서명만 — ⚠️ 공증이 없으면 다른 기기의 첫 실행에서 Gatekeeper 가 경고한다 (공증 전까지)
+- **하나도 설정 안 함** → 미서명
+
+이 게이트가 필요한 이유: 번들러는 환경 변수의 **존재**(`var_os`)로 서명 여부를 판정하므로, **빈 문자열도 "존재"로 잡혀** 빈 인증서 임포트를 시도해 실패한다. 또 공증 자격이 부분적으로만 있으면(`APPLE_ID` + `APPLE_PASSWORD` 는 있고 `APPLE_TEAM_ID` 가 없음) `MissingTeamId` 로 하드 실패한다 — 근거: `crates/tauri-bundler/src/bundle/macos/{sign,app}.rs`.
+
+**필요 없는 시크릿** (명시적으로):
+- `APPLE_SIGNING_IDENTITY` — 인증서에서 자동으로 추론된다. 문제가 생겨 신원을 고정하고 싶을 때만 이 값(또는 `bundle.macOS.signingIdentity`)을 지정한다.
+- `KEYCHAIN_PASSWORD` — 번들러가 임시 키체인을 직접 만들고 지우므로 필요 없다. 수동 키체인 임포트가 들어간 옛 문서 예시는 레거시 흐름용이다.
+
+⭐ **Team ID 불변 조건**: §6 과 같다 — 인증서를 갱신(만료 등)할 때 **같은 Team ID** 로 재발급한다. Team ID 가 바뀌면 모든 기존 사용자가 TCC 권한을 잃는다(F-13 자동 업데이트 전제 조건, `docs/spec/platform-constraints.md` §3.5).
+
+**등록 절차**: `gh secret set APPLE_CERTIFICATE < cert.b64`(시크릿마다 반복) 또는 Settings → Secrets and variables → Actions. ⛔ **시크릿 값을 어떤 저장소 파일에도 절대 써넣지 않는다** — 이 문서는 절차만 다룬다.
+
+**첫 릴리즈 / 미서명 교체 절차**: 미서명 드래프트 릴리즈로 파이프라인 자체를 검증하는 것은 문제없다. 시크릿을 설정한 뒤 서명된 빌드로 교체하려면 → 드래프트 릴리즈 삭제 → 원격 태그 삭제 → **같은 태그를 다시 푸시**(워크플로 재실행).

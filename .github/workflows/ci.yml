@@ -1,0 +1,25 @@
+# Ultrakey CI — PR 과 main 브랜치 푸시 체크.
+# 릴리즈 파이프라인은 release.yml(v* 태그 푸시 전용)로 분리되어 있다. 근거: 이슈 #50.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: test + clippy
+    # 워크스페이스가 macOS 전용 FFI(objc2-*, IOKit)를 쓰므로 Linux 러너에서는
+    # 컴파일이 성립하지 않는다 — 체크도 macOS 러너에서 돌린다.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
