@@ -9,7 +9,9 @@
 
 #![allow(non_camel_case_types, non_upper_case_globals, dead_code)]
 
-use objc2_core_foundation::{CFDictionary, CFMutableDictionary, CFRunLoopSource, CFString};
+use objc2_core_foundation::{
+    CFAllocator, CFDictionary, CFMutableDictionary, CFRunLoopSource, CFString,
+};
 use std::ffi::{c_char, c_void};
 
 // ============================================================================
@@ -95,6 +97,36 @@ extern "C" {
         notify: IONotificationPortRef,
     ) -> *mut CFRunLoopSource;
 
+    /// 근거: `IOKitLib.h` —
+    /// `kern_return_t IOServiceGetMatchingServices(mach_port_t mainPort, CFDictionaryRef matching CF_RELEASES_ARGUMENT, io_iterator_t *existing);`
+    /// `matching` 은 이 호출이 참조 하나를 소비한다(CF_RELEASES_ARGUMENT). `existing` 에
+    /// 담기는 이터레이터는 호출자가 `IOObjectRelease` 로 해제해야 한다(문서:
+    /// "should be released by the caller when the iteration is finished").
+    pub(crate) fn IOServiceGetMatchingServices(
+        main_port: MachPortT,
+        matching: *const CFDictionary,
+        existing: *mut IoIteratorT,
+    ) -> KernReturnT;
+
+    /// 근거: `IOKitLib.h` —
+    /// `CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStringRef key, CFAllocatorRef allocator, IOOptionBits options);`
+    /// `io_registry_entry_t` 는 `io_object_t` 의 별칭이다(`IOTypes.h`, 위 `IoObjectT` 참고).
+    /// 반환값은 CF_RETURNS_RETAINED 규칙이다(문서: "The caller should release with
+    /// CFRelease") — 우리가 소유권을 받는다.
+    /// ⚠️ **`options` 는 이 함수에 한해 아무 플래그도 정의되어 있지 않다**(문서: "No
+    /// options are currently defined") — `kIORegistryIterateRecursively`/
+    /// `kIORegistryIterateParents` 는 이 함수가 아니라 `IORegistryEntrySearchCFProperty`
+    /// (별도 함수, 여기서 선언하지 않음)의 옵션이다. 그래서 이 크레이트는 항상 `0` 을
+    /// 넘긴다 — 상속 검색이 필요하면 `IORegistryEntrySearchCFProperty` 를 별도로
+    /// 선언해야 하고, 지금은 직속 프로퍼티 조회만으로 충분하다(호출부 `hid_device.rs`
+    /// 참고).
+    pub(crate) fn IORegistryEntryCreateCFProperty(
+        entry: IoObjectT,
+        key: *const CFString,
+        allocator: *const CFAllocator,
+        options: u32,
+    ) -> *mut c_void;
+
     /// 근거: `IOKitLib.h`. `matching` 은 참조 하나를 소비한다(CF_RELEASES_ARGUMENT).
     pub(crate) fn IOServiceAddMatchingNotification(
         notify_port: IONotificationPortRef,
@@ -140,6 +172,18 @@ pub(crate) const K_IOHID_DEVICE_USAGE_KEY: &str = "DeviceUsage";
 pub(crate) const K_HID_USAGE_PAGE_GENERIC_DESKTOP: i32 = 0x01;
 pub(crate) const K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD: i32 = 0x06;
 
+/// 근거: `IOKit.framework/.../hid/IOHIDDeviceKeys.h` — `#define kIOHIDVendorIDKey "VendorID"`.
+/// F-17(`per-device-settings.md` §3.2) 디바이스 열거·핫플러그가 읽는 프로퍼티 키다.
+pub(crate) const K_IOHID_VENDOR_ID_KEY: &str = "VendorID";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDProductIDKey "ProductID"`.
+pub(crate) const K_IOHID_PRODUCT_ID_KEY: &str = "ProductID";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDProductKey "Product"`.
+pub(crate) const K_IOHID_PRODUCT_KEY: &str = "Product";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDTransportKey "Transport"`.
+pub(crate) const K_IOHID_TRANSPORT_KEY: &str = "Transport";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDBuiltInKey "Built-In"`. ⚠️ 하이픈 포함, 원문 그대로.
+pub(crate) const K_IOHID_BUILT_IN_KEY: &str = "Built-In";
+
 // ============================================================================
 // CoreFoundation — 범용 CFRetain/CFRelease
 // ============================================================================
@@ -150,6 +194,49 @@ pub(crate) const K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD: i32 = 0x06;
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     pub(crate) fn CFRelease(cf: *const c_void);
+
+    /// 근거: `CFPreferences.h` — `CFPropertyListRef CFPreferencesCopyValue(
+    /// CFStringRef key, CFStringRef applicationID, CFStringRef userName, CFStringRef hostName);`
+    /// "Copy" 규칙(CF_RETURNS_RETAINED) — 문서: "Caller must release the returned value".
+    ///
+    /// ⭐ **`CFPreferencesCopyAppValue` 가 아니라 이것을 쓴다.** 같은 헤더가
+    /// "the App functions ... should never be called with kCFPreferencesAnyApplication"
+    /// 이라고 명시적으로 권고하기 때문이다 — `NSGlobalDomain` 을 읽는 정식 경로는
+    /// 도메인 3요소(application/user/host)를 모두 받는 이 함수다.
+    ///
+    /// ⭐ **네 조합을 이 기기에서 직접 실측해 고른 것이다**(2026-08-30, 이슈 #28).
+    /// `com.apple.keyboard.fnState` 로 시험한 결과:
+    /// ```text
+    /// CFPreferencesCopyAppValue(key, kCFPreferencesAnyApplication)                     → CFBoolean 1
+    /// CFPreferencesCopyAppValue(key, kCFPreferencesCurrentApplication)                 → CFBoolean 1
+    /// CFPreferencesCopyValue(key, AnyApplication, CurrentUser, AnyHost)                → CFBoolean 1  ← 채택
+    /// CFPreferencesCopyValue(key, AnyApplication, CurrentUser, CurrentHost)            → NULL
+    /// ```
+    /// 즉 헤더가 권고하지 않는 조합도 이 기기에서는 값을 주지만, **권고를 따르면서도
+    /// 같은 값을 주는 조합이 존재하므로** 그쪽을 택한다. `CurrentHost` 는 값을 주지
+    /// 않으므로 반드시 `AnyHost` 여야 한다(이것도 실측이다).
+    /// ⚠️ 반환 타입이 `CFNumber` 가 아니라 **`CFBoolean`** 이다(`defaults` 는 `1` 로
+    /// 출력하지만 실제 저장 타입은 불리언이다) — `fn_state.rs` 가 둘 다 받는다.
+    pub(crate) fn CFPreferencesCopyValue(
+        key: *const CFString,
+        application_id: *const CFString,
+        user_name: *const CFString,
+        host_name: *const CFString,
+    ) -> *mut c_void;
+
+    /// 근거: `CFPreferences.h` — `CF_EXPORT const CFStringRef kCFPreferencesAnyApplication;`.
+    /// `CFPreferencesCopyValue` 의 `applicationID` 자리에 쓰면 `NSGlobalDomain` 을
+    /// 가리킨다. ⚠️ 헤더가 쓰지 말라고 한 것은 **App 계열 함수**(`…CopyAppValue`)와의
+    /// 조합이지 이 함수와의 조합이 아니다.
+    pub(crate) static kCFPreferencesAnyApplication: Option<&'static CFString>;
+
+    /// 근거: `CFPreferences.h` — `CF_EXPORT const CFStringRef kCFPreferencesCurrentUser;`
+    pub(crate) static kCFPreferencesCurrentUser: Option<&'static CFString>;
+
+    /// 근거: `CFPreferences.h` — `CF_EXPORT const CFStringRef kCFPreferencesAnyHost;`
+    /// ⚠️ `kCFPreferencesCurrentHost` 를 쓰면 `com.apple.keyboard.fnState` 는 `NULL` 이
+    /// 온다(위 실측 표) — 이 값은 host 중립으로 저장된다.
+    pub(crate) static kCFPreferencesAnyHost: Option<&'static CFString>;
 }
 
 // ============================================================================

@@ -26,8 +26,23 @@ fn main() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use std::time::{Duration, Instant};
-        use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent};
+        use ultrakey_platform::hotplug::{watch_keyboards, HotplugEventKind};
         use ultrakey_platform::runloop::RunLoopHandle;
+
+        // F-17(`per-device-settings.md`) 확장 — `HotplugEvent` 는 이제 `kind` +
+        // `device: Option<DeviceInfo>` 구조체다(§3.2). 이 프로브는 스레드 친화성만
+        // 보면 되므로 `device` 는 참고용으로만 찍는다.
+        fn describe_device(ev: &ultrakey_platform::hotplug::HotplugEvent) -> String {
+            match &ev.device {
+                Some(d) => format!(
+                    "{:04x}:{:04x} {}",
+                    d.vendor_id,
+                    d.product_id,
+                    d.product_name.as_deref().unwrap_or("?")
+                ),
+                None => "속성 없음".to_string(),
+            }
+        }
 
         let no_runloop_hits = Arc::new(AtomicUsize::new(0));
         let with_runloop_hits = Arc::new(AtomicUsize::new(0));
@@ -38,12 +53,13 @@ fn main() {
             .name("no-runloop".to_string())
             .spawn(move || {
                 let _watcher = watch_keyboards(Box::new(move |ev| {
-                    let label = match ev {
-                        HotplugEvent::Attached => "연결",
-                        HotplugEvent::Detached => "해제",
+                    let label = match ev.kind {
+                        HotplugEventKind::Attached => "연결",
+                        HotplugEventKind::Detached => "해제",
                     };
+                    let device = describe_device(&ev);
                     hits_b.fetch_add(1, Ordering::SeqCst);
-                    println!("  [no-runloop]   ⚠️ 콜백 도착 — {label}");
+                    println!("  [no-runloop]   ⚠️ 콜백 도착 — {label} ({device})");
                 }));
                 println!("[no-runloop]   등록 완료 — CFRunLoopRun 을 호출하지 않고 대기한다");
                 // 폴링 스레드처럼 그냥 잠들어 있는다. 런루프는 돌지 않는다.
@@ -57,12 +73,13 @@ fn main() {
             .name("with-runloop".to_string())
             .spawn(move || {
                 let _watcher = watch_keyboards(Box::new(move |ev| {
-                    let label = match ev {
-                        HotplugEvent::Attached => "연결",
-                        HotplugEvent::Detached => "해제",
+                    let label = match ev.kind {
+                        HotplugEventKind::Attached => "연결",
+                        HotplugEventKind::Detached => "해제",
                     };
+                    let device = describe_device(&ev);
                     hits_a.fetch_add(1, Ordering::SeqCst);
-                    println!("  [with-runloop] ✅ 콜백 도착 — {label}");
+                    println!("  [with-runloop] ✅ 콜백 도착 — {label} ({device})");
                 }));
                 println!("[with-runloop] 등록 완료 — CFRunLoopRun 을 돈다");
                 let deadline = Instant::now() + Duration::from_secs(90);

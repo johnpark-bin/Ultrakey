@@ -37,7 +37,7 @@ use crate::lifecycle::{
     AtomicTapState, CreateAttemptResult, RecoveryCounters, RecreateOutcome, ReenableOutcome,
     TapState,
 };
-use crate::path_b::PathBManager;
+use crate::path_b::{GlobalD1Migration, HidutilGlobalMigration, LedgerStore, PathBManager};
 use crate::state::SharedState;
 use crate::system_hooks::SystemHooks;
 use crate::trace::{self, TapTrace, TraceDrainHandle, TraceEmit, TraceRing};
@@ -116,14 +116,21 @@ impl Engine {
     ///
     /// ⛔ `on_event` 는 **탭 전용 스레드에서** 불린다 — [`EngineEvent`] 문서의 "블록하지
     /// 마라" 계약을 반드시 읽어라. 이 계약을 어기면 시스템 전체 입력이 멈춘다.
+    ///
+    /// ⭐ F-17 — `ledger` 는 이 엔진이 저장소 구현을 모르기 때문에 앱이 넘겨야 하는
+    /// [`crate::path_b::LedgerStore`] 구현체다. **앱은 반드시 `perDevice._managed`
+    /// 위에 영속화하는 진짜 구현을 넘겨야 한다** — `crate::path_b::NullLedgerStore`
+    /// 를 그대로 쓰면 원장이 프로세스 재시작 사이에 전혀 남지 않아 D-17-2 의 크래시
+    /// 안전(2단계 영속화)이 성립하지 않는다.
     pub fn start(
         config: EngineConfig,
         gate: Arc<AtomicAppGate>,
+        ledger: Box<dyn LedgerStore>,
         on_event: Box<dyn Fn(EngineEvent) + Send + Sync>,
     ) -> Result<Self, EngineError> {
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (config, gate, on_event);
+            let _ = (config, gate, ledger, on_event);
             return Err(EngineError::UnsupportedPlatform);
         }
 
@@ -137,13 +144,16 @@ impl Engine {
             // 종료 시 정리한다"는 설계는 가장 흔한 종료 경로에서 그냥 동작하지 않는다 —
             // 그래서 종료 정리는 부가적 최적화로 격하하고, **매 기동마다 무조건 재조정**한다.
             //
-            // ⭐ M2 — `config` 가 이미 D-1 caps lock alias 를 요구할 수 있다(예: 지난
-            // 실행에서 caps lock 프리셋을 켜 둔 채 재시작). `desired` 를 `config` 에서
-            // 계산해 넘긴다 — M1 시절 하드코딩됐던 빈 목록을 걷어낸다. `config` 를
-            // `SharedState::new` 로 옮기기 *전에* 계산해야 한다(그 호출이 값을 소비한다).
-            let desired = crate::path_b::desired_mappings_for(&config);
-            let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend)));
-            if let Err(e) = path_b.reconcile_on_start(&desired) {
+            // ⭐ F-17 — 재조정은 이제 디바이스별이다(`docs/dev/architecture.md` §7.1).
+            // 붙어 있는 키보드 목록을 한 번 얻어(`list_attached_keyboards()`) 넘긴다 —
+            // `PathBManager` 는 스스로 이 함수를 부르지 않는다(테스트에서 목록을 주입할
+            // 수 있어야 하기 때문, CONTRACT.md 부록 B.4). `config` 를 `SharedState::new`
+            // 로 옮기기 *전에* 재조정해야 한다(그 호출이 값을 소비한다).
+            let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+            let migration: Option<Box<dyn GlobalD1Migration>> =
+                Some(Box::new(HidutilGlobalMigration));
+            let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
+            if let Err(e) = path_b.reconcile_on_start(&config, &attached) {
                 tracing::warn!(error = %e, "경로 B 시작 시 재조정 확인에 실패했다");
             }
 
@@ -214,15 +224,15 @@ impl Engine {
     /// 설정을 교체한다 — `ArcSwap` 원자적 교체 후 탭 스레드에 `Reconfigure` 명령을 보내
     /// `Arbiter` 내부 quick press 슬롯 캐시를 다시 구성하게 한다.
     ///
-    /// ⭐ M2/D-1 — 경로 B(`hidutil`) 설치·정리도 여기서 동기적으로 수행한다. 호출자는
-    /// 항상 메인(Tauri 커맨드) 스레드다 — **탭 스레드가 아니다.** `hidutil` 서브프로세스
-    /// 호출은 §2.2 가 콜백 임계 경로에서 금지하는 블로킹 I/O 그 자체이지만, 이 메서드는
-    /// 그 경로 밖에서만 불린다(architecture.md §6.6 이 확정한 "설정이 바뀔 때마다
-    /// 재계산해서 Engine::reconfigure 경로로 반영"의 구현).
+    /// ⭐ F-17 — 경로 B(디바이스별 합성 배열) 재적용도 여기서 동기적으로 수행한다.
+    /// 호출자는 항상 메인(Tauri 커맨드) 스레드다 — **탭 스레드가 아니다.** `hidutil`
+    /// 서브프로세스 호출(디바이스 수만큼)은 §2.2 가 콜백 임계 경로에서 금지하는 블로킹
+    /// I/O 그 자체이지만, 이 메서드는 그 경로 밖에서만 불린다(architecture.md §6.6 이
+    /// 확정한 "설정이 바뀔 때마다 재계산해서 Engine::reconfigure 경로로 반영"의 구현).
     pub fn reconfigure(&self, config: EngineConfig) {
-        let desired = crate::path_b::desired_mappings_for(&config);
-        if let Err(e) = self.path_b.apply(&desired) {
-            tracing::warn!(error = %e, "경로 B(D-1 caps lock alias) 재적용 실패");
+        let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+        if let Err(e) = self.path_b.apply_all(&config, &attached) {
+            tracing::warn!(error = %e, "경로 B(F-17 디바이스별 배열) 재적용 실패");
         }
         self.shared.config.store(Arc::new(config));
         self.commands.send(EngineCommand::Reconfigure);
@@ -257,7 +267,10 @@ impl Engine {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        if let Err(e) = self.path_b.cleanup() {
+        // ⭐ F-17 — cleanup 도 디바이스별이라 붙어 있는 목록이 필요하다(B.4.3, 뽑혀
+        // 있는 디바이스는 건드리지 않고 원장에 남긴다).
+        let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+        if let Err(e) = self.path_b.cleanup(&attached) {
             tracing::warn!(error = %e, "경로 B 정리 실패");
         }
         // 탭 스레드가 끝난 뒤에 정리한다 — 탭 스레드가 마지막으로 push 한 레코드까지
@@ -791,21 +804,28 @@ fn drain_commands(
                 st.arbiter.reconfigure(&cfg);
                 tracing::info!("설정 변경을 반영해 Arbiter 를 재구성했다");
             }
-            EngineCommand::ReapplyHidMapping => {
-                // ⭐ M2/D-1 — 더 이상 하드코딩된 빈 매핑이 아니다. 현재 설정에서
-                // 요구하는 매핑(caps lock alias 가 켜져 있으면 F18)을 다시 계산해
-                // 재적용한다. 핫플러그(외장 키보드 연결)가 드물게만 이 경로를 타므로,
-                // 이 커맨드 perform 콜백(탭 이벤트 콜백 자체는 아니다) 안에서
-                // hidutil 서브프로세스를 동기 호출해도 §2.2 가 금지하는 "매 이벤트
+            EngineCommand::ReapplyHidMapping(device) => {
+                // ⭐ F-17 — `Some(device)` 면 핫플러그로 방금 연결된 그 디바이스 하나만
+                // (`apply_device`), `None` 이면(디바이스 속성을 읽지 못했거나 전체
+                // 재조정이 필요한 경우) 붙어 있는 디바이스 전체를 다시 계산해
+                // 재적용한다(`apply_all`, CONTRACT.md 부록 B.5). 핫플러그가 드물게만
+                // 이 경로를 타므로, 이 커맨드 perform 콜백(탭 이벤트 콜백 자체는 아니다)
+                // 안에서 hidutil 서브프로세스를 동기 호출해도 §2.2 가 금지하는 "매 이벤트
                 // 임계 경로"에는 해당하지 않는다 — M1 부터 이어진 판단이다.
                 let (path_b, cfg) = {
                     let st = cell.borrow();
                     (st.path_b.clone(), st.shared.config.load_full())
                 };
-                let desired = crate::path_b::desired_mappings_for(&cfg);
-                match path_b.apply(&desired) {
-                    Ok(()) => tracing::info!(count = desired.len(), "경로 B 재적용을 완료했다"),
-                    Err(e) => tracing::warn!(error = %e, "경로 B 재적용에 실패했다"),
+                let result = match &device {
+                    Some(dev) => path_b.apply_device(&cfg, dev),
+                    None => {
+                        let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+                        path_b.apply_all(&cfg, &attached)
+                    }
+                };
+                match result {
+                    Ok(()) => tracing::info!(?device, "경로 B(F-17) 재적용을 완료했다"),
+                    Err(e) => tracing::warn!(error = %e, ?device, "경로 B(F-17) 재적용에 실패했다"),
                 }
             }
             EngineCommand::Shutdown => {

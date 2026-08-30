@@ -17,6 +17,8 @@ pub mod accessibility;
 pub mod bundle;
 pub mod event;
 pub mod event_tap;
+pub mod fn_state;
+pub mod hid_device;
 pub mod hid_lock;
 pub mod hid_mapping;
 pub mod hotplug;

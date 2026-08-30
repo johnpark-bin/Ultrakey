@@ -27,7 +27,10 @@ pub mod watchdog;
 pub use command::{CommandChannel, EngineCommand};
 pub use engine::{Engine, EngineError, EngineEvent};
 pub use lifecycle::TapState;
-pub use path_b::{PathBManager, ReconcileReport};
+pub use path_b::{
+    d1_for, d1_mapping, GlobalD1Migration, HidutilGlobalMigration, LedgerStore, NullLedgerStore,
+    PathBManager, ReconcileReport,
+};
 pub use state::SharedState;
 pub use system_hooks::SystemHooks;
 pub use watchdog::Watchdog;

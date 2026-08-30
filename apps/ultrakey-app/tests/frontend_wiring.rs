@@ -331,6 +331,10 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         "Failed to render: ",
         "Failed to save setting: ",
         "Failed to switch tab: ",
+        // F-17(Keyboards 탭) — `open_keyboard_settings` invoke 실패 진단 문구.
+        // 카탈로그를 거치지 않는 이유는 위 3개와 동일하다(진단 전용, 카탈로그
+        // 자체가 죽었을 수도 있는 경로).
+        "Failed to open keyboard settings: ",
     ];
 
     let html = read_settings_html();
@@ -742,5 +746,193 @@ fn synthesize_caps_lock_remap_토글이_엔진에도_반영된다() {
     assert!(
         body.contains("synthesize_caps_lock_remap = next"),
         "메뉴 토글이 AppState::presets 정본을 갱신하지 않는다 — 탭 스레드가 옛 값을 계속 본다"
+    );
+}
+
+// ⭐ F-17(per-device-settings.md) — `Keyboards` 탭 재발 방지 테스트.
+//
+// ⚠️ 이 테스트들은 프론트엔드(settings.html) 배선만 정적으로 확인한다. 이 탭이
+// 기대하는 백엔드 커맨드(settings_unset · open_keyboard_settings)와 bootstrap
+// state.perDevice 필드는 이 워크트리에서 다른 세션이 동시에 구현 중이라, main.rs/
+// crates 쪽이 아직 없을 수 있다 — 여기서는 main.rs 를 전혀 참조하지 않는다.
+
+/// `Keyboards` 탭 버튼·패널이 존재하고, `TABS` 배열에 Korean 다음·General 앞
+/// 순서로 들어 있다(명세 §3.1: Seek·Hyperkey·Presets·Korean·Keyboards·General).
+#[test]
+fn settings_html_에_keyboards_탭_버튼_패널이_tabs_배열_순서대로_있다() {
+    let html = read_settings_html();
+
+    assert!(
+        html.contains(r#"id="tab-keyboards" data-tab="keyboards""#),
+        "settings.html 에 Keyboards 탭 버튼(id=\"tab-keyboards\")이 없다"
+    );
+    assert!(
+        html.contains(r#"id="panel-keyboards""#),
+        "settings.html 에 Keyboards 탭 패널(id=\"panel-keyboards\")이 없다"
+    );
+    assert!(
+        html.contains(r#"["seek", "hyperkey", "presets", "korean", "keyboards", "general"]"#),
+        "settings.html 의 TABS 배열이 Korean 다음·General 앞 순서로 \"keyboards\" 를 \
+         갖고 있지 않다(명세 §3.1)"
+    );
+}
+
+/// 고정 컨트롤 4개(명세 §3.1.5): 디바이스 선택 팝업 1 + 그룹 제목 2("키 변환 세트",
+/// "Function Keys") + macOS Function Keys 상태 표시줄(뱃지+버튼) 1.
+#[test]
+fn settings_html_에_keyboards_탭_고정_컨트롤_4개가_있다() {
+    let html = read_settings_html();
+
+    for id in [
+        "keyboards-device-picker",       // 1. 디바이스 선택 팝업
+        "keyboards-keyremap-heading",    // 2. 그룹 제목 — 키 변환 세트
+        "keyboards-functionkeys-heading", // 2. 그룹 제목 — Function Keys
+        "keyboards-fnstate-badge",       // 3. macOS 상태 표시줄 — 뱃지
+        "keyboards-open-system-settings-btn", // 3. macOS 상태 표시줄 — 버튼
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 Keyboards 탭 고정 컨트롤 id=\"{id}\" 가 없다"
+        );
+    }
+}
+
+/// 기능 2(고정 12개, §3.5): F1~F12 각각 선택 팝업 + `data-fn-key` 배선.
+#[test]
+fn settings_html_에_keyboards_탭_f1_f12_팝업_12개가_있다() {
+    let html = read_settings_html();
+
+    for n in 1..=12 {
+        let id = format!("keyboards-fkey-f{n}");
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 F{n} 선택 팝업(id=\"{id}\")이 없다"
+        );
+        assert!(
+            html.contains(&format!("data-fn-key=\"f{n}\"")),
+            "id=\"{id}\" 팝업에 data-fn-key=\"f{n}\" 배선이 없다"
+        );
+    }
+}
+
+/// 기능 1(가변 M행, §3.4.1): 목록 컨테이너 + `+ Add item` 버튼.
+#[test]
+fn settings_html_에_keyboards_탭_가변_길이_목록_편집기_컨테이너와_추가_버튼이_있다() {
+    let html = read_settings_html();
+
+    assert!(
+        html.contains(r#"id="keyboards-keyremap-list""#),
+        "settings.html 에 키 변환 세트 목록 컨테이너(id=\"keyboards-keyremap-list\")가 없다"
+    );
+    assert!(
+        html.contains(r#"id="keyboards-keyremap-add-btn""#),
+        "settings.html 에 `+ Add item` 버튼(id=\"keyboards-keyremap-add-btn\")이 없다"
+    );
+    assert!(
+        html.contains(r#"id="keyboards-keyremap-empty""#),
+        "settings.html 에 빈 목록 안내(id=\"keyboards-keyremap-empty\")가 없다"
+    );
+}
+
+/// Keyboards 탭이 기대하는 두 백엔드 커맨드를 invoke 한다 — `settings_unset`
+/// ("공통 따름" = 키 삭제, §3.3) 과 `open_keyboard_settings`(macOS 설정 열기, §3.5.1).
+#[test]
+fn settings_html_이_settings_unset과_open_keyboard_settings를_invoke한다() {
+    let html = read_settings_html();
+    for command in ["settings_unset", "open_keyboard_settings"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+}
+
+/// 명세 §4.1 표의 24개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 23개)가
+/// en.json·ko.json 양쪽에 전부 있다. ⚠️ 탭 라벨 키만 명세 제안(`preferences.tabs.
+/// keyboards.title`) 대신 기존 코드베이스 관례(`settings.tab.<탭>`)를 따라
+/// `settings.tab.keyboards` 로 잡았다 — settings.html 의 근거 주석 참고.
+#[test]
+fn keyboards_탭_신규_i18n_키_24개가_en_ko_양쪽에_있다() {
+    let en = flatten_catalog(&read_en_catalog());
+    let ko = flatten_catalog(&read_ko_catalog());
+
+    const KEYS: &[&str] = &[
+        "settings.tab.keyboards",
+        "preferences.keyboards.devicePicker.forAllDevices",
+        "preferences.keyboards.devicePicker.notConnectedSuffix",
+        "preferences.keyboards.group.keyRemap.title",
+        "preferences.keyboards.group.functionKeys.title",
+        "preferences.keyboards.keyRemap.addRow",
+        "preferences.keyboards.keyRemap.emptyList",
+        "preferences.keyboards.keyRemap.duplicateFromWarning",
+        "preferences.keyboards.functionKeys.followCommon",
+        "preferences.keyboards.functionKeys.useStandardFKey",
+        "preferences.keyboards.functionKeys.macosStatus.label",
+        "preferences.keyboards.functionKeys.macosStatus.openButton",
+        "preferences.keyboards.functionKeys.function.displayBrightnessDown",
+        "preferences.keyboards.functionKeys.function.displayBrightnessUp",
+        "preferences.keyboards.functionKeys.function.missionControl",
+        "preferences.keyboards.functionKeys.function.spotlight",
+        "preferences.keyboards.functionKeys.function.dictation",
+        "preferences.keyboards.functionKeys.function.doNotDisturb",
+        "preferences.keyboards.functionKeys.function.rewind",
+        "preferences.keyboards.functionKeys.function.playPause",
+        "preferences.keyboards.functionKeys.function.fastForward",
+        "preferences.keyboards.functionKeys.function.mute",
+        "preferences.keyboards.functionKeys.function.volumeDown",
+        "preferences.keyboards.functionKeys.function.volumeUp",
+    ];
+    assert_eq!(KEYS.len(), 24, "이 목록 자체가 24개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라");
+
+    let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
+    let missing_ko: Vec<_> = KEYS.iter().filter(|k| !ko.contains(**k)).collect();
+    assert!(missing_en.is_empty(), "en.json 에 없는 Keyboards 탭 키: {missing_en:?}");
+    assert!(missing_ko.is_empty(), "ko.json 에 없는 Keyboards 탭 키: {missing_ko:?}");
+}
+
+/// `settings.html` 이 문자열 리터럴로 참조하는 모든 `preferences.keyboards.*` 키가
+/// en.json·ko.json 양쪽에 있다 — 일반 검사(`settings_html_의_settings_점_리터럴은_
+/// 전부_카탈로그_키다`)는 `settings.*` 접두사만 보므로, 이 탭이 쓰는 다른 접두사를
+/// 여기서 별도로 잡는다(Korean 탭의 동일 패턴 재사용).
+#[test]
+fn settings_html_의_preferences_keyboards_점_리터럴이_en_ko_양쪽_카탈로그에_모두_있다() {
+    let html = read_settings_html();
+    let en_keys = flatten_catalog(&read_en_catalog());
+    let ko_keys = flatten_catalog(&read_ko_catalog());
+
+    let keyboards_keys: BTreeSet<_> = extract_double_quoted_literals(&html)
+        .into_iter()
+        .filter(|s| s.starts_with("preferences.keyboards."))
+        .collect();
+
+    assert!(
+        !keyboards_keys.is_empty(),
+        "settings.html 에서 \"preferences.keyboards.*\" 리터럴을 하나도 찾지 못했다 — \
+         Keyboards 탭 배선이 빠졌을 수 있다"
+    );
+
+    let missing_en: Vec<_> = keyboards_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
+    let missing_ko: Vec<_> = keyboards_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+
+    assert!(missing_en.is_empty(), "en.json 에 없는 preferences.keyboards.* 키: {missing_en:?}");
+    assert!(missing_ko.is_empty(), "ko.json 에 없는 preferences.keyboards.* 키: {missing_ko:?}");
+}
+
+/// 탭별 창 크기 문서 주석(§3.1.4)에 `Keyboards` 값이 있고, 그 값이 **잠정값이며
+/// 실측이 아니라는 사실**을 정직하게 밝히고 있다 — 명세 §3.1.4 가 이 탭은 신설이라
+/// 실측 근거가 없다고 명시했으므로, 다른 탭들(전부 실측)과 같은 방식으로 확정값인
+/// 것처럼 적으면 안 된다.
+#[test]
+fn settings_html_문서가_keyboards_탭_창_크기를_잠정값으로_밝힌다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains("Keyboards 710×517"),
+        "settings.html 문서 주석에 Keyboards 탭의 잠정 창 크기(710×517, Hyperkey 값 \
+         재사용)가 보이지 않는다"
+    );
+    assert!(
+        html.contains("잠정값, 실측 아님"),
+        "settings.html 문서 주석이 Keyboards 탭 창 크기를 잠정값이라고 밝히지 않는다 — \
+         per-device-settings.md §3.1.4 는 이 탭이 신설이라 실측 근거가 없다고 명시했다"
     );
 }

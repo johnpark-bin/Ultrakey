@@ -257,6 +257,64 @@ impl SourceKey {
         }
     }
 
+    /// `(page << 32) | usage` — 경로 B(`UserKeyMapping`)의 `Src`/`Dst` 로 쓸 수 있는 값
+    /// (F-17, `docs/spec/per-device-settings.md` §3.4·§3.6 규칙 4). **35종 전부가
+    /// `Some` 이다** — [`SourceKey::keycode`] 와 달리 `F21`~`F24`·`menu (PC)` 도 값을
+    /// 갖는다: 경로 B 는 CG 가상 키코드가 아니라 HID usage 로 동작하므로, `kVK_*`
+    /// 상수가 없는 키도 HID Usage Tables 상의 usage 는 존재할 수 있다.
+    ///
+    /// 값의 근거 등급(이 세션의 F-17 구현 계약 CONTRACT.md §2.1, 실측 교차검증 포함):
+    /// - `CapsLock` = `0x39` — ⭐ 실측(이 기기의 현재 상태 + 스파이크가 교차 확인).
+    /// - `F9`/`F10` = `0x42`/`0x43`, `F13`/`F14`/`F15`/`F18` = `0x68`/`0x69`/`0x6A`/`0x6D`
+    ///   — ⭐ 실측으로 교차검증(스파이크 §2·§8 + 이 기기의 현재 상태).
+    /// - 나머지 modifier·F-키·`menu (PC)` 는 USB HID Usage Tables 표준 정의를 그대로
+    ///   따른다(교차 검증된 값들로부터 Keyboard Page 전체 표가 역산 가능하다).
+    /// - `Globe` = `0xFF00000003`(Apple 벤더 정의값) — 저장은 확인됐으나(스파이크 S-7)
+    ///   **동작은 미확인**이라 `(미확정)` 등급으로 남긴다. Keyboard Page(`0x07`) 공식을
+    ///   따르지 않는 유일한 값이다.
+    pub fn hid_usage(self) -> Option<u64> {
+        use SourceKey::*;
+        const KEYBOARD_PAGE: u64 = 0x07 << 32;
+        match self {
+            // ⚠️ Globe 만 Keyboard Page 밖의 Apple 벤더 정의 값이다(위 문서 주석).
+            Globe => Some(0xFF00000003),
+            CapsLock => Some(KEYBOARD_PAGE | 0x39),
+            LeftControl => Some(KEYBOARD_PAGE | 0xE0),
+            LeftShift => Some(KEYBOARD_PAGE | 0xE1),
+            LeftOption => Some(KEYBOARD_PAGE | 0xE2),
+            LeftCommand => Some(KEYBOARD_PAGE | 0xE3),
+            RightControl => Some(KEYBOARD_PAGE | 0xE4),
+            RightShift => Some(KEYBOARD_PAGE | 0xE5),
+            RightOption => Some(KEYBOARD_PAGE | 0xE6),
+            RightCommand => Some(KEYBOARD_PAGE | 0xE7),
+            MenuPc => Some(KEYBOARD_PAGE | 0x65),
+            F1 => Some(KEYBOARD_PAGE | 0x3A),
+            F2 => Some(KEYBOARD_PAGE | 0x3B),
+            F3 => Some(KEYBOARD_PAGE | 0x3C),
+            F4 => Some(KEYBOARD_PAGE | 0x3D),
+            F5 => Some(KEYBOARD_PAGE | 0x3E),
+            F6 => Some(KEYBOARD_PAGE | 0x3F),
+            F7 => Some(KEYBOARD_PAGE | 0x40),
+            F8 => Some(KEYBOARD_PAGE | 0x41),
+            F9 => Some(KEYBOARD_PAGE | 0x42),
+            F10 => Some(KEYBOARD_PAGE | 0x43),
+            F11 => Some(KEYBOARD_PAGE | 0x44),
+            F12 => Some(KEYBOARD_PAGE | 0x45),
+            F13 => Some(KEYBOARD_PAGE | 0x68),
+            F14 => Some(KEYBOARD_PAGE | 0x69),
+            F15 => Some(KEYBOARD_PAGE | 0x6A),
+            F16 => Some(KEYBOARD_PAGE | 0x6B),
+            F17 => Some(KEYBOARD_PAGE | 0x6C),
+            F18 => Some(KEYBOARD_PAGE | 0x6D),
+            F19 => Some(KEYBOARD_PAGE | 0x6E),
+            F20 => Some(KEYBOARD_PAGE | 0x6F),
+            F21 => Some(KEYBOARD_PAGE | 0x70),
+            F22 => Some(KEYBOARD_PAGE | 0x71),
+            F23 => Some(KEYBOARD_PAGE | 0x72),
+            F24 => Some(KEYBOARD_PAGE | 0x73),
+        }
+    }
+
     /// 35종 전량, 팝업 표시 순서 그대로(`hyperkey.md` §4 실측).
     pub fn all() -> &'static [SourceKey] {
         use SourceKey::*;
@@ -373,6 +431,43 @@ mod tests {
         assert_eq!(SourceKey::CapsLock.label(), "caps lock");
         assert_eq!(SourceKey::MenuPc.label(), "menu (PC)");
         assert_eq!(SourceKey::Globe.label(), "globe");
+    }
+
+    // ── hid_usage() — F-17(`docs/spec/per-device-settings.md` §3.4) ──────────────
+    //
+    // ⭐ 기대값을 구현이 쓰는 상수에서 가져오지 않는다(PR #17 함정, `modifier_flags()`
+    // 테스트와 같은 원칙). 이 세션의 F-17 구현 계약(CONTRACT.md §0.3)이 이 기기에서
+    // 직접 실측·교차검증한 리터럴을 그대로 적는다.
+    #[test]
+    fn hid_usage_matches_measured_cross_check_values() {
+        let expect: &[(SourceKey, u64)] = &[
+            (SourceKey::CapsLock, 0x700000039),
+            (SourceKey::F18, 0x70000006D),
+            (SourceKey::F9, 0x700000042),
+            (SourceKey::F10, 0x700000043),
+            (SourceKey::F13, 0x700000068),
+            (SourceKey::F15, 0x70000006A),
+        ];
+        for (k, want) in expect {
+            assert_eq!(k.hid_usage(), Some(*want), "{k:?} 의 hid_usage() 가 실측값과 다르다");
+        }
+    }
+
+    /// 35종 전부가 `Some` 이다 — `keycode()`(물리 keycode)와 달리 `F21`~`F24`·
+    /// `menu (PC)` 도 HID usage 는 존재한다(경로 B 는 CG 가상 키코드가 아니라 HID
+    /// usage 로 동작하기 때문).
+    #[test]
+    fn hid_usage_is_some_for_all_35_source_keys() {
+        for k in SourceKey::all() {
+            assert!(k.hid_usage().is_some(), "{k:?} 의 hid_usage() 가 None 이다");
+        }
+    }
+
+    /// Globe 만 Keyboard Page(`0x07`) 공식 밖의 Apple 벤더 정의 값이다(스파이크 S-7 —
+    /// 저장은 확인됐으나 동작은 미확인).
+    #[test]
+    fn globe_hid_usage_is_apple_vendor_value() {
+        assert_eq!(SourceKey::Globe.hid_usage(), Some(0xFF00000003));
     }
 
     // ── modifier_flags() — 이슈 #19 증상 A ────────────────────────────────────────

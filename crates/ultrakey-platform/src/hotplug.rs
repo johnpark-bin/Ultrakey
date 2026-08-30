@@ -37,17 +37,32 @@
 //! 소스를 직접 거는 것은 이 모듈과 `event_tap.rs` 뿐이고, `event_tap.rs` 는
 //! 이미 자기 전용 스레드에서 런루프를 돌고 있다.
 
-/// 키보드 장치의 연결/해제.
-pub enum HotplugEvent {
+use crate::hid_mapping::DeviceInfo;
+
+/// 키보드 장치의 연결/해제 종류.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotplugEventKind {
     Attached,
     Detached,
 }
 
+/// 키보드 장치의 연결/해제 이벤트(F-17 §3.2 확장 — 스파이크 §10).
+///
+/// ⚠️ `device` 는 속성을 읽지 못했을 때 `None` 이다 — 특히
+/// `kIOTerminatedNotification` 콜백 시점엔 서비스가 이미 종료 중이라
+/// `IORegistryEntryCreateCFProperty` 가 실패할 수 있다. 이벤트 자체는 **삼키지
+/// 않고 그대로** 보낸다 — 소비자(F-17 재조정 로직)가 `None` 을 "이 디바이스가
+/// 무엇인지 모르니 전체 재조정으로 대응하라"는 신호로 쓴다.
+pub struct HotplugEvent {
+    pub kind: HotplugEventKind,
+    pub device: Option<DeviceInfo>,
+}
+
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use super::HotplugEvent;
+    use super::{HotplugEvent, HotplugEventKind};
     use crate::ffi::{
-        self, IONotificationPortRef, IoIteratorT, K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD,
+        self, IONotificationPortRef, IoIteratorT, IoObjectT, K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD,
         K_HID_USAGE_PAGE_GENERIC_DESKTOP, K_IOHID_DEVICE_KEY, K_IOHID_DEVICE_USAGE_KEY,
         K_IOHID_DEVICE_USAGE_PAGE_KEY, K_IO_MATCHED_NOTIFICATION, K_IO_TERMINATED_NOTIFICATION,
     };
@@ -73,13 +88,12 @@ mod macos_impl {
         kind: HotplugEventKind,
     }
 
-    #[derive(Clone, Copy)]
-    enum HotplugEventKind {
-        Attached,
-        Detached,
-    }
-
-    fn build_keyboard_matching_dict() -> Option<CFRetained<CFMutableDictionary>> {
+    /// 키보드 usage(`DeviceUsagePage=1`/`DeviceUsage=6`) 매칭 사전을 만든다.
+    ///
+    /// ⭐ F-17(`per-device-settings.md` §3.2)의 디바이스 열거(`hid_device.rs`)가
+    /// **같은 필터**를 그대로 재사용한다 — 새 필터를 만들지 않는다. 그래서
+    /// `pub(crate)` 로 올려 둔다.
+    pub(crate) fn build_keyboard_matching_dict() -> Option<CFRetained<CFMutableDictionary>> {
         // SAFETY: 정적 C 문자열을 넘기는 순수 함수 호출이다.
         let dict_ptr = unsafe {
             ffi::IOServiceMatching(K_IOHID_DEVICE_KEY.as_ptr() as *const std::os::raw::c_char)
@@ -115,15 +129,20 @@ mod macos_impl {
     }
 
     /// 이터레이터를 끝까지 비운다(무장/재무장에 필수). `on_each` 는 살아있는
-    /// 항목마다 호출한 뒤 즉시 해제한다.
-    fn drain_iterator(iterator: IoIteratorT, mut on_each: impl FnMut()) {
+    /// 항목(`io_object_t`)마다 호출한 뒤 즉시 해제한다.
+    ///
+    /// ⭐ F-17 확장 — `on_each` 가 `io_object_t` 를 받는다. 호출부(이 모듈의
+    /// 알림 콜백, `hid_device.rs` 의 열거)가 이 값으로
+    /// `IORegistryEntryCreateCFProperty` 를 불러 디바이스 속성을 읽는다.
+    /// `hid_device.rs` 도 이 함수를 재사용하므로 `pub(crate)` 다.
+    pub(crate) fn drain_iterator(iterator: IoIteratorT, mut on_each: impl FnMut(IoObjectT)) {
         loop {
             // SAFETY: `iterator` 는 호출자가 보증하는 유효한 io_iterator_t 다.
             let item = unsafe { ffi::IOIteratorNext(iterator) };
             if item == 0 {
                 break;
             }
-            on_each();
+            on_each(item);
             // SAFETY: `IOIteratorNext` 문서 — 반환된 항목은 호출자가 해제해야 한다.
             unsafe { ffi::IOObjectRelease(item) };
         }
@@ -139,10 +158,14 @@ mod macos_impl {
     ) {
         // SAFETY: 위 문서 참조.
         let ctx = unsafe { &*(refcon as *const CallbackWithKind) };
-        drain_iterator(iterator, || {
-            let event = match ctx.kind {
-                HotplugEventKind::Attached => HotplugEvent::Attached,
-                HotplugEventKind::Detached => HotplugEvent::Detached,
+        drain_iterator(iterator, |entry| {
+            // ⚠️ `kIOTerminatedNotification` 콜백 시점엔 서비스가 이미 종료
+            // 중이라 속성을 못 읽을 수 있다(§5 규칙 6·7) — 그래도 이벤트는
+            // `device: None` 으로 그대로 보낸다. 삼키지 않는다.
+            let device = crate::hid_device::read_device_properties(entry);
+            let event = HotplugEvent {
+                kind: ctx.kind,
+                device,
             };
             (ctx.inner.callback)(event);
         });
@@ -231,7 +254,7 @@ mod macos_impl {
                 return None;
             }
             // ⚠️ 최초 무장 — 기존 장치 목록을 조용히(콜백 호출 없이) 비운다.
-            drain_iterator(matched_iterator, || {});
+            drain_iterator(matched_iterator, |_entry| {});
 
             let mut terminated_iterator: IoIteratorT = 0;
             // SAFETY: 위와 동일한 계약.
@@ -256,7 +279,7 @@ mod macos_impl {
                 return None;
             }
             // ⚠️ 최초 무장 — 위와 동일한 이유.
-            drain_iterator(terminated_iterator, || {});
+            drain_iterator(terminated_iterator, |_entry| {});
 
             Some(Installed {
                 notify_port,
@@ -411,6 +434,11 @@ mod macos_impl {
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::{watch_keyboards, KeyboardHotplugWatcher};
+
+/// `hid_device.rs`(디바이스 열거)가 재사용하는 내부 도구 — 같은 매칭 필터와 같은
+/// 이터레이터 순회 골격을 두 번 만들지 않는다(§3.2 "기존 자산 재사용 판정").
+#[cfg(target_os = "macos")]
+pub(crate) use macos_impl::{build_keyboard_matching_dict, drain_iterator};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {

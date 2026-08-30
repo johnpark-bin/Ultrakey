@@ -38,6 +38,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::sync::{Arc, Mutex};
 
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -46,7 +47,9 @@ use tauri::{LogicalSize, Manager, State, Wry};
 
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
 use ultrakey_core::keycode::{KeyCode, SourceKey};
+use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger, SystemFunction};
 use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
+use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::Catalog;
@@ -60,6 +63,8 @@ use ultrakey_permissions::{
     PermissionMonitor, PermissionState,
 };
 use ultrakey_platform::bundle;
+use ultrakey_platform::fn_state;
+use ultrakey_platform::hid_device;
 use ultrakey_platform::login_item;
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 
@@ -504,6 +509,281 @@ fn general_view(store: &SettingsStore) -> GeneralView {
     }
 }
 
+// ============================================================================
+// F-17 키보드별 설정(`per-device-settings.md`) — `Keyboards` 탭 백엔드 계약
+// (`settings.html` 851~866행 주석이 정본으로 삼는 모양). 정본은 이 브랜치의
+// `CONTRACT.md` §B.6 이다.
+// ============================================================================
+
+/// `state.perDevice.devices` 항목 하나 — 팝업이 그대로 쓴다(§3.1.2).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PerDeviceDeviceView {
+    id: String,
+    name: String,
+    connected: bool,
+}
+
+/// `state.perDevice.systemFunctions` 항목 하나 — 기능 2 선택 팝업(§3.5).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PerDeviceSystemFunctionView {
+    value: String,
+    label_key: String,
+}
+
+/// `Keyboards` 탭 전체를 그리는 데 필요한 다섯 필드(계약 §B.6).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PerDeviceView {
+    devices: Vec<PerDeviceDeviceView>,
+    /// `state.sourceKeys` 와 같은 형식(`{value,label}` — 여기서는 `hasKeycode` 도
+    /// 함께 실리지만 프런트는 그 필드를 쓰지 않는다) — `SourceKey::all()` 35종.
+    source_keys: Vec<SourceKeyView>,
+    system_functions: Vec<PerDeviceSystemFunctionView>,
+    fn_state_is_standard: Option<bool>,
+    values: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `SystemFunction` variant 이름(PascalCase, 예: `"DisplayBrightnessDown"`)을
+/// `preferences.keyboards.functionKeys.function.<camelCase>` i18n 키로 바꾼다.
+/// ⚠️ `SystemFunction` 은 `SourceKey`/`KeyRemapRow` 와 같은 이유로 variant 이름
+/// 그대로 직렬화된다(`perdevice/mod.rs` 문서 주석) — 그래서 `serde_variant_name`
+/// 이 주는 문자열의 첫 글자만 낮추면 §4.1 카탈로그의 camelCase 세그먼트와 정확히
+/// 맞아떨어진다(예: `"Mute"` → `mute`, `"DoNotDisturb"` → `doNotDisturb`).
+fn system_function_label_key(f: SystemFunction) -> String {
+    let variant = serde_variant_name(&f);
+    let mut chars = variant.chars();
+    let camel = match chars.next() {
+        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    format!("preferences.keyboards.functionKeys.function.{camel}")
+}
+
+/// `perDevice.` 접두사 키 전부를 원본 JSON 그대로 모은다 — `perDevice._managed`
+/// (D-17-2 원장)만 제외한다(§B.1: "엔진은 원장이 아니라 설정 스냅샷만 본다").
+/// ⭐ `store.get::<Value>()` 는 JSON `null` 도 그대로 `Some(Value::Null)` 로 돌려준다
+/// (`Value` 는 자기 자신으로 항상 역직렬화된다) — §3.3 이 요구하는 "`null` 과 부재의
+/// 구별"이 이 함수를 거쳐도 사라지지 않는다.
+fn collect_per_device_values(store: &SettingsStore) -> BTreeMap<String, serde_json::Value> {
+    let mut values = BTreeMap::new();
+    for key in store.keys() {
+        if key.starts_with("perDevice.") && key != keys::PER_DEVICE_MANAGED {
+            if let Some(v) = store.get::<serde_json::Value>(key) {
+                values.insert(key.to_string(), v);
+            }
+        }
+    }
+    values
+}
+
+/// `state.perDevice` 조립 — 계약 §B.6 다섯 필드.
+fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
+    // devices — list_attached_keyboards() ∪ 설정 키가 존재하는 디바이스, (vid,pid)
+    // 중복 제거(§3.2). `BTreeMap<DeviceId, _>` 자체가 중복 제거 역할을 한다.
+    let mut devices: BTreeMap<DeviceId, PerDeviceDeviceView> = BTreeMap::new();
+    for info in hid_device::list_attached_keyboards() {
+        let id = DeviceId::new(info.vendor_id, info.product_id);
+        let name = info
+            .product_name
+            .clone()
+            .unwrap_or_else(|| id.as_str().to_string());
+        devices.insert(
+            id.clone(),
+            PerDeviceDeviceView { id: id.as_str().to_string(), name, connected: true },
+        );
+    }
+    for key in store.keys() {
+        let Some(rest) = key.strip_prefix("perDevice.") else {
+            continue;
+        };
+        let Some((scope, _tail)) = rest.split_once('.') else {
+            continue;
+        };
+        // `scope` 가 "all"·"_managed" 면 `DeviceId::parse` 가 자연히 `None` 을 준다
+        // (콜론이 없다) — 별도 분기 없이 걸러진다.
+        let Some(id) = DeviceId::parse(scope) else {
+            continue;
+        };
+        devices.entry(id.clone()).or_insert_with(|| {
+            // 미연결 디바이스의 이름 — 저장된 제품명이 없으니 id 그대로 쓴다
+            // (⛔ 개인 디바이스 이름 하드코딩 금지, 계약 §B.6).
+            PerDeviceDeviceView { id: id.as_str().to_string(), name: id.as_str().to_string(), connected: false }
+        });
+    }
+
+    // sourceKeys — `state.sourceKeys` 와 같은 조립 함수를 재사용한다(35종, 키캡 각인).
+    let source_keys = SourceKey::all().iter().copied().map(source_key_view).collect();
+
+    // systemFunctions — hid_usage() 가 Some 인 것만(CONTRACT §2.2, 팝업 규약).
+    let system_functions = SystemFunction::all()
+        .iter()
+        .copied()
+        .filter(|f| f.hid_usage().is_some())
+        .map(|f| PerDeviceSystemFunctionView {
+            value: serde_variant_name(&f),
+            label_key: system_function_label_key(f),
+        })
+        .collect();
+
+    PerDeviceView {
+        devices: devices.into_values().collect(),
+        source_keys,
+        system_functions,
+        fn_state_is_standard: fn_state::f_keys_are_standard(),
+        values: collect_per_device_values(store).into_iter().collect(),
+    }
+}
+
+/// `settings_set`/`settings_unset`. `perDevice.*` 는 계약 §3.3 이 정한 두 모양뿐이다:
+/// `perDevice.<scope>.keyRemap.rows` 또는 `perDevice.<scope>.functionKeys.f1`~`f12`.
+/// ⛔ `perDevice._managed`(D-17-2 원장)는 이 경로로 건드릴 수 없다 — `LedgerStore`
+/// (엔진이 부른다)만의 채널이다.
+fn validate_per_device_key(key: &str) -> Result<(), String> {
+    if key == keys::PER_DEVICE_MANAGED {
+        return Err(format!("{key} 는 원장 키다 — 이 커맨드로 바꿀 수 없다"));
+    }
+    let rest = key
+        .strip_prefix("perDevice.")
+        .ok_or_else(|| format!("알 수 없는 설정 키: {key}"))?;
+    let (scope, tail) = rest
+        .split_once('.')
+        .ok_or_else(|| format!("알 수 없는 설정 키: {key}"))?;
+    if scope != keys::PER_DEVICE_COMMON_SCOPE && DeviceId::parse(scope).is_none() {
+        return Err(format!("알 수 없는 디바이스 식별자: {scope}"));
+    }
+    let is_key_remap = tail == "keyRemap.rows";
+    let is_function_key = FKey::all()
+        .iter()
+        .any(|f| tail == format!("functionKeys.{}", f.key_segment()));
+    if !is_key_remap && !is_function_key {
+        return Err(format!("알 수 없는 설정 키: {key}"));
+    }
+    Ok(())
+}
+
+/// `settings_set` 의 `perDevice.*` 경로(F-17). 다른 `settings_set_*` 와 달리 메모리
+/// 캐시가 없다 — `perDevice.*` 값은 저장소 자체가 정본이고, `EngineConfig::
+/// per_device_values` 는 매번 저장소에서 다시 채운다(`build_engine_config`).
+///
+/// 순서: 1) 키 모양 검증 2) **저장**(⚠️ JSON `null` 을 그대로 쓴다 — §3.3 의 명시적
+/// 끔이지 삭제가 아니다) 3) **엔진 반영**(`reconfigure_engine` 이 저장소를 다시 읽어
+/// `per_device_values` 를 채운다 — `SettingsStore::set()` 은 디스크 쓰기가 실패해도
+/// 메모리 값은 이미 갱신해 두므로, 이 순서로도 D-B 근거("저장 실패와 무관하게 엔진
+/// 반영")가 그대로 성립한다) 4) 새 `SettingsState`.
+fn settings_set_per_device(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    validate_per_device_key(key)?;
+
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // perDevice.* 는 hyperkey/meh/bleh 소스 키 자체를 바꾸지 않으므로 force_reset
+    // (stuck modifier 방지) 은 필요 없다 — D-D 의 대상 밖이다.
+    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, false)?;
+
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
+}
+
+/// F-17 §3.3 "공통 따름" — 값 `null` 저장이 아니라 키 **삭제**다(부재와 명시적 끔은
+/// 다르다). `SettingsStore`(F-15, `crates/ultrakey-core`)는 개별 키 삭제 API 를
+/// 노출하지 않는다 — "삭제 없는 write-through"가 그 크레이트의 명시적 설계 결정이기
+/// 때문이다(`store.rs` 모듈 문서: "되돌려도 키를 지우지 않는다"). 그 크레이트를 고치는
+/// 대신(위임 범위 밖) 이 앱 계층에서만, 저장 파일을 직접 읽어 그 키만 제거하고 다시
+/// 쓴 뒤 `SettingsStore::load()` 로 재적재해 메모리 캐시를 동기화한다.
+///
+/// ⚠️ 아직 디스크에 한 번도 쓴 적 없는 in-memory 스토어(`path() == None`)는 지울
+/// 파일도, 지울 키도 없다 — 아무 것도 하지 않는다(그 상태에서는 애초에 이 키가
+/// 저장돼 있을 수 없다).
+fn remove_setting_key(store: &mut SettingsStore, key: &str) -> Result<(), String> {
+    let Some(path) = store.path().map(|p| p.to_path_buf()) else {
+        return Ok(());
+    };
+
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        // 파일이 아예 없으면 지울 키도 없다 — 조용히 성공 취급한다.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("설정 파일을 읽을 수 없다: {e}")),
+    };
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("설정 파일 파싱 실패: {e}"))?;
+    if let Some(values) = envelope.get_mut("values").and_then(|v| v.as_object_mut()) {
+        values.remove(key);
+    }
+    let json = serde_json::to_vec_pretty(&envelope).map_err(|e| e.to_string())?;
+
+    // 원자적 쓰기 — `SettingsStore::persist()` 와 같은 절차(임시 파일 → 동기화 →
+    // rename). `state.store` 락을 쥔 채로만 호출되므로(호출부 참고) 동시 쓰기 경합은
+    // 없다.
+    let tmp_path = path.with_extension("unset.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        f.write_all(&json).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
+
+    let (reloaded, _outcome) = SettingsStore::load(path);
+    *store = reloaded;
+    Ok(())
+}
+
+/// `perDevice._managed` 원장 — `ultrakey_engine::path_b::LedgerStore` 구현
+/// (계약 §B.2). 엔진은 저장소 구현을 모른다 — 이 앱 계층이 `SettingsStore` 위에
+/// 얹는다. `AppState` 를 통째로 쥐는 이유는 `store` 가 그 안의 `Mutex` 필드라서다
+/// (별도로 `Arc<Mutex<SettingsStore>>` 를 다시 만들지 않는다).
+struct AppLedgerStore {
+    app_state: Arc<AppState>,
+}
+
+impl LedgerStore for AppLedgerStore {
+    /// ⚠️ 저장 실패가 앱을 죽이면 안 된다(계약 §B.6 항목 1) — 읽기는 실패할 수 없는
+    /// 경로다(`get` 이 없으면 빈 원장), 락이 poison 된 경우만 panic 한다(기존 코드
+    /// 전반이 `.lock().unwrap()` 을 쓰는 것과 같은 관례 — poison 은 이미 다른 곳에서
+    /// panic 이 난 뒤라는 뜻이라 여기서 감출 이유가 없다).
+    fn load(&self) -> ManagedLedger {
+        let store = self.app_state.store.lock().unwrap();
+        match store.get::<serde_json::Value>(keys::PER_DEVICE_MANAGED) {
+            Some(v) => ultrakey_core::perdevice::read_managed_ledger(&v),
+            None => ManagedLedger::new(),
+        }
+    }
+
+    fn store(&self, ledger: &ManagedLedger) -> Result<(), String> {
+        let value = ultrakey_core::perdevice::write_managed_ledger(ledger);
+        let mut store = self.app_state.store.lock().map_err(|e| e.to_string())?;
+        store.set(keys::PER_DEVICE_MANAGED, &value).map_err(|e| {
+            tracing::error!(error = %e, "perDevice._managed 원장 저장 실패");
+            e.to_string()
+        })
+    }
+}
+
 /// `settings_set`/`settings_resolve_conflict` 가 돌려주는 충돌 대화상자 페이로드
 /// (architecture.md §6.5). `kind` 문자열은 `settings.presets.conflict.title.<kind>`
 /// i18n 키와 맞물리므로 `ConflictKind` 의 정확한 camelCase 표기여야 한다.
@@ -669,6 +949,8 @@ struct SettingsState {
     /// 값을 아직 적용하지 않은 충돌(architecture.md §6.5) — `Some` 이면 그 앞의
     /// `settings_set` 호출은 아무것도 저장·반영하지 않았다.
     pending_conflict: Option<PendingConflictView>,
+    /// F-17 `Keyboards` 탭(`per-device-settings.md`, `settings.html` 851~866행 계약).
+    per_device: PerDeviceView,
 }
 
 fn build_settings_state(
@@ -706,6 +988,7 @@ fn build_settings_state(
         general: general_view(store),
         korean: korean_view(korean),
         pending_conflict,
+        per_device: build_per_device_view(store),
     }
 }
 
@@ -802,6 +1085,7 @@ fn build_engine_config(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    store: &SettingsStore,
 ) -> EngineConfig {
     let mut config = EngineConfig::default();
     config.rules.modifier_rules = hyperkey.to_modifier_rules();
@@ -817,6 +1101,9 @@ fn build_engine_config(
     // F-16 — `korean.disableInRemoteDesktop` 은 여기 들어오지 않는다(엔진 설정이
     // 아니라 게이트다, D-K3) — `gate_controller.set_korean_exclusion_enabled` 이 따로 처리한다.
     config.rules.korean_rules = korean.to_rules();
+    // F-17 — `perDevice.*` 원본 스냅샷(`_managed` 원장 제외). 설정이 바뀔 때마다
+    // 이 함수를 다시 거치므로 매번 저장소에서 새로 채운다(계약 §B.1).
+    config.per_device_values = collect_per_device_values(store);
 
     config
 }
@@ -1113,7 +1400,10 @@ fn reconfigure_engine(
 ) -> Result<(), String> {
     let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
     if let Some(engine) = engine_guard.as_ref() {
-        engine.reconfigure(build_engine_config(hyperkey, presets, korean));
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let config = build_engine_config(hyperkey, presets, korean, &store);
+        drop(store);
+        engine.reconfigure(config);
         if force_reset {
             engine.force_reset_state();
         }
@@ -1165,7 +1455,54 @@ fn settings_set(
         return settings_set_korean(&state, &key, &value);
     }
 
+    if key.starts_with("perDevice.") {
+        return settings_set_per_device(&state, &key, &value);
+    }
+
     settings_set_hyperkey(&state, &key, &value)
+}
+
+/// F-17 §3.3 "공통 따름" — `settings_unset` 커맨드. `settings_set` 에 `value: null`
+/// 을 보내는 것과 **다르다**: `null` 은 명시적 끔이고, 이 커맨드는 키 자체를
+/// 지워 상위 계층(공통) 값을 따르게 한다(`settings.html` 851~866행 계약 —
+/// `commitUnset`). 저장 뒤 절차는 `settings_set_per_device` 와 같다(엔진 반영 →
+/// 새 `SettingsState`).
+#[tauri::command]
+fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<SettingsState, String> {
+    validate_per_device_key(&key)?;
+
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        remove_setting_key(&mut store, &key)?;
+    }
+
+    reconfigure_engine(&state, &hyperkey_snapshot, &presets_snapshot, &korean_snapshot, false)?;
+
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &store,
+        None,
+        None,
+    ))
+}
+
+/// F-17 §3.5.1 — `시스템 설정 열기` 버튼. `(추정)` URL 스킴(명세 §3.5.1·§9) — 실패해도
+/// 앱은 죽지 않고 프런트에 `Err` 로만 알린다(`settings.html` 의
+/// `keyboards-open-system-settings-btn` 리스너가 `.catch()` 로 받는다).
+#[tauri::command]
+fn open_keyboard_settings() -> Result<(), String> {
+    if bundle::open_url("x-apple.systempreferences:com.apple.preference.keyboard") {
+        Ok(())
+    } else {
+        Err("키보드 시스템 설정을 열지 못했다".to_string())
+    }
 }
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
@@ -1664,10 +2001,12 @@ fn main() {
             quit_app,
             settings_bootstrap,
             settings_set,
+            settings_unset,
             settings_set_tab,
             settings_resolve_conflict,
             general_set_launch_on_login,
             general_set_hide_menu_bar_icon,
+            open_keyboard_settings,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
@@ -1828,12 +2167,20 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
-    let config = build_engine_config(&hyperkey, &presets, &korean);
+    let config = {
+        let store = state.store.lock().unwrap();
+        build_engine_config(&hyperkey, &presets, &korean, &store)
+    };
+
+    // F-17 — `LedgerStore` 구현(`perDevice._managed`, 계약 §B.2). 엔진이 이것을
+    // `PathBManager` 에 넘겨 디바이스별 원장을 영속화한다.
+    let ledger: Box<dyn LedgerStore> = Box::new(AppLedgerStore { app_state: state.clone() });
 
     let handle_for_events = handle.clone();
     match Engine::start(
         config,
         state.gate.clone(),
+        ledger,
         Box::new(move |event| on_engine_event(&handle_for_events, event)),
     ) {
         Ok(engine) => {
@@ -2530,7 +2877,12 @@ mod tests {
         hyperkey.hyper.enabled = true;
         hyperkey.mouse_apply.drag = true;
 
-        let config = build_engine_config(&hyperkey, &PresetSettings::default(), &KoreanSettings::default());
+        let config = build_engine_config(
+            &hyperkey,
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(config.rules.modifier_rules.len(), 1);
         assert!(config.mouse_apply.drag);
         assert!(config.mouse_apply.click); // 기본값 유지
@@ -2543,7 +2895,12 @@ mod tests {
         let hyperkey = HyperkeySettings::default();
         let presets = PresetSettings { caps_space_enter: true, quick_press_duration_ms: 500, ..PresetSettings::default() };
 
-        let config = build_engine_config(&hyperkey, &presets, &KoreanSettings::default());
+        let config = build_engine_config(
+            &hyperkey,
+            &presets,
+            &KoreanSettings::default(),
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(config.rules.combo_rules.len(), 1);
         assert_eq!(config.timings.quick_press_duration_ms, 500);
     }
@@ -2554,11 +2911,21 @@ mod tests {
     fn build_engine_config_computes_d1_caps_lock_alias() {
         let hyperkey = HyperkeySettings::default();
 
-        let none_needed = build_engine_config(&hyperkey, &PresetSettings::default(), &KoreanSettings::default());
+        let none_needed = build_engine_config(
+            &hyperkey,
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(none_needed.caps_lock_alias, None);
 
         let needs_alias = PresetSettings { caps_space_enter: true, ..PresetSettings::default() };
-        let with_alias = build_engine_config(&hyperkey, &needs_alias, &KoreanSettings::default());
+        let with_alias = build_engine_config(
+            &hyperkey,
+            &needs_alias,
+            &KoreanSettings::default(),
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(with_alias.caps_lock_alias, Some(KeyCode::F18));
 
         let synthesize_on = PresetSettings {
@@ -2566,7 +2933,12 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        let with_synthesize = build_engine_config(&hyperkey, &synthesize_on, &KoreanSettings::default());
+        let with_synthesize = build_engine_config(
+            &hyperkey,
+            &synthesize_on,
+            &KoreanSettings::default(),
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(with_synthesize.caps_lock_alias, None);
     }
 
@@ -2577,8 +2949,115 @@ mod tests {
             shift_space_switches_input_source: true,
             ..KoreanSettings::default()
         };
-        let config = build_engine_config(&HyperkeySettings::default(), &PresetSettings::default(), &korean);
+        let config = build_engine_config(
+            &HyperkeySettings::default(),
+            &PresetSettings::default(),
+            &korean,
+            &SettingsStore::in_memory(),
+        );
         assert_eq!(config.rules.korean_rules.len(), 1);
+    }
+
+    // build_engine_config() — F-17: `perDevice.*` 키만 스냅샷에 실리고 `_managed`
+    // 원장은 제외된다(계약 §B.1).
+    #[test]
+    fn build_engine_config_collects_per_device_values_excluding_managed_ledger() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(&keys::per_device_key_remap_rows(keys::PER_DEVICE_COMMON_SCOPE), &serde_json::json!([]))
+            .unwrap();
+        store.set(keys::PER_DEVICE_MANAGED, &serde_json::json!({})).unwrap();
+
+        let config = build_engine_config(
+            &HyperkeySettings::default(),
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &store,
+        );
+
+        assert!(config
+            .per_device_values
+            .contains_key(&keys::per_device_key_remap_rows(keys::PER_DEVICE_COMMON_SCOPE)));
+        assert!(!config.per_device_values.contains_key(keys::PER_DEVICE_MANAGED));
+    }
+
+    // F-17 — validate_per_device_key() §3.3 이 정한 두 모양(keyRemap.rows·
+    // functionKeys.f1~f12)만 통과시킨다. `_managed` 원장 키는 이 경로로 건드릴 수
+    // 없다(계약 §B.2, D-17-2).
+    #[test]
+    fn validate_per_device_key_accepts_key_remap_and_function_key_shapes() {
+        assert!(validate_per_device_key("perDevice.all.keyRemap.rows").is_ok());
+        assert!(validate_per_device_key("perDevice.5ac:24f.keyRemap.rows").is_ok());
+        assert!(validate_per_device_key("perDevice.all.functionKeys.f1").is_ok());
+        assert!(validate_per_device_key("perDevice.5ac:24f.functionKeys.f12").is_ok());
+    }
+
+    #[test]
+    fn validate_per_device_key_rejects_managed_ledger_key() {
+        assert!(validate_per_device_key(keys::PER_DEVICE_MANAGED).is_err());
+    }
+
+    #[test]
+    fn validate_per_device_key_rejects_bad_device_scope_and_unknown_tail() {
+        // ⭐ 콜론이 없는 스코프는 "all" 도 유효한 디바이스 id 도 아니다.
+        assert!(validate_per_device_key("perDevice.notADevice.keyRemap.rows").is_err());
+        // ⭐ FKey 는 f1~f12 뿐이다 — f13 은 기능 2 의 슬롯이 아니다(§3.5).
+        assert!(validate_per_device_key("perDevice.all.functionKeys.f13").is_err());
+        assert!(validate_per_device_key("hyperkey.hyper.enabled").is_err());
+    }
+
+    // F-17 — collect_per_device_values() 는 `perDevice.` 접두사 키만 원본 JSON
+    // 그대로 모으고 `_managed` 원장은 제외한다. `null` 값(명시적 끔, §3.3)도 그대로
+    // 실린다 — 부재와 구별돼야 하기 때문이다.
+    #[test]
+    fn collect_per_device_values_includes_null_and_excludes_managed_ledger() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(&keys::per_device_function_key("all", FKey::F1), &serde_json::Value::Null)
+            .unwrap();
+        store.set(keys::PER_DEVICE_MANAGED, &serde_json::json!({})).unwrap();
+        store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &true).unwrap();
+
+        let values = collect_per_device_values(&store);
+
+        assert_eq!(
+            values.get(&keys::per_device_function_key("all", FKey::F1)),
+            Some(&serde_json::Value::Null)
+        );
+        assert!(!values.contains_key(keys::PER_DEVICE_MANAGED));
+        assert!(!values.contains_key(settings_keys::GENERAL_LAUNCH_ON_LOGIN));
+    }
+
+    // F-17 — system_function_label_key() 는 §4.1 카탈로그의 camelCase 세그먼트와
+    // 정확히 맞아떨어져야 한다(실제 en.json 키와 대조).
+    #[test]
+    fn system_function_label_key_matches_catalog_segments() {
+        assert_eq!(
+            system_function_label_key(SystemFunction::Mute),
+            "preferences.keyboards.functionKeys.function.mute"
+        );
+        assert_eq!(
+            system_function_label_key(SystemFunction::DoNotDisturb),
+            "preferences.keyboards.functionKeys.function.doNotDisturb"
+        );
+        assert_eq!(
+            system_function_label_key(SystemFunction::DisplayBrightnessDown),
+            "preferences.keyboards.functionKeys.function.displayBrightnessDown"
+        );
+    }
+
+    // F-17 — build_per_device_view() 의 systemFunctions 는 hid_usage() 가 Some 인
+    // 8종만 낸다(CONTRACT §2.2 — MissionControl·Spotlight·Dictation·DoNotDisturb 는
+    // 팝업에서 빠진다).
+    #[test]
+    fn build_per_device_view_system_functions_excludes_four_unknown_functions() {
+        let view = build_per_device_view(&SettingsStore::in_memory());
+        assert_eq!(view.system_functions.len(), 8);
+        let values: Vec<&str> = view.system_functions.iter().map(|f| f.value.as_str()).collect();
+        assert!(!values.contains(&"MissionControl"));
+        assert!(!values.contains(&"Spotlight"));
+        assert!(!values.contains(&"Dictation"));
+        assert!(!values.contains(&"DoNotDisturb"));
     }
 
     // caps_is_modifier_source() — hyper/meh/bleh 중 활성화된 슬롯만 본다.
