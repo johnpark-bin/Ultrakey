@@ -1453,6 +1453,8 @@ fn seek_modifier_비트값이_ultrakey_core_flags와_일치한다() {
     assert_eq!(
         js_command, rs_command,
         "settings.html 의 SEEK_SHORTCUT_MOD_COMMAND 가 flags.rs 의 EventFlags::COMMAND 와 다르다"
+    );
+}
 
 // ============================================================================
 // D6 — `General` 탭 언어 선택 + Launch on login 수정(이슈 #39,

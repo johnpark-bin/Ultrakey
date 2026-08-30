@@ -2167,19 +2167,24 @@ async fn settings_import(
 /// 저장소 교체 뒤 그대로 다시 부를 뿐이다. 부팅 경로는 이미 실기기로 검증된
 /// 경로라 여기서 별도로 검증할 새 코드를 만들지 않는다.
 fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(), String> {
-    let (hyperkey, presets, korean, disabled_apps) = {
+    // ⚠️ `seek` 도 함께 되살린다 — F-01(이슈 #39 와 병렬로 머지된 M3-3)이 `AppState`
+    // 에 네 번째 메모리 정본을 더했다. 빠뜨리면 import 가 Seek 설정만 조용히
+    // 반영하지 않는 "부분 교체"가 되어 §3.4 결정 4(교체)가 깨진다.
+    let (hyperkey, presets, korean, seek, disabled_apps) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let hyperkey = HyperkeySettings::from_store(&store);
         let presets = PresetSettings::from_store(&store);
         let korean = KoreanSettings::from_store(&store);
+        let seek = SeekSettings::from_store(&store);
         let disabled_apps: Vec<String> =
             store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
-        (hyperkey, presets, korean, disabled_apps)
+        (hyperkey, presets, korean, seek, disabled_apps)
     };
 
     *state.hyperkey.lock().map_err(|e| e.to_string())? = hyperkey.clone();
     *state.presets.lock().map_err(|e| e.to_string())? = presets;
     *state.korean.lock().map_err(|e| e.to_string())? = korean;
+    *state.seek.lock().map_err(|e| e.to_string())? = seek.clone();
 
     // ⭐ 게이트도 boot 만큼 되돌린다 — `general.disabledApps`/
     // `korean.disableInRemoteDesktop` 도 import 로 바뀔 수 있는 값이다(D-K3 과
@@ -2192,7 +2197,7 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
 
     // 규칙 테이블이 통째로 바뀔 수 있으므로 항상 force_reset 한다
     // (`settings_set_preset`/`settings_set_korean` 과 같은 이유).
-    reconfigure_engine(state, &hyperkey, &presets, &korean, true)?;
+    reconfigure_engine(state, &hyperkey, &presets, &korean, &seek, true)?;
 
     // 5) `general.language` 가 import 로 바뀌었으면 카탈로그도 교체한다
     // (A-2 언어 선택 경로, `settings_set_general_language` 와 같은 판정).
