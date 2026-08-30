@@ -16,6 +16,7 @@ ultrakey-presets = { workspace = true }
 ultrakey-korean = { workspace = true }
 ultrakey-permissions = { workspace = true }
 ultrakey-i18n = { workspace = true }
+ultrakey-seek = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

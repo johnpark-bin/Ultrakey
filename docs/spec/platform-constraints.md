@@ -42,8 +42,8 @@
 SuperKey 는 `LSMinimumSystemVersion = 12.0` 을 유지하면서 `CGDisplayCreateImage` / `CGDisplayCreateImageForRect` 로 화면을 캡처한다. ScreenCaptureKit 심볼은 하나도 없다.
 
 - ⭐ `README.md` 의 **D1("최소 macOS 를 12.0 으로 둘 것인가, 12.3 으로 올릴 것인가")은 답이 나왔다: 12.0 을 유지한다.** 12.3 상향의 유일한 근거였던 ScreenCaptureKit 이 필수가 아니기 때문이다.
-- **`screencapturekit` 크레이트(8.0.1)를 F-02 의 필수 의존에서 뺀다.** 대신 `core-graphics` 0.25.0 또는 `objc2-core-graphics` 0.3.2 로 `CGDisplayCreateImage` 를 부른다.
-  ⚠️ **다만 이 크레이트들이 `CGDisplayCreateImage` 를 실제로 노출하는지는 아무도 확인하지 않았다** — 기존 조사는 `screencapturekit` 만 검증했다. 이것이 이번 검증이 만든 **새로운 커버리지 공백**이다(§7 **P11**). 미노출이면 수기 `extern "C"` 로 그 한 함수만 선언하면 되므로 **`Rust 바인딩` 판정 자체는 어느 쪽이든 바뀌지 않는다.**
+- **`screencapturekit` 크레이트(8.0.1)를 F-02 의 필수 의존에서 뺀다.** 대신 **`objc2-core-graphics` 0.3.2**(이 저장소가 이미 쓰는 크레이트)로 `CGDisplayCreateImage` 를 부른다.
+  ⭐ **확인 완료(이슈 #30, §7 P11 해소): `objc2-core-graphics`(0.3.2)가 노출한다.** `CGDisplayCreateImage` · `CGDisplayCreateImageForRect` 둘 다 기본 기능에 포함되고 `Option<CFRetained<CGImage>>` 를 돌려주는 안전한 래퍼다. `core-graphics` 0.25.0 을 새로 들일 필요도, 수기 `extern "C"` 도 필요 없다 — 실제 컴파일로 증명했다(`crates/ultrakey-platform/src/screen_capture.rs`).
 - **대가**: `CGDisplayCreateImage` 는 macOS 14 에서 deprecated 다. 다만 SDK `macosx26.5` 로 빌드된 v1.66 이 여전히 이를 쓰고 출하 중이라는 것이 **deprecated ≠ 제거**의 실증이다. 이 트레이드오프를 감수하고 12.0 을 지지대로 삼되, ScreenCaptureKit 경로를 **나중에 추가 가능한 대안**으로 남긴다(캡처 계층을 교체 가능하게 분리 — §4.3 의 렌더링 계층 분리와 같은 논리).
 - **기각한 대안**: 12.3 으로 올리고 ScreenCaptureKit 만 쓴다 — 원본이 12.0 사용자를 버리지 않고 제품을 성립시켰다는 증거가 있는데, 클론이 먼저 사용자를 버릴 이유가 없다.
 
@@ -334,7 +334,7 @@ Seek 은 **매 키 입력마다** 후보를 다시 필터링해 하이라이트�
 | :--- | :--- | :--- | :--- |
 | P1 | 전용 스레드 런루프의 실제 지연 특성 | §5.2 는 원리에 근거한 결정이며 실측이 아니다 | 프로토타입에서 콜백 지연 분포 측정 |
 | ~~P2~~ | ~~최소 macOS 버전 12.0 vs 12.3~~ | ✅ **해소.** SuperKey v1.66 이 `LSMinimumSystemVersion = 12.0` 을 유지하며 ScreenCaptureKit 없이 `CGDisplayCreateImage` 로 출하 중이다(§0.2 a). **12.0 을 유지한다.** 남는 것은 `CGDisplayCreateImage` 의 deprecated 상태를 언제까지 감수할지이며, 이는 P9 로 이관 | — |
-| P3 | WKWebView 오버레이 렌더링 지연 | 실측 없음 | 키 입력 → 화면 갱신 왕복 시간 측정 스파이크 |
+| P3 | WKWebView 오버레이 렌더링 지연 | ⭐ **절반 해소(이슈 #30).** **검출 쪽은 실측됐다** — 전체 화면(3840×1600 + 2560×1440) `.accurate` OCR 이 **약 775 ms**(캡처 31 ms + OCR 744 ms)이고, `VNRecognizeTextRequest` 는 **병렬화되지 않는다**(이득 0 %). ⭐ 중요한 것은 이 비용이 **세션당 1회**이고 매 키 입력마다 드는 비용이 아니라는 점이다 — 입력마다 하는 일은 이미 만들어진 후보 목록에 대한 순수 문자열 필터링이다. **따라서 P3 가 남긴 진짜 미실측은 "이미 그려진 오버레이를 키 입력마다 다시 그리는 WKWebView 왕복" 하나로 좁혀졌다.** 근거: `docs/dev/seek-ocr-latency-spike.md` | (남은 절반) 후보를 실제로 그린 상태에서 키 입력 → 화면 갱신 왕복 시간 측정 — F-03 위임 |
 | P4 | `NSMenuItem` 별 아이콘을 Tauri 트레이 API 로 넣을 수 있는가 | Tauri 문서에서 확인 못 함 | `tray-icon` 의 `ns_status_item()` 으로 내려가면 확실히 가능 `(추정)` |
 | P5 | `axuielement` 가 `AXUIElementSetMessagingTimeout` 을 노출하는가 | docs.rs 목록에서 확인 못 함 | 미노출이면 `accessibility-sys` 로 그 한 함수만 직접 선언 |
 | P6 | `MultitouchSupport` **함수 시그니처** | 절반 해소(§0.2 b). **부를 함수 9개는 실측 확정**, 인자 타입·`MTTouch` 구조체 레이아웃은 여전히 비공개 | 오픈소스 구현체(`fingermgmt` 등) 대조. **시그니처를 추측으로 쓰지 말 것** |
@@ -342,4 +342,4 @@ Seek 은 **매 키 입력마다** 후보를 다시 필터링해 하이라이트�
 | **P8** | `CopySymbolicHotKeys`(`kHISymbolicHotKey*`)의 시그니처와 안정성 | ⭐ **신규.** SuperKey 가 쓰는 것은 확정이나(§0.3) 공식 문서화되지 않은 Carbon API 다 | 단축키 충돌 경고를 **격하 가능한 선택 기능**으로 설계해 실패를 흡수한다 |
 | **P9** | `CGDisplayCreateImage` deprecated 대응 시한 | ⭐ **신규(P2 에서 이관).** macOS 14 에서 deprecated 이나 SDK `macosx26.5` 빌드에서 여전히 동작한다(§0.2 a) | 캡처 계층을 교체 가능하게 분리하고, 제거 신호가 보이면 ScreenCaptureKit 경로를 추가한다 |
 | **P10** | OCR 전처리 필터 조합의 효과 | ⭐ **신규.** SuperKey 가 `CILanczosScaleTransform`·`CIPhotoEffectMono`/`Noir`·`CIMaximumComponent`/`Minimum` 을 쓰는 것은 확정이나, **어떤 조건에서 어떤 필터를 고르는지**는 알 수 없다 | F-02 실측 스파이크에서 전처리 유무의 OCR 정확도·지연 차이를 직접 측정 |
-| **P11** | ⭐ **`core-graphics` 크레이트가 `CGDisplayCreateImage` 를 노출하는가** | ⭐ **신규 — 이번 검증이 만든 커버리지 공백.** ScreenCaptureKit 전제가 사라지면서(§0.2 a) 캡처 API 가 바뀌었는데, `rust-macos-capability-notes.md` 는 `screencapturekit` 크레이트만 검증했고 `CGDisplayCreateImage` 의 Rust 커버리지는 **아무도 확인하지 않았다** | docs.rs 에서 `core-graphics` / `core-graphics-sys` / `objc2-core-graphics` 를 확인한다. 미노출이면 수기 `extern "C"` 로 그 한 함수만 선언한다 — 어느 쪽이든 `Rust 바인딩` 판정은 바뀌지 않는다 |
+| ~~P11~~ | ~~`core-graphics` 크레이트가 `CGDisplayCreateImage` 를 노출하는가~~ | ⭐ **해소(이슈 #30).** 이 저장소가 이미 쓰는 **`objc2-core-graphics`(0.3.2)** 가 `CGDisplayCreateImage` · `CGDisplayCreateImageForRect` 를 기본 기능(`CGDirectDisplay` + `CGImage`)으로 노출한다 — `Option<CFRetained<CGImage>>` 를 돌려주는 안전한 래퍼다. 함께 필요한 `CGGetActiveDisplayList` · `CGDisplayBounds`, 그리고 `CGPreflightScreenCaptureAccess` · `CGRequestScreenCaptureAccess` 도 같은 크레이트에 있다. ⭐ **`core-graphics`/`core-graphics-sys` 를 새로 들이거나 원시 `extern "C"` 를 선언할 필요가 없다** — P6 의 시그니처 추측 위험에 새로 노출되는 지점이 하나도 늘지 않았다. 확인 방법: 크레이트 소스 대조 + **실제 컴파일**(`crates/ultrakey-platform/src/screen_capture.rs`) | 해소됨 |

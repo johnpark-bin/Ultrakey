@@ -24,3 +24,29 @@ objc2-app-kit = { workspace = true }
 objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 block2 = { workspace = true }
+
+# ── F-02 (Seek 텍스트 검출, 이슈 #30) ─────────────────────────────────────
+# 기본 기능 전량(objc2-vision 은 63개)을 켜면 빌드가 무거워지므로
+# default-features = false 로 두고 실제로 쓰는 헤더만 켠다.
+objc2-core-image = { workspace = true, default-features = false, features = [
+    "std",
+    "CIImage",
+    "CIFilter",
+    "CIContext",
+    "CIVector",
+    "objc2-core-graphics",
+    "objc2-core-foundation",
+] }
+objc2-vision = { workspace = true, default-features = false, features = [
+    "std",
+    "VNTypes",
+    "VNRequest",
+    "VNRequestHandler",
+    "VNObservation",
+    "VNRecognizeTextRequest",
+    "VNGeometry",
+    "objc2-core-graphics",
+    "objc2-core-image",
+    "objc2-core-foundation",
+] }
+axuielement = { workspace = true }

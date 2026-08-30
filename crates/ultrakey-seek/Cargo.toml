@@ -1,0 +1,17 @@
+[package]
+name = "ultrakey-seek"
+description = "F-02 Seek 텍스트 후보 검출의 순수 로직 — 좌표 변환·정규화·병합·질의 매칭"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+tracing = { workspace = true }
+
+# ⭐ 순수 로직(transform·merge·query·candidate)은 이 의존성을 쓰지 않는다 —
+# 그래서 `cargo test -p ultrakey-seek` 는 macOS 가 아닌 곳에서도 전량 돈다.
+# `detect` 모듈만 이것을 쓰고, 그 모듈 전체가 `#[cfg(target_os = "macos")]` 다.
+ultrakey-platform = { workspace = true }

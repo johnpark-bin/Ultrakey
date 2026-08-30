@@ -48,6 +48,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "apple-cf"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7fd680cd0f3f02ee717b2014b26d18985c57b784384ba47213fcf8791e8c250"
+dependencies = [
+ "doom-fish-utils",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -221,6 +230,15 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "axuielement"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b73f5695be92296c35c332cfd287d2fce87d8d205306ee2e56659f6ae6386df"
+dependencies = [
+ "apple-cf",
+]
 
 [[package]]
 name = "base64"
@@ -577,6 +595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-queue"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -827,6 +854,16 @@ dependencies = [
  "precomputed-hash",
  "selectors",
  "tendril",
+]
+
+[[package]]
+name = "doom-fish-utils"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c801f6c2a0db1a1909d89fc395b9dccc594de9ef599659fbde9bb3b55ef67f9f"
+dependencies = [
+ "crossbeam-queue",
+ "futures-util",
 ]
 
 [[package]]
@@ -2310,6 +2347,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006"
 dependencies = [
  "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 
@@ -2438,6 +2477,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
  "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-vision"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfc194758a2d5d7540b1ad283bfb9ca318ec608991892326e95b428230b2689b"
+dependencies = [
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image",
  "objc2-foundation",
 ]
 
@@ -4196,6 +4248,7 @@ dependencies = [
  "ultrakey-permissions",
  "ultrakey-platform",
  "ultrakey-presets",
+ "ultrakey-seek",
 ]
 
 [[package]]
@@ -4280,12 +4333,15 @@ dependencies = [
 name = "ultrakey-platform"
 version = "0.1.0"
 dependencies = [
+ "axuielement",
  "block2",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-core-image",
  "objc2-foundation",
+ "objc2-vision",
  "plist",
  "serde",
  "thiserror 2.0.20",
@@ -4300,6 +4356,15 @@ dependencies = [
  "serde",
  "serde_json",
  "ultrakey-core",
+]
+
+[[package]]
+name = "ultrakey-seek"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tracing",
+ "ultrakey-platform",
 ]
 
 [[package]]

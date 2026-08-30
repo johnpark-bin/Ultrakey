@@ -31,6 +31,49 @@ Screen Recording 이 Seek(`F-02`) 사용 시 필요하다는 사실 자체는 �
 2. **권한 DB 불일치("out of sync")는 예외적 사고가 아니라 상시 발생하는 실패 모드**다. 개발자에게는 재빌드할 때마다(§7, ad-hoc 서명의 `cdhash` 변경), 일반 사용자에게는 앱 업데이트나 재설치 시 발생할 수 있다. 실측으로 이 진단·복구 흐름 전량이 확정됐다(§3.3) — 전용 복구 UI 는 부가 기능이 아니라 필수 기능이다.
 3. ⭐ **event tap 생성 실패는 복구 시도의 대상일 뿐 아니라, 끝내 해소되지 않으면 치명적이다.** 원문 "Failed to create event tap. Exiting program" 이 보여주듯 앱은 종료한다. 이 부분은 `F-10`(menu-bar-and-lifecycle.md) §2 시나리오 E 와 상호 참조한다 — F-11 은 진단·복구 UI 의 내용을, F-10 은 그로 인한 앱 상태·프로세스 생명주기 전이를 각각 소유한다.
 
+### 1.3 ⭐⭐ 신규 — F-02 가 Screen Recording 을 실제로 필요하게 만든다 (이슈 #30)
+
+§1.1 을 쓸 때 이 앱에는 **실제로 화면을 캡처하는 코드가 아직 없었다.** F-02(Seek 텍스트 검출)의 소스 A 가 `CGDisplayCreateImage` 를 부르면서 Screen Recording 이 처음으로 실제 요구 권한이 된다. 이 절은 그것이 이 문서에 무엇을 바꾸는지 확정한다.
+
+#### 무엇이 바뀌지 않는가
+
+- **온보딩 모달은 여전히 Accessibility 하나만 다룬다.** §3.2 의 `Authorize Superkey` 모달에 Screen Recording 을 추가하지 않는다. 근거: Screen Recording 이 없어도 앱의 핵심(키 리매핑 F-07, Hyperkey F-05, Presets F-08)은 전부 정상이고 Seek 의 AX 경로(F-02 소스 B)와 클릭 실행(F-04)도 산다. **최초 실행 시점에 아직 쓰지도 않을 권한을 요구하면 온보딩 이탈률만 올린다.**
+- **`unauthorizedMenu`(F-10) 전이 조건도 그대로다** — 그것은 Accessibility 전용이다.
+
+#### ⭐ 무엇이 바뀌는가 — 조용한 실패를 감지해야 한다
+
+⚠️ **`CGDisplayCreateImage` 는 권한이 없어도 실패하지 않는다.** 오류가 아니라 **데스크톱 배경(벽지)만 담긴 이미지**가 돌아온다 — 창도 메뉴 막대도 없다. 사용자에게는 `Seek 가 아무것도 못 찾는다` 로만 보이고, 그것은 **텍스트가 없는 화면**(F-02 §5 #2)과 구분되지 않는다.
+
+그래서 이 구현은 **원본과 의도적으로 다르게 `CGPreflightScreenCaptureAccess()` 를 쓴다.**
+
+| | 원본 SuperKey v1.66 | ⭐ 이 클론 |
+| :--- | :--- | :--- |
+| 사전 확인 | 하지 않음 (심볼 없음, §1.1) | **`CGPreflightScreenCaptureAccess()`** — Seek 세션을 열 때 |
+| 시스템 프롬프트 | OS 가 첫 캡처에서 암묵적으로 | 동일 (아래 참조) |
+| 실패 시 안내 | 없음 (구분 불가) | 후보 0개의 **이유**를 말해 준다 |
+
+**이 이탈을 정당화하는 근거 3가지**:
+
+1. **`CGPreflightScreenCaptureAccess` 는 프롬프트를 띄우지 않는 순수 조회다.** §1.1 이 경계한 것은 macOS 표준 TCC 프롬프트가 우리 자체 모달을 대신해 버리는 것이었고, 그 경계는 `AXIsProcessTrustedWithOptions`(프롬프트 변형)에 대한 것이었다. preflight 는 여기에 해당하지 않으므로 §1.1 의 `표준 프롬프트를 한 번도 띄우지 않는다` 원칙과 **충돌하지 않는다**.
+2. **결과 이미지만 보고 추론할 수 없다.** 후보 0개는 권한 없음과 텍스트 없는 화면 양쪽에서 똑같이 나온다.
+3. **크레이트 커버리지 비용이 0 이다** — `objc2-core-graphics`(0.3.2)가 이 함수를 이미 노출한다(F-02 §7 확정). 새 의존성도, 원시 FFI 선언도 필요 없다.
+
+기각한 대안: **원본과 똑같이 아무 확인도 하지 않기.** F-02 §5 #1 의 기대 동작(소스 A 가 죽고 소스 B 로 계속)은 그래도 만족되지만, 사용자에게 **이유를 말해 줄 수 없다.** 이 문서는 §3.2.1 에서 이미 `권한 실패는 눈에 보여야 한다` 를 원칙으로 세웠으므로, 그 원칙과 정합하는 쪽을 골랐다.
+
+#### `CGRequestScreenCaptureAccess` 는 언제 부르는가
+
+⚠️ **이 프롬프트는 프로세스당 한 번만 뜬다.** 이미 거부한 사용자에게는 아무 일도 일어나지 않는다. 따라서:
+
+- Seek 세션에서 preflight 가 `false` 이면 **한 번만** `CGRequestScreenCaptureAccess()` 를 시도하고,
+- 그것이 `false` 를 돌려주면 **시스템 설정 딥링크**(§3.3 의 기존 경로, `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`)로 안내한다.
+
+⚠️ **권한을 새로 부여하면 macOS 는 앱 재시작을 요구한다** — Screen Recording 은 이 요구가 Accessibility 보다 엄격하다. §3.3 의 재시작 안내를 이 경로에도 적용한다.
+
+#### ⚠️ 개발 워크플로 함정이 더 잘 드러난다
+
+§7 의 개발 워크플로 요구사항이 이미 정한 것 — `cargo tauri dev` 금지, `.app` 안의 바이너리 직접 실행 금지 — 이 **Screen Recording 에서 Accessibility 보다 더 잘 드러난다.** TCC 가 부모 프로세스 권한으로 판정하므로, 터미널에서 실행하면 **터미널의** Screen Recording 권한으로 캡처가 되어 앱은 권한이 없는데 잘 동작하는 것처럼 보이는 상태가 만들어진다. 반드시 `./scripts/build-signed.sh` → `open …/Ultrakey.app` 로 검증한다.
+
+
 ## 2. 사용자 시나리오
 
 ### S1 — 최초 실행 정상 흐름 (⭐ 정정)
@@ -76,7 +119,7 @@ Screen Recording 이 Seek(`F-02`) 사용 시 필요하다는 사실 자체는 �
 | :--- | :--- | :---: | :--- | :--- |
 | Accessibility | 키 이벤트 감지·클릭 실행 | ✅ `AXIsProcessTrusted()` | 자체 모달 `Authorize Superkey`(§3.2) — 시스템 프롬프트 아님 | 키 리매핑 전체(F-07), Seek 의 클릭 실행(F-04), AX 파싱 검출 경로(F-02) |
 | Input Monitoring | `CGEventTap`/HID 이벤트 수신의 전제 조건으로 추정 | ❌ | `IOHIDManagerOpen` 실패 시 원문 "IOHIDManagerOpen failed with kIOReturnNotPermitted. Retrying... (Attempt " 로 붙잡고 재시도. 앱이 명시적으로 요청하지 않아도 OS 가 이 반복 시도 과정에서 자체 프롬프트를 띄울 가능성이 있으나 확정하지 못함 `(미확정)` | 키 리매핑(F-07) — 정확히 어떤 조건에서 필수인지는 `(미확정)` → §9 |
-| Screen Recording | Seek 의 OCR 캡처(`CGDisplayCreateImage`) | ❌ | `CGDisplayCreateImage` 호출 시 macOS 가 표준 프롬프트를 암묵적으로 띄움. 앱은 관여하지 않는다 | Seek 의 OCR 검출 경로(F-02)만. AX 파싱 경로·클릭 실행·키 리매핑 자체는 영향 없음 |
+| Screen Recording | Seek 의 OCR 캡처(`CGDisplayCreateImage`) | ⭐ **✅ 이 클론은 확인한다** — `CGPreflightScreenCaptureAccess()`(원본은 ❌, §1.3) | 프롬프트 없는 순수 조회로 상태만 읽고, 없으면 `CGRequestScreenCaptureAccess()` 를 **한 번** 시도한 뒤 시스템 설정 딥링크로 안내. ⚠️ 확인하지 않으면 권한 없음이 **조용한 실패**(데스크톱 배경만 캡처)로 나타나 텍스트 없는 화면과 구분되지 않는다 | Seek 의 OCR 검출 경로(F-02)만. AX 파싱 경로·클릭 실행·키 리매핑 자체는 영향 없음 |
 
 ⭐ Input Monitoring 이 실제로 `CGEventTap` 설치의 전제 조건인지는 macOS 버전에 따라 다를 수 있으나, 이 문서는 확인 API 부재라는 실측 사실만 명시하고 "필수 여부"는 `(미확정)` 으로 남긴다 — 추측으로 메우지 않는다.
 
@@ -160,12 +203,12 @@ If the checkbox is disabled, click the padlock and enter your password
 
 ### 3.5 권한 조합별 기능 가용성 (⭐ 갱신 — 확인 가능한 축이 실제로는 하나뿐임을 반영)
 
-Accessibility 만 앱이 직접 확인할 수 있는 값이고, Input Monitoring·Screen Recording 은 "확인"이 아니라 "실패의 관찰"로만 상태를 유추할 수 있다는 점에 유의해서 읽는다.
+⭐ **갱신(이슈 #30)**: 이제 앱이 직접 확인할 수 있는 값은 **둘**이다 — Accessibility(`AXIsProcessTrusted`)와 **Screen Recording**(`CGPreflightScreenCaptureAccess`, §1.3). Input Monitoring 만 여전히 실패의 관찰로만 상태를 유추할 수 있다.
 
-| Accessibility(확인 가능) | Input Monitoring(추론) | Screen Recording(추론) | 결과 |
+| Accessibility(확인 가능) | Input Monitoring(추론) | Screen Recording(⭐ 확인 가능) | 결과 |
 | :---: | :---: | :---: | :--- |
 | ✅ | ✅(재시도 성공) | ✅(캡처 성공) | 전체 기능 정상. Seek 는 OCR + AX 파싱 병합 검출(F-02) |
-| ✅ | ✅ | ❌(캡처 실패 또는 미승인) | 키 리매핑·Hyperkey·Presets 정상. Seek 는 AX 파싱 경로만 동작(`Seek using macOS accessibility` 옵션이 켜져 있는 경우) |
+| ✅ | ✅ | ❌(⭐ **preflight 로 확인됨**) | 키 리매핑·Hyperkey·Presets 정상. Seek 는 AX 파싱 경로만 동작(`Seek using macOS accessibility` 옵션이 켜져 있는 경우). ⭐ 이제 이 상태를 **감지해 사용자에게 이유를 말해 준다**(§1.3) — 예전에는 후보 0개와 구분되지 않았다 |
 | ✅ | ❌(`IOHIDManagerOpen` 계속 실패) | — | F-07 이 이벤트를 받지 못함 → 키 리매핑·Seek 트리거 전부 무력화 가능성. 정확한 영향 범위는 §3.1 각주와 같이 `(미확정)` |
 | ❌ | — | — | 클릭 실행(F-04) 자체가 불가능 — 사실상 앱 전체가 무력화. `unauthorizedMenu`(F-10)로 전이 |
 | ✅였다가 진단(out of sync) | — | — | §3.3 의 진단·복구 흐름으로 전이. F-10 과 연동해 최종적으로 종료될 수 있음 |
@@ -216,7 +259,7 @@ Accessibility 만 앱이 직접 확인할 수 있는 값이고, Input Monitoring
 ## 6. 필요한 플랫폼 API
 
 - **Accessibility**: `AXIsProcessTrusted()`(확인 — 원본이 실제로 쓰는 유일한 명시적 API). `AXIsProcessTrustedWithOptions()` 는 **원본에 없다**(§1.1) — 클론이 이를 채택할지는 §7 의 설계 선택. rust-macos-capability-notes.md §2.5. Info.plist 에 별도 사용 설명 키 없음(usage description 키 자체가 전무 — app-bundle-analysis.md §1).
-- **Screen Recording**: 원본은 `CGPreflightScreenCaptureAccess`/`CGRequestScreenCaptureAccess` 를 **쓰지 않는다**(실측: 링크 심볼 부재) — `CGDisplayCreateImage`/`CGDisplayCreateImageForRect` 호출 시 OS 가 암묵적으로 프롬프트한다(app-bundle-analysis.md §3.1). 클론이 명시적 확인/요청 API 를 쓸지는 §7 의 설계 선택.
+- **Screen Recording**: 원본은 `CGPreflightScreenCaptureAccess`/`CGRequestScreenCaptureAccess` 를 **쓰지 않는다**(실측: 링크 심볼 부재) — `CGDisplayCreateImage`/`CGDisplayCreateImageForRect` 호출 시 OS 가 암묵적으로 프롬프트한다(app-bundle-analysis.md §3.1). ⭐ **이 클론은 둘 다 쓴다 — 결정 완료(§1.3, 이슈 #30).** `CGPreflightScreenCaptureAccess()` 로 프롬프트 없이 상태를 읽고, 없을 때만 `CGRequestScreenCaptureAccess()` 를 한 번 시도한다. 두 함수 모두 **`objc2-core-graphics`(0.3.2)가 이미 노출**하므로 새 의존성도 원시 FFI 도 필요 없다(실제 컴파일로 확인 — `crates/ultrakey-platform/src/screen_recording.rs`).
 - **Input Monitoring**: 원본은 `IOHIDCheckAccess`/`IOHIDRequestAccess` 를 **쓰지 않는다** — `IOHIDManagerOpen` 등을 직접 호출해 `kIOReturnNotPermitted` 실패를 붙잡아 재시도한다(§3.1). 이 두 확인/요청 함수는 macOS SDK 에는 존재하지만 원본이 링크하지 않았을 뿐이다 — 클론이 쓰기로 하면 전용 Rust 크레이트가 없어 `#[link(name="IOKit", kind="framework")]` 로 직접 링크하고 `extern "C"` 로 선언해야 한다(rust-macos-capability-notes.md §2.5).
 - **`CGEventTapCreate` (판정용, 설치 자체는 F-07 소관)**: F-11 은 §3.3 의 out-of-sync 판정을 위해 F-07 이 노출하는 "탭 생성 성공/실패" 신호를 구독한다.
 - **시스템 설정 딥링크**: `x-apple.systempreferences:` URL 스킴. 원본의 자체 모달(§3.2)은 버튼(`Open System Settings`)으로 이를 호출하는 것으로 보이나, 정확한 URL(앵커 이름)은 이번 실측(nib 텍스트·AX 트리) 범위에서 문자열 자체로는 확인되지 않았다 `(미확정)` → §9. Accessibility 앵커(`Privacy_Accessibility`)는 이전 조사(rust-macos-capability-notes.md §2.5)에서 원문으로 확인된 값을 유지한다.

@@ -14,6 +14,7 @@
 //! `docs/dev/architecture.md`(경로 A/B/C 배치)를 그대로 따른다.
 
 pub mod accessibility;
+pub mod ax_text;
 pub mod bundle;
 pub mod event;
 pub mod event_tap;
@@ -22,11 +23,15 @@ pub mod hid_device;
 pub mod hid_lock;
 pub mod hid_mapping;
 pub mod hotplug;
+pub mod image_preprocess;
 pub mod login_item;
 pub mod runloop;
+pub mod screen_capture;
+pub mod screen_recording;
 pub mod secure_input;
 pub mod text_input_source;
 pub mod trace_ring;
+pub mod vision_ocr;
 pub mod workspace;
 
 /// macOS 전용 수기 FFI 선언 모음. 공개 헤더에서 확인한 시그니처만 담는다

@@ -1680,3 +1680,127 @@ from 팝업에 F-05 소스 키 35종이 명세 순서로 떴다. **종속 표현
 B 3서비스 = `caps_lock→F18` 7건, `fnState=1`). 검증 시작 시점에 돌고 있던 메인 체크아웃의
 Ultrakey 도 **다시 띄워** 원래대로 되돌렸다.
 ⛔ 사용자의 Karabiner 설정은 읽지도 바꾸지도 않았다. 시스템 설정·키체인도 건드리지 않았다.
+
+---
+
+## 항목 8 — F-02 Seek 텍스트 후보 검출 (M3 1차 / 이슈 #30 신설)
+
+> **무엇을 확인하는가**: 명세 `docs/spec/seek-text-detection.md` §8 수용 기준 중
+> **실제 화면·실제 TCC 권한이 있어야만 확인 가능한 것들**. 순수 로직(좌표 변환 수식,
+> 병합 M1~M3, 질의 매칭)은 `cargo test -p ultrakey-seek` 28개가 이미 덮으므로 여기서
+> 다시 확인하지 않는다(§0-bis 의 원칙 그대로).
+>
+> ⛔ **F-01(세션)·F-03(오버레이)·F-04(클릭)은 아직 없다.** 그래서 이 항목은 단축키로
+> Seek 을 여는 것이 아니라, 앱에 심어 둔 **검출 프로브**를 환경변수로 한 번 돌려
+> 그 산출물을 로그와 덤프 파일로 확인한다.
+
+### ⚠️ 8-0. 왜 터미널 실행으로는 이 항목을 검증할 수 없는가
+
+Screen Recording 권한은 TCC 가 **부모 프로세스** 기준으로 판정한다
+([`../spec/platform-constraints.md`](../spec/platform-constraints.md) §3.2).
+**이 함정은 Accessibility 보다 Screen Recording 에서 훨씬 잘 드러난다** — 실제로
+이 세션이 측정한 대비가 그것이다:
+
+| 실행 방식 | `CGPreflightScreenCaptureAccess()` | OCR 후보 |
+| :--- | :--- | ---: |
+| 터미널에서 `cargo run --example seek_ocr_spike` | `true` (**터미널의** 권한) | 45 + 102 개 |
+| 서명된 `.app` 을 `open` 으로 기동 | `false` | **0 개** |
+
+⛔ **따라서 반드시 `./scripts/build-signed.sh` → `open …/Ultrakey.app` 경로로만 확인한다.**
+`cargo tauri dev` 도, `.app` 안의 바이너리 직접 실행도 안 된다.
+
+### 8-a. 준비
+
+```sh
+./scripts/build-signed.sh
+rm -f ~/Library/Logs/Ultrakey/seek-candidates.json
+```
+
+프로브를 켜는 환경변수(전부 선택):
+
+| 변수 | 뜻 |
+| :--- | :--- |
+| `ULTRAKEY_SEEK_DETECT_DUMP=1` | 기동 직후 검출을 **한 번** 돌린다 (이것만 필수) |
+| `ULTRAKEY_SEEK_DETECT_AX=1` | 소스 B(Accessibility)도 켠다 |
+| `ULTRAKEY_SEEK_DETECT_LANGS=ko-KR,en-US` | `recognitionLanguages` 를 지정한다 |
+| `ULTRAKEY_SEEK_DETECT_REQUEST=1` | 권한이 없으면 시스템 프롬프트를 한 번 띄운다 |
+
+```sh
+open -n target/universal-apple-darwin/release/bundle/macos/Ultrakey.app \
+  --env ULTRAKEY_SEEK_DETECT_DUMP=1
+```
+
+관찰: `~/Library/Logs/Ultrakey/ultrakey.log` 의 `F-02` 로 시작하는 줄,
+그리고 후보 전량이 담긴 `~/Library/Logs/Ultrakey/seek-candidates.json`.
+
+### ⭐ 8-b. 권한 **없을** 때 — 조용한 실패를 감지하는가 (명세 §8, F-11 §1.3)
+
+⭐ **이것을 먼저 한다.** 권한을 부여하기 전 상태가 그대로 이 케이스이기 때문이다.
+
+1. Screen Recording 목록에서 Ultrakey 가 꺼져 있는(또는 없는) 상태로 위 명령을 실행한다.
+2. 로그에서 확인:
+   - `F-02 검출 프로브 시작 … screen_recording=Denied`
+   - `F-02 검출 프로브 완료 total=0 ocr=0 … capture_ms=<0 이 아닌 값>`
+   - ⭐ `ERROR … ⚠️ 소스 A 후보 0개 + Screen Recording 권한 없음 — 조용한 실패다.`
+
+⭐ **`capture_ms` 가 0 이 아니라는 점이 핵심이다** — `CGDisplayCreateImage` 가 **실패하지
+않고 이미지를 돌려줬는데** OCR 후보가 0개다. 이것이 명세가 말한 조용한 실패이고, 권한
+상태를 따로 보지 않으면 "텍스트 없는 화면"(§5 #2)과 구분되지 않는다.
+
+### 8-c. 권한 **있을** 때 — 실제 후보가 잡히는가 (명세 §8 첫 항목)
+
+1. 시스템 설정 ▸ 개인정보 보호 및 보안 ▸ **화면 기록** 에서 Ultrakey 를 켠다.
+   (`ULTRAKEY_SEEK_DETECT_REQUEST=1` 로 프롬프트를 띄울 수도 있다.)
+2. ⚠️ **앱을 완전히 종료했다가 다시 띄운다** — Screen Recording 은 이 요구가
+   Accessibility 보다 엄격하다.
+3. 화면에 **텍스트가 많은 창**(에디터·브라우저)을 띄워 두고 8-a 명령을 실행한다.
+4. 확인:
+   - `screen_recording=Granted`
+   - `F-02 디스플레이 OCR 완료 (증분 전달)` 가 **디스플레이 수만큼** 찍히는가 —
+     이것이 결정 S-1(디스플레이별 증분 전달)이 실제로 동작한다는 증거다
+   - `F-02 후보` 줄들의 `text` 가 화면에 실제로 보이는 문자열과 일치하는가
+   - ⭐ `x`/`y` 가 **그 텍스트가 실제로 있는 화면 위치**를 가리키는가.
+     주 디스플레이가 아닌 화면의 후보는 `x` 가 음수여야 한다(전역 원점이 `(-2560, 0)` 인
+     경우) — 이것이 §5 #3 의 v1.55 다중 디스플레이 회귀를 막는 지점이다
+
+### 8-d. 소스 B(AX)와 병합 (명세 §8 2·3·8번 항목)
+
+```sh
+open -n …/Ultrakey.app --env ULTRAKEY_SEEK_DETECT_DUMP=1 --env ULTRAKEY_SEEK_DETECT_AX=1
+```
+
+- `ax=<0 이 아닌 값>` 이 찍히는가 (최전면 창에서 AX 요소를 읽었는가)
+- `merged_away=<0 이 아닌 값>` — 겹친 후보가 실제로 제거됐는가
+- 덤프 JSON 에서 같은 위치에 `"Ocr"` 과 `"Accessibility"` 가 **함께** 남아 있지
+  않은가. ⭐ 남아 있다면 M3(OCR 이 AX 를 대체)가 깨진 것이다
+- ⚠️ AX 를 끄고(`ULTRAKEY_SEEK_DETECT_AX` 없이) 돌리면 `ax=0` 이어야 한다
+
+### 8-e. 한국어 인식 (스파이크 §3, 결정 S-4)
+
+한글이 많은 화면을 띄워 두고:
+
+```sh
+open -n …/Ultrakey.app --env ULTRAKEY_SEEK_DETECT_DUMP=1 \
+  --env ULTRAKEY_SEEK_DETECT_LANGS=ko-KR,en-US
+```
+
+- 기본값(변수 없음)에서는 한글 후보가 **0개**여야 한다
+- `ko-KR` 을 **첫 번째**로 넣으면 한글 후보가 나와야 한다
+- ⚠️ `en-US,ko-KR` 순서로는 **나오지 않는다** — 실측된 동작이다
+- `total_ms` 가 3~4배로 늘어나는 것도 함께 확인한다 (S-4 의 대가)
+
+### ⛔ 8-f. 이 절차로도 확인할 수 없는 것
+
+| 항목 | 왜 |
+| :--- | :--- |
+| **Retina(`scale = 2.0`)** | 이 기기에 붙은 두 디스플레이가 모두 `scale = 1.00` 이고 Retina 패널이 없다. 해상도(시스템 설정) 변경은 위임 범위 밖이라 하지 않았다. §3.2.3 3단계는 `ultrakey-seek` **단위 테스트로만** 검증된다 |
+| `Only Seek in the frontmost window` 의 실제 창 프레임 획득 | 창 프레임을 어디서 얻는지는 명세가 `(미확정)` 으로 남겼고(§3.3.2), 그 획득 책임은 F-01 이다. 이 구현은 호출자가 넘긴 사각형을 쓴다 |
+| 응답 없는 앱에서 AX 타임아웃이 실제로 걸리는가 (§8, §5 #7) | 앱을 인위적으로 멈추게 하려면 `SIGSTOP` 을 남의 프로세스에 보내야 한다. 코드상 `set_timeout(0.5)` 이 시스템 와이드·대상 앱 양쪽에 걸리는 것까지만 확인했다 |
+| Stage Manager · 전체화면 스페이스 (§5 #5, #15) | 범위 밖 |
+
+### 📌 실측 결과 (2026-08-30, 이슈 #30)
+
+| 절차 | 결과 |
+| :--- | :--- |
+| 8-b 권한 없을 때 조용한 실패 감지 | ✅ **통과.** 서명된 `.app` 에서 `screen_recording=Denied`, `capture_ms=8.05`(캡처는 성공), `ocr=0`, 그리고 `ERROR … 조용한 실패다` 가 정확히 찍혔다 |
+| 8-0 TCC 함정 대비 | ✅ **관측함.** 같은 코드가 터미널에서는 147개 후보, 서명된 `.app` 에서는 0개 — 위 표 그대로다 |
