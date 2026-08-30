@@ -85,8 +85,8 @@ pub struct ComboRule {
 pub struct KoreanRule {
     /// `RuleId::Korean(13)`..`Korean(16)`.
     pub id: RuleId,
-    /// 물리 트리거 키(`space`(0x31) / `lang1`/`lang2`(미확정, 1단계는 다루지 않는다) /
-    /// `grave`(0x32)).
+    /// 물리 트리거 키(`space`(0x31) / `lang1`(`KeyCode::JIS_KANA`, 0x68) /
+    /// `lang2`(`KeyCode::JIS_EISU`, 0x66) / `grave`(0x32)).
     pub trigger_key: KeyCode,
     pub trigger: KoreanTrigger,
     /// 참이면 [`crate::korean::KoreanImeState::Active`] 일 때만 발화한다(fail-closed).

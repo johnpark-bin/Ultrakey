@@ -463,9 +463,9 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
 }
 
 /// `Korean` 탭 5개 항목 — F-16(`docs/spec/korean-input.md` §4.2). `presets_view` 와
-/// 같은 형식. ⭐ `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 값 자체는
-/// 그대로 실어 보낸다 — UI 가 `disabled` 로 dimmed 하는 것뿐이지 저장은 정상 동작한다
-/// (D-K8, 2단계 활성화는 다음 작업의 범위).
+/// 같은 형식. `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 2단계에서
+/// 활성화됐다(D-K14) — §3.2 의 키코드가 근거 3중으로 해소되어 UI 도 규칙 평가도
+/// 정상 동작한다.
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KoreanView {

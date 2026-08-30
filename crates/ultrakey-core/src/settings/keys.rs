@@ -100,10 +100,10 @@ pub const PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP: &str = "presets.synthesizeCapsLock
 
 /// F-16.1 `Shift + Space 로 입력 소스 변경` — 체크박스. 기본값 ☐(부재 = `false`).
 pub const KOREAN_SHIFT_SPACE_SWITCHES_INPUT_SOURCE: &str = "korean.shiftSpaceSwitchesInputSource";
-/// F-16.2 `한/영 키로 입력 소스 변경` — 체크박스. §3.2 키코드가 `(미확정)`인 동안 UI 에서
-/// dimmed 이고, `KoreanSettings::to_rules()` 는 이 값을 읽어도 규칙을 내지 않는다(D-K8).
+/// F-16.2 `한/영 키로 입력 소스 변경` — 체크박스. 기본값 ☐(부재 = `false`). §3.2 키코드가
+/// 근거 3중으로 해소되어(`KeyCode::JIS_KANA`) `KoreanSettings::to_rules()` 가 규칙을 낸다(D-K14).
 pub const KOREAN_HAN_ENG_SWITCHES_INPUT_SOURCE: &str = "korean.hanEngSwitchesInputSource";
-/// F-16.3 `한자 키로 한자 변환` — 체크박스. 상동(D-K8) — 규칙을 내지 않는다.
+/// F-16.3 `한자 키로 한자 변환` — 체크박스. 상동(D-K14) — `KeyCode::JIS_EISU`, 규칙을 낸다.
 pub const KOREAN_HANJA_KEY_CONVERTS_HANJA: &str = "korean.hanjaKeyConvertsHanja";
 /// F-16.4 `₩ 키로 백틱(\`) 입력` — 체크박스. 기본값 ☐(부재 = `false`).
 pub const KOREAN_WON_KEY_TYPES_BACKTICK: &str = "korean.wonKeyTypesBacktick";

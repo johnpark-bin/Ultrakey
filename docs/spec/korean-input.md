@@ -38,14 +38,16 @@
 3. macOS 가 이를 "입력 소스 선택" 단축키로 인식해 입력 소스를 전환한다.
 4. 사용자는 스페이스바 옆 shift 만으로 손을 떼지 않고 입력 소스를 바꿀 수 있다 — `⌃Space` 보다 손가락 이동이 짧다.
 
-### 시나리오 B — 외장 키보드의 한/영 키가 dimmed 되어 있다
+### 시나리오 B — 106키 외장 키보드의 한/영 키를 쓴다
 
-전제: 사용자가 106키 외장 키보드를 쓰며 `Korean` 탭을 처음 연다.
+전제: 사용자가 한국어 106키 외장 키보드를 쓰며 `Korean` 탭에서 `한/영 키로 입력 소스 변경`(F-16.2)을 켰다.
 
-1. 사용자가 `한/영 키로 입력 소스 변경`(F-16.2) 체크박스를 켜려 한다.
-2. 체크박스가 회색으로 흐려져 있어(dimmed, `preferences-ui.md` §3.8 표현 ①) 클릭해도 반응하지 않는다.
-3. 부제에 "이 키의 키코드가 아직 확인되지 않았습니다" 안내가 붙어 있다.
-4. 사용자는 이 기능이 고장난 것이 아니라 **아직 구현되지 않은 상태**임을 이해한다(§3.2, §5#1).
+1. 사용자가 한/영 키를 아무 modifier 없이 누른다.
+2. macOS 는 이 물리 키를 `kVK_JIS_Kana`(`0x68`)로 전달한다 — 한국어 전용 상수가 없어 같은 물리 위치의 JIS 상수를 재사용하기 때문이다(§3.2).
+3. Ultrakey 가 이를 `control`+`space` 로 치환해 방출하고, macOS 가 "입력 소스 선택" 단축키로 인식해 전환한다.
+4. ⭐ **현재 입력 소스가 한국어든 영문이든 똑같이 동작한다** — 이 키에는 입력 소스 조건을 걸지 않는다(§3.1). 걸면 영문에서 한국어로 되돌아올 수 없는 편도 키가 된다.
+
+> ⚠️ **이 시나리오는 실기기로 확인되지 않았다** — 검증 기기에 한국어 106키 물리 키보드가 없다(§5 #1). keycode 자체는 근거 3중으로 확정되었으나(§3.2), 실제 하드웨어가 그 keycode 를 보내는지는 미검증이다.
 
 ### 시나리오 C — `` ` `` 를 입력하고, 곧이어 창을 전환한다
 
@@ -306,8 +308,8 @@ F-16.3·F-16.4 는 "한국어 입력기가 활성일 때만" 발화한다.
 | # | 라벨(ko) | 라벨(en) | 컨트롤 | 기본값 | 표시·활성화 조건 | 문자열 카탈로그 키 | 저장 키 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | 1 | `Shift + Space 로 입력 소스 변경` | `Change input source with Shift + Space` | 체크박스 | ☐ | 항상. **부제 종속**(`preferences-ui.md` §3.8 표현 ②): `macOS 시스템 설정의 '입력 소스 선택' 단축키가 ⌃Space 여야 동작합니다` | `korean.shiftSpaceSwitchesInputSource.label`(+ `.subtitle`) | `korean.shiftSpaceSwitchesInputSource` |
-| 2 | `한/영 키로 입력 소스 변경` | `Change input source with the Han/Eng key` | 체크박스 | ☐ | ⚠️ **§3.2 의 키코드가 `(미확정)`인 동안 ① dimmed**(`preferences-ui.md` §3.8 표현 ①). 부제로 사유 표시: `이 키의 키코드가 아직 확인되지 않았습니다` | `korean.hanEngSwitchesInputSource.label`(+ `.subtitle`) | `korean.hanEngSwitchesInputSource` |
-| 3 | `한자 키로 한자 변환` | `Convert to Hanja with the Hanja key` | 체크박스 | ☐ | 2 와 동일하게 dimmed. 부제: 한국어 입력기가 활성일 때만 적용됨 | `korean.hanjaKeyConvertsHanja.label`(+ `.subtitle`) | `korean.hanjaKeyConvertsHanja` |
+| 2 | `한/영 키로 입력 소스 변경` | `Change input source with the Han/Eng key` | 체크박스 | ☐ | ⭐ **정정: 이제 활성이다.** §3.2 의 키코드가 해소되어 dimmed 조건이 사라졌다. **부제 종속**: `한국어 106키 키보드의 한/영 키에서 동작한다. JIS(일본어) 배열의 かな 키와 같은 키코드를 쓴다` — ⛔ **"실기기 미검증" 배지를 UI 에 두지 않는다**(아래 ⭐) | `settings.korean.han_eng`(+ `.hint`) | `korean.hanEngSwitchesInputSource` |
+| 3 | `한자 키로 한자 변환` | `Convert to Hanja with the Hanja key` | 체크박스 | ☐ | 2 와 같이 **정정: 활성**. **부제 종속**: `한국어 106키 키보드의 한자 키에서, 한국어 입력기가 활성일 때만 동작한다. JIS 배열의 英数 키와 같은 키코드를 쓴다` | `settings.korean.hanja`(+ `.hint`) | `korean.hanjaKeyConvertsHanja` |
 | 4 | `₩ 키로 백틱(\`) 입력` | ``Type backtick (`) with the ₩ key`` | 체크박스 | ☐ | 항상. **부제 종속**: `한국어 입력기가 활성일 때만 적용되며, 수정자를 함께 누른 조합(⌘\` 등)에는 개입하지 않습니다` | `korean.wonKeyTypesBacktick.label`(+ `.subtitle`) | `korean.wonKeyTypesBacktick` |
 | 5 | `원격 데스크톱 클라이언트에서 한국어 키 처리 끄기` | `Disable Korean key handling in remote desktop clients` | 체크박스 | **☑** | 항상. 1~4 중 하나라도 켜져야 의미가 있으나 **dimmed 하지 않는다** — 항상 켜둘 값이라 종속 표현을 쓰면 오히려 혼란스럽다. 부제로 이유를 설명 | `korean.disableInRemoteDesktop.label`(+ `.subtitle`) | `korean.disableInRemoteDesktop` |
 | 6 | (안내 텍스트 — 컨트롤 아님) | | 정적 텍스트 | — | §7 의 오른쪽 command 안내(아래) | `korean.hyperViaRightCommandHint` | — |
@@ -316,6 +318,7 @@ F-16.3·F-16.4 는 "한국어 입력기가 활성일 때만" 발화한다.
 - ⭐ **정정(구현 시점).** 위 표의 `문자열 카탈로그 키` 열은 명세를 쓰던 시점의 **제안**이었고, 저장 키와 같은 모양(`korean.*`)으로 적혀 있었다. 실제로 구현된 F-09 규약은 **UI 문자열이 전부 `settings.<탭>.<항목>` 접두**를 쓰며, `apps/ultrakey-app/tests/frontend_wiring.rs` 의 자동 검사(`settings.` 로 시작하는 리터럴이 전부 ko·en 양쪽 카탈로그에 있는가)가 그 접두사에 걸려 있다. 카탈로그 키를 `korean.*` 로 두면 **그 자동 검사 바깥으로 새어 나가** 번역 누락이 조용히 통과한다.
   → **카탈로그 키는 `settings.korean.*`** 를 쓴다. ⛔ **저장 키는 위 표 그대로 `korean.*`** 다 — 둘은 다른 축이다.
 - ⭐ **영어 문자열이 필요한 이유**: 이 탭은 영어 사용자에게도 보인다(§4.1 기각한 대안 ②). 한국어 UI 전용 기능이 아니다.
+- ⭐ **증거 등급을 UI 에 노출하지 않는다는 결정.** 항목 2·3 은 `(웹 조사 확정 + SDK 헤더 실측, **실기기 미검증**)`(§3.2)이다. 그 사실을 체크박스 옆 배지로 보이자는 안을 **기각한다** — 증거 등급은 **개발자용 메타 정보**이지 사용자가 조작할 수 있는 사실이 아니다. 사용자에게 유용한 것은 "이 키가 있는 키보드에서만 동작한다" 는 **조작 가능한 사실**이고, 그것은 부제가 이미 말한다. 등급의 자리는 이 명세·`../dev/manual-verification.md`·PR 이다. ⚠️ 이 결정은 항목 2·3 이 **1단계에서 dimmed + 사유 표시로 출하됐던 것과 구분된다** — 그때는 "켤 수 없다" 는 사용자가 겪는 사실이었으므로 UI 가 말해야 했다(§5 #1).
 
 ---
 

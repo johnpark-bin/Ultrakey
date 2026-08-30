@@ -406,11 +406,12 @@
     </section>
 
     <!-- Korean 탭 — F-16(korean-input.md) §4.1 순서 그대로(Presets 다음, General 앞).
-         ⭐ 1단계 범위: F-16.1(Shift+Space)·F-16.4(₩→백틱)·항목 5(원격 데스크톱 제외)
-         셋만 실제로 동작한다. 한/영(F-16.2)·한자(F-16.3)는 §5#1 이 "결함이 아니라
-         정직한 상태"로 판정한 그대로 General 탭의 미구현 컨트롤과 똑같은 방식
-         (disabled + .badge + .hint.why)으로 dimmed 출하한다 — lang1/lang2 의 virtual
-         keycode 가 아직 확정되지 않았다(§3.2, D-K8). -->
+         ⭐ 2단계에서 F-16.1(Shift+Space)·F-16.2(한/영)·F-16.3(한자)·F-16.4(₩→백틱)·
+         항목 5(원격 데스크톱 제외) 전부가 동작한다 — 한/영·한자를 막던 lang1/lang2
+         virtual keycode 미확정 상태가 §3.2 의 근거 3중으로 해소됐다(D-K14). ⛔ UI 에
+         "실기기 미검증" 배지를 두지 않는다(D-K16) — 그것은 개발자용 증거 등급이지
+         사용자가 조작할 수 있는 사실이 아니다. 대신 부제로 "이 키가 있는 키보드에서만
+         동작한다"는 조작 가능한 사실을 안내한다. -->
     <section id="panel-korean" class="tabpanel" role="tabpanel" aria-labelledby="tab-korean" hidden>
       <h1 id="korean-heading"></h1>
 
@@ -422,25 +423,21 @@
       </div>
       <p class="hint" id="korean-shift-space-hint"></p>
 
-      <!-- ⭐ 2단계 — dimmed. 키코드 미확정이라 규칙이 하나도 나가지 않는다(D-K8). -->
       <div class="row">
-        <label class="checkbox-row disabled">
-          <input type="checkbox" id="korean-han-eng" data-key="korean.hanEngSwitchesInputSource" disabled />
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-han-eng" data-key="korean.hanEngSwitchesInputSource" />
           <span id="korean-han-eng-label"></span>
-          <span class="badge" id="korean-han-eng-badge"></span>
         </label>
       </div>
-      <p class="hint why" id="korean-han-eng-why"></p>
+      <p class="hint" id="korean-han-eng-hint"></p>
 
-      <!-- ⭐ 2단계 — dimmed. 상동. -->
       <div class="row">
-        <label class="checkbox-row disabled">
-          <input type="checkbox" id="korean-hanja" data-key="korean.hanjaKeyConvertsHanja" disabled />
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-hanja" data-key="korean.hanjaKeyConvertsHanja" />
           <span id="korean-hanja-label"></span>
-          <span class="badge" id="korean-hanja-badge"></span>
         </label>
       </div>
-      <p class="hint why" id="korean-hanja-why"></p>
+      <p class="hint" id="korean-hanja-hint"></p>
 
       <div class="row">
         <label class="checkbox-row">
@@ -648,9 +645,9 @@ if (!tauri || !tauri.core) {
     $("korean-shift-space-label").textContent = t("settings.korean.shift_space");
     $("korean-shift-space-hint").textContent = t("settings.korean.shift_space.hint");
     $("korean-han-eng-label").textContent = t("settings.korean.han_eng");
-    $("korean-han-eng-why").textContent = t("settings.korean.han_eng.why");
+    $("korean-han-eng-hint").textContent = t("settings.korean.han_eng.hint");
     $("korean-hanja-label").textContent = t("settings.korean.hanja");
-    $("korean-hanja-why").textContent = t("settings.korean.hanja.why");
+    $("korean-hanja-hint").textContent = t("settings.korean.hanja.hint");
     $("korean-won-backtick-label").textContent = t("settings.korean.won_backtick");
     $("korean-won-backtick-hint").textContent = t("settings.korean.won_backtick.hint");
     $("korean-remote-desktop-label").textContent = t("settings.korean.remote_desktop");
@@ -678,10 +675,8 @@ if (!tauri || !tauri.core) {
       "menu-bar-icon-badge",
       "remove-activation-badge",
       "purchase-badge",
-      // ⭐ F-16 2단계(한/영·한자) — General 탭 미구현 컨트롤과 같은 배지 키를
-      // 재사용한다(F16-strings.md — 새 배지 문자열을 만들지 않는다).
-      "korean-han-eng-badge",
-      "korean-hanja-badge",
+      // ⭐ F-16 2단계(한/영·한자)는 §3.2 의 근거 3중으로 해소되어 활성 컨트롤로
+      // 출하한다 — 더 이상 이 미구현 배지 루프에 속하지 않는다(D-K16).
     ]) {
       $(id).textContent = badgeText;
     }

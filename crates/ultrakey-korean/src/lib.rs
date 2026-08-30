@@ -7,10 +7,11 @@
 //! `ultrakey_core::rules::KoreanRule` 목록으로 번역하는 것과, F-16 기본 제외 앱 목록을
 //! 소유하는 것뿐이다. macOS 에 전혀 의존하지 않고, `unsafe` 도 전혀 필요 없다.
 //!
-//! ⚠️ **1단계 범위**: F-16.1(`Shift+Space`)과 F-16.4(`₩`) 두 규칙만 낸다. 한/영(F-16.2)·
-//! 한자(F-16.3)는 설정 필드만 존재하고 [`KoreanSettings::to_rules`] 가 규칙을 하나도
-//! 내지 않는다 — `lang1`/`lang2` 의 virtual keycode 가 `(미확정)`이기 때문이다
-//! (`docs/spec/korean-input.md` §3.2, D-K8).
+//! F-16.1(`Shift+Space`)·F-16.2(한/영)·F-16.3(한자)·F-16.4(`₩`) 4종 규칙을 전부 낸다.
+//! ⭐ 한/영·한자는 2단계에서 얹혔다(`docs/spec/korean-input.md` §3.2, D-K14) — 착수를
+//! 막던 `lang1`/`lang2` virtual keycode 미확정 상태가 근거 3중(§3.2)으로 해소됐다.
+//! ⚠️ 등급은 `(웹 조사 확정 + SDK 헤더 실측, 실기기 미검증)` — 한국어 106키 물리
+//! 키보드로 실제 눌러 본 것은 아니다.
 
 #![forbid(unsafe_code)]
 

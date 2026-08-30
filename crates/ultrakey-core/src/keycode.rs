@@ -44,6 +44,48 @@ impl KeyCode {
     /// 트리거 키다. 근거: `Carbon/HIToolbox/Events.h` 243행 `kVK_ANSI_Grave = 0x32` —
     /// 이 세션이 로컬 SDK 헤더에서 직접 확인했다.
     pub const ANSI_GRAVE: KeyCode = KeyCode(0x32);
+    /// 한/영 키(HangulMode, Karabiner `lang1`). F-16.2(`docs/spec/korean-input.md` §3.2,
+    /// D-K12)의 트리거 키다.
+    ///
+    /// ⚠️ **이름이 뒤집혀 보이는 이유.** 이 상수의 이름은 `kVK_JIS_Kana` 다 — "가나"라는
+    /// 이름과 한/영 전환이라는 기능이 정반대로 보인다. macOS 는 한국어 전용 `kVK_*`
+    /// 상수를 두지 않는다: 한/영 키는 JIS(일본어) 배열의 `かな` 키와 **같은 물리
+    /// 위치**를 쓰므로, macOS 가 그 물리 위치의 JIS 상수를 그대로 재사용한다. 즉
+    /// 이름은 물리 키 위치를 가리키지, 이 상수로 눌리는 논리적 기능을 가리키지 않는다.
+    ///
+    /// ⚠️ **JIS 물리 키보드도 같은 keycode 를 낸다**(명세 §5 #13). JIS 배열 키보드의
+    /// `かな` 키를 누르면 이 상수와 똑같은 `0x68` 이 도착한다 — 이 값만으로는 한국어
+    /// 106키의 한/영 키와 JIS 키보드의 `かな` 키를 구분할 수 없다. 두 항목의 기본값이
+    /// ☐ 이므로 사용자가 명시적으로 켜야만 일어나는 부작용으로 허용한다.
+    ///
+    /// **근거 3중(전부 일치, 명세 §3.2)**:
+    /// 1. W3C `uievents-key` 이슈 #55 — `Lang1(HID 0x90) → Mac kVK_JIS_Kana`.
+    ///    https://github.com/w3c/uievents-key/issues/55
+    /// 2. ⭐ 실측 — 이 세션이 로컬 SDK 헤더를 직접 확인했다:
+    ///    `…/MacOSX.sdk/…/HIToolbox.framework/Headers/Events.h` 328행 `kVK_JIS_Kana = 0x68`.
+    /// 3. Chromium `ui/events/keycodes/keyboard_code_conversion_mac.mm` —
+    ///    `{kVK_JIS_Kana, DomKey::KANJI_MODE}`.
+    ///
+    /// 등급: `(웹 조사 확정 + SDK 헤더 실측, 실기기 미검증)` — 한국어 106키 물리
+    /// 키보드로 실제 눌러 본 것은 아니다(검증 기기에 그 키보드가 없다).
+    pub const JIS_KANA: KeyCode = KeyCode(0x68);
+    /// 한자 키(Hanja, Karabiner `lang2`). F-16.3(`docs/spec/korean-input.md` §3.2,
+    /// D-K12)의 트리거 키다.
+    ///
+    /// ⚠️ **이름이 뒤집혀 보이는 이유**는 [`KeyCode::JIS_KANA`] 와 같다 — 한자 키는
+    /// JIS 배열의 `英数`(에이스/영숫자) 키와 같은 물리 위치를 쓰므로, macOS 가 그
+    /// 물리 위치의 `kVK_JIS_Eisu` 상수를 재사용한다.
+    ///
+    /// ⚠️ **JIS 물리 키보드도 같은 keycode 를 낸다**(명세 §5 #13) — [`KeyCode::JIS_KANA`]
+    /// 의 같은 주의사항이 그대로 적용된다.
+    ///
+    /// **근거 3중(전부 일치, 명세 §3.2)**:
+    /// 1. W3C `uievents-key` 이슈 #55 — `Lang2(HID 0x91) → Mac kVK_JIS_Eisu`.
+    /// 2. ⭐ 실측 — `Events.h` 327행 `kVK_JIS_Eisu = 0x66`(이 세션이 직접 확인).
+    /// 3. Chromium — `{kVK_JIS_Eisu, DomKey::EISU}`.
+    ///
+    /// 등급: [`KeyCode::JIS_KANA`] 와 동일 — `(웹 조사 확정 + SDK 헤더 실측, 실기기 미검증)`.
+    pub const JIS_EISU: KeyCode = KeyCode(0x66);
     pub const RETURN: KeyCode = KeyCode(0x24);
     pub const TAB: KeyCode = KeyCode(0x30);
     pub const ESCAPE: KeyCode = KeyCode(0x35);
@@ -406,5 +448,15 @@ mod tests {
     #[test]
     fn ansi_grave_matches_kvk_ansi_grave() {
         assert_eq!(KeyCode::ANSI_GRAVE, KeyCode(0x32));
+    }
+
+    /// F-16.2·F-16.3 트리거 키(`docs/spec/korean-input.md` §3.2, D-K12). 근거 3중이
+    /// 일치한 값을 리터럴로 직접 적는다 — 구현 상수에서 역산하지 않는다(PR #17 함정).
+    /// ⚠️ 이름과 기능이 뒤집혀 보인다는 점(§3.2)을 이 테스트가 다시 못박는다: 한/영이
+    /// `JIS_KANA`, 한자가 `JIS_EISU` 다.
+    #[test]
+    fn jis_kana_and_jis_eisu_match_carbon_header_values() {
+        assert_eq!(KeyCode::JIS_KANA, KeyCode(0x68), "한/영 = kVK_JIS_Kana");
+        assert_eq!(KeyCode::JIS_EISU, KeyCode(0x66), "한자 = kVK_JIS_Eisu");
     }
 }
