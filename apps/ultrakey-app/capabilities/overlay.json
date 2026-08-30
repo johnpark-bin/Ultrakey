@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "F-03 오버레이 창(과 P3 실측 하네스 창)이 Rust 가 emit 한 프레임을 받으려면 core:event 의 listen 이 필요하다. Tauri v2 는 capabilities 파일이 하나도 없으면 plugin:event|listen 을 ACL 로 막는다 — 실제로 막혔고(스파이크 1차 실행), 이 파일이 그것을 연다. 대상 창은 라벨 글롭으로 한정한다: 권한 모달(permissions)·설정 창(settings)에는 주지 않는다.",
+  "windows": [
+    "overlay-*",
+    "seek-bar",
+    "spike-*"
+  ],
+  "permissions": [
+    "core:event:default"
+  ]
+}

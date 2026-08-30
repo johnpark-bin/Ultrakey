@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ultrakey — F-03 P3 spike</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #dom-layer, #canvas-layer { position: absolute; inset: 0; }
+  #canvas-layer { display: none; }
+  .hl {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 214, 0, .9);
+    background: rgba(255, 214, 0, .35);
+    border-radius: 2px;
+  }
+  .hl.sel { border: 2px solid #0a84ff; background: rgba(10, 132, 255, .30); }
+  .lbl {
+    position: absolute;
+    font: 11px/1.2 -apple-system, system-ui, sans-serif;
+    color: #fff;
+    background: rgba(0, 0, 0, .72);
+    padding: 1px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  #line { position: absolute; inset: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="dom-layer"></div>
+<svg id="line"><line id="line-seg" stroke="#0a84ff" stroke-width="1.5" /></svg>
+<canvas id="canvas-layer"></canvas>
+<script>
+// ⭐ F-03 P3 실측 전용 페이지. 제품 렌더러가 아니다 —
+// `docs/dev/seek-overlay-render-spike.md` 가 이 파일의 산출물을 해석한다.
+//
+// 측정하는 것:
+//   js_recv_ms  : Rust 가 emit 한 시각(payload.t_emit_ms, 벽시계 보정 불가) 대신
+//                 이 페이지가 이벤트 콜백에 진입한 시각(performance.now()).
+//   js_build_ms : DOM/Canvas 를 실제로 갱신하는 데 든 시간(동기 구간).
+//   js_paint_ms : 갱신 시작부터 **두 번째 rAF** 까지 — 프레임이 실제로 커밋된
+//                 뒤를 뜻한다. vsync 대기가 포함되므로 build_ms 보다 항상 크다.
+// 창 이름은 Tauri JS API 로 읽는다 — URL 쿼리로는 못 받는다(Rust 쪽 주석 참조).
+let LABEL = "?";
+try {
+  LABEL = window.__TAURI__.webviewWindow.getCurrentWebviewWindow().label;
+} catch (e) { /* 아래 진단이 대신 보여 준다 */ }
+
+const domLayer = document.getElementById("dom-layer");
+const canvasEl = document.getElementById("canvas-layer");
+const lineSvg = document.getElementById("line");
+const lineSeg = document.getElementById("line-seg");
+const ctx = canvasEl.getContext("2d");
+
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  canvasEl.width = Math.round(window.innerWidth * dpr);
+  canvasEl.height = Math.round(window.innerHeight * dpr);
+  canvasEl.style.width = window.innerWidth + "px";
+  canvasEl.style.height = window.innerHeight + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeCanvas();
+window.addEventListener("resize", sizeCanvas);
+
+// ── 렌더러 A — DOM (절대배치 div) ────────────────────────────────────────
+// 노드를 매 프레임 새로 만들지 않고 풀에서 재사용한다. 매번 innerHTML 로
+// 갈아엎으면 후보 수백 개에서 레이아웃이 통째로 다시 돈다.
+const pool = [];
+const labelPool = [];
+function renderDom(items, line) {
+  canvasEl.style.display = "none";
+  domLayer.style.display = "block";
+  lineSvg.style.display = "block";
+  while (pool.length < items.length) {
+    const d = document.createElement("div");
+    d.className = "hl";
+    domLayer.appendChild(d);
+    pool.push(d);
+    const l = document.createElement("div");
+    l.className = "lbl";
+    domLayer.appendChild(l);
+    labelPool.push(l);
+  }
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const d = pool[i];
+    d.style.cssText = "";
+    d.className = it.sel ? "hl sel" : "hl";
+    d.style.transform = `translate(${it.x}px, ${it.y}px)`;
+    d.style.width = it.w + "px";
+    d.style.height = it.h + "px";
+    d.style.display = "block";
+    const l = labelPool[i];
+    l.textContent = it.label;
+    l.style.transform = `translate(${it.x}px, ${it.y - 13}px)`;
+    l.style.display = "block";
+  }
+  for (let i = items.length; i < pool.length; i++) {
+    pool[i].style.display = "none";
+    labelPool[i].style.display = "none";
+  }
+  if (line) {
+    lineSeg.setAttribute("x1", line[0]);
+    lineSeg.setAttribute("y1", line[1]);
+    lineSeg.setAttribute("x2", line[2]);
+    lineSeg.setAttribute("y2", line[3]);
+    lineSvg.style.display = "block";
+  } else {
+    lineSvg.style.display = "none";
+  }
+}
+
+// ── 렌더러 B — Canvas 2D (한 서피스에 즉시 모드로) ──────────────────────
+function renderCanvas(items, line) {
+  domLayer.style.display = "none";
+  lineSvg.style.display = "none";
+  canvasEl.style.display = "block";
+  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  ctx.font = "11px -apple-system, system-ui, sans-serif";
+  ctx.textBaseline = "bottom";
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.sel) {
+      ctx.fillStyle = "rgba(10,132,255,.30)";
+      ctx.strokeStyle = "#0a84ff";
+      ctx.lineWidth = 2;
+    } else {
+      ctx.fillStyle = "rgba(255,214,0,.35)";
+      ctx.strokeStyle = "rgba(255,214,0,.9)";
+      ctx.lineWidth = 1;
+    }
+    ctx.fillRect(it.x, it.y, it.w, it.h);
+    ctx.strokeRect(it.x, it.y, it.w, it.h);
+    const tw = ctx.measureText(it.label).width;
+    ctx.fillStyle = "rgba(0,0,0,.72)";
+    ctx.fillRect(it.x, it.y - 14, tw + 8, 14);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(it.label, it.x + 4, it.y - 2);
+  }
+  if (line) {
+    ctx.strokeStyle = "#0a84ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(line[0], line[1]);
+    ctx.lineTo(line[2], line[3]);
+    ctx.stroke();
+  }
+}
+
+// ⭐ 진단 — 페이지가 로드되긴 했는지 눈으로 확인할 수 있게 좌상단에 한 줄 남긴다.
+// 스파이크 창은 투명이라, 이것마저 없으면 "안 뜬 것"과 "떴는데 JS 가 죽은 것"을
+// 구별할 수 없다.
+const diag = document.createElement("div");
+diag.style.cssText = "position:absolute;left:8px;top:8px;z-index:9;font:12px system-ui;"
+  + "color:#fff;background:rgba(0,0,0,.75);padding:3px 7px;border-radius:4px";
+diag.textContent = "spike: loaded, label=" + LABEL;
+document.body.appendChild(diag);
+
+const tauri = window.__TAURI__;
+if (!tauri) {
+  diag.textContent = "spike: NO window.__TAURI__";
+} else {
+  const { invoke } = tauri.core;
+  // ⭐⭐ **`tauri.event.listen` 을 쓰면 안 된다.** 그 함수는 리스너를
+  // `target: Any` 로 등록해서, Rust 쪽이 `emit_to(EventTarget::webview_window(…))`
+  // 로 **대상을 지정해 보내도 모든 창이 다 받는다.** 실기기에서 실제로
+  // 밟았다 — 디스플레이 3 의 창이 디스플레이 2 의 프레임을 그려, 연결선이
+  // 엉뚱한 화면에 그려지고 경계를 넘는 선이 끊긴 것처럼 보였다.
+  // `getCurrentWebviewWindow().listen(…)` 은 리스너를 **이 창**으로 등록한다.
+  const self_ = tauri.webviewWindow.getCurrentWebviewWindow();
+
+  self_.listen("spike://frame", (ev) => {
+    const p = ev.payload;
+    const t0 = performance.now();
+    if (p.mode === "canvas") renderCanvas(p.items, p.line);
+    else renderDom(p.items, p.line);
+    const built = performance.now();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const painted = performance.now();
+        invoke("overlay_spike_ack", {
+          seq: p.seq,
+          label: LABEL,
+          buildMs: built - t0,
+          paintMs: painted - t0,
+        });
+      });
+    });
+  }).then(() => {
+    diag.textContent = "spike: ready, label=" + LABEL;
+    return invoke("overlay_spike_ready", { label: LABEL });
+  }).catch((e) => { diag.textContent = "spike: listen failed — " + e; });
+}
+</script>
+</body>
+</html>

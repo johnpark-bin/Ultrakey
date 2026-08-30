@@ -56,6 +56,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `ultrakey-engine` | F-07 인프라 | 탭 생명주기 · 워치독 · 절전/깨어남 · 핫플러그 |
 | `ultrakey-layout` | F-14 (B) | 입력 소스 독립성 |
 | `ultrakey-hyperkey` | F-05 | hyper · meh · bleh |
+| `ultrakey-overlay` | **F-03** | Seek 오버레이의 순수 로직 — 좌표 변환 · 연결선 클리핑 · 증분 수신 세션. macOS 비의존 |
 | `ultrakey-permissions` | F-11 | 권한 온보딩과 복구 |
 | `ultrakey-i18n` | F-14 (A) / D4 | 문자열 카탈로그 (ko + en) |
 | `apps/ultrakey-app` | F-09 · F-10 껍데기 | Tauri 앱 |

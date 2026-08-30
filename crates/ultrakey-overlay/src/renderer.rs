@@ -1,0 +1,159 @@
+//! 오버레이를 실제로 그리는 계층의 트레이트 — §7 이 요구한 "교체 가능한
+//! 렌더링 계층"의 이음매.
+//!
+//! ⭐ 1차 구현은 WKWebView(Tauri 웹뷰)로 [`crate::model::OverlayFrame`]/
+//! [`crate::model::SearchBarFrame`] 을 JS 로 emit 해 그리는 방식이 될 것으로
+//! 예상된다(§7 판정). 하지만 §3.6 의 지연 예산을 WKWebView 가 만족하는지는
+//! 명세 §9 미해결 질문 2번으로 남아 있다 — 실측 결과 예산을 넘으면, 이
+//! 트레이트를 구현하는 두 번째 타입(`objc2-quartz-core` 의 `CALayer` 직접
+//! 그리기)으로 교체하면 된다. 그 교체가 [`crate::session::OverlaySession`]
+//! 이나 이 크레이트의 다른 어떤 것도 건드리지 않고 가능하다는 것이 이
+//! 트레이트가 존재하는 이유다.
+
+use crate::geometry::OverlayDisplay;
+use crate::model::{OverlayFrame, SearchBarFrame};
+
+/// 오버레이 렌더링 실패.
+#[derive(Debug, thiserror::Error)]
+pub enum RenderError {
+    /// 서피스(창/레이어) 생성·동기화에 실패했다.
+    #[error("오버레이 서피스 동기화 실패: {0}")]
+    SurfaceSync(String),
+    /// 프레임 그리기에 실패했다.
+    #[error("프레임 렌더링 실패: {0}")]
+    Present(String),
+    /// 검색 바 위치 갱신에 실패했다.
+    #[error("검색 바 위치 갱신 실패: {0}")]
+    SearchBarOrigin(String),
+    /// 표시/숨김 전환에 실패했다.
+    #[error("표시/숨김 전환 실패: {0}")]
+    Visibility(String),
+}
+
+/// 오버레이를 실제로 그리는 계층.
+///
+/// `OverlaySession` 이 산출한 렌더 모델([`OverlayFrame`]/[`SearchBarFrame`])을
+/// 실제 화면 출력으로 옮기는 경계다 — 이 트레이트 아래로는 플랫폼 의존
+/// 코드(WKWebView IPC, `CALayer`, `NSWindow`)가 있을 수 있지만, 이 크레이트는
+/// 그 구현을 갖지 않는다(모듈 상단 문서 참조).
+pub trait OverlayRenderer {
+    /// 디스플레이 목록에 맞춰 렌더링 서피스(창/레이어)를 만들거나 갱신한다.
+    /// 핫플러그(명세 §5 #1)마다 다시 호출된다.
+    fn sync_surfaces(&mut self, displays: &[OverlayDisplay]) -> Result<(), RenderError>;
+
+    /// 프레임 목록(디스플레이별)과 검색 바 프레임을 실제 화면에 그린다.
+    fn present(
+        &mut self,
+        frames: &[OverlayFrame],
+        bar: &SearchBarFrame,
+    ) -> Result<(), RenderError>;
+
+    /// 검색 바 위치를 옮긴다(사용자 드래그, §3.4 위치 저장).
+    fn set_search_bar_origin(&mut self, x: f64, y: f64) -> Result<(), RenderError>;
+
+    /// 오버레이를 표시한다(§3.1 "표시" 상태 진입).
+    fn show(&mut self) -> Result<(), RenderError>;
+
+    /// 오버레이를 숨긴다(§3.1 "숨김" 상태 진입).
+    fn hide(&mut self) -> Result<(), RenderError>;
+}
+
+/// 아무것도 그리지 않는 렌더러 — 마지막으로 받은 값만 기록한다.
+///
+/// `OverlaySession` → `OverlayRenderer` 배선을 테스트하는 데 쓰고, 이
+/// 트레이트가 실제로 교체 가능한 이음매임을 코드로 증명한다(§7). 실제 UI
+/// 프로세스에서는 쓰이지 않는다 — 테스트·프로토타입 전용이다.
+#[derive(Debug, Default)]
+pub struct NullRenderer {
+    /// 마지막으로 `sync_surfaces` 에 전달된 디스플레이 수.
+    pub last_synced_display_count: usize,
+    /// 마지막으로 `present` 에 전달된 프레임(디스플레이별).
+    pub last_frames: Vec<OverlayFrame>,
+    /// 마지막으로 `present` 에 전달된 검색 바 프레임.
+    pub last_bar: Option<SearchBarFrame>,
+    /// 마지막으로 설정된 검색 바 원점.
+    pub last_bar_origin: Option<(f64, f64)>,
+    /// 현재 표시 중인가.
+    pub visible: bool,
+}
+
+impl OverlayRenderer for NullRenderer {
+    fn sync_surfaces(&mut self, displays: &[OverlayDisplay]) -> Result<(), RenderError> {
+        self.last_synced_display_count = displays.len();
+        Ok(())
+    }
+
+    fn present(
+        &mut self,
+        frames: &[OverlayFrame],
+        bar: &SearchBarFrame,
+    ) -> Result<(), RenderError> {
+        self.last_frames = frames.to_vec();
+        self.last_bar = Some(bar.clone());
+        Ok(())
+    }
+
+    fn set_search_bar_origin(&mut self, x: f64, y: f64) -> Result<(), RenderError> {
+        self.last_bar_origin = Some((x, y));
+        Ok(())
+    }
+
+    fn show(&mut self) -> Result<(), RenderError> {
+        self.visible = true;
+        Ok(())
+    }
+
+    fn hide(&mut self) -> Result<(), RenderError> {
+        self.visible = false;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palette::Appearance;
+    use crate::session::OverlaySession;
+    use ultrakey_seek::Rect;
+
+    fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
+        OverlayDisplay {
+            display_id: id,
+            frame: Rect { x, y, width: w, height: h },
+            backing_scale: 2.0,
+        }
+    }
+
+    /// `NullRenderer` 로 세션 → 렌더러 왕복 — `sync_surfaces`·`present`·
+    /// `show`/`hide`·`set_search_bar_origin` 이 실제로 값을 전달하는가.
+    /// 이 테스트 자체가 `OverlayRenderer` 가 교체 가능한 이음매임을
+    /// 코드로 증명한다 — `OverlaySession` 은 `NullRenderer` 가 무엇인지
+    /// 전혀 모른 채로 렌더 모델만 내놓는다.
+    #[test]
+    fn session_to_renderer_round_trip() {
+        let displays = vec![
+            display(1, 0.0, 0.0, 1000.0, 1000.0),
+            display(2, 1000.0, 0.0, 1000.0, 1000.0),
+        ];
+        let session = OverlaySession::open(displays.clone(), Appearance::Light, false);
+
+        let mut renderer = NullRenderer::default();
+        renderer.sync_surfaces(&displays).unwrap();
+        assert_eq!(renderer.last_synced_display_count, 2);
+
+        renderer.show().unwrap();
+        assert!(renderer.visible);
+
+        let frames = session.frames();
+        let bar = session.search_bar_frame();
+        renderer.present(&frames, &bar).unwrap();
+        assert_eq!(renderer.last_frames.len(), 2);
+        assert_eq!(renderer.last_bar.as_ref().unwrap().query, "");
+
+        renderer.set_search_bar_origin(123.0, 45.0).unwrap();
+        assert_eq!(renderer.last_bar_origin, Some((123.0, 45.0)));
+
+        renderer.hide().unwrap();
+        assert!(!renderer.visible);
+    }
+}

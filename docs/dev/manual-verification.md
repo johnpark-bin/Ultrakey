@@ -1,4 +1,4 @@
-# 수동 검증 절차 (M1 · M2)
+# 수동 검증 절차 (M1 · M2 · M3)
 
 > **이 문서의 목적**: `docs/spec/README.md` 의 **"✅ M1 완료 판정" 5개 항목**(항목 1~5)과,
 > **M2 2차가 더한 F-08 프리셋·F-10 메뉴바**(항목 6·7, 이슈 #15)를 각각 어떻게 확인하는지 적는다.
@@ -1917,3 +1917,161 @@ app.ultrakey.Ultrakey` 로 되돌렸고, 되돌아간 것까지 확인**했다.
 내용을 보고 있지 않기 때문이다. **실기기 검증이 아니었으면 이 결함은 그대로
 남았다** — 단위 테스트로는 "권한 없이 캡처한 이미지에 메뉴 막대가 들어 있다" 는
 사실 자체를 알 수 없다.
+
+---
+
+## 항목 9 — F-03 Seek 오버레이 UI (M3 2차 / 이슈 #34 신설)
+
+> 대상 명세: `docs/spec/seek-overlay-ui.md` · 실측 근거: `docs/dev/seek-overlay-render-spike.md`
+> 이 항목이 확인하는 것은 **화면에 실제로 그려지는가**와 **포커스를 뺏지 않는가** 둘이다.
+> 두 가지 다 단위 테스트로는 원리적으로 확인할 수 없다.
+
+### ⚠️ 9-0. 왜 이 항목이 필요한가 — 실제로 세 가지를 잡았다
+
+이 절차를 처음 수행하면서 **단위 테스트가 전부 통과하는 상태에서 세 개의 결함**을
+찾았다. 셋 다 "코드가 옳은데 화면이 틀린" 종류라 자동 테스트로는 잡히지 않는다.
+
+| # | 증상 | 원인 | 어떻게 잡았나 |
+| :--- | :--- | :--- | :--- |
+| 1 | 창 설정은 성공했다고 나오는데 `can_become_key=true` | **tao(Tauri 창 백엔드)가 `canBecomeKeyWindow` 를 무조건 `YES` 로 오버라이드**한다. `NSWindowStyleMaskBorderless` 로 바꿔도 AppKit 기본 구현이 애초에 호출되지 않는다 | 설정 뒤 **값을 되읽어 로그로 남긴** 덕에 즉시 보였다 |
+| 2 | 앱이 조용히 죽음(크래시 리포트도 Rust 패닉도 없음) | 1번을 고치려 `object_setClass` 로 클래스를 바꿔 끼웠는데(`tauri-nspanel` 기법), Tauri 창은 생성 시점에 이미 KVO 로 스위즐돼 있어(`NSKVONotifying_TaoWindow`) isa 재변경이 KVO 와 충돌한다 | 킬 스위치(`ULTRAKEY_OVERLAY_NO_SWAP`)로 원인을 갈랐다 |
+| 3 | ⭐ **연결선이 디스플레이 경계에서 끊긴 것처럼 보임** — v1.55 회귀와 똑같은 증상 | 좌표 계산은 **정확했다**. 진짜 원인은 **JS 의 `tauri.event.listen` 이 리스너를 `target: Any` 로 등록**해서, Rust 가 `emit_to` 로 대상을 지정해도 **모든 창이 모든 프레임을 받은 것**이다 → 디스플레이 3 의 창이 디스플레이 2 의 프레임을 그렸다 | 스크린샷 픽셀을 직접 세어 "선이 있는 곳"과 "있어야 할 곳"이 다름을 확인하고, 캔버스에 임시 배지(창 이름·`display_id`)를 그려 확정 |
+
+### 9-a. 준비
+
+```sh
+./scripts/build-signed.sh
+```
+
+⛔ `cargo tauri dev` 금지, `.app` 안 바이너리 직접 실행 금지(§0 과 같은 이유).
+
+⭐ **F-01(세션 상태 머신)이 아직 없으므로 오버레이를 열 호출자가 없다.** 그래서
+검증 전용 하네스를 둔다 — `ULTRAKEY_OVERLAY_DEMO=1`. 이 모드는 **엔진(CGEventTap)을
+켜지 않고**, `setup()` 안에서 곧바로 반환한 뒤 오버레이만 구동한다(그래서 이미 떠
+있는 다른 인스턴스와 나란히 돌릴 수 있다).
+
+```sh
+open -n target/universal-apple-darwin/release/bundle/macos/Ultrakey.app \
+  --env ULTRAKEY_OVERLAY_DEMO=1
+# 선택: 타이핑을 흉내 낼 문자열(기본 "se")
+#       --env ULTRAKEY_OVERLAY_DEMO_QUERY=set
+# 선택: AX 소스도 켜서 §3.5 의 OCR/AX 하이라이트 구분을 본다
+#       --env ULTRAKEY_OVERLAY_DEMO_AX=1
+```
+
+⭐ **기동 후 6초 뒤에** 오버레이가 뜬다. **그 사이에 다른 앱(텍스트 편집기 등)을
+클릭해 커서를 깜빡이게 두어라** — 그것이 9-c 의 판정 기준이다.
+
+### 9-b. 창 네이티브 속성 — 로그로 **값을 대조**한다
+
+```sh
+grep '네이티브 설정 완료' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+창마다 한 줄씩(디스플레이 수 + 검색 바 1) 나와야 하고, 각 줄이 다음을 만족해야 한다:
+
+| 필드 | 기대값 | 무엇을 뜻하는가 |
+| :--- | :--- | :--- |
+| `can_become_key` | **`Some(false)`** | ⭐ 활성화하지 않고 표시 — 클릭해도 키 윈도우가 되지 않는다 |
+| `non_activating` | `true` | 표적 스위즐이 걸렸다 |
+| `level` | `Some(1000)` | `NSScreenSaverWindowLevel` — 전체화면 앱 위 |
+| `collection_behavior` | `Some(337)` | `CanJoinAllSpaces(1) + Stationary(16) + IgnoresCycle(64) + FullScreenAuxiliary(256)` |
+| `outer_position` / `outer_size` | `requested` 와 일치 | 창이 정말 그 디스플레이를 덮는가 |
+
+⚠️ `can_become_key` 가 `Some(true)` 면 **9-0 의 결함 1이 재발한 것**이다.
+
+### ⭐ 9-c. 포커스를 뺏지 않는가 (§8 수용 기준 1)
+
+오버레이가 뜬 **뒤에** 확인한다:
+
+1. 9-a 에서 클릭해 둔 앱의 **텍스트 커서가 계속 깜빡이는가**.
+2. 메뉴 막대의 앱 이름이 **그대로인가**(Ultrakey 로 바뀌면 실패).
+3. 값으로도 대조:
+
+```sh
+osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'
+```
+
+### 9-d. 증분 수신 (S-6, §8 — 이 기능의 핵심)
+
+```sh
+grep -E '오버레이를 열었다|검출 전에 질의를 걸었다|증분 수신|검출 완료' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+- `오버레이를 열었다 … elapsed_ms=0.x` — ⭐ **검출을 기다리지 않고 즉시 열린다**
+- `증분 수신 … display_id=… arrived_at_ms=…` 이 **디스플레이마다 따로** 찍힌다
+- 눈으로: 검색 바가 먼저 뜨고(하단에 얇은 진행 표시), 그 뒤 **하이라이트가 화면에
+  단계적으로 늘어난다**. 한 번에 다 뜨면 S-6 이 깨진 것이다
+
+### ⭐ 9-e. 연결선이 디스플레이 경계를 넘는가 (§8 — v1.55 회귀 방지)
+
+눈으로만 보면 애매하다. **두 화면을 동시에 캡처해 경계 픽셀을 센다**:
+
+```sh
+screencapture -x a.png b.png   # 인자 하나당 디스플레이 하나
+```
+
+그다음 한쪽 화면의 **안쪽 끝 열**과 다른 쪽 화면의 **바깥쪽 끝 열**에서 강조색
+(`#0A84FF`) 픽셀의 y 좌표를 비교한다. **두 y 가 같아야** 선이 이어진 것이다.
+
+⚠️ 두 창의 `requestAnimationFrame` 이 독립적이라, 선택이 막 바뀐 직후에는 한쪽만
+갱신된 프레임이 잡힐 수 있다. **여러 번 캡처해 한 번이라도 일치하면 통과**로 본다.
+
+### 9-f. 전체화면 앱 위 표시 (§8)
+
+```sh
+osascript -e 'tell application "TextEdit" to activate' \
+          -e 'tell application "TextEdit" to make new document with properties {text:"F-03 fullscreen verification"}'
+osascript -e 'tell application "System Events" to tell process "TextEdit" to set value of attribute "AXFullScreen" of front window to true'
+```
+
+전체화면이 된 디스플레이를 캡처해 **하이라이트가 그 위에 그려져 있는지** 본다.
+⛔ 끝나면 전체화면을 풀고 문서를 저장하지 않고 닫는다.
+
+### 9-g. 검색 바 위치 저장 (§3.4, §8)
+
+```sh
+grep -E '검색 바 위치를 저장했다|ULTRAKEY_OVERLAY_DEMO —' ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+- 첫 실행: `stored=None` → `저장된 검색 바 위치가 없다 — 기본 위치를 쓴다`
+- 이후 실행: `stored=Some((x, y))` — **부재 = 기본값**(F-15 §3.6) 규약대로다
+
+### ⛔ 9-h. 이 절차로도 확인할 수 **없는** 것
+
+| 항목 | 왜 |
+| :--- | :--- |
+| **마우스로 실제 드래그**해 검색 바를 옮기는 것 | 사람이 없으면 못 한다. 합성 마우스 이벤트를 쓰려면 `CGEvent` 마우스 경로를 만들어야 하는데 **그것이 F-04 의 범위**라 손대지 않았다. 대신 드래그의 **전제**(클릭 통과 꺼짐 · `setMovableByWindowBackground(true)` · `canBecomeKey=false`)와 **결과**(`Moved` → 저장 → 재시작 후 복원)는 각각 확인했다 |
+| **디스플레이 핫플러그** | 케이블을 뽑을 사람이 없다. `didChangeScreenParameters` 구독과 재배치 로직은 배선돼 있고, 재배치 판정 자체는 `ultrakey-overlay` 단위 테스트가 덮는다 |
+| **Retina(배율 2.0)** | 이 기기의 두 디스플레이가 모두 `backing_scale = 1.0` 이다(F-02 스파이크와 같은 한계). `devicePixelRatio` 보정 코드는 있으나 실측되지 않았다 |
+| **Mission Control / Stage Manager** (§5 #5, #6) | 명세가 `(추정)` 으로 남긴 항목이고 이번 범위 밖 |
+| **다크/라이트 전환** | 시스템 외관을 바꾸는 것은 사용자 설정 변경이라 하지 않았다. 조회 자체(`dark=true`)는 로그로 확인 |
+
+### 📌 실측 결과 (2026-08-30, 이슈 #34 / 브랜치 `feat/seek-overlay`)
+
+기기·배치는 F-02 스파이크와 같다(M4 Pro / 3840×1600 @ `(0,0)` + 2560×1440 @ `(-2560,0)`,
+둘 다 `backing_scale=1.0`, 60 Hz + 144 Hz). 전부 **서명된 `.app` 을 `open` 으로 기동**한 결과다.
+
+| 절차 | 결과 |
+| :--- | :--- |
+| 9-b 창 속성 | ✅ **통과.** 창 3개(`seek-bar` · `overlay-3` · `overlay-2`) 모두 `can_become_key=Some(false)` · `non_activating=true` · `level=Some(1000)` · `collection_behavior=Some(337)` |
+| 9-b 창 프레임 | ✅ **통과.** `overlay-3` = `(0,0) 3840×1600`, `overlay-2` = `(-2560,0) 2560×1440` — 요청값과 실제값이 일치 |
+| ⭐ 9-c 포커스 미탈취 | ✅ **통과.** 오버레이가 뜬 뒤에도 `frontmost = firefox` 그대로였고, 메뉴 막대도 바뀌지 않았다 |
+| ⭐ 9-d 증분 수신 | ✅ **통과.** `오버레이를 열었다 … elapsed_ms=0.23` (검출 전), 그 뒤 `display_id=3 candidates=42 arrived_at_ms=478` → `display_id=2 candidates=118 arrived_at_ms=896`. 검출 완료는 966 ms — **세션은 그것을 기다리지 않았다** |
+| 9-d 키 입력 재렌더링 | ✅ **통과.** `키 입력 — 재렌더링 query=se matches=25` |
+| ⭐ 9-e 연결선 경계 통과 | ✅ **통과.** 동시 캡처 8쌍 중 2쌍에서 **디스플레이 2 의 오른쪽 끝 열과 디스플레이 3 의 왼쪽 끝 열이 모두 `y=423`** — 같은 y 에서 이어진다. (나머지 쌍은 두 창의 rAF 가 어긋난 순간이거나 선택 매치가 한 화면 안에 있던 순간이다) |
+| 9-e 창별 프레임 격리 | ✅ **통과.** 임시 배지로 `win=overlay-3 id=3` · `win=overlay-2 id=2` 확인(수정 전에는 `win=overlay-3 id=2` 였다 — 9-0 결함 3) |
+| ⭐ 9-f 전체화면 위 표시 | ✅ **통과.** TextEdit 을 디스플레이 2 에 전체화면(`AXFullScreen=true`, 프레임 `(-2560,0,2560,1440)`)으로 두고 캡처했을 때, **그 위에 하이라이트 10개와 라벨(4·9·13·14·16·18·20·21·23·24)이 그려져 있었다** |
+| 9-g 검색 바 위치 저장 | ✅ **통과.** 첫 실행 `stored=None` → 기본 위치 계산, 이후 실행 `stored=Some((1720.0, 320.0))` 로 복원 |
+| §3.5 OCR/AX 구분 | ✅ **통과.** `ULTRAKEY_OVERLAY_DEMO_AX=1` 로 `AX 후보를 넣는다 … count=10` — AX 매치는 파선 테두리로 그려진다 |
+| §3.5 외관·모션 | ✅ **조회 확인.** `외관·모션 설정 dark=true reduce_motion=false` — 팔레트가 시스템 외관을 따른다 |
+| 상한 정책(§4.2) | ✅ 로그 `omitted=0`(후보가 상한 미만이었다). 상한 동작 자체는 단위 테스트가 덮는다 |
+
+#### 검증 중 변경한 시스템 상태와 복원
+
+| 항목 | 상태 |
+| :--- | :--- |
+| **화면 기록 권한** | ⚠️ **이 검증은 권한을 바꾸지 않았다.** 시작 시점에 이미 `screen_recording=Granted` 였고(로그), 끝날 때도 그대로다. 부여도 회수도 하지 않았으므로 되돌릴 것이 없다 |
+| TextEdit | 검증용으로 새 문서를 만들어 전체화면으로 두었다가 **전체화면 해제 → 저장하지 않고 닫기 → 종료**까지 완료 |
+| 검증용 앱 프로세스 | `ULTRAKEY_OVERLAY_DEMO`/`ULTRAKEY_OVERLAY_SPIKE` 로 띄운 인스턴스는 전부 종료했다 |
+| 키체인 · 시스템 설정 · Karabiner | **건드리지 않았다** |

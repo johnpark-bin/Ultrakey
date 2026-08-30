@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>Ultrakey Seek Searchbar</title>
+<style>
+  :root {
+    /* ⭐ palette 는 Rust 가 매 이벤트마다 보내므로, JS 가 이 CSS 변수들을
+       매번 갱신한다. 여기 값은 첫 페인트(이벤트 도착 전)를 위한 폴백이며
+       docs/spec/seek-overlay-ui.md §4.2 제안 기본값과 같다. */
+    --hl-selected-fill: rgba(10, 132, 255, 0.30);
+    --hl-selected-stroke: #0A84FF;
+    --bar-bg: rgba(0, 0, 0, 0.72);
+    --bar-fg: #ffffff;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    /* 이 창도 `transparent: true` 다 — #root 가 자체적으로 반투명
+       배경(backdrop-filter 포함)을 그리고, body 는 완전히 투명해야 창
+       모서리 바깥이 하위 화면과 이질감 없이 섞인다. */
+    background: transparent;
+    font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    color: var(--bar-fg);
+  }
+  [hidden] { display: none !important; }
+
+  #root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--bar-fg) 18%, transparent);
+    background: var(--bar-bg);
+    /* Spotlight 유사 느낌(§1) — 반투명 배경 위에 블러. */
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    overflow: hidden;
+  }
+
+  /* 상단 40pt 바. §1.1 실측 크기(400×40pt)는 검색 바 창의 최소/기본
+     프레임이며, 매치 목록이 붙으면 창 자체가 Rust 쪽에서 세로로 자란다
+     — 이 페이지는 그 크기 변화에 맞춰 늘어나기만 하면 된다. */
+  #bar {
+    flex: 0 0 40px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    box-sizing: border-box;
+  }
+
+  #mag {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    opacity: .75;
+  }
+  #mag svg { display: block; width: 100%; height: 100%; }
+
+  #query-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    font-size: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  /* ⚠️ <input> 을 쓰지 않는다. 이 창은 `canBecomeKey = false` 로 만들어져
+     (§3.2) 실제로 키 윈도우가 될 수 없다 — 즉 <input> 을 둬도 포커스를
+     받지 못해 타이핑이 씹힌다. 타이핑은 F-01 이 CGEventTap 으로 가로채
+     Rust 가 `query` 필드로 밀어 넣는다. 그래서 여기서는 텍스트를 <span>
+     에 그리고, 캐럿은 CSS 애니메이션으로 깜빡임만 흉내 낸다 — 이 캐럿은
+     실제 텍스트 입력 지점이 아니라 "지금 타이핑을 받고 있다"는 순수한
+     시각적 신호다. */
+  #query-text { white-space: pre; }
+  #caret {
+    display: inline-block;
+    width: 1px;
+    height: 1.1em;
+    margin-left: 1px;
+    background: var(--bar-fg);
+    animation: caret-blink 1s step-end infinite;
+  }
+  @keyframes caret-blink {
+    0%, 50% { opacity: 1; }
+    50.01%, 100% { opacity: 0; }
+  }
+  #placeholder {
+    position: absolute;
+    left: 0;
+    opacity: .45;
+    pointer-events: none;
+  }
+
+  #counter {
+    flex: 0 0 auto;
+    font-size: 12px;
+    opacity: .7;
+    white-space: nowrap;
+  }
+
+  /* ⭐ S-6 의 UI 표현 — 검출 미확정 표시.
+     근거: docs/dev/seek-ocr-latency-spike.md S-6 — 오버레이는 후보 0개로
+     먼저 뜨고, 주 디스플레이 기준 약 335ms(전체 775ms) 뒤부터 후보가
+     채워지기 시작한다. 그 공백 구간 동안 "매치 없음"과 "아직 찾는 중"이
+     화면상 구별되지 않으면 사용자가 오검출로 오인한다 — 이 얇은
+     불확정 진행 표시가 그 구분을 만든다. */
+  #detecting-track {
+    flex: 0 0 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--bar-fg) 12%, transparent);
+  }
+  #detecting-thumb {
+    height: 100%;
+    width: 30%;
+    background: var(--hl-selected-stroke);
+    animation: detecting-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes detecting-slide {
+    0% { transform: translateX(-120%); }
+    50% { transform: translateX(280%); }
+    100% { transform: translateX(-120%); }
+  }
+
+  #matches {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    border-top: 1px solid color-mix(in srgb, var(--bar-fg) 12%, transparent);
+  }
+  .match-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    /* 드래그는 네이티브 setMovableByWindowBackground(true) 가 이미
+       Rust 쪽에서 걸려 있다(-webkit-app-region: drag 는 Tauri/WKWebView
+       에서 신뢰할 수 없어 쓰지 않는다) — 여기서는 행이 클릭을 받게만
+       하고, 텍스트 드래그 선택으로 배경 드래그가 씹히지 않도록
+       user-select 만 끈다. */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .match-row:hover { background: color-mix(in srgb, var(--bar-fg) 8%, transparent); }
+  .match-row.selected { background: var(--hl-selected-fill); }
+  .match-row .idx {
+    flex: 0 0 auto;
+    width: 22px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    opacity: .6;
+    font-size: 12px;
+  }
+  .match-row .text {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .match-row .badge {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--bar-fg) 16%, transparent);
+    opacity: .85;
+  }
+
+  #diag {
+    position: fixed;
+    left: 4px;
+    top: 4px;
+    z-index: 9;
+    font: 11px system-ui, sans-serif;
+    color: #fff;
+    background: rgba(200, 0, 0, .85);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<div id="root">
+  <div id="bar">
+    <span id="mag" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+    </span>
+    <div id="query-wrap">
+      <span id="placeholder">Seek</span>
+      <span id="query-text"></span><span id="caret"></span>
+    </div>
+    <div id="counter"></div>
+  </div>
+  <div id="detecting-track" hidden><div id="detecting-thumb"></div></div>
+  <div id="matches" hidden></div>
+</div>
+<div id="diag" hidden></div>
+<script>
+// F-03 Seek 오버레이 — 검색 바 창(EntryBarWindow, §1.1). 하이라이트
+// 오버레이(overlay-highlight.html)와는 별개의 독립 창이다.
+
+function showDiag(text) {
+  const d = document.getElementById("diag");
+  if (!d) return;
+  d.textContent = text;
+  d.hidden = false;
+}
+
+let LABEL = "?";
+try {
+  LABEL = window.__TAURI__.webviewWindow.getCurrentWebviewWindow().label;
+} catch (e) { /* 진단 문구에만 반영 */ }
+
+const $ = (id) => document.getElementById(id);
+const root = $("root");
+const queryText = $("query-text");
+const placeholder = $("placeholder");
+const counter = $("counter");
+const detectingTrack = $("detecting-track");
+const matchesEl = $("matches");
+
+const PALETTE_VAR_MAP = {
+  selected_fill: "--hl-selected-fill",
+  selected_stroke: "--hl-selected-stroke",
+  bar_bg: "--bar-bg",
+  bar_fg: "--bar-fg",
+};
+
+function applyPalette(palette) {
+  if (!palette) return;
+  for (const key in PALETTE_VAR_MAP) {
+    const v = palette[key];
+    if (v) root.style.setProperty(PALETTE_VAR_MAP[key], v);
+  }
+}
+
+function sourceBadge(source) {
+  return source === "Accessibility" ? "AX" : "OCR";
+}
+
+function render(payload) {
+  applyPalette(payload.palette);
+
+  const query = payload.query || "";
+  queryText.textContent = query;
+  placeholder.hidden = query.length > 0;
+
+  const total = payload.total_matches || 0;
+  if (total <= 0) {
+    counter.textContent = "없음";
+  } else if (typeof payload.selected_index === "number") {
+    counter.textContent = (payload.selected_index + 1) + " / " + total;
+  } else {
+    counter.textContent = "- / " + total;
+  }
+
+  detectingTrack.hidden = !payload.detecting;
+
+  const matches = payload.matches || [];
+  if (matches.length === 0) {
+    matchesEl.hidden = true;
+    matchesEl.textContent = "";
+    return;
+  }
+  matchesEl.hidden = false;
+
+  // 행을 재사용하지 않고 매번 다시 그린다 — 매치 목록은 후보 캔버스
+  // (overlay-highlight.html)와 달리 DOM 이 적절하다. 목록 길이는 화면
+  // 표시 상한(§4.2, 200개)에 종속되고, 검색어 입력마다 항상 재구성되는
+  // 성격이라 diff 갱신의 이득이 크지 않다.
+  const frag = document.createDocumentFragment();
+  let selectedRow = null;
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    const row = document.createElement("div");
+    row.className = "match-row";
+    row.dataset.index = String(m.index);
+    if (payload.selected_index === m.index) {
+      row.classList.add("selected");
+    }
+
+    const idx = document.createElement("span");
+    idx.className = "idx";
+    idx.textContent = String(m.index + 1);
+
+    const text = document.createElement("span");
+    text.className = "text";
+    text.textContent = m.text;
+
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = sourceBadge(m.source);
+
+    row.appendChild(idx);
+    row.appendChild(text);
+    row.appendChild(badge);
+    frag.appendChild(row);
+
+    if (row.classList.contains("selected")) selectedRow = row;
+  }
+  matchesEl.textContent = "";
+  matchesEl.appendChild(frag);
+
+  if (selectedRow) selectedRow.scrollIntoView({ block: "nearest" });
+}
+
+// 클릭 위임 — 행 안에 붙었다 떨어졌다 하는 요소마다 리스너를 다는 대신
+// 컨테이너 하나에 위임해 재렌더링 때마다 리스너를 새로 달 필요가 없다.
+matchesEl.addEventListener("click", (ev) => {
+  const row = ev.target.closest(".match-row");
+  if (!row) return;
+  const index = Number(row.dataset.index);
+  const tauri = window.__TAURI__;
+  if (!tauri || !tauri.core) return;
+  // ⚠️ overlay_select_match 커맨드는 Rust 쪽에 아직 없을 수 있다 —
+  // 실패해도 조용히 넘어간다(사용자가 보는 화면에 영향 없음).
+  tauri.core.invoke("overlay_select_match", { index }).catch(() => {});
+});
+
+// 한 rAF 프레임에 여러 이벤트가 도착하면 최신 것만 그린다(§3.6 디바운스
+// 취지 — 이 창은 DOM 목록이 있어 하이라이트 캔버스보다 재렌더 비용이
+// 크므로 코얼레싱을 그대로 적용한다).
+let pending = null;
+let rafScheduled = false;
+function onSearchbar(payload) {
+  pending = payload;
+  if (rafScheduled) return;
+  rafScheduled = true;
+  requestAnimationFrame(() => {
+    rafScheduled = false;
+    if (!pending) return;
+    const p = pending;
+    pending = null;
+    render(p);
+  });
+}
+
+const tauri = window.__TAURI__;
+if (!tauri || !tauri.core || !tauri.event) {
+  showDiag("overlay-searchbar: window.__TAURI__ 누락 (withGlobalTauri 확인)");
+} else {
+  const { invoke } = tauri.core;
+  // ⭐⭐ **`tauri.event.listen` 을 쓰면 안 된다.** 그 함수는 리스너를
+  // `target: Any` 로 등록해서, Rust 쪽이 `emit_to(EventTarget::webview_window(…))`
+  // 로 **대상을 지정해 보내도 모든 창이 다 받는다.** 실기기에서 실제로
+  // 밟았다 — 디스플레이 3 의 창이 디스플레이 2 의 프레임을 그려, 연결선이
+  // 엉뚱한 화면에 그려지고 경계를 넘는 선이 끊긴 것처럼 보였다.
+  // `getCurrentWebviewWindow().listen(…)` 은 리스너를 **이 창**으로 등록한다.
+  const self_ = tauri.webviewWindow.getCurrentWebviewWindow();
+
+  self_.listen("overlay://searchbar", (ev) => {
+    try {
+      onSearchbar(ev.payload);
+    } catch (e) {
+      showDiag("overlay-searchbar: 렌더 실패 — " + String(e));
+    }
+  }).then(() => {
+    return invoke("overlay_surface_ready", { label: LABEL });
+  }).catch((e) => {
+    showDiag("overlay-searchbar: 초기화 실패 — " + String(e));
+  });
+}
+</script>
+</body>
+</html>

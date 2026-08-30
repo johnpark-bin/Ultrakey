@@ -1,0 +1,19 @@
+[package]
+name = "ultrakey-overlay"
+description = "F-03 Seek 화면 오버레이 UI의 순수 로직 — 좌표 변환·클리핑·렌더 모델·세션 상태"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# ⭐ 이 크레이트는 F-02(ultrakey-seek)가 낸 전역 좌표·후보를 받아 F-03
+# 오버레이의 순수 로직(좌표 변환·클리핑·렌더 모델 산출·세션 상태)만 한다.
+# macOS 의존성(objc2*, tauri)은 전혀 쓰지 않는다 — 그래서
+# `cargo test -p ultrakey-overlay` 는 macOS 가 아닌 곳에서도 전량 돈다.
+ultrakey-seek = { workspace = true }
