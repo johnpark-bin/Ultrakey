@@ -108,7 +108,14 @@
 
 ### 3.6 설정 저장
 
-**결정: 자체 JSON 저장소(`tauri-plugin-store` 기반), `com.knollsoft.Superkey` 의 `NSUserDefaults` 도메인은 사용하지 않는다.** 이 결정 자체는 유지한다(근거는 기존 §3.6 그대로 아래에 보존).
+**결정: 자체 JSON 저장소, `com.knollsoft.Superkey` 의 `NSUserDefaults` 도메인은 사용하지 않는다.** 이 결정 자체는 유지한다(근거는 기존 §3.6 그대로 아래에 보존).
+
+⭐ **구현 크레이트 정정 (2026-08-30, M2 1차 / 이슈 #13).** 이전 판은 저장소를 `tauri-plugin-store` 로 구현한다고 적었다. **구현하면서 두 가지가 드러나 정정한다** — 상세 근거는 `settings-store-and-integrity.md` §7 (1) 에 있다.
+
+1. ⛔ `#[serde(default)]` 구조체를 통째로 직렬화하면 **모든 필드가 파일에 쓰여** "부재 = 기본값"이 쓰기 쪽에서 깨진다. 디스크 표현은 타입 직렬화가 아니라 **희소 키-값 맵**(`{"schemaVersion":1,"values":{"<평평한.키>":<json>}}`)이어야 하고, 타입 구조체는 그 맵에서 필드별로 조립한다.
+2. 저장 계층을 Tauri 에 의존시키면 `cargo test` 가 webview 툴체인을 요구하게 되어 `../dev/architecture.md` 의 "Tauri 는 앱 크레이트에만" 결정과 충돌한다. 그래서 저장 계층은 **`ultrakey-core::settings::store` 의 순수 Rust 구현**이다.
+
+**바뀌지 않는 것**: JSON 파일을 앱 데이터 디렉터리에 두고 `NSUserDefaults` 를 쓰지 않는다는 결정, 그리고 아래 4개 근거.
 
 ⭐ **"부재 = 기본값" 규약을 명시적으로 추가한다.** 원본을 아무 설정도 바꾸지 않은 상태로 실행했을 때 `~/Library/Preferences/com.knollsoft.Superkey.plist` 에는 키가 **7개뿐**이었다(실측: defaults, app-bundle-analysis.md §2.1) — `SUEnableAutomaticChecks`·`SUHasLaunchedBefore`·`lastVersion`·창 위치·Paddle 캐시 두 건, 그리고 `hyperFlags`·`minAxCharCount` 뿐이다. `Remap key to hyper key`, 16개 프리셋 등 나머지 **모든 설정 키는 존재하지 않는다.** 즉 원본의 저장 계층은 **"키가 없으면 그 설정의 하드코딩된 기본값으로 동작한다"** 는 규약이며, 사용자가 한 번이라도 건드린 항목만 디스크에 기록된다(실측 뒷받침: 토글 후 원상복구했음에도 `capsWasdArrows`·`oneSwipeFromTop`·`seekOptions`·`seekRemapKeycode` 4개 키가 "기본값과 동등한 값"으로 새로 생겼다 — app-bundle-analysis.md §7.1).
 
@@ -278,7 +285,7 @@
 - **창 위치 저장·복원**: Tauri `window.outer_position()` / `set_position()` + `window.available_monitors()`. §5 항목 8 의 클램프 로직은 "열릴 탭의 크기"를 먼저 결정한 뒤 계산해야 한다.
 - **단축키 레코더의 로컬 키 캡처**: `global-hotkey` 크레이트는 "가로채기가 아니라 등록"이라 레코딩 UI 용도로는 맞지 않는다. macOS 표준 패턴은 `NSEvent.addLocalMonitorForEvents(matching:handler:)` 이며, `objc2-app-kit` 을 통해 접근 가능하나 커버리지가 명시적으로 검증되지 않았다 → §9. §3.5 에서 정리했듯, 원본이 쓰는 `KeyboardShortcuts`(Swift 전용 패키지)를 클론이 따라야 할 이유는 없다 — 이 API 경로로 충분하다는 판단이다.
 - **시스템 예약 단축키 조회**: ⭐ 공개 API 는 없으나, 원본이 실제로 쓰는 경로가 확정됐다 — `kHISymbolicHotKeyCode`/`kHISymbolicHotKeyEnabled`/`kHISymbolicHotKeyModifiers`(`CopySymbolicHotKeys` 계열, Carbon HIToolbox, 실측: 번들 심볼). **클론이 이 경로를 택할지의 판단**: 이 API 는 공식 문서화되지 않았고 향후 macOS 버전에서 제거될 위험이 있다(Carbon 은 수년간 deprecated 상태). 그러나 `objc2`/`core-foundation` 바인딩으로 접근 가능한 C 심볼이므로 새 네이티브 shim 은 필요 없다(Rust 바인딩 판정 유지). **권장**: 완전한 커버리지가 필요하지 않다면(§5 항목 6 의 "알려진 고위험 조합 하드코딩 목록" 대응으로 충분하다면) 굳이 비공개 API 위험을 감수하지 않는 쪽을, 원본과 동등한 완전성을 목표로 한다면 이 경로를 채택하되 macOS 버전별 동작 확인을 CI 에 넣는 쪽을 제안한다 — 최종 채택 여부는 `(미확정)`, 제품 결정 사항으로 §9 에 남긴다.
-- **설정 저장**: `tauri-plugin-store` — JSON 기반, 앱 데이터 디렉토리. §3.6 의 "부재 = 기본값" 규약을 로더 레벨에서 구현한다(역직렬화 시 `#[serde(default)]` 류로 필드별 기본값을 채움).
+- **설정 저장**: 플랫폼 API 요구 없음 — `ultrakey-core::settings::store` 의 순수 Rust JSON 저장소. 경로는 Tauri `app.path().app_data_dir()` 로 얻는다. §3.6 의 "부재 = 기본값" 규약은 **희소 키-값 맵** 으로 구현한다(⛔ `#[serde(default)]` 구조체 통째 직렬화로는 지킬 수 없다 — §3.6 정정 참조).
 - **VoiceOver**: §3.4 참조 — 커스텀 컨트롤에는 ARIA 속성을 HTML/CSS/JS 레벨에서 직접 부여한다.
 - **다크모드**: CSS `prefers-color-scheme` + `objc2-app-kit` 의 `NSApp.appearance` `(추정)`.
 - **권한 상태 조회**: `AXIsProcessTrusted()`, `CGPreflightScreenCaptureAccess()`, `IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)` — 단, §4.4 확인 결과 **원본은 이를 General 탭에 표시하지 않는다.** 클론이 표시할지는 F-11 의 제품 결정이다.

@@ -1,7 +1,15 @@
 //! 엔진 설정 타입. 값의 근거(실측 대 설계 판단)를 각 필드 옆에 구분해 적는다
 //! (`docs/dev/architecture.md` §4 와 일치).
+//!
+//! `store`(F-15 `settings-store-and-integrity.md` §3.1)는 이 모듈이 정의하는 타입들이
+//! 디스크에서 조립되는 방식을 담당한다 — "부재 = 기본값" 규약의 실제 구현이다.
+//! `keys`는 그 저장소가 쓰는 문자열 키 상수를 모아 둔다.
 
 use crate::rules::RuleTable;
+
+pub mod keys;
+pub mod store;
+pub use store::*;
 
 /// `Apply modifiers to keypress events and:` 4개 체크박스(`hyperkey.md` §3.3).
 ///

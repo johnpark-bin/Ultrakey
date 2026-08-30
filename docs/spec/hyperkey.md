@@ -64,6 +64,8 @@ hyper/meh/bleh 는 각각 독립적인 상태 기계를 갖되 형태는 동일�
 
 **단독으로 눌렀다 뗀 경우(quick press)의 의미는 UI 로는 여전히 확정되지 않지만, 메커니즘 존재 자체는 실측으로 확인되었다(실측: 번들 문자열, app-bundle-analysis.md §2.3).** 실행 파일 문자열에 `quickHyperKeycode` · `executeQuickHyperKey` · `hyperDownTime` 키가 존재한다 — 이름 구성(`quick` + `Hyper`)으로 볼 때 **hyper 소스 키에도 `Presets` 탭의 `Quick press caps lock to execute` 와 유사한 quick press 개념이 적용된다**는 근거다. 다만 이 값들에 대응하는 UI 컨트롤은 Seek·Hyperkey·Presets·General 4개 탭 어디에도 관찰되지 않았다(실측: AX 트리) — 즉 **메커니즘 존재는 확정, 노출 경로(어느 탭의 어느 조건에서 나타나는가)와 정확한 의미(quick press 시 무엇을 실행하는가)는 여전히 `(미확정)`**이다. 이는 `Presets` 탭의 `Quick press caps lock to execute` 와는 별개의 메커니즘일 가능성이 높지만(그 항목은 caps lock 전용이고 Hyperkey 탭에는 quick press 라벨이 없음), caps lock 을 hyper 소스로 동시에 배정한 경우 두 규칙이 같은 물리 키 위에서 경쟁하게 된다는 점은 조사 §6 관찰 2("Hyperkey 와 Presets 는 동일한 물리 키를 두고 경쟁한다")로 확정된 사실이다. 이 경쟁의 중재는 F-07/F-08 소관이다.
 
+⭐ **소스 키의 down/up 은 `FlagsChanged` 로 온다 (2026-08-30 실측, M2 1차).** 위 표는 "소스 키 physical keyDown/keyUp" 이라고 쓰고 있으나, macOS 는 modifier 키(caps lock·shift·control·option·command·globe)의 누름/뗌을 `kCGEventKeyDown`/`KeyUp` 이 아니라 **`kCGEventFlagsChanged` 하나로만** 전달한다. 소스 키 35종 중 F1~F24 를 뺀 **전부**가 여기 해당하므로, 엔진은 `FlagsChanged` 를 down/up 으로 환원한 뒤 이 표를 적용해야 한다. 환원 방법과 기각한 대안은 `key-remapping-engine.md` §5 #18 에 있다 — **이 환원이 없으면 hyper 는 어떤 소스 키로도 발동하지 않는다.**
+
 ### 3.3 `Apply modifiers to keypress events and:` — 이벤트 타입 대응
 
 이 설정은 hyper/meh/bleh 어느 조합이 Active 상태든 공통으로 적용되는 **전역 스위치**다(조사 §3.2 는 이 4개 체크박스를 Hyperkey 탭 전체에 하나만 배치했고, 조합별로 따로 두지 않았다).
@@ -205,6 +207,7 @@ hyper/meh/bleh 는 각각 독립적인 상태 기계를 갖되 형태는 동일�
    ⭐ **원본의 동작은 여전히 `(미확정)` 이나, 클론의 선택은 확정했다 (2026-08-30, M1 구현): OR 합산.** 근거 — ① 각 소스 키의 down/up 이 독립적이므로, 덮어쓰기를 택하면 "먼저 뗀 쪽이 나중 것까지 지우는가"라는 질문이 곧바로 따라붙고 어느 답도 자연스럽지 않다. ② OR 합산은 물리 modifier 키를 여러 개 동시에 누른 것과 동일한 의미론이라 사용자 직관과 맞는다. ③ 비트마스크 표현(§3.1)과 연산이 일치해 각 소스 키가 자기 마스크를 독립적으로 set/clear 하면 된다. **기각한 대안** — 나중에 눌린 쪽이 덮어씀: 해제 순서에 따라 결과가 달라져 비결정적이 된다. 원본과 다를 수 있으므로 실측 기회가 생기면 재확인 대상이다.
 3. **globe/fn 키의 이벤트 경로** — `globe` 이 팝업에 정식 항목으로 실재함은 확정됐지만(§5 항목 7), `fn`/globe 키가 표준 `flagsChanged` 와 다른 이벤트 체계(NX 이벤트 등)를 타는지, 그로 인해 hyper 소스로서 별도 처리가 필요한지는 여전히 `(미확정)`이며 v1.60 수정 커밋의 정확한 원인도 확인 불가.
 4. **`Apply modifiers to ...` 4항목의 정확한 `CGEventType` 매핑(부분 해소)** — `CGEventPost`/`CGEventCreateMouseEvent` 심볼 확인으로 "마우스 이벤트 합성·재주입" 메커니즘 자체는 승격되었다(실측: 번들 심볼, §3.1). 그러나 `Click`/`Drag`/`Move`/`Scroll` 각 체크박스가 좌/우/기타 버튼(Left/Right/Other MouseDown 등)을 모두 포함하는지 등 세부 매핑은 여전히 추정이다 — §3.3, §6.
-5. **런타임 설정 변경의 즉시 반영 여부** — hyper 가 Active 상태인 도중 `Include shift in hyper key` 등을 변경했을 때 그 순간부터 반영되는지, 다음 keyDown 부터인지 불명확.
+5. **런타임 설정 변경의 즉시 반영 여부 (부분 해소)** — ⭐ **클론의 동작은 실측으로 확정됐다 (2026-08-30, M2 1차 / 이슈 #13).** 환경설정 창에서 shift 포함 토글을 끄면 **앱 재시작 없이 즉시** 엔진에 반영된다(`ArcSwap` 원자적 교체 + 탭 스레드 `Reconfigure` 명령). 반영과 동시에 **상태 기계를 강제 리셋**하므로(stuck modifier 방지), 다음 누름부터 새 조합이 적용된다. 실측 증거: `../dev/manual-verification.md` 항목 3 "실측 결과".
+   ⚠️ 남는 것: **소스 키를 물리적으로 누른 채** 토글을 바꾸는 경우는 재현하지 못했다(환경설정 창을 클릭하려면 키를 놓아야 한다). 그리고 **원본 SuperKey 의 동작은 여전히 `(미확정)`** 이다 — 위는 클론이 택한 동작이다.
 6. **meh/bleh 저장 키 이름** — `hyperFlags` 가 hyper 의 저장 키임은 확정됐으나(§3.1), meh·bleh 에 대응하는 저장 키 이름(`mehFlags`/`blehFlags` 류로 추정)은 실행 파일 문자열에서 직접 확인되지 않았다 `(미확정)`.
 7. **`Change menu bar icon when engaged`/`Provide haptic feedback when triggered`가 트랙패드 경로 이외에도 적용되는가** — 물리 키를 통한 hyper 활성화 시에도 이 두 표시가 함께 동작하는지, 아니면 트랙패드 경로에만 국한되는지 조사 자료로 확정되지 않는다 — §3.5.

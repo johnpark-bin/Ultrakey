@@ -130,8 +130,17 @@ impl Engine {
             let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
                 Arc::new(ArcSwapOption::empty());
 
-            // 경로 B — ⭐ M1 은 규칙이 0 개이므로 `desired` 는 항상 빈 목록이다. 잔존
-            // 매핑이 있으면 관찰만 한다(`path_b.rs` 문서 참고).
+            // 경로 B — ⭐ **정리의 정본은 종료가 아니라 기동이다**(F-15
+            // `settings-store-and-integrity.md` §3.1.1 결정 2). M1 실기기 검증에서
+            // **로그아웃 시 graceful shutdown 경로가 아예 실행되지 않는 것**이 관찰됐고
+            // (`docs/dev/manual-verification.md` "실측 결과"), 경로 B 매핑은 프로세스가
+            // 죽어도 커널 HID 층에 남는다(`docs/dev/architecture.md` §2.4). 즉 "정상
+            // 종료 시 정리한다"는 설계는 가장 흔한 종료 경로에서 그냥 동작하지 않는다 —
+            // 그래서 종료 정리는 부가적 최적화로 격하하고, **매 기동마다 무조건 재조정**한다.
+            //
+            // ⭐ M2 1차 시점에도 `desired` 는 여전히 빈 목록이다 — hyper/meh/bleh 는
+            // 전부 경로 A(`CGEventTap`)로 처리되고, 경로 B 로 배정되는 규칙은 F-08(M2 2차)
+            // 이 처음 만든다. 그때 이 인자만 채우면 되도록 호출 자리를 지금 확정해 둔다.
             let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend)));
             if let Err(e) = path_b.reconcile_on_start(&[]) {
                 tracing::warn!(error = %e, "경로 B 시작 시 재조정 확인에 실패했다");
@@ -194,6 +203,14 @@ impl Engine {
 
     pub fn tap_state(&self) -> TapState {
         self.tap_state.load()
+    }
+
+    /// 규칙이 바뀌는 순간 소스 키가 물리적으로 눌린 채였다면 stuck modifier 가 남는다.
+    /// 설정 변경 직후 이 명령을 함께 보내 상태 기계를 Idle 로 되돌린다 — 절전/잠금
+    /// 진입 시 이미 같은 명령으로 방지하는 것과 같은 장치다(`key-remapping-engine.md`
+    /// §5 항목 9, `EngineCommand::ForceResetState` 문서 주석).
+    pub fn force_reset_state(&self) {
+        self.commands.send(EngineCommand::ForceResetState);
     }
 
     /// ⚠️ 스레드를 누수시키지 않는다 — 탭 스레드·워치독·지연 스케줄러 순서로 전부

@@ -153,7 +153,12 @@ impl Arbiter {
 
         // 정본 상태 갱신 — 이후 모든 계층이 "이 갱신 이후의" 상태를 공유해서 읽는다.
         // v1.20 예방의 핵심: hyper 판정과 preset 판정이 서로 다른 사본을 보지 않는다.
-        match ev.kind {
+        // ⭐ `FlagsChanged` 는 여기서 down/up 으로 환원한다 — 그 근거는
+        // [`Self::flags_changed_is_press`] 문서에 있다. 이 환원을 하지 않으면 modifier
+        // 소스 키(35종 중 F-키를 뺀 전부)가 정본 눌림 테이블에 영영 기록되지 않는다.
+        let kind = self.normalize_kind(ev);
+
+        match kind {
             EventKind::KeyDown => self.state.set_pressed(ev.keycode, true),
             EventKind::KeyUp => self.state.set_pressed(ev.keycode, false),
             _ => {}
@@ -161,7 +166,7 @@ impl Arbiter {
 
         // 계층 2: hyper/meh/bleh 소스 키 자체의 이벤트.
         if let Some(rule) = cfg.rules.modifier_rule_for(ev.keycode).copied() {
-            if let Some(out) = self.handle_modifier_source_event(&rule, ev, now, cfg) {
+            if let Some(out) = self.handle_modifier_source_event(&rule, ev, kind, now, cfg) {
                 return out;
             }
         }
@@ -182,11 +187,17 @@ impl Arbiter {
         let active = self.state.active_synth_flags();
         if !active.is_empty() {
             if ev.kind.is_key() {
-                return Outcome::pass_with_flags(Layer::HyperModifier, ev.flags | active);
+                return Outcome::pass_with_flags(
+                    Layer::HyperModifier,
+                    Self::strip_caps_lock_bit(cfg, ev.flags | active),
+                );
             }
             if ev.kind.is_click() || ev.kind.is_drag() || ev.kind.is_move() || ev.kind.is_scroll() {
                 return if self.mouse_should_apply(cfg, ev.kind) {
-                    Outcome::pass_with_flags(Layer::HyperModifier, ev.flags | active)
+                    Outcome::pass_with_flags(
+                        Layer::HyperModifier,
+                        Self::strip_caps_lock_bit(cfg, ev.flags | active),
+                    )
                 } else {
                     Outcome::pass(Layer::HyperModifier)
                 };
@@ -197,17 +208,102 @@ impl Arbiter {
         Outcome::pass(Layer::Passthrough)
     }
 
+    /// ⭐ caps lock 이 modifier 소스로 배정돼 있으면 잠금 비트(`alphaShift`)를 지운다
+    /// (2026-08-30, M2 1차 / 이슈 #13 — 실측으로 발견한 결함).
+    ///
+    /// **문제**: caps lock 을 hyper 소스로 쓰면 hyper 자체는 정상 동작하지만, 다른 앱이
+    /// **caps lock 이 켜진 것으로 인식**한다. 실측(브라우저 프로브): 합성된 이벤트의
+    /// `getModifierState("CapsLock")` 이 계속 `true` 였고, 그래서 글자가 대문자로 나갔다.
+    ///
+    /// **원인은 우리 쪽이다.** 합성·통과 이벤트를 만들 때 `ev.flags` 를 그대로 물려주는데,
+    /// 원본 caps lock 이벤트에는 이미 `alphaShift` 비트가 실려 온다. 그 비트가 우리가
+    /// 내보내는 모든 이벤트에 그대로 따라붙는다.
+    ///
+    /// **결정**: caps lock 이 hyper/meh/bleh 소스로 **등록되어 있는 동안**, 이 엔진이
+    /// 만지는 이벤트에서 `alphaShift` 를 지운다. 근거 — 그 키를 modifier 소스로 배정한
+    /// 순간부터 사용자에게 caps lock 은 **더 이상 잠금 키가 아니다.** 잠금을 토글할 수단이
+    /// 없으므로 잠금 비트가 남아 있는 것은 사용자가 되돌릴 수 없는 상태이고, 그것은
+    /// `hyperkey.md` §8 이 요구하는 "caps lock 의 실제 잠금이 켜지지 않는다"와도 어긋난다.
+    ///
+    /// ⚠️ **범위를 좁게 잡았다** — 이 엔진이 **이미 손대는 이벤트**(합성 `flagsChanged`,
+    /// 조합이 활성인 동안 flags 를 얹어 통과시키는 이벤트)에만 적용한다. 아무것도 하지
+    /// 않고 통과시키는 이벤트까지 건드리려면 매 이벤트에 `CGEventSetFlags` 를 부르게 되어
+    /// 임계 경로 비용이 늘고(`architecture.md` §2.2), 얻는 것은 "이미 잠겨 있던 상태"의
+    /// 표시뿐이다. 그 경우는 경로 C(`hid_lock::set_caps_lock_state`)가 다룰 몫이다.
+    ///
+    /// 기각한 대안 — **경로 C 로 잠금을 끄는 것만으로 해결한다**: 이번 실측에서
+    /// `ioreg` 의 `HIDCapsLockState` 는 계속 `No` 였다. 즉 **하드웨어 잠금은 애초에
+    /// 걸리지 않았고** 이벤트 flags 에만 비트가 실려 있었다 — 경로 C 로는 이 경우를
+    /// 고칠 수 없다. 두 층위가 다르다는 것을 실측이 보여준 셈이라 여기 남긴다.
+    fn strip_caps_lock_bit(cfg: &EngineConfig, flags: EventFlags) -> EventFlags {
+        let caps_is_source = cfg
+            .rules
+            .modifier_rules
+            .iter()
+            .any(|r| r.source == KeyCode::CAPS_LOCK);
+        if caps_is_source {
+            flags & !EventFlags::CAPS_LOCK
+        } else {
+            flags
+        }
+    }
+
+    /// ⭐ `FlagsChanged` 를 `KeyDown`/`KeyUp` 으로 환원한다 (2026-08-30, M2 1차 / 이슈 #13).
+    ///
+    /// **왜 필요한가 — 이것이 없으면 hyper 가 아예 동작하지 않는다.** macOS 는 modifier
+    /// 키(caps lock · shift · control · option · command · globe)의 눌림/뗌을
+    /// `kCGEventKeyDown`/`KeyUp` 이 아니라 **`kCGEventFlagsChanged` 하나로만** 전달한다.
+    /// 그런데 소스 키 팝업 35종 중 F1~F24 를 뺀 **전부가 modifier 키**다 — 즉 이 환원이
+    /// 없으면 `handle_modifier_source_event` 가 `_ => None` 으로 빠져 원본 이벤트가 그대로
+    /// 통과하고, hyper/meh/bleh 는 **어떤 소스 키로도 발동하지 않는다.**
+    ///
+    /// ⛔ M1 은 이 결함을 안고 머지되었다. `docs/dev/manual-verification.md` 항목 2·3
+    /// ("caps lock 을 hyper 로 지정하면 다른 앱이 `⌃⌥⌘⇧` 를 인식한다")이 환경설정 UI 가
+    /// 없어 **한 번도 수행되지 않았기 때문**이다 — 자동 테스트는 전부 `KeyDown`/`KeyUp`
+    /// 으로만 이벤트를 만들어 이 경로를 건드리지 않았다. 실기기 검증이 왜 완료 조건인지를
+    /// 보여주는 사례라 근거를 여기 남긴다.
+    ///
+    /// **판정 방법: 우리가 소유한 정본 눌림 테이블을 본다.** 그 keycode 가 지금 눌린
+    /// 것으로 기록돼 있지 않으면 이번 `FlagsChanged` 는 누름이고, 눌린 것으로 기록돼
+    /// 있으면 뗌이다.
+    ///
+    /// 기각한 대안 — **`ev.flags` 의 비트를 보고 판정한다**: 두 곳에서 깨진다.
+    /// (1) 좌/우 shift 는 공개 `CGEventFlags` 상수에서 **같은 비트**(`0x20000`)를 공유해
+    /// `left shift` 와 `right shift` 를 구분할 수 없다. 소스 키 목록은 둘을 별도 항목으로
+    /// 두므로 이 판정으로는 규칙을 옳게 적용할 수 없다. (2) caps lock 의 `alphaShift`
+    /// 비트는 **키의 눌림이 아니라 잠금(lock) 상태**를 나타낸다 — 눌림 판정에 쓸 수 없다.
+    /// 물리 keycode 와 우리 상태만으로 판정하는 쪽이 `key-remapping-engine.md` §8 의
+    /// "문자·플래그 의미 기반 판정 금지" 원칙과도 일관된다.
+    ///
+    /// 상태가 어긋날 위험(탭이 죽은 사이 키를 뗀 경우)은 이미 있는 장치가 흡수한다 —
+    /// 절전·잠금·Secure Input·탭 복구 경로가 `EngineCommand::ForceResetState` 로 전체를
+    /// `Idle` 로 되돌린다(§5 항목 9).
+    fn normalize_kind(&self, ev: &InputEvent) -> EventKind {
+        if ev.kind != EventKind::FlagsChanged {
+            return ev.kind;
+        }
+        if self.state.is_pressed(ev.keycode) {
+            EventKind::KeyUp
+        } else {
+            EventKind::KeyDown
+        }
+    }
+
     /// 이벤트의 keycode 가 hyper/meh/bleh 소스 키 자신일 때의 처리(§3-b 계층 2, §3-c).
+    ///
+    /// `kind` 는 [`Self::normalize_kind`] 가 `FlagsChanged` 를 환원한 결과다 — 이 함수는
+    /// `ev.kind` 를 직접 보지 않는다.
     fn handle_modifier_source_event(
         &mut self,
         rule: &ModifierRule,
         ev: &InputEvent,
+        kind: EventKind,
         now: Millis,
         cfg: &EngineConfig,
     ) -> Option<Outcome> {
         let qp_cfg = self.quick_press_config(cfg);
 
-        match ev.kind {
+        match kind {
             EventKind::KeyDown => {
                 let prev = self.state.machine(rule.source);
                 let (next, event) = prev.on_key_down(now, ev.autorepeat, &qp_cfg);
@@ -217,7 +313,8 @@ impl Arbiter {
                 if matches!(event, Some(QuickPressEvent::HoldStart)) {
                     // ⭐ 여러 조합이 동시에 활성이면 OR 로 합산한다(keystate.rs 문서 참고).
                     // active_synth_flags() 는 방금 반영한 next 상태를 포함해 계산된다.
-                    let flags = ev.flags | self.state.active_synth_flags();
+                    let flags =
+                        Self::strip_caps_lock_bit(cfg, ev.flags | self.state.active_synth_flags());
                     out.push(SynthEvent {
                         kind: EventKind::FlagsChanged,
                         keycode: rule.source,
@@ -238,7 +335,8 @@ impl Arbiter {
                     // 유지한다(공유 비트가 있는 hyper/meh/bleh 조합 중 하나만 놓아도 나머지가
                     // 살아 있어야 하므로).
                     let remaining = self.state.active_synth_flags();
-                    let flags = (ev.flags & !rule.flags) | remaining;
+                    let flags =
+                        Self::strip_caps_lock_bit(cfg, (ev.flags & !rule.flags) | remaining);
                     out.push(SynthEvent {
                         kind: EventKind::FlagsChanged,
                         keycode: rule.source,
@@ -360,6 +458,26 @@ mod tests {
     fn key_up(keycode: KeyCode, flags: EventFlags) -> InputEvent {
         InputEvent {
             kind: EventKind::KeyUp,
+            keycode,
+            flags,
+            autorepeat: false,
+        }
+    }
+
+    /// `Disposition::PassWithFlags` 에서 flags 를 꺼낸다 — 통과 이벤트에 무엇이 얹혔는지
+    /// 보는 테스트가 여러 개라 헬퍼로 뽑는다.
+    fn passed_flags(out: &Outcome) -> EventFlags {
+        match out.disposition() {
+            Disposition::PassWithFlags(f) => f,
+            other => panic!("flags 가 얹힌 통과가 아니다: {other:?}"),
+        }
+    }
+
+    /// macOS 가 modifier 키의 눌림/뗌을 실제로 보내는 형태 — `KeyDown`/`KeyUp` 이 아니라
+    /// `FlagsChanged` 하나다. `normalize_kind` 회귀 테스트들이 이 헬퍼로 그 형태를 재현한다.
+    fn flags_changed(keycode: KeyCode, flags: EventFlags) -> InputEvent {
+        InputEvent {
+            kind: EventKind::FlagsChanged,
             keycode,
             flags,
             autorepeat: false,
@@ -598,5 +716,291 @@ mod tests {
         let out = arb.on_tick(&cfg, Millis(100));
         assert_eq!(out.emitted().len(), 0);
         assert_eq!(out.layer(), Layer::Passthrough);
+    }
+
+    // ── `normalize_kind` 회귀 테스트 (2026-08-30, M2 1차 / 이슈 #13) ──────────────────────
+    //
+    // `normalize_kind` 가 없던 M1 은 hyper/meh/bleh 가 caps lock 등 어떤 modifier 소스
+    // 키로도 발동하지 않는 결함을 안고 있었다 — 자동 테스트가 전부 KeyDown/KeyUp 으로만
+    // 이벤트를 만들어 macOS 의 실제 전달 형태(FlagsChanged)를 재현하지 않았기 때문이다.
+    // 아래 테스트들은 2026-08-30 실기기 검증(hyper 소스 = left control, 브라우저가
+    // `keydown KeyA` 에서 `⌃⌥⌘⇧` 4개를 인식)을 자동으로 고정한다.
+
+    /// 회귀 #1 — hyper 소스 키의 첫 FlagsChanged 는 정본 눌림 테이블에 기록이 없으므로
+    /// KeyDown 으로 환원되어 hyper 조합이 즉시 발동해야 한다.
+    #[test]
+    fn flags_changed_first_occurrence_normalizes_to_key_down() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted().len(), 1);
+        assert_eq!(out.emitted()[0].kind, EventKind::FlagsChanged);
+        assert_eq!(out.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
+    }
+
+    /// 회귀 #2 — 같은 키의 두 번째 FlagsChanged 는 정본 눌림 테이블에 이미 기록이 있으므로
+    /// KeyUp 으로 환원되어 hyper 비트를 벗겨내야 한다.
+    #[test]
+    fn flags_changed_second_occurrence_normalizes_to_key_up() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(10));
+
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted().len(), 1);
+        assert_eq!(out.emitted()[0].kind, EventKind::FlagsChanged);
+        assert!(!out.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT));
+    }
+
+    /// ⭐ 회귀 #3 — 핵심 케이스. hyper 가 FlagsChanged 로 활성화된 채 다른 키의 KeyDown 이
+    /// 오면 그 KeyDown 에 `⌃⌥⌘⇧` 4개 비트가 전부 얹혀 통과해야 한다. 이것이 2026-08-30
+    /// 실기기 검증에서 브라우저가 `KeyA` 의 keydown 에서 실제로 관측한 바로 그 동작이다.
+    #[test]
+    fn flags_changed_hold_lets_other_key_down_carry_all_four_hyper_flags() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let caps = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        assert_eq!(caps.disposition(), Disposition::Consume);
+
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
+        assert_eq!(a_down.layer(), Layer::HyperModifier);
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
+        if let Disposition::PassWithFlags(flags) = a_down.disposition() {
+            assert!(flags.contains(EventFlags::CONTROL));
+            assert!(flags.contains(EventFlags::ALTERNATE));
+            assert!(flags.contains(EventFlags::COMMAND));
+            assert!(flags.contains(EventFlags::SHIFT));
+        }
+    }
+
+    /// 회귀 #4 — `Include shift in hyper key` OFF 대응 규칙(HYPER_NO_SHIFT)으로 같은
+    /// 시나리오를 돌리면 shift 비트만 빠진 3개(⌃⌥⌘)가 얹혀야 한다.
+    #[test]
+    fn flags_changed_hold_without_shift_carries_three_modifiers_only() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::CAPS_LOCK,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_NO_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
+
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_NO_SHIFT));
+        if let Disposition::PassWithFlags(flags) = a_down.disposition() {
+            assert!(flags.contains(EventFlags::CONTROL));
+            assert!(flags.contains(EventFlags::ALTERNATE));
+            assert!(flags.contains(EventFlags::COMMAND));
+            assert!(!flags.contains(EventFlags::SHIFT));
+        }
+    }
+
+    /// 회귀 #5 — FlagsChanged 가 정본 눌림 테이블(`KeyStateTable::is_pressed`)을 실제로
+    /// 갱신하는지 직접 검증한다. `Arbiter::state` 와 `is_pressed` 가 모두 pub 이라 우회 없이
+    /// 바로 관찰 가능하다.
+    #[test]
+    fn flags_changed_updates_canonical_pressed_table() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+        assert!(!arb.state.is_pressed(KeyCode::CAPS_LOCK));
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        assert!(
+            arb.state.is_pressed(KeyCode::CAPS_LOCK),
+            "첫 FlagsChanged 이후 정본 눌림 테이블은 눌림으로 기록돼야 한다"
+        );
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(10));
+        assert!(
+            !arb.state.is_pressed(KeyCode::CAPS_LOCK),
+            "두 번째 FlagsChanged 이후에는 뗌으로 기록돼야 한다"
+        );
+    }
+
+    /// 회귀 #6 — `ev.flags` 비트가 아니라 keycode 로 판정한다는 근거를 고정한다. 좌/우
+    /// shift 는 공개 `CGEventFlags` 상수에서 같은 비트를 공유하지만, right shift 만 hyper
+    /// 소스로 등록했을 때 left shift 의 FlagsChanged 는 다른 keycode 이므로 규칙이 전혀
+    /// 발동하지 않아야 한다(소비되지 않고 그대로 통과).
+    #[test]
+    fn flags_changed_distinguishes_left_and_right_shift_by_keycode() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::RIGHT_SHIFT,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), false, Millis(0));
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert_eq!(out.layer(), Layer::Passthrough);
+        assert!(arb.state.active_synth_flags().is_empty());
+    }
+
+    /// 회귀 #7 — F-키 소스(F1~F24)는 애초에 `KeyDown`/`KeyUp` 으로 정상 전달되므로
+    /// `normalize_kind` 의 환원 대상이 아니다. 그 기존 경로가 이번 변경으로 깨지지
+    /// 않았음을 확인한다.
+    #[test]
+    fn f_key_source_still_uses_key_down_key_up_path() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::F13,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        let f13_down = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), false, Millis(0));
+        assert_eq!(f13_down.disposition(), Disposition::Consume);
+        assert_eq!(f13_down.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
+
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), false, Millis(10));
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
+
+        let f13_up = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::NONE), false, Millis(20));
+        assert_eq!(f13_up.disposition(), Disposition::Consume);
+        assert!(!f13_up.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT));
+    }
+
+    /// 회귀 #8 — 탭이 죽어 있는 사이 실제로 키를 뗀 경우의 복구 경로. `force_reset` 은
+    /// 정본 눌림 테이블도 함께 지우므로, 그 다음 FlagsChanged 는 (직전까지 눌림으로
+    /// 기록돼 있었더라도) 다시 "누름"으로 환원되어야 한다 — "뗌"으로 잘못 해석되면
+    /// hyper 가 영영 재발동하지 못한다.
+    #[test]
+    fn force_reset_then_flags_changed_normalizes_to_key_down_again() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+        assert!(arb.state.is_pressed(KeyCode::CAPS_LOCK));
+
+        arb.force_reset();
+        assert!(!arb.state.is_pressed(KeyCode::CAPS_LOCK), "force_reset 은 정본 눌림 테이블도 지운다");
+
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(100));
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
+    }
+
+    /// 회귀 #9 — hyper 를 FlagsChanged 로 활성화한 경우에도(기존 테스트는 KeyDown 으로만
+    /// 활성화했다) MouseApply 의 종류별 토글이 그대로 지켜져야 한다: click:true 는
+    /// flags 를 얹고, drag:false 는 얹지 않는다.
+    #[test]
+    fn flags_changed_activated_hyper_applies_to_mouse_click_but_not_drag() {
+        let cfg = hyper_config(); // 기본 MouseApply: click=true, drag=false
+        let mut arb = Arbiter::new(&cfg);
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), false, Millis(0));
+
+        let click_ev = InputEvent {
+            kind: EventKind::LeftMouseDown,
+            keycode: KeyCode(0),
+            flags: EventFlags::NONE,
+            autorepeat: false,
+        };
+        let click_out = arb.arbitrate(&cfg, &click_ev, false, Millis(10));
+        assert_eq!(click_out.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
+
+        let drag_ev = InputEvent {
+            kind: EventKind::LeftMouseDragged,
+            keycode: KeyCode(0),
+            flags: EventFlags::NONE,
+            autorepeat: false,
+        };
+        let drag_out = arb.arbitrate(&cfg, &drag_ev, false, Millis(11));
+        assert_eq!(drag_out.disposition(), Disposition::Pass);
+    }
+    /// ⭐ 회귀 — caps lock 을 hyper 소스로 쓰면 합성 이벤트에 **잠금 비트가 남으면 안 된다.**
+    /// 실측(브라우저 프로브)에서 `getModifierState("CapsLock")` 이 계속 참이라 글자가
+    /// 대문자로 나갔다. 원인은 `ev.flags` 를 그대로 물려준 것이었다.
+    #[test]
+    fn caps_lock_source_strips_alpha_shift_from_synthesized_event() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        // 원본 caps lock 이벤트에는 잠금 비트가 실려 온다 — 그것이 실측된 형태다.
+        let ev = flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK);
+        let out = arb.arbitrate(&cfg, &ev, false, Millis(0));
+
+        assert_eq!(out.disposition(), Disposition::Consume);
+        let synth = out.emitted();
+        assert_eq!(synth.len(), 1, "합성 flagsChanged 하나가 나와야 한다");
+        assert!(
+            (synth[0].flags & EventFlags::CAPS_LOCK) == EventFlags::NONE,
+            "합성 이벤트에 alphaShift 가 남아 있다: {:?}",
+            synth[0].flags
+        );
+        assert_eq!(
+            synth[0].flags & EventFlags::HYPER_WITH_SHIFT,
+            EventFlags::HYPER_WITH_SHIFT,
+            "hyper 4비트는 그대로 실려야 한다"
+        );
+    }
+
+    /// ⭐ 회귀 — hyper 가 활성인 동안 **통과시키는 다른 키**에도 잠금 비트가 따라붙으면
+    /// 안 된다. 실측에서 후속 `KeyA` 가 계속 caps lock 켜짐으로 인식됐다.
+    #[test]
+    fn caps_lock_source_strips_alpha_shift_from_passed_through_keys() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            false,
+            Millis(0),
+        );
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode(0x00), EventFlags::CAPS_LOCK),
+            false,
+            Millis(10),
+        );
+        let flags = passed_flags(&out);
+        assert!(
+            (flags & EventFlags::CAPS_LOCK) == EventFlags::NONE,
+            "통과 이벤트에 alphaShift 가 남아 있다: {flags:?}"
+        );
+        assert_eq!(flags & EventFlags::HYPER_WITH_SHIFT, EventFlags::HYPER_WITH_SHIFT);
+    }
+
+    /// ⭐ 과잉 적용 방지 — caps lock 이 **소스가 아니면** 잠금 비트를 건드리지 않는다.
+    /// 사용자가 정상적으로 caps lock 을 켜 둔 상태를 우리가 지워서는 안 된다.
+    #[test]
+    fn alpha_shift_is_preserved_when_caps_lock_is_not_a_source() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::RIGHT_COMMAND,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::RIGHT_COMMAND, EventFlags::CAPS_LOCK),
+            false,
+            Millis(0),
+        );
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode(0x00), EventFlags::CAPS_LOCK),
+            false,
+            Millis(10),
+        );
+        let flags = passed_flags(&out);
+        assert_eq!(
+            flags & EventFlags::CAPS_LOCK,
+            EventFlags::CAPS_LOCK,
+            "사용자가 켜 둔 caps lock 을 지워서는 안 된다"
+        );
     }
 }

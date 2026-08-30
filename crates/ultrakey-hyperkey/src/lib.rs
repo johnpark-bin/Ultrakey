@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::keycode::SourceKey;
 use ultrakey_core::rules::{ModifierKind, ModifierRule};
-use ultrakey_core::settings::MouseApply;
+use ultrakey_core::settings::{keys, MouseApply, SettingsStore};
 
 /// hyper/meh/bleh 각각의 "체크박스 + 소스 키 팝업" 한 쌍(`hyperkey.md` §4 항목 1·3·4).
 ///
@@ -47,8 +47,98 @@ fn default_include_shift_in_hyper() -> bool {
     true
 }
 
-/// Hyperkey 탭의 설정 전체(`hyperkey.md` §4 의 8개 항목 중, 트랙패드 관련 3개는 `F-06`
-/// 소관이라 여기서 다루지 않는다 — §3.5 "소유 판정" 참고).
+/// `Engage hyper key using trackpad:` 팝업의 5개 영역 선택지(실측 표시 순서 그대로,
+/// `preferences-ui.md` §4.2.2). 기본값은 `top right`.
+///
+/// ⚠️ 이 값을 실제 트랙패드 제스처 판정 규칙으로 번역하는 것은 이 크레이트의 일이
+/// 아니다 — `to_modifier_rules()` 는 이 필드를 읽지 않는다(제스처 인식은 F-06
+/// `trackpad-hyper-gesture.md`, M5 소관). 여기서는 값을 "부재=기본값" 규약대로
+/// 저장·복원할 자리만 만든다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrackpadArea {
+    TopLeft,
+    #[default]
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Top,
+}
+
+impl TrackpadArea {
+    /// 5종 전량, 팝업 표시 순서 그대로.
+    pub fn all() -> &'static [TrackpadArea] {
+        use TrackpadArea::*;
+        &[TopLeft, TopRight, BottomLeft, BottomRight, Top]
+    }
+
+    /// 저장·UI 가 쓰는 안정적 문자열 식별자. `#[serde(rename_all = "camelCase")]` 와
+    /// 동일한 표현이라 `SettingsStore::get::<TrackpadArea>()` 의 결과와 항상 일치한다.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TrackpadArea::TopLeft => "topLeft",
+            TrackpadArea::TopRight => "topRight",
+            TrackpadArea::BottomLeft => "bottomLeft",
+            TrackpadArea::BottomRight => "bottomRight",
+            TrackpadArea::Top => "top",
+        }
+    }
+
+    // 표준 `FromStr` 트레이트가 아니라 일부러 평범한 연관 함수로 둔다 — 실패 사유를
+    // 담은 에러 타입이 필요 없고, `SettingsStore::get` 이 이미 "키 없음/타입 불일치"를
+    // `None` 하나로 합류시켜 주므로 이 함수도 `Option` 을 돌려주는 편이 호출부에서
+    // 자연스럽게 이어진다(`unwrap_or(TrackpadArea::default())` 류).
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<TrackpadArea> {
+        match s {
+            "topLeft" => Some(TrackpadArea::TopLeft),
+            "topRight" => Some(TrackpadArea::TopRight),
+            "bottomLeft" => Some(TrackpadArea::BottomLeft),
+            "bottomRight" => Some(TrackpadArea::BottomRight),
+            "top" => Some(TrackpadArea::Top),
+            _ => None,
+        }
+    }
+}
+
+fn default_trackpad_area() -> TrackpadArea {
+    TrackpadArea::TopRight
+}
+
+/// `Engage hyper key using trackpad:` 행 + 조건부 체크박스 2개(`hyperkey.md` §4 항목 6~8).
+///
+/// 소유 판정(`hyperkey.md` §3.5): 존재·기본값·활성화 조건은 F-05(이 크레이트)가 소유하고,
+/// 제스처의 실제 동작(메뉴바 아이콘이 언제 바뀌는지, 햅틱이 정확히 언제 발생하는지)은
+/// F-06 이 소유한다. 그래서 이 구조체는 값을 담을 뿐, 판정에는 관여하지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackpadSettings {
+    /// 실측 기본값 ☐ = false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// 실측 기본값 `top right`.
+    #[serde(default = "default_trackpad_area")]
+    pub area: TrackpadArea,
+    /// `Change menu bar icon when engaged` — `enabled` 가 켜졌을 때만 UI 에 나타나는
+    /// 조건부 체크박스(§5 항목 6 참고). 실측 기본값 ☐ = false.
+    #[serde(default)]
+    pub change_menu_bar_icon: bool,
+    /// `Provide haptic feedback when triggered` — 상동. 실측 기본값 ☐ = false.
+    #[serde(default)]
+    pub haptic_feedback: bool,
+}
+
+impl Default for TrackpadSettings {
+    fn default() -> Self {
+        TrackpadSettings {
+            enabled: false,
+            area: TrackpadArea::TopRight,
+            change_menu_bar_icon: false,
+            haptic_feedback: false,
+        }
+    }
+}
+
+/// Hyperkey 탭의 설정 전체(`hyperkey.md` §4 의 8개 항목).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HyperkeySettings {
     #[serde(default)]
@@ -64,6 +154,10 @@ pub struct HyperkeySettings {
     /// §3.3 — 실측 기본값은 `Click` 만 ON.
     #[serde(default)]
     pub mouse_apply: MouseApply,
+    /// `hyperkey.md` §4 항목 6~8 — 존재·기본값만 이 크레이트 소관(위 `TrackpadSettings`
+    /// 문서 주석 참고).
+    #[serde(default)]
+    pub trackpad: TrackpadSettings,
 }
 
 impl Default for HyperkeySettings {
@@ -74,6 +168,66 @@ impl Default for HyperkeySettings {
             meh: SlotSettings::default(),
             bleh: SlotSettings::default(),
             mouse_apply: MouseApply::default(),
+            trackpad: TrackpadSettings::default(),
+        }
+    }
+}
+
+impl HyperkeySettings {
+    /// [`SettingsStore`]에서 필드별로 조립한다 — 키가 없는 필드는 그 필드의 기본값을
+    /// 쓴다. ⭐ 이것이 F-15(`settings-store-and-integrity.md` §3.1) "부재 = 기본값"
+    /// 규약의 실제 구현 지점이다. `SettingsStore::get` 이 이미 "키 없음"과 "타입
+    /// 불일치"를 둘 다 `None` 으로 합류시켜 주므로, 여기서는 `unwrap_or_default()` 로
+    /// 받기만 하면 된다.
+    pub fn from_store(store: &SettingsStore) -> Self {
+        HyperkeySettings {
+            hyper: SlotSettings {
+                enabled: store.get(keys::HYPERKEY_HYPER_ENABLED).unwrap_or_default(),
+                source: store
+                    .get(keys::HYPERKEY_HYPER_SOURCE)
+                    .unwrap_or(SourceKey::CapsLock),
+            },
+            include_shift_in_hyper: store
+                .get(keys::HYPERKEY_INCLUDE_SHIFT_IN_HYPER)
+                .unwrap_or(true),
+            meh: SlotSettings {
+                enabled: store.get(keys::HYPERKEY_MEH_ENABLED).unwrap_or_default(),
+                source: store
+                    .get(keys::HYPERKEY_MEH_SOURCE)
+                    .unwrap_or(SourceKey::CapsLock),
+            },
+            bleh: SlotSettings {
+                enabled: store.get(keys::HYPERKEY_BLEH_ENABLED).unwrap_or_default(),
+                source: store
+                    .get(keys::HYPERKEY_BLEH_SOURCE)
+                    .unwrap_or(SourceKey::CapsLock),
+            },
+            mouse_apply: MouseApply {
+                click: store.get(keys::HYPERKEY_MOUSE_APPLY_CLICK).unwrap_or(true),
+                drag: store
+                    .get(keys::HYPERKEY_MOUSE_APPLY_DRAG)
+                    .unwrap_or_default(),
+                r#move: store
+                    .get(keys::HYPERKEY_MOUSE_APPLY_MOVE)
+                    .unwrap_or_default(),
+                scroll: store
+                    .get(keys::HYPERKEY_MOUSE_APPLY_SCROLL)
+                    .unwrap_or_default(),
+            },
+            trackpad: TrackpadSettings {
+                enabled: store
+                    .get(keys::HYPERKEY_TRACKPAD_ENABLED)
+                    .unwrap_or_default(),
+                area: store
+                    .get(keys::HYPERKEY_TRACKPAD_AREA)
+                    .unwrap_or(TrackpadArea::TopRight),
+                change_menu_bar_icon: store
+                    .get(keys::HYPERKEY_TRACKPAD_CHANGE_MENU_BAR_ICON)
+                    .unwrap_or_default(),
+                haptic_feedback: store
+                    .get(keys::HYPERKEY_TRACKPAD_HAPTIC)
+                    .unwrap_or_default(),
+            },
         }
     }
 }
@@ -373,6 +527,12 @@ mod tests {
                 r#move: false,
                 scroll: true,
             },
+            trackpad: TrackpadSettings {
+                enabled: true,
+                area: TrackpadArea::BottomLeft,
+                change_menu_bar_icon: true,
+                haptic_feedback: false,
+            },
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: HyperkeySettings = serde_json::from_str(&json).unwrap();
@@ -395,6 +555,77 @@ mod tests {
         assert!(!settings.mouse_apply.drag);
         assert!(!settings.mouse_apply.r#move);
         assert!(!settings.mouse_apply.scroll);
+        assert!(!settings.trackpad.enabled);
+        assert_eq!(settings.trackpad.area, TrackpadArea::TopRight);
+        assert!(!settings.trackpad.change_menu_bar_icon);
+        assert!(!settings.trackpad.haptic_feedback);
+    }
+
+    // TrackpadArea::all() — 5종, 팝업 표시 순서 그대로(`preferences-ui.md` §4.2.2).
+    #[test]
+    fn trackpad_area_all_lists_five_in_display_order() {
+        assert_eq!(
+            TrackpadArea::all(),
+            &[
+                TrackpadArea::TopLeft,
+                TrackpadArea::TopRight,
+                TrackpadArea::BottomLeft,
+                TrackpadArea::BottomRight,
+                TrackpadArea::Top,
+            ]
+        );
+    }
+
+    // TrackpadArea::as_str()/from_str() 왕복.
+    #[test]
+    fn trackpad_area_as_str_from_str_round_trip() {
+        for &area in TrackpadArea::all() {
+            assert_eq!(TrackpadArea::from_str(area.as_str()), Some(area));
+        }
+        assert_eq!(TrackpadArea::from_str("bogus"), None);
+    }
+
+    // ⭐ 8. HyperkeySettings::from_store(&빈 스토어) == HyperkeySettings::default()
+    // ("부재 = 기본값" 규약의 소비 지점, F-15 §8).
+    #[test]
+    fn from_store_on_empty_store_matches_default() {
+        let store = SettingsStore::in_memory();
+        assert_eq!(HyperkeySettings::from_store(&store), HyperkeySettings::default());
+    }
+
+    // 9. hyperkey.includeShiftInHyper=false 만 저장된 스토어 → 그 필드만 바뀌고
+    //    나머지는 기본값.
+    #[test]
+    fn from_store_applies_only_the_stored_field() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(keys::HYPERKEY_INCLUDE_SHIFT_IN_HYPER, &false)
+            .unwrap();
+
+        let settings = HyperkeySettings::from_store(&store);
+
+        assert!(!settings.include_shift_in_hyper);
+        assert_eq!(
+            settings,
+            HyperkeySettings {
+                include_shift_in_hyper: false,
+                ..HyperkeySettings::default()
+            }
+        );
+    }
+
+    // from_store — 타입이 안 맞는 값이 저장돼 있어도 그 필드만 기본값으로 대체되고
+    // 나머지는 정상 조립된다(SettingsStore::get 의 계약이 여기까지 이어진다).
+    #[test]
+    fn from_store_falls_back_to_default_on_type_mismatch() {
+        let mut store = SettingsStore::in_memory();
+        store.set(keys::HYPERKEY_HYPER_ENABLED, &"yes").unwrap(); // bool 이 아님
+        store.set(keys::HYPERKEY_MEH_ENABLED, &true).unwrap();
+
+        let settings = HyperkeySettings::from_store(&store);
+
+        assert!(!settings.hyper.enabled, "타입 불일치 값은 기본값으로 대체돼야 한다");
+        assert!(settings.meh.enabled, "다른 키는 영향받지 않아야 한다");
     }
 
 #[test]
