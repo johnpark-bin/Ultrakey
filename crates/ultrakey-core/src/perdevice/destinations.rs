@@ -76,7 +76,23 @@ impl DestinationCategory {
     /// 팝업 표시 순서 그대로 15종 전량.
     pub fn all() -> &'static [DestinationCategory] {
         use DestinationCategory::*;
-        &[Disable, ModifierKeys, ControlsAndSymbols, ArrowKeys, LetterKeys, NumberKeys, FunctionKeys, MediaControls, KeypadKeys, PcKeyboardKeys, InternationalKeys, ApplicationLaunchKeys, GuiApplicationControlKeys, RemoteControlButtons, Others]
+        &[
+            Disable,
+            ModifierKeys,
+            ControlsAndSymbols,
+            ArrowKeys,
+            LetterKeys,
+            NumberKeys,
+            FunctionKeys,
+            MediaControls,
+            KeypadKeys,
+            PcKeyboardKeys,
+            InternationalKeys,
+            ApplicationLaunchKeys,
+            GuiApplicationControlKeys,
+            RemoteControlButtons,
+            Others,
+        ]
     }
 
     /// `preferences.keyboards.functionKeys.category.<세그먼트>` i18n 키의 뒷부분.
@@ -182,6 +198,11 @@ pub fn find(id: &str) -> Option<&'static FunctionDestination> {
     ALL.iter().find(|d| d.id == id)
 }
 
+// ⚠️ `rustfmt` 를 끈다 — 항목 하나가 한 줄인 **표**로 읽히는 것이 이 상수의
+// 존재 이유다. 자동 포맷은 313개 항목을 각각 6줄로 펼쳐 2,700줄짜리 파일로
+// 만들고, 그러면 "어떤 목적지가 어느 카테고리에 어떤 값으로 있는가"를 눈으로
+// 훑을 수 없게 된다.
+#[rustfmt::skip]
 const ALL: &[FunctionDestination] = &[
     FunctionDestination { id: "disable", label: "vk_none", category: DestinationCategory::Disable, value: 0x700000000, support: PathBSupport::DisableUnverified },
     FunctionDestination { id: "key.caps_lock", label: "caps_lock", category: DestinationCategory::ModifierKeys, value: 0x700000039, support: PathBSupport::Measured },
@@ -552,7 +573,12 @@ mod tests {
                 d.id,
                 d.page()
             );
-            assert!(d.usage() <= 0xFFFF, "{}: usage={:#x} 가 범위를 벗어났다", d.id, d.usage());
+            assert!(
+                d.usage() <= 0xFFFF,
+                "{}: usage={:#x} 가 범위를 벗어났다",
+                d.id,
+                d.usage()
+            );
         }
     }
 
@@ -595,7 +621,11 @@ mod tests {
                 order.push(d.category);
             }
         }
-        assert_eq!(order, DestinationCategory::all(), "카테고리 순서가 all() 과 다르다");
+        assert_eq!(
+            order,
+            DestinationCategory::all(),
+            "카테고리 순서가 all() 과 다르다"
+        );
     }
 
     /// ⭐ 값 회귀 방지 — 다른 경로로 이미 실측·확정된 값과 일치하는지 본다.
@@ -641,7 +671,10 @@ mod tests {
                 // 예전에 값이 없던 4종 중 3종은 이제 값이 생겼다(카탈로그가 더 넓다).
                 (None, Some(_)) => {
                     assert!(
-                        matches!(variant.as_str(), "MissionControl" | "Spotlight" | "Dictation"),
+                        matches!(
+                            variant.as_str(),
+                            "MissionControl" | "Spotlight" | "Dictation"
+                        ),
                         "예상 밖으로 값이 생긴 항목: {variant}"
                     )
                 }
@@ -672,6 +705,9 @@ mod tests {
             assert_eq!(d.support, want, "{} 의 근거 등급이 어긋났다", d.id);
         }
         assert!(!find("disable").unwrap().support.is_verified());
-        assert!(find("consumer.volume_increment").unwrap().support.is_verified());
+        assert!(find("consumer.volume_increment")
+            .unwrap()
+            .support
+            .is_verified());
     }
 }

@@ -2,6 +2,13 @@
 //!
 //! CONTRACT.md(이 세션의 F-17 구현 계약) §2.2 를 그대로 코드로 옮긴 것이다.
 //!
+//! ⚠️ **이것은 PR #29 가 출하한 *옛* 저장 표현의 어휘다 — 새 어휘는
+//! [`super::destinations`] 다(이슈 #31 ②).** [`SystemFunction`] 은 더 이상 기능 2
+//! 선택 팝업의 선택지가 아니다 — 팝업은 `destinations::all()` 313종을 쓴다. 이
+//! 파일은 옛 저장값을 새 카탈로그로 옮기는 마이그레이션 경로
+//! (`destinations::migrate_legacy_system_function`)가 `SystemFunction::hid_usage()`
+//! 값과 새 목적지 값이 일치하는지 대조하는 데만 계속 쓰인다.
+//!
 //! ⛔ 이 표에 없는 값을 지어내지 않는다. [`SystemFunction::hid_usage`] 가
 //! `MissionControl`·`Spotlight`·`Dictation`·`DoNotDisturb` 4종에 대해 `None` 인
 //! 것은 명세(`docs/spec/per-device-settings.md` §3.5)가 후보값조차 제시하지 않은
@@ -63,7 +70,12 @@ impl SystemFunction {
         use SystemFunction::*;
         match self {
             VolumeUp => Evidence::Measured,
-            VolumeDown | Mute | PlayPause | FastForward | Rewind | DisplayBrightnessUp
+            VolumeDown
+            | Mute
+            | PlayPause
+            | FastForward
+            | Rewind
+            | DisplayBrightnessUp
             | DisplayBrightnessDown => Evidence::StandardTable,
             MissionControl | Spotlight | Dictation | DoNotDisturb => Evidence::Unknown,
         }
@@ -112,7 +124,10 @@ mod tests {
     fn remaining_eight_functions_have_standard_table_candidates() {
         for f in SystemFunction::all() {
             if *f != SystemFunction::VolumeUp {
-                assert!(f.hid_usage().is_some() || f.evidence() == Evidence::Unknown, "{f:?}");
+                assert!(
+                    f.hid_usage().is_some() || f.evidence() == Evidence::Unknown,
+                    "{f:?}"
+                );
             }
             if f.hid_usage().is_some() && *f != SystemFunction::VolumeUp {
                 assert_eq!(f.evidence(), Evidence::StandardTable, "{f:?}");

@@ -177,12 +177,20 @@ impl PathBManager {
 
     /// 설정 변경·전체 재적용. `attached` 에 있는 디바이스에만 쓴다(B.4.3 — 뽑혀 있는
     /// 디바이스는 건드리지 않는다).
-    pub fn apply_all(&self, cfg: &EngineConfig, attached: &[DeviceInfo]) -> Result<(), HidMappingError> {
+    pub fn apply_all(
+        &self,
+        cfg: &EngineConfig,
+        attached: &[DeviceInfo],
+    ) -> Result<(), HidMappingError> {
         self.apply_all_inner(cfg, attached)?;
         Ok(())
     }
 
-    fn apply_all_inner(&self, cfg: &EngineConfig, attached: &[DeviceInfo]) -> Result<usize, HidMappingError> {
+    fn apply_all_inner(
+        &self,
+        cfg: &EngineConfig,
+        attached: &[DeviceInfo],
+    ) -> Result<usize, HidMappingError> {
         let settings = PerDeviceSettings::new(&cfg.per_device_values);
         let d1 = d1_for(cfg);
         let mut count = 0usize;
@@ -197,7 +205,11 @@ impl PathBManager {
 
     /// 핫플러그 1대 재적용. `device` 가 방금 연결됐다는 전제(호출자, §3.6 규칙 8)로
     /// `attached` 목록 없이 바로 계산·쓴다.
-    pub fn apply_device(&self, cfg: &EngineConfig, device: &DeviceId) -> Result<(), HidMappingError> {
+    pub fn apply_device(
+        &self,
+        cfg: &EngineConfig,
+        device: &DeviceId,
+    ) -> Result<(), HidMappingError> {
         let settings = PerDeviceSettings::new(&cfg.per_device_values);
         let d1 = d1_for(cfg);
         let composition = compose(device, &settings, d1);
@@ -265,7 +277,11 @@ impl PathBManager {
     /// ①이 있어 어느 시점에 죽어도 원장은 커널에 있을 수 있는 우리 것의 상위집합이다
     /// (이슈 #19 증상 B 류의 영구 누수를 막는다). ③이 있어 정상 경로에서는 원장이
     /// 정확해 남의 매핑을 잘못 지우지 않는다(PR #23 보존).
-    fn write_device(&self, device: &DeviceId, composed: &[KeyMapping]) -> Result<(), HidMappingError> {
+    fn write_device(
+        &self,
+        device: &DeviceId,
+        composed: &[KeyMapping],
+    ) -> Result<(), HidMappingError> {
         // ① 쓰기 전 — 상위집합을 먼저 원장에 기록한다.
         let mut ledger = self.ledger.load();
         let prev = ledger.get(device).cloned().unwrap_or_default();
@@ -395,7 +411,11 @@ mod tests {
             })
         }
 
-        fn apply(&self, device: &DeviceMatch, mappings: &[KeyMapping]) -> Result<(), HidMappingError> {
+        fn apply(
+            &self,
+            device: &DeviceMatch,
+            mappings: &[KeyMapping],
+        ) -> Result<(), HidMappingError> {
             self.apply_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(hook) = &self.on_apply {
                 hook();
@@ -491,7 +511,11 @@ mod tests {
 
         mgr.apply_device(&cfg, &dev).unwrap();
 
-        let written = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
+        let written = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
         assert_eq!(written.len(), 3, "{written:?}");
         assert!(written.contains(&d1()));
         assert!(written.contains(&mapping(
@@ -500,7 +524,50 @@ mod tests {
         )));
         assert!(written.contains(&mapping(
             SourceKey::F9.hid_usage().unwrap(),
-            ultrakey_core::perdevice::SystemFunction::Mute.hid_usage().unwrap()
+            ultrakey_core::perdevice::SystemFunction::Mute
+                .hid_usage()
+                .unwrap()
+        )));
+    }
+
+    // ⭐ 이슈 #31 ② — 위 테스트와 같은 시나리오를 **새 목적지 카탈로그 id**
+    // (`"consumer.mute"`, `SystemFunction::Mute` 가 아니라)로 저장했을 때도 엔진이
+    // 정확히 같은 값으로 합성한다. 위 테스트는 옛 저장값이 여전히 읽힌다는 것을
+    // 증명하는 마이그레이션 테스트로 그대로 둔다 — 이 테스트는 새 저장 경로 자체를
+    // 고정한다.
+    #[test]
+    fn write_device_resolves_new_catalog_id_stored_directly() {
+        let dev = device_a();
+        let backend = FakeBackend::default();
+        let ledger = FakeLedger::default();
+        let mgr = PathBManager::new(Box::new(backend), None, Box::new(ledger));
+
+        let f9_key = settings_keys::per_device_function_key(
+            dev.as_str(),
+            ultrakey_core::perdevice::FKey::F9,
+        );
+        let values = std::collections::BTreeMap::from([(
+            f9_key,
+            serde_json::Value::String("consumer.mute".to_string()),
+        )]);
+        let cfg = EngineConfig {
+            per_device_values: values,
+            ..Default::default()
+        };
+
+        mgr.apply_device(&cfg, &dev).unwrap();
+
+        let written = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert!(written.contains(&mapping(
+            SourceKey::F9.hid_usage().unwrap(),
+            ultrakey_core::perdevice::SystemFunction::Mute
+                .hid_usage()
+                .unwrap()
         )));
     }
 
@@ -530,10 +597,21 @@ mod tests {
 
         mgr.apply_all(&cfg, &[info(&dev_a), info(&dev_b)]).unwrap();
 
-        let a = mgr.backend.read_current(&dev_a.to_match()).unwrap().aggregated;
-        let b = mgr.backend.read_current(&dev_b.to_match()).unwrap().aggregated;
+        let a = mgr
+            .backend
+            .read_current(&dev_a.to_match())
+            .unwrap()
+            .aggregated;
+        let b = mgr
+            .backend
+            .read_current(&dev_b.to_match())
+            .unwrap()
+            .aggregated;
         assert_eq!(a.len(), 1, "디바이스 A 는 자신의 설정을 받아야 한다: {a:?}");
-        assert!(b.is_empty(), "디바이스 B 는 디바이스 A 전용 설정의 영향을 받으면 안 된다: {b:?}");
+        assert!(
+            b.is_empty(),
+            "디바이스 B 는 디바이스 A 전용 설정의 영향을 받으면 안 된다: {b:?}"
+        );
     }
 
     // ── PR #23 — 남의 매핑 보존 ──────────────────────────────────────────────
@@ -550,8 +628,16 @@ mod tests {
         let cfg = EngineConfig::default();
         mgr.apply_all(&cfg, &[info(&dev)]).unwrap();
 
-        let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
-        assert_eq!(left, vec![foreign], "원장에 없던 남의 매핑은 그대로 남아야 한다(PR #23)");
+        let left = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(
+            left,
+            vec![foreign],
+            "원장에 없던 남의 매핑은 그대로 남아야 한다(PR #23)"
+        );
     }
 
     // ── 이슈 #19 회귀 방지 — 우리 것 제거 ────────────────────────────────────
@@ -573,8 +659,15 @@ mod tests {
         let cfg = EngineConfig::default();
         mgr.apply_all(&cfg, &[info(&dev)]).unwrap();
 
-        let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
-        assert!(left.is_empty(), "더 이상 요구되지 않는 우리 매핑은 사라져야 한다: {left:?}");
+        let left = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert!(
+            left.is_empty(),
+            "더 이상 요구되지 않는 우리 매핑은 사라져야 한다: {left:?}"
+        );
     }
 
     // ── B.4.2 / D-17-6 — src 충돌 시 우리가 이긴다 ───────────────────────────
@@ -585,8 +678,7 @@ mod tests {
         let src = SourceKey::CapsLock.hid_usage().unwrap();
         // 남이 이미 caps lock 을 escape 로 매핑해 뒀다(우리 원장 밖).
         let foreign_conflicting = mapping(src, SourceKey::LeftControl.hid_usage().unwrap());
-        let backend =
-            FakeBackend::default().with_device(dev.to_match(), vec![foreign_conflicting]);
+        let backend = FakeBackend::default().with_device(dev.to_match(), vec![foreign_conflicting]);
         let ledger = FakeLedger::default();
         let mgr = PathBManager::new(Box::new(backend), None, Box::new(ledger));
 
@@ -597,8 +689,16 @@ mod tests {
         };
         mgr.apply_device(&cfg, &dev).unwrap();
 
-        let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
-        assert_eq!(left, vec![d1()], "우리 매핑이 이겨야 하고, 배열에 src 중복이 없어야 한다");
+        let left = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(
+            left,
+            vec![d1()],
+            "우리 매핑이 이겨야 하고, 배열에 src 중복이 없어야 한다"
+        );
     }
 
     // ── ⭐ 2단계 영속화 — ② 커널 쓰기 직전 원장이 prev ∪ composed 상위집합이다 ──
@@ -636,7 +736,11 @@ mod tests {
         };
         mgr.apply_device(&cfg, &dev).unwrap();
 
-        let seen = observed.lock().unwrap().clone().expect("apply() 안에서 원장을 관찰했어야 한다");
+        let seen = observed
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("apply() 안에서 원장을 관찰했어야 한다");
         let seen_for_dev = seen.get(&dev).cloned().unwrap_or_default();
         assert!(
             seen_for_dev.contains(&prev_mapping),
@@ -693,9 +797,20 @@ mod tests {
         // 종료 시점에 이 디바이스가 뽑혀 있다 — cleanup 이 건드리면 안 된다.
         mgr.cleanup(&[]).unwrap();
 
-        let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
-        assert_eq!(left, vec![foreign, d1()], "뽑혀 있는 디바이스는 손대지 않아야 한다");
-        assert!(mgr.ledger.load().contains_key(&dev), "원장에도 그대로 남아야 한다");
+        let left = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(
+            left,
+            vec![foreign, d1()],
+            "뽑혀 있는 디바이스는 손대지 않아야 한다"
+        );
+        assert!(
+            mgr.ledger.load().contains_key(&dev),
+            "원장에도 그대로 남아야 한다"
+        );
     }
 
     #[test]
@@ -713,9 +828,20 @@ mod tests {
 
         mgr.cleanup(&[info(&dev)]).unwrap();
 
-        let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
-        assert_eq!(left, vec![foreign], "우리 매핑만 사라지고 남의 매핑은 남아야 한다");
-        assert!(!mgr.ledger.load().contains_key(&dev), "정리한 디바이스는 원장에서 빠져야 한다");
+        let left = mgr
+            .backend
+            .read_current(&dev.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(
+            left,
+            vec![foreign],
+            "우리 매핑만 사라지고 남의 매핑은 남아야 한다"
+        );
+        assert!(
+            !mgr.ledger.load().contains_key(&dev),
+            "정리한 디바이스는 원장에서 빠져야 한다"
+        );
     }
 
     // ── 전역 마이그레이션 — 정확히 한 번, per-device 쓰기보다 먼저(D-17-5) ───
@@ -762,8 +888,15 @@ mod tests {
             calls: calls.clone(),
             order: order.clone(),
         };
-        let backend = OrderedBackend { inner: backend, order: order.clone() };
-        let mgr = PathBManager::new(Box::new(backend), Some(Box::new(migration)), Box::new(ledger));
+        let backend = OrderedBackend {
+            inner: backend,
+            order: order.clone(),
+        };
+        let mgr = PathBManager::new(
+            Box::new(backend),
+            Some(Box::new(migration)),
+            Box::new(ledger),
+        );
 
         let cfg = EngineConfig {
             caps_lock_alias: Some(KeyCode::F18),
@@ -772,15 +905,26 @@ mod tests {
         let report = mgr.reconcile_on_start(&cfg, &[info(&dev)]).unwrap();
 
         assert!(report.global_migration_cleared);
-        assert_eq!(calls.lock().unwrap().len(), 1, "마이그레이션은 정확히 한 번만 호출돼야 한다");
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "마이그레이션은 정확히 한 번만 호출돼야 한다"
+        );
         assert_eq!(calls.lock().unwrap()[0], d1_mapping());
 
         // 두 번째 reconcile_on_start 호출 — 더 이상 호출되면 안 된다.
         mgr.reconcile_on_start(&cfg, &[info(&dev)]).unwrap();
-        assert_eq!(calls.lock().unwrap().len(), 1, "두 번째 호출에서는 재시도하지 않아야 한다");
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "두 번째 호출에서는 재시도하지 않아야 한다"
+        );
 
         let seen_order = order.lock().unwrap().clone();
-        assert_eq!(seen_order[0], "migration", "마이그레이션이 어떤 디바이스 쓰기보다 먼저 와야 한다");
+        assert_eq!(
+            seen_order[0], "migration",
+            "마이그레이션이 어떤 디바이스 쓰기보다 먼저 와야 한다"
+        );
         assert!(seen_order[1..].contains(&"device_write"));
     }
 
@@ -808,12 +952,18 @@ mod tests {
                 ..Default::default()
             };
             mgr.apply_device(&cfg, &dev).unwrap();
-            let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
+            let left = mgr
+                .backend
+                .read_current(&dev.to_match())
+                .unwrap()
+                .aggregated;
             assert_eq!(
                 left,
                 vec![mapping(
                     SourceKey::F9.hid_usage().unwrap(),
-                    ultrakey_core::perdevice::SystemFunction::Mute.hid_usage().unwrap()
+                    ultrakey_core::perdevice::SystemFunction::Mute
+                        .hid_usage()
+                        .unwrap()
                 )]
             );
         }
@@ -839,12 +989,18 @@ mod tests {
                 ..Default::default()
             };
             mgr.apply_device(&cfg, &dev).unwrap();
-            let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
+            let left = mgr
+                .backend
+                .read_current(&dev.to_match())
+                .unwrap()
+                .aggregated;
             assert_eq!(
                 left,
                 vec![mapping(
                     SourceKey::F9.hid_usage().unwrap(),
-                    ultrakey_core::perdevice::SystemFunction::VolumeUp.hid_usage().unwrap()
+                    ultrakey_core::perdevice::SystemFunction::VolumeUp
+                        .hid_usage()
+                        .unwrap()
                 )]
             );
         }
@@ -866,7 +1022,11 @@ mod tests {
                 ..Default::default()
             };
             mgr.apply_device(&cfg, &dev).unwrap();
-            let left = mgr.backend.read_current(&dev.to_match()).unwrap().aggregated;
+            let left = mgr
+                .backend
+                .read_current(&dev.to_match())
+                .unwrap()
+                .aggregated;
             assert!(left.is_empty(), "명시적 끔은 매핑이 없어야 한다: {left:?}");
         }
     }

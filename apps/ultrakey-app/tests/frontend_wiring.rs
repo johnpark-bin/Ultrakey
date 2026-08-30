@@ -838,14 +838,15 @@ fn settings_html_에_keyboards_탭_버튼_패널이_tabs_배열_순서대로_있
     );
 }
 
-/// 고정 컨트롤 4개(명세 §3.1.5): 디바이스 선택 팝업 1 + 그룹 제목 2("키 변환 세트",
-/// "Function Keys") + macOS Function Keys 상태 표시줄(뱃지+버튼) 1.
+/// 고정 컨트롤 4개(명세 §3.1.5): 디바이스 선택 좌측 패인 1(이슈 #31 ④ 로 팝업에서
+/// 재배치) + 그룹 제목 2("키 변환 세트", "Function Keys") + macOS Function Keys
+/// 상태 표시줄(뱃지+버튼) 1.
 #[test]
 fn settings_html_에_keyboards_탭_고정_컨트롤_4개가_있다() {
     let html = read_settings_html();
 
     for id in [
-        "keyboards-device-picker",            // 1. 디바이스 선택 팝업
+        "keyboards-device-list",              // 1. 디바이스 선택 좌측 패인
         "keyboards-keyremap-heading",         // 2. 그룹 제목 — 키 변환 세트
         "keyboards-functionkeys-heading",     // 2. 그룹 제목 — Function Keys
         "keyboards-fnstate-badge",            // 3. macOS 상태 표시줄 — 뱃지
@@ -856,6 +857,46 @@ fn settings_html_에_keyboards_탭_고정_컨트롤_4개가_있다() {
             "settings.html 에 Keyboards 탭 고정 컨트롤 id=\"{id}\" 가 없다"
         );
     }
+}
+
+/// ⭐ 이슈 #31 ④ 회귀 방지 — 디바이스 선택 팝업(`<select>`)이 완전히 사라지고
+/// 좌측 세로 패인(`role="listbox"` + 항목 `role="option"`)으로 대체됐다.
+#[test]
+fn settings_html_의_디바이스_선택은_팝업이_아니라_좌측_패인이다() {
+    let html = read_settings_html();
+
+    assert!(
+        !html.contains(r#"id="keyboards-device-picker""#),
+        "settings.html 에 옛 디바이스 선택 <select>(id=\"keyboards-device-picker\")가 \
+         아직 남아 있다 — 이슈 #31 ④ 가 좌측 패인으로 교체하기로 했다"
+    );
+    assert!(
+        html.contains(r#"id="keyboards-device-list""#) && html.contains(r#"role="listbox""#),
+        "settings.html 에 좌측 패인 컨테이너(id=\"keyboards-device-list\", \
+         role=\"listbox\")가 없다"
+    );
+
+    let js = extract_js_function(&html, "function buildDeviceOption(");
+    assert!(
+        js.contains(r#"role", "option""#),
+        "buildDeviceOption() 이 항목에 role=\"option\" 을 달지 않는다"
+    );
+
+    let highlight = extract_js_function(&html, "function highlightSelectedDevice(");
+    assert!(
+        highlight.contains("aria-selected"),
+        "highlightSelectedDevice() 가 aria-selected 를 갱신하지 않는다"
+    );
+
+    // 방향키 이동 — 이 탭 목록(#tablist)의 키보드 처리와 같은 수준.
+    assert!(
+        html.contains(r#"$("keyboards-device-list").addEventListener("keydown""#),
+        "좌측 패인에 keydown(방향키) 리스너가 배선돼 있지 않다"
+    );
+    assert!(
+        html.contains(r#"$("keyboards-device-list").addEventListener("click""#),
+        "좌측 패인에 click 리스너가 배선돼 있지 않다"
+    );
 }
 
 /// 기능 2(고정 12개, §3.5): F1~F12 각각 선택 팝업 + `data-fn-key` 배선.
@@ -872,6 +913,62 @@ fn settings_html_에_keyboards_탭_f1_f12_팝업_12개가_있다() {
         assert!(
             html.contains(&format!("data-fn-key=\"f{n}\"")),
             "id=\"{id}\" 팝업에 data-fn-key=\"f{n}\" 배선이 없다"
+        );
+    }
+}
+
+/// ⭐ 이슈 #31 ② — 기능 2 팝업이 `<optgroup>` 을 만들고, `표준 F-키로 사용`
+/// (`KEYBOARDS_STANDARD_FKEY`)이 카테고리 루프보다 **앞**에 온다. 예전에는 이
+/// 옵션이 팝업 맨 끝에 있어 313개 항목 뒤에 있으면 사실상 못 찾았다.
+#[test]
+fn populate_function_key_select_는_optgroup을_만들고_표준_f_키_옵션을_카테고리_앞에_둔다() {
+    let html = read_settings_html();
+    let f = extract_js_function(&html, "function populateFunctionKeySelect(");
+
+    assert!(
+        f.contains("createElement(\"optgroup\")"),
+        "populateFunctionKeySelect() 가 <optgroup> 을 만들지 않는다"
+    );
+
+    let standard_at = f
+        .find("KEYBOARDS_STANDARD_FKEY")
+        .expect("KEYBOARDS_STANDARD_FKEY 참조가 있어야 한다");
+    let category_loop_at = f
+        .find("destinationCategories")
+        .expect("destinationCategories 순회가 있어야 한다");
+    assert!(
+        standard_at < category_loop_at,
+        "표준 F-키로 사용 옵션이 카테고리 optgroup 뒤에 온다 — 313개 항목 뒤에 있으면 \
+         사실상 못 찾는다(이슈 #31 ②)"
+    );
+}
+
+/// ⭐ 이슈 #31 ② — 선택된 목적지가 `verified === false` 면 그 F-키 행 아래에
+/// "동작 미확인" 힌트가 배선돼 있다(카탈로그에서 숨기지 않는다).
+#[test]
+fn render_function_keys_group_이_동작_미확인_힌트를_배선한다() {
+    let html = read_settings_html();
+    let f = extract_js_function(&html, "function renderFunctionKeysGroup(");
+
+    assert!(
+        f.contains("renderHiddenNote"),
+        "renderFunctionKeysGroup() 이 renderHiddenNote() 를 호출하지 않는다"
+    );
+    assert!(
+        f.contains("preferences.keyboards.functionKeys.unverifiedHint"),
+        "renderFunctionKeysGroup() 이 unverifiedHint 카탈로그 키를 참조하지 않는다"
+    );
+    assert!(
+        f.contains(".verified"),
+        "renderFunctionKeysGroup() 이 목적지의 verified 플래그를 보지 않는다"
+    );
+
+    // 힌트 호스트가 F1~F12 각각에 있어야 한다.
+    for n in 1..=12 {
+        let host_id = format!("keyboards-fkey-f{n}-hint");
+        assert!(
+            html.contains(&format!("id=\"{host_id}\"")),
+            "settings.html 에 F{n} 동작 미확인 힌트 호스트(id=\"{host_id}\")가 없다"
         );
     }
 }
@@ -971,7 +1068,11 @@ fn extract_js_function<'a>(html: &'a str, signature: &str) -> &'a str {
 #[test]
 fn settings_html_이_settings_unset과_open_keyboard_settings를_invoke한다() {
     let html = read_settings_html();
-    for command in ["settings_unset", "open_keyboard_settings", "keyboard_fn_state"] {
+    for command in [
+        "settings_unset",
+        "open_keyboard_settings",
+        "keyboard_fn_state",
+    ] {
         assert!(
             html.contains(&format!("invoke(\"{command}\"")),
             "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
@@ -990,7 +1091,9 @@ fn settings_html_이_settings_unset과_open_keyboard_settings를_invoke한다() 
 fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
     let main_rs = read_main_rs();
     assert!(
-        main_rs.contains("x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys"),
+        main_rs.contains(
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension?FunctionKeys"
+        ),
         "open_keyboard_settings 가 Function Keys 패널 딥링크를 쓰지 않는다(이슈 #31 ③a)"
     );
     assert!(
@@ -1009,12 +1112,16 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
     );
 }
 
-/// 명세 §4.1 표의 24개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 23개)가
+/// 명세 §4.1 표의 29개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 28개)가
 /// en.json·ko.json 양쪽에 전부 있다. ⚠️ 탭 라벨 키만 명세 제안(`preferences.tabs.
 /// keyboards.title`) 대신 기존 코드베이스 관례(`settings.tab.<탭>`)를 따라
 /// `settings.tab.keyboards` 로 잡았다 — settings.html 의 근거 주석 참고.
+///
+/// ⭐ 이슈 #31 ② — 옛 `functionKeys.function.*` 12종(시스템 기능 8종짜리 어휘)은
+/// 목적지 카탈로그 313종/15카테고리로 갈아치워졌다. 그 12종을 15개 카테고리 +
+/// `disable` + `unverifiedHint`(17개)로 대체한다 — 24 - 12 + 17 = 29.
 #[test]
-fn keyboards_탭_신규_i18n_키_24개가_en_ko_양쪽에_있다() {
+fn keyboards_탭_신규_i18n_키_29개가_en_ko_양쪽에_있다() {
     let en = flatten_catalog(&read_en_catalog());
     let ko = flatten_catalog(&read_ko_catalog());
 
@@ -1031,6 +1138,43 @@ fn keyboards_탭_신규_i18n_키_24개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.functionKeys.useStandardFKey",
         "preferences.keyboards.functionKeys.macosStatus.label",
         "preferences.keyboards.functionKeys.macosStatus.openButton",
+        "preferences.keyboards.functionKeys.disable",
+        "preferences.keyboards.functionKeys.unverifiedHint",
+        "preferences.keyboards.functionKeys.category.disable",
+        "preferences.keyboards.functionKeys.category.modifierKeys",
+        "preferences.keyboards.functionKeys.category.controlsAndSymbols",
+        "preferences.keyboards.functionKeys.category.arrowKeys",
+        "preferences.keyboards.functionKeys.category.letterKeys",
+        "preferences.keyboards.functionKeys.category.numberKeys",
+        "preferences.keyboards.functionKeys.category.functionKeys",
+        "preferences.keyboards.functionKeys.category.mediaControls",
+        "preferences.keyboards.functionKeys.category.keypadKeys",
+        "preferences.keyboards.functionKeys.category.pcKeyboardKeys",
+        "preferences.keyboards.functionKeys.category.internationalKeys",
+        "preferences.keyboards.functionKeys.category.applicationLaunchKeys",
+        "preferences.keyboards.functionKeys.category.guiApplicationControlKeys",
+        "preferences.keyboards.functionKeys.category.remoteControlButtons",
+        "preferences.keyboards.functionKeys.category.others",
+    ];
+    assert_eq!(
+        KEYS.len(),
+        29,
+        "이 목록 자체가 29개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+    );
+
+    let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
+    let missing_ko: Vec<_> = KEYS.iter().filter(|k| !ko.contains(**k)).collect();
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 Keyboards 탭 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 Keyboards 탭 키: {missing_ko:?}"
+    );
+
+    // ⭐ 옛 12종이 양쪽 카탈로그에서 완전히 사라졌는지도 함께 고정한다.
+    const REMOVED_FUNCTION_KEYS: &[&str] = &[
         "preferences.keyboards.functionKeys.function.displayBrightnessDown",
         "preferences.keyboards.functionKeys.function.displayBrightnessUp",
         "preferences.keyboards.functionKeys.function.missionControl",
@@ -1045,20 +1189,25 @@ fn keyboards_탭_신규_i18n_키_24개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.functionKeys.function.volumeUp",
     ];
     assert_eq!(
-        KEYS.len(),
-        24,
-        "이 목록 자체가 24개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+        REMOVED_FUNCTION_KEYS.len(),
+        12,
+        "삭제 대상 목록 자체가 12개가 아니다"
     );
-
-    let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
-    let missing_ko: Vec<_> = KEYS.iter().filter(|k| !ko.contains(**k)).collect();
+    let still_in_en: Vec<_> = REMOVED_FUNCTION_KEYS
+        .iter()
+        .filter(|k| en.contains(**k))
+        .collect();
+    let still_in_ko: Vec<_> = REMOVED_FUNCTION_KEYS
+        .iter()
+        .filter(|k| ko.contains(**k))
+        .collect();
     assert!(
-        missing_en.is_empty(),
-        "en.json 에 없는 Keyboards 탭 키: {missing_en:?}"
+        still_in_en.is_empty(),
+        "en.json 에 옛 function.* 키가 아직 남아 있다: {still_in_en:?}"
     );
     assert!(
-        missing_ko.is_empty(),
-        "ko.json 에 없는 Keyboards 탭 키: {missing_ko:?}"
+        still_in_ko.is_empty(),
+        "ko.json 에 옛 function.* 키가 아직 남아 있다: {still_in_ko:?}"
     );
 }
 
