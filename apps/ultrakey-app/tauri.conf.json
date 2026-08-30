@@ -22,8 +22,8 @@
         "label": "settings",
         "url": "settings.html",
         "title": "Ultrakey",
-        "width": 710,
-        "height": 517,
+        "width": 825,
+        "height": 821,
         "resizable": true,
         "visible": false,
         "center": true

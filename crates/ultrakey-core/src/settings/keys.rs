@@ -45,6 +45,11 @@ pub const HYPERKEY_TRACKPAD_CHANGE_MENU_BAR_ICON: &str = "hyperkey.trackpad.chan
 pub const HYPERKEY_TRACKPAD_HAPTIC: &str = "hyperkey.trackpad.haptic";
 /// 환경설정 창이 마지막으로 열려 있던 탭(F-09).
 pub const UI_LAST_TAB: &str = "ui.lastTab";
+/// 사용자가 드래그로 조절한 설정 창 너비(논리 좌표, pt) — 이슈 #32 Phase 1.
+/// `ui.windowHeight` 와 항상 짝으로 존재해야 복원한다(둘 중 하나만 있으면 무시).
+pub const UI_WINDOW_WIDTH: &str = "ui.windowWidth";
+/// 상동 — 높이.
+pub const UI_WINDOW_HEIGHT: &str = "ui.windowHeight";
 
 // ── F-08 Power User Presets(`power-user-presets.md`) — `ultrakey-presets` 가 소비한다 ──
 
@@ -159,6 +164,8 @@ pub fn all() -> &'static [&'static str] {
         HYPERKEY_TRACKPAD_CHANGE_MENU_BAR_ICON,
         HYPERKEY_TRACKPAD_HAPTIC,
         UI_LAST_TAB,
+        UI_WINDOW_WIDTH,
+        UI_WINDOW_HEIGHT,
         PRESETS_CAPS_LOCK_REMAP_ENABLED,
         PRESETS_CAPS_LOCK_REMAP_TARGET,
         PRESETS_CAPS_QUICK_PRESS_ENABLED,

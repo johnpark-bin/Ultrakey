@@ -376,50 +376,58 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
     );
 }
 
-/// 탭 5개의 창 크기 상수(main.rs `tab_window_size`)가 명세값과 일치하는지는
-/// `src/main.rs` 자체의 유닛 테스트(`tests::tab_window_size_matches_spec_values`)가
-/// 이미 검증한다. 여기서는 그 상수들이 `settings.html` 문서 주석에도 정확히
-/// 기록되어 있는지만 방어적으로 재확인한다(창 크기는 Rust 가 소유하고, HTML 은
-/// 그 사실만 인용한다 — 값 자체를 HTML 이 중복 정의하지 않는다).
-///
-/// ⭐ `613×484` 는 F-16 `Korean` 탭의 **실측값**이다(korean-input.md §4.1·§9 #5):
-/// 이 탭의 마크업을 실제로 렌더해 잰 `panel-korean` 내용 416px + `.panel` 상하
-/// 패딩 40px + 타이틀바 28px. 처음 잡았던 잠정치 400 은 84px 모자라 내용이 잘렸다.
+/// ⭐ 이슈 #32 Phase 1 — 탭별 창 크기 테이블은 없앴다(원본 SuperKey 는 탭마다
+/// 창을 리사이즈하지만, 이 클론은 단일 크기로 고정하고 사용자가 조절한 크기를
+/// 영속화하기로 결정했다). `settings.html` 문서 주석이 이 새 사실 — "탭 전환은
+/// 더 이상 창 크기를 바꾸지 않는다"와, 기본 크기의 근거(825×821, main.rs
+/// `SETTINGS_WINDOW_DEFAULT` 주석이 실측값을 댄다) — 을 정확히 인용하는지
+/// 방어적으로 확인한다.
 #[test]
-fn settings_html_문서가_탭_창_크기_명세값을_인용한다() {
+fn settings_html_문서가_탭_전환은_창_크기를_바꾸지_않는다고_설명한다() {
     let html = read_settings_html();
-    for token in ["555×378", "710×517", "825×527", "613×484", "613×273"] {
-        assert!(
-            html.contains(token),
-            "settings.html 문서 주석에 탭 창 크기 {token} 이 보이지 않는다 — \
-             preferences-ui.md §3.1 실측값(Seek 555×378 · Hyperkey 710×517 · \
-             Presets 825×527 · Korean 613×484(실측) · General 613×273 pt)과 \
-             어긋났을 수 있다."
-        );
-    }
+    assert!(
+        html.contains("탭 전환은") && html.contains("창 크기를 바꾸지 않는다"),
+        "settings.html 의 탭 목록 주석이 '탭 전환은 더 이상 창 크기를 바꾸지 \
+         않는다'는 사실을 더는 설명하지 않는다 — 이슈 #32 Phase 1 로 동작이 \
+         바뀌었으니 문서 주석도 같이 갱신해야 한다."
+    );
+    assert!(
+        html.contains("825×821"),
+        "settings.html 문서 주석에 설정 창 기본 크기 825×821(main.rs \
+         SETTINGS_WINDOW_DEFAULT 의 실측 근거)이 보이지 않는다."
+    );
 }
 
-/// `main.rs` 의 `tab_window_size` 가 `korean` 탭을 알고, `settings_html_문서가_탭_창_크기_
-/// 명세값을_인용한다` 와 같은 값(613×484)을 쓰는지 소스 텍스트로 확인한다. 실제 반환값
-/// 자체는 `src/main.rs` 유닛 테스트(`tests::tab_window_size_matches_spec_values`)가 검증한다
-/// — 여기서는 "그 커맨드가 korean 을 다루는가"라는 배선 자체를 재발 방지 관점에서 본다.
+/// `main.rs` 의 `KNOWN_TABS` 화이트리스트가 `korean`·`keyboards` 를 아는지
+/// 소스 텍스트로 재확인한다. 실제 판정 로직(`is_known_tab`)의 동작 자체는
+/// `src/main.rs` 유닛 테스트(`tests::is_known_tab_knows_all_six_tabs`,
+/// `tests::every_tab_in_settings_html_is_a_known_tab`)가 검증한다 — 여기서는
+/// "그 화이트리스트가 이 탭들을 다루는가"라는 배선 자체를 재발 방지 관점에서
+/// 본다(이슈 #28: `Keyboards` 탭이 화이트리스트에 없어 설정 창 전체가 오류
+/// 화면으로 죽었던 결함). 이슈 #32 Phase 1 에서 탭별 창 크기 테이블(예전
+/// `tab_window_size`)은 없앴지만, 화이트리스트 자체와 이 재발 방지 테스트는
+/// 그대로 남는다 — 크기와 무관하게 지켜야 하는 불변조건이기 때문이다.
 #[test]
-fn main_rs_의_tab_window_size가_korean_탭_크기를_안다() {
+fn main_rs_의_known_tabs가_korean과_keyboards를_안다() {
     let main_rs = read_main_rs();
     assert!(
-        main_rs.contains("\"korean\" => Some((613, 484))"),
-        "main.rs 의 tab_window_size() 가 \"korean\" => Some((613, 484)) 을 반환하지 않는다"
+        main_rs.contains(
+            "const KNOWN_TABS: &[&str] = &[\"seek\", \"hyperkey\", \"presets\", \"korean\", \"keyboards\", \"general\"];"
+        ),
+        "main.rs 의 KNOWN_TABS 화이트리스트가 예상한 6개 탭을 그대로 담고 있지 않다"
     );
 }
 
 /// ⭐ F-15 §8 회귀 방지 — **환경설정 창을 열기만 해서는 `settings.json` 이 생기면 안 된다.**
 ///
-/// 창을 처음 그릴 때도 탭 크기를 맞추려고 `settings_set_tab` 을 부르는데, 그때 `ui.lastTab`
-/// 까지 저장해 버리면 "설정을 한 번도 건드리지 않으면 저장 파일이 아예 생기지 않는다"가
-/// 첫 실행에서 바로 깨진다. 그래서 최초 렌더는 `persist: false` 로 부른다 — 이 테스트는
-/// 그 호출 규약이 유지되는지를 지킨다(이 규약이 깨져도 다른 테스트는 전부 통과한다).
+/// 창을 처음 그릴 때도 탭 상태를 맞추려고 `settings_set_tab` 을 부르는데(이슈 #32
+/// Phase 1 부터 이 호출은 창을 리사이즈하지 않는다 — 탭 화이트리스트 검증만
+/// 한다), 그때 `ui.lastTab` 까지 저장해 버리면 "설정을 한 번도 건드리지 않으면
+/// 저장 파일이 아예 생기지 않는다"가 첫 실행에서 바로 깨진다. 그래서 최초 렌더는
+/// `persist: false` 로 부른다 — 이 테스트는 그 호출 규약이 유지되는지를 지킨다
+/// (이 규약이 깨져도 다른 테스트는 전부 통과한다).
 #[test]
-fn 최초_렌더는_탭을_저장하지_않고_리사이즈만_한다() {
+fn 최초_렌더는_탭을_저장하지_않는다() {
     let html = read_settings_html();
 
     assert!(
@@ -993,21 +1001,8 @@ fn settings_html_의_preferences_keyboards_점_리터럴이_en_ko_양쪽_카탈�
     );
 }
 
-/// 탭별 창 크기 문서 주석(§3.1.4)에 `Keyboards` 값이 있고, 그 값이 **잠정값이며
-/// 실측이 아니라는 사실**을 정직하게 밝히고 있다 — 명세 §3.1.4 가 이 탭은 신설이라
-/// 실측 근거가 없다고 명시했으므로, 다른 탭들(전부 실측)과 같은 방식으로 확정값인
-/// 것처럼 적으면 안 된다.
-#[test]
-fn settings_html_문서가_keyboards_탭_창_크기를_잠정값으로_밝힌다() {
-    let html = read_settings_html();
-    assert!(
-        html.contains("Keyboards 710×517"),
-        "settings.html 문서 주석에 Keyboards 탭의 잠정 창 크기(710×517, Hyperkey 값 \
-         재사용)가 보이지 않는다"
-    );
-    assert!(
-        html.contains("잠정값, 실측 아님"),
-        "settings.html 문서 주석이 Keyboards 탭 창 크기를 잠정값이라고 밝히지 않는다 — \
-         per-device-settings.md §3.1.4 는 이 탭이 신설이라 실측 근거가 없다고 명시했다"
-    );
-}
+// ⛔ `settings_html_문서가_keyboards_탭_창_크기를_잠정값으로_밝힌다` (예전 테스트) —
+// 이슈 #32 Phase 1 에서 탭별 창 크기 테이블 자체를 없앴으므로 "Keyboards 탭만
+// 잠정값"이라는 전제가 더는 성립하지 않는다. 걷어냈다. `Keyboards` 665px 는 이제
+// `SETTINGS_WINDOW_DEFAULT` 의 실측 목록(2026-08-30) 중 하나로 다른 5개 탭과
+// 동등하게 실측되어 있다 — main.rs 의 그 상수 doc 주석 참고.
