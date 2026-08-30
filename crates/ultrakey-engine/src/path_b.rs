@@ -463,8 +463,7 @@ mod tests {
 
     #[test]
     fn desired_mappings_for_f18_alias_installs_caps_lock_to_f18() {
-        let mut cfg = EngineConfig::default();
-        cfg.caps_lock_alias = Some(KeyCode::F18);
+        let cfg = EngineConfig { caps_lock_alias: Some(KeyCode::F18), ..Default::default() };
         assert_eq!(
             desired_mappings_for(&cfg),
             vec![KeyMapping { src: HID_USAGE_CAPS_LOCK, dst: HID_USAGE_F18 }]
@@ -473,8 +472,7 @@ mod tests {
 
     #[test]
     fn desired_mappings_for_non_f18_alias_is_empty_and_defensive() {
-        let mut cfg = EngineConfig::default();
-        cfg.caps_lock_alias = Some(KeyCode::ESCAPE);
+        let cfg = EngineConfig { caps_lock_alias: Some(KeyCode::ESCAPE), ..Default::default() };
         assert!(desired_mappings_for(&cfg).is_empty());
     }
 }
