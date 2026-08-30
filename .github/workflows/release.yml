@@ -67,7 +67,7 @@ jobs:
           set -euo pipefail
           # tauri-bundler 는 환경 변수의 "존재"(var_os) 로 서명 여부를 판정한다 —
           # 빈 문자열도 존재로 잡아 빈 인증서 임포트를 시도해 실패한다. 또한 공증
-          # 자격이 부분적으로만 있으면(사원증+암호 있고 Team ID 없음) MissingTeamId
+          # 자격이 부분적으로만 있으면(APPLE_ID+APPLE_PASSWORD 있고 Team ID 없음) MissingTeamId
           # 로 하드 실패한다. 그래서 불완전한 그룹은 빌드 직전에 환경에서 제거한다.
           # 근거: tauri-apps/tauri crates/tauri-bundler/src/bundle/macos/{sign,app}.rs
           SIGNED=false
