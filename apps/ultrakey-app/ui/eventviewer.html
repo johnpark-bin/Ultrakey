@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ⭐ "Ultrakey" 는 브랜드 고유명사라 번역 대상이 아니다(settings.html 과 같은 근거).
+     실제 창 제목은 Rust 쪽 WebviewWindowBuilder 가 정한다. -->
+<title>Ultrakey — Event Viewer</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: Canvas;
+    color: CanvasText;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── 상단 바 ─────────────────────────────────────────────────────────── */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    background: color-mix(in srgb, currentColor 4%, transparent);
+    flex: 0 0 auto;
+  }
+  .toolbar button {
+    all: unset; box-sizing: border-box; cursor: pointer;
+    padding: 4px 10px; border-radius: 6px; font: inherit;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  }
+  .toolbar button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .toolbar button:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
+  .toolbar label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .spacer { flex: 1 1 auto; }
+  .state { font-size: 12px; opacity: .7; }
+  .state.paused { color: color-mix(in srgb, orange 70%, CanvasText); opacity: 1; }
+
+  /* ── 안내(권한 없음 등) ─────────────────────────────────────────────── */
+  #notice {
+    margin: 0; padding: 8px 12px; font-size: 12px;
+    background: color-mix(in srgb, orange 18%, Canvas);
+    border-bottom: 1px solid color-mix(in srgb, orange 40%, transparent);
+  }
+  #notice[hidden] { display: none; }
+
+  /* ── 표 ──────────────────────────────────────────────────────────────── */
+  .scroll { flex: 1 1 auto; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: Canvas;
+    text-align: left; font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; opacity: .6;
+    padding: 6px 8px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  }
+  tbody td {
+    padding: 4px 8px; vertical-align: top;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 7%, transparent);
+  }
+  tbody tr:hover { background: color-mix(in srgb, currentColor 5%, transparent); }
+
+  /* ⭐ 이 창의 핵심 질문은 "내가 누른 것이 그대로 나갔는가, 아니면 Ultrakey 가 먹고
+     다른 것을 냈는가"다. 그래서 소비된 줄을 색 막대로 구분한다(event-viewer.md §3.3). */
+  tr.consumed { background: color-mix(in srgb, Highlight 9%, transparent); }
+  tr.consumed td:first-child { box-shadow: inset 3px 0 0 Highlight; }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }
+  .dim { opacity: .55; }
+  .mods { letter-spacing: .06em; }
+  .rule { font-weight: 600; }
+  .rule.none { font-weight: 400; opacity: .5; }
+  .emit { display: block; }
+  .arrow { opacity: .4; padding: 0 2px; }
+
+  /* ── 하단 상태 줄 ────────────────────────────────────────────────────── */
+  .statusbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 12px;
+    padding: 5px 12px; font-size: 11px; opacity: .7;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .statusbar .dropped { color: color-mix(in srgb, orange 70%, CanvasText); opacity: 1; }
+
+  #empty { padding: 28px; text-align: center; opacity: .5; font-size: 12px; }
+  #empty[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button id="pause" type="button">Pause</button>
+  <button id="clear" type="button">Clear</button>
+  <label><input type="checkbox" id="autoscroll" checked /> Auto-scroll</label>
+  <span class="spacer"></span>
+  <span class="state" id="state">Listening…</span>
+</div>
+
+<p id="notice" hidden></p>
+
+<div class="scroll" id="scroll">
+  <p id="empty">Press a key to see how Ultrakey interprets it.</p>
+  <table hidden id="table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Time</th>
+        <th>Input</th>
+        <th>Rule</th>
+        <th>Disposition</th>
+        <th>Output</th>
+        <th>Effects</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<div class="statusbar">
+  <span id="count">0 events</span>
+  <span id="dropped" class="dropped" hidden></span>
+  <span class="spacer"></span>
+  <span class="dim">Keyboard events only</span>
+</div>
+
+<script type="module">
+  // ⛔ 이 창의 문자열은 **번역하지 않는다**(event-viewer.md §9 항목 3). `KeyDown`·
+  // `Pass`·`Consume` 는 로그와 같은 성격의 기술 어휘이고, 사용자가 이 화면을 스크린샷
+  // 으로 붙여 문의할 때 로케일마다 문구가 다르면 대조가 어려워진다. 예외는 규칙 이름
+  // 하나 — 그것은 사용자가 설정 화면에서 본 그 이름이어야 하므로 백엔드가 카탈로그를
+  // 태워 보낸다.
+  const { invoke } = window.__TAURI__.core;
+
+  const $ = (id) => document.getElementById(id);
+
+  /** 화면에 유지하는 줄 수 상한. 백엔드 버퍼(500, §3.5)와 같은 크기로 맞춘다 —
+   *  DOM 이 무한히 자라면 진단 창을 열어 둔 채 하루를 보내는 사용자에게 문제가 된다. */
+  const MAX_ROWS = 500;
+
+  let lastSeq = 0;
+  let paused = false;
+  let total = 0;
+
+  function fmtTime(ms) {
+    const d = new Date(ms);
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  }
+
+  const MOD_GLYPH = {
+    // ⭐ modifier 기호는 로케일과 무관한 고정 글리프다
+    // (localization-and-input-sources.md §3.1.3).
+    control: "⌃", option: "⌥", command: "⌘", shift: "⇧",
+    capsLock: "⇪", fn: "fn",
+  };
+
+  function mods(list) {
+    if (!list || list.length === 0) return "";
+    return list.map((m) => MOD_GLYPH[m] || m).join("");
+  }
+
+  function hex(n) {
+    return "0x" + Number(n).toString(16).toUpperCase().padStart(2, "0");
+  }
+
+  function td(html, cls) {
+    const cell = document.createElement("td");
+    if (cls) cell.className = cls;
+    cell.innerHTML = html;
+    return cell;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function renderRow(r) {
+    const tr = document.createElement("tr");
+    if (r.disposition === "Consume") tr.classList.add("consumed");
+
+    tr.appendChild(td(String(r.seq), "mono dim"));
+    tr.appendChild(td(fmtTime(r.atMs), "mono dim"));
+
+    // 입력 — 원본 이벤트 그대로. alias 가 걸렸을 때만 판정 대상 keycode 를 덧붙인다.
+    let input = `<span class="mono">${esc(r.kind)} ${hex(r.keycode)}</span>`;
+    const m = mods(r.modifiers);
+    if (m) input += ` <span class="mods">${esc(m)}</span>`;
+    if (r.autorepeat) input += ` <span class="dim">↻</span>`;
+    if (r.aliasActive && r.resolvedKeycode !== r.keycode) {
+      input += ` <span class="arrow">→</span><span class="mono dim">${hex(r.resolvedKeycode)}</span>`;
+    }
+    tr.appendChild(td(input));
+
+    // 적용된 규칙 — 계층 + (있으면) 개별 규칙 이름.
+    const ruleName = r.ruleLabel || r.rule;
+    tr.appendChild(td(
+      ruleName
+        ? `<span class="rule">${esc(ruleName)}</span><br><span class="dim">${esc(r.layer)}</span>`
+        : `<span class="rule none">${esc(r.layer)}</span>`
+    ));
+
+    let disp = esc(r.disposition);
+    if (r.disposition === "PassWithFlags") {
+      disp += ` <span class="mono dim">${hex(r.dispositionFlags)}</span>`;
+    }
+    tr.appendChild(td(disp, "mono"));
+
+    // 출력 — 실제로 합성해 내보낸 이벤트.
+    const emitted = (r.emitted || []).map((e) => {
+      const em = mods(e.modifiers);
+      return `<span class="emit mono">${esc(e.kind)} ${hex(e.keycode)}${em ? ` <span class="mods">${esc(em)}</span>` : ""}</span>`;
+    }).join("");
+    tr.appendChild(td(emitted || '<span class="dim">—</span>'));
+
+    const effects = (r.effects || []).slice();
+    if (r.pathC) effects.push(r.pathC);
+    tr.appendChild(td(
+      effects.length ? effects.map((e) => `<span class="emit">${esc(e)}</span>`).join("") : '<span class="dim">—</span>',
+      "mono"
+    ));
+
+    return tr;
+  }
+
+  function append(records) {
+    const rows = $("rows");
+    const frag = document.createDocumentFragment();
+    for (const r of records) frag.appendChild(renderRow(r));
+    rows.appendChild(frag);
+
+    while (rows.childElementCount > MAX_ROWS) rows.removeChild(rows.firstElementChild);
+
+    total += records.length;
+    $("count").textContent = `${total} event${total === 1 ? "" : "s"}`;
+    if (total > 0) {
+      $("empty").hidden = true;
+      $("table").hidden = false;
+    }
+    if ($("autoscroll").checked) {
+      const s = $("scroll");
+      s.scrollTop = s.scrollHeight;
+    }
+  }
+
+  function showNotice(text) {
+    const n = $("notice");
+    if (text) { n.textContent = text; n.hidden = false; }
+    else { n.hidden = true; }
+  }
+
+  async function poll() {
+    try {
+      const res = await invoke("eventviewer_poll", { afterSeq: lastSeq });
+
+      // ⭐ 관찰할 수 있는 상태인지 먼저 알린다(§5 항목 1·2) — 권한이 없으면
+      // 이벤트가 영영 오지 않는데, 화면이 그냥 비어 있으면 사용자는 "고장났나"만
+      // 알 수 있고 "권한이 없다"는 알 수 없다.
+      showNotice(res.notice || "");
+
+      if (res.dropped > 0) {
+        const d = $("dropped");
+        d.textContent = `${res.dropped} dropped (ring full)`;
+        d.hidden = false;
+      }
+
+      const records = res.records || [];
+      if (records.length > 0) {
+        lastSeq = records[records.length - 1].seq;
+        if (!paused) append(records);
+      }
+    } catch (e) {
+      showNotice("Event Viewer is not available: " + String(e));
+    }
+  }
+
+  $("pause").addEventListener("click", () => {
+    paused = !paused;
+    $("pause").textContent = paused ? "Resume" : "Pause";
+    $("state").textContent = paused ? "Paused — still recording" : "Listening…";
+    $("state").classList.toggle("paused", paused);
+  });
+
+  $("clear").addEventListener("click", () => {
+    $("rows").replaceChildren();
+    total = 0;
+    $("count").textContent = "0 events";
+    $("dropped").hidden = true;
+    $("table").hidden = true;
+    $("empty").hidden = false;
+    invoke("eventviewer_clear").catch(() => {});
+  });
+
+  // ⭐ 폴링이다. emit 으로 밀면 빠르게 타이핑할 때 WebView 가 렌더보다 메시지를 더
+  // 많이 받는다(§3.5 기각한 대안). 100ms 면 사람 눈에는 실시간이다.
+  setInterval(poll, 100);
+  poll();
+</script>
+</body>
+</html>

@@ -10,6 +10,8 @@ use crate::rules::RuleTable;
 
 pub mod keys;
 pub mod store;
+/// 설정 export / import (F-15 §3.4, 이슈 #39).
+pub mod transfer;
 pub use store::*;
 
 /// `Apply modifiers to keypress events and:` 4개 체크박스(`hyperkey.md` §3.3).

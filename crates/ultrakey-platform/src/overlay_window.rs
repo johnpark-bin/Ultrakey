@@ -138,11 +138,11 @@ impl NsWindowHandle {
     #[must_use]
     pub fn from_tauri_ptr(ptr: *mut core::ffi::c_void) -> Option<Self> {
         if ptr.is_null() {
-            tracing::error!("ns_window() 가 널을 돌려줬다 — 오버레이 창을 네이티브로 설정할 수 없다");
+            tracing::error!("ns_window() returned null; cannot apply native overlay window settings");
             return None;
         }
         if !imp::is_ns_window(ptr) {
-            tracing::error!("ns_window() 가 준 포인터가 NSWindow 가 아니다 — 설정을 건너뛴다");
+            tracing::error!("ns_window() returned a pointer that is not an NSWindow; skipping setup");
             return None;
         }
         Some(Self { ptr })
@@ -276,7 +276,7 @@ mod imp {
             return true; // 이미 했다.
         }
         let Some(method) = cls.instance_method(sel) else {
-            tracing::error!("클래스에 {sel:?} 가 없다 — 스위즐하지 않는다");
+            tracing::error!("class has no {sel:?}; skipping swizzle");
             return false;
         };
         // SAFETY: `method` 는 방금 이 클래스에서 얻은 유효한 메서드다.
@@ -301,7 +301,7 @@ mod imp {
                 true
             }
             None => {
-                tracing::error!("{sel:?} 스위즐이 원래 구현을 돌려주지 않았다");
+                tracing::error!("swizzling {sel:?} did not return the original implementation");
                 false
             }
         }
@@ -344,7 +344,7 @@ mod imp {
             tracing::info!(
                 class = %cls.name().to_string_lossy(),
                 registered = list.len(),
-                "⭐ 이 창을 비활성 창으로 등록했다(표적 스위즐)"
+                "registered this window as non-activating (targeted swizzle)"
             );
             true
         } else {
@@ -363,7 +363,7 @@ mod imp {
         if obj.downcast_ref::<NSWindow>().is_some() {
             return true;
         }
-        tracing::error!(class = %obj.class().name().to_string_lossy(), "NSWindow 가 아닌 객체다");
+        tracing::error!(class = %obj.class().name().to_string_lossy(), "object is not an NSWindow");
         false
     }
 
@@ -371,7 +371,7 @@ mod imp {
     pub(super) fn configure(ptr: *mut core::ffi::c_void, kind: OverlayWindowKind, sharing: Sharing) -> bool {
         // SAFETY: 호출자 계약 — `ptr` 는 Tauri 가 방금 내준 살아 있는 NSWindow.
         let Some(w) = (unsafe { window(ptr) }) else {
-            tracing::error!("ns_window() 가 널을 돌려줬다 — 오버레이 창을 네이티브로 설정하지 못한다");
+            tracing::error!("ns_window() returned null; failed to apply native overlay window settings");
             return false;
         };
 

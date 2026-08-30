@@ -63,7 +63,7 @@ pub fn d1_for(cfg: &EngineConfig) -> Option<KeyMapping> {
             // D-1 은 F18 로 고정돼 있다(architecture.md §6.1) — 다른 값이 들어오면
             // 설계 위반이다. 지어낸 매핑을 만들지 않고 방어적으로 None 을 돌려준다.
             tracing::error!(
-                "caps_lock_alias 가 F18 이 아니다 — D-1 설계 위반, 경로 B 매핑을 만들지 않는다"
+                "caps_lock_alias is not F18; a D-1 design violation, not creating a Path B mapping"
             );
             None
         }
@@ -249,16 +249,16 @@ impl PathBManager {
             Ok(cleared) => {
                 if cleared {
                     tracing::info!(
-                        "전역 D-1 잔재(구버전이 매칭 없이 설치한 caps lock → F18)를 \
-                         발견해 제거했다(D-17-5)"
+                        "found and removed a global D-1 leftover (caps lock → F18 installed \
+                         without a matching config by an older version, D-17-5)"
                     );
                 } else {
-                    tracing::debug!("전역 D-1 잔재가 없다 — 이관할 것이 없다");
+                    tracing::debug!("no global D-1 leftover; nothing to migrate");
                 }
                 cleared
             }
             Err(e) => {
-                tracing::warn!(error = %e, "전역 D-1 잔재 이관 시도가 실패했다 — 계속 진행한다");
+                tracing::warn!(error = %e, "global D-1 leftover migration attempt failed; continuing anyway");
                 false
             }
         }
@@ -296,7 +296,7 @@ impl PathBManager {
             tracing::warn!(
                 error = %e,
                 device = device.as_str(),
-                "원장 저장 실패(쓰기 전 상위집합) — 계속 진행한다"
+                "ledger save failed (pre-write superset); continuing anyway"
             );
         }
 
@@ -322,8 +322,8 @@ impl PathBManager {
                     src = format!("{:#x}", m.src),
                     dst = format!("{:#x}", m.dst),
                     device = device.as_str(),
-                    "남의 매핑이 이 디바이스의 F-17 설정과 같은 소스 키를 요구해 \
-                     이번 쓰기에서 제외한다(D-17-6 — 우리가 이긴다)"
+                    "a foreign mapping claims the same source key as this device's F-17 \
+                     settings; excluding it from this write (D-17-6 — we win)"
                 );
                 false
             } else {
@@ -355,7 +355,7 @@ impl PathBManager {
             tracing::warn!(
                 error = %e,
                 device = device.as_str(),
-                "원장 저장 실패(쓰기 후 정확집합) — 계속 진행한다"
+                "ledger save failed (post-write exact set); continuing anyway"
             );
         }
 

@@ -1,4 +1,5 @@
-//! F-14(A) 문자열 카탈로그 — 제품 결정 D4(한국어 + 영어 현지화 채택, 이슈 #5).
+//! F-14(A) 문자열 카탈로그 — 제품 결정 D4(한국어 + 영어 현지화 채택, 이슈 #5),
+//! 이슈 #39 로 `zh`·`es`·`ja` 를 더해 5종으로 확장.
 //!
 //! ⭐ `docs/spec/localization-and-input-sources.md` §3.1.5 "단일 소스" 결정을 그대로
 //! 따른다: 로케일당 카탈로그 파일 1개(`resources/i18n/<locale>.json`, 평평한 키-값
@@ -12,17 +13,32 @@
 //! 리소스로도 서빙해 WebView 가 `fetch` 로 읽게 하는 설정은 이 크레이트의 책임이
 //! 아니라 `apps/ultrakey-app` 소관이다 — 카탈로그 파일은 여기서 소유하되, 번들링
 //! 방법은 앱 크레이트가 결정한다.
+//!
+//! ## 왜 5종인가
+//!
+//! §3.1.1 은 원래 D4 로 한국어·영어 두 개만 확정했으나, 이슈 #39(사용자 요구)로
+//! `zh`(간체 중국어)·`es`(스페인어)·`ja`(일본어)가 더해져 5종이 됐다. 이 확장도
+//! 원본 SuperKey 를 따라가는 것이 아니라 **클론 고유의 제품 결정**이라는 D4 의
+//! 성격은 그대로다 — SuperKey 는 애초에 현지화 기능이 없다(§1).
 
 use std::collections::HashMap;
 
-/// 클론이 지원하기로 결정한 로케일(제품 결정 D4: 한국어 + 영어).
+/// 클론이 지원하기로 결정한 로케일(제품 결정 D4, 이슈 #39 로 5종 확장).
 ///
-/// §3.1.1 은 "확정된 로케일 목록 없음, 클론이 정할 문제"라고 판정했고, D4 로
-/// 한국어·영어 두 개로 확정됐다.
+/// §3.1.1 표: `en`(기본/폴백) · `ko` · `zh`(간체) · `es` · `ja`. 다섯 개 전부
+/// LTR 이라 §3.1.4 의 RTL 미러링 규칙은 현재 적용 대상이 없다.
+///
+/// ⚠️ **번체 중국어(`zh-Hant`·`zh-TW`·`zh-HK`)는 이 목록에 없다.** 간체 카탈로그로
+/// 대신 채우지 않는다 — 두 표기 체계는 어휘까지 다르고, 간체를 번체 사용자에게
+/// 보여주는 것이 영어를 보여주는 것보다 낫다는 근거가 없다(§3.1.1). 번체가
+/// 필요해지면 `zh-Hant` 를 **별도 카탈로그로** 추가하는 것이 맞는 방향이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Locale {
     En,
     Ko,
+    Zh,
+    Es,
+    Ja,
 }
 
 impl Locale {
@@ -31,6 +47,28 @@ impl Locale {
         match self {
             Locale::En => "en",
             Locale::Ko => "ko",
+            Locale::Zh => "zh",
+            Locale::Es => "es",
+            Locale::Ja => "ja",
+        }
+    }
+
+    /// `General` 탭 언어 선택 UI 에 쓰는, **그 언어 자신의 이름**(endonym).
+    ///
+    /// ⭐ 현재 UI 로케일이 무엇이든 항상 같은 값을 반환한다 — `Korean`·`Chinese`
+    /// 처럼 현재 UI 언어로 이름을 쓰면, 잘못된 언어로 앱이 떠서 아무것도 못
+    /// 읽는 사용자가 자기 언어를 목록에서 찾지 못한다. 언어 선택 팝업은 "지금
+    /// UI 를 읽을 수 없는 사람"이 쓰는 유일한 컨트롤이므로, 그 목록만은 현재
+    /// 로케일과 무관해야 한다(`localization-and-input-sources.md` §3.1.2-a).
+    /// (`System` 항목은 이 함수의 범위 밖이다 — 그것을 고르는 사람은 이미 UI 를
+    /// 읽을 수 있는 상태이므로 일반 카탈로그 키로 번역한다.)
+    pub fn endonym(self) -> &'static str {
+        match self {
+            Locale::En => "English",
+            Locale::Ko => "한국어",
+            Locale::Zh => "中文",
+            Locale::Es => "Español",
+            Locale::Ja => "日本語",
         }
     }
 
@@ -39,19 +77,38 @@ impl Locale {
     /// §3.1.2 절차 3 은 "정확히 일치하는 지역 변형이 없으면 언어 코드만으로
     /// 폴백한다"고 정했다 — 이 함수는 그 폴백까지 포함해, 태그의 첫 서브태그
     /// (언어 서브태그)만 보고 판정한다. 스크립트·지역 서브태그(`ko-Kore-KR` 의
-    /// `Kore`·`KR`)는 무시한다.
+    /// `Kore`·`KR`)는 원칙적으로 무시한다.
+    ///
+    /// ⭐ 단 하나의 예외가 `zh` 다 — 번체 중국어를 간체 카탈로그로 접지 않기
+    /// 위해(§3.1.1), `zh` 는 언어 서브태그만으로 판정을 끝내지 않고 스크립트·
+    /// 지역 서브태그까지 함께 본다. `Hant`·`TW`·`HK` 서브태그가 하나라도 있으면
+    /// 번체로 보고 `None` 을 돌려줘 `en` 으로 폴백시킨다(대소문자 무관).
     pub fn from_language_tag(tag: &str) -> Option<Self> {
-        let lang = tag.split('-').next().unwrap_or(tag);
-        match lang.to_ascii_lowercase().as_str() {
+        let mut subtags = tag.split('-');
+        let lang = subtags.next().unwrap_or(tag).to_ascii_lowercase();
+        match lang.as_str() {
             "en" => Some(Locale::En),
             "ko" => Some(Locale::Ko),
+            "es" => Some(Locale::Es),
+            "ja" => Some(Locale::Ja),
+            "zh" => {
+                let is_traditional = subtags.any(|sub| {
+                    let sub = sub.to_ascii_lowercase();
+                    sub == "hant" || sub == "tw" || sub == "hk"
+                });
+                if is_traditional {
+                    None
+                } else {
+                    Some(Locale::Zh)
+                }
+            }
             _ => None,
         }
     }
 
-    /// 클론이 지원하는 로케일 전체 목록.
+    /// 클론이 지원하는 로케일 전체 목록. `En` 이 기본·폴백이므로 항상 첫 번째다.
     pub fn all() -> &'static [Locale] {
-        &[Locale::En, Locale::Ko]
+        &[Locale::En, Locale::Ko, Locale::Zh, Locale::Es, Locale::Ja]
     }
 }
 
@@ -59,6 +116,12 @@ impl Locale {
 const EN_JSON: &str = include_str!("../../../resources/i18n/en.json");
 /// ko 카탈로그 원본. 컴파일 타임에 임베드된다.
 const KO_JSON: &str = include_str!("../../../resources/i18n/ko.json");
+/// zh(간체) 카탈로그 원본. 컴파일 타임에 임베드된다.
+const ZH_JSON: &str = include_str!("../../../resources/i18n/zh.json");
+/// es 카탈로그 원본. 컴파일 타임에 임베드된다.
+const ES_JSON: &str = include_str!("../../../resources/i18n/es.json");
+/// ja 카탈로그 원본. 컴파일 타임에 임베드된다.
+const JA_JSON: &str = include_str!("../../../resources/i18n/ja.json");
 
 /// 임베드된 카탈로그 JSON 을 평평한 키-값 맵으로 파싱한다.
 ///
@@ -74,6 +137,9 @@ fn raw_for(locale: Locale) -> &'static str {
     match locale {
         Locale::En => EN_JSON,
         Locale::Ko => KO_JSON,
+        Locale::Zh => ZH_JSON,
+        Locale::Es => ES_JSON,
+        Locale::Ja => JA_JSON,
     }
 }
 
@@ -207,26 +273,88 @@ mod tests {
             .collect()
     }
 
-    /// ⭐ 커버리지 테스트 — §8(A) 수용 기준("두 경로 사이에 번역 키 누락 차이가
-    /// 없다")을 자동으로 지키는 장치. en/ko 의 키 집합이 완전히 같아야 한다.
+    /// 다섯 카탈로그 전부의 (코드, JSON 원본) 쌍. 테스트들이 공통으로 순회한다.
+    fn all_catalog_jsons() -> [(&'static str, &'static str); 5] {
+        [
+            ("en", EN_JSON),
+            ("ko", KO_JSON),
+            ("zh", ZH_JSON),
+            ("es", ES_JSON),
+            ("ja", JA_JSON),
+        ]
+    }
+
+    /// 문자열에 등장하는 위치 인자 `{0}`, `{1}` … 의 인덱스 집합을 뽑는다.
+    /// `format()` 이 실제로 치환하는 패턴(`{숫자}`)만 본다 — 그 밖의 중괄호는
+    /// 대상이 아니다.
+    fn placeholder_indices(s: &str) -> BTreeSet<u32> {
+        let mut indices = BTreeSet::new();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'{' {
+                if let Some(end) = s[i + 1..].find('}') {
+                    let inner = &s[i + 1..i + 1 + end];
+                    if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                        if let Ok(n) = inner.parse::<u32>() {
+                            indices.insert(n);
+                        }
+                    }
+                    i += end + 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        indices
+    }
+
+    /// ⭐ 커버리지 테스트 — §8(A) 수용 기준("경로 사이에 번역 키 누락 차이가
+    /// 없다")을 자동으로 지키는 장치. en 을 기준으로 나머지 네 카탈로그의 키
+    /// 집합이 완전히 같아야 한다(하위 호환을 위해 옛 이름도 남긴다).
     #[test]
     fn en_ko_key_sets_are_identical() {
         let en = key_set(&raw_value(EN_JSON));
-        let ko = key_set(&raw_value(KO_JSON));
-
-        let only_in_en: Vec<_> = en.difference(&ko).cloned().collect();
-        let only_in_ko: Vec<_> = ko.difference(&en).cloned().collect();
-
-        assert!(
-            only_in_en.is_empty() && only_in_ko.is_empty(),
-            "en/ko 카탈로그 키 집합이 다릅니다.\nen 에만 있음: {only_in_en:?}\nko 에만 있음: {only_in_ko:?}"
-        );
+        for (name, json) in all_catalog_jsons() {
+            if name == "en" {
+                continue;
+            }
+            let other = key_set(&raw_value(json));
+            let only_in_en: Vec<_> = en.difference(&other).cloned().collect();
+            let only_in_other: Vec<_> = other.difference(&en).cloned().collect();
+            assert!(
+                only_in_en.is_empty() && only_in_other.is_empty(),
+                "en/{name} 카탈로그 키 집합이 다릅니다.\nen 에만 있음: {only_in_en:?}\n{name} 에만 있음: {only_in_other:?}"
+            );
+        }
     }
 
-    /// 두 파일 모두 유효한 flat JSON — 값이 전부 문자열이고 중첩이 없다.
+    /// `Locale::all()` 을 돌며 en 과 키 집합이 정확히 같은지 검증한다. 위
+    /// `en_ko_key_sets_are_identical` 과 같은 불변식을 로케일 목록(`Locale::all`)
+    /// 기준으로 다시 확인한다 — 목록이 늘어나도 이 테스트가 자동으로 따라간다.
     #[test]
-    fn catalogs_are_flat_string_maps() {
-        for (name, json) in [("en", EN_JSON), ("ko", KO_JSON)] {
+    fn all_catalogs_have_identical_key_sets() {
+        let en = key_set(&raw_value(EN_JSON));
+        for locale in Locale::all() {
+            if *locale == Locale::En {
+                continue;
+            }
+            let other = key_set(&raw_value(raw_for(*locale)));
+            let only_in_en: Vec<_> = en.difference(&other).cloned().collect();
+            let only_in_other: Vec<_> = other.difference(&en).cloned().collect();
+            assert!(
+                only_in_en.is_empty() && only_in_other.is_empty(),
+                "en/{} 카탈로그 키 집합이 다릅니다.\nen 에만 있음: {only_in_en:?}\n{} 에만 있음: {only_in_other:?}",
+                locale.code(),
+                locale.code(),
+            );
+        }
+    }
+
+    /// 다섯 파일 모두 유효한 flat JSON — 값이 전부 문자열이고 중첩이 없다.
+    #[test]
+    fn all_catalogs_are_flat_string_maps() {
+        for (name, json) in all_catalog_jsons() {
             let value = raw_value(json);
             let object = value
                 .as_object()
@@ -240,6 +368,52 @@ mod tests {
         }
     }
 
+    /// ⭐ 각 키에 대해 en 값의 `{0}`,`{1}`… 위치 인자 집합과 다른 로케일 값의
+    /// 집합이 같은지 검증한다. 다르면 `format()` 이 조용히 인자 개수가 안 맞는
+    /// 문장을 만들어낸다(치환 안 된 `{0}` 이 그대로 노출되거나, 인자가 버려짐).
+    #[test]
+    fn all_catalogs_preserve_positional_placeholders() {
+        let en = raw_value(EN_JSON);
+        let en_obj = en.as_object().expect("en 최상위는 객체여야 한다");
+
+        for (name, json) in all_catalog_jsons() {
+            if name == "en" {
+                continue;
+            }
+            let value = raw_value(json);
+            let obj = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} 카탈로그 최상위는 객체여야 한다"));
+            for (key, en_v) in en_obj {
+                let Some(other_v) = obj.get(key) else {
+                    // 키 누락은 다른 테스트(all_catalogs_have_identical_key_sets)가 잡는다.
+                    continue;
+                };
+                let en_placeholders = placeholder_indices(en_v.as_str().unwrap_or_default());
+                let other_placeholders = placeholder_indices(other_v.as_str().unwrap_or_default());
+                assert_eq!(
+                    en_placeholders, other_placeholders,
+                    "{name} 카탈로그의 \"{key}\" 위치 인자 집합이 en 과 다릅니다.\nen: {en_placeholders:?}\n{name}: {other_placeholders:?}"
+                );
+            }
+        }
+    }
+
+    /// §3.1.3: 브랜드 고유명사는 번역 대상이 아니다 — `app.name` 은 로케일과
+    /// 무관하게 항상 `Ultrakey` 다. 다섯 카탈로그 전부를 확인한다.
+    #[test]
+    fn app_name_is_never_translated() {
+        for locale in Locale::all() {
+            let catalog = Catalog::for_locale(*locale);
+            assert_eq!(
+                catalog.get("app.name"),
+                "Ultrakey",
+                "{} 카탈로그의 app.name 이 번역되었다",
+                locale.code()
+            );
+        }
+    }
+
     #[test]
     fn from_language_tag_matches_language_subtag_only() {
         assert_eq!(Locale::from_language_tag("ko"), Some(Locale::Ko));
@@ -247,7 +421,49 @@ mod tests {
         assert_eq!(Locale::from_language_tag("ko-Kore-KR"), Some(Locale::Ko));
         assert_eq!(Locale::from_language_tag("en-US"), Some(Locale::En));
         assert_eq!(Locale::from_language_tag("de-CH"), None);
-        assert_eq!(Locale::from_language_tag("ja"), None);
+        assert_eq!(Locale::from_language_tag("fr"), None);
+    }
+
+    /// 지역 변형 태그가 언어 서브태그만으로 올바르게 폴백되는지 확인한다.
+    #[test]
+    fn from_language_tag_maps_regional_variants() {
+        assert_eq!(Locale::from_language_tag("ko-KR"), Some(Locale::Ko));
+        assert_eq!(Locale::from_language_tag("zh-Hans-CN"), Some(Locale::Zh));
+        assert_eq!(Locale::from_language_tag("es-419"), Some(Locale::Es));
+        assert_eq!(Locale::from_language_tag("ja-JP"), Some(Locale::Ja));
+        assert_eq!(Locale::from_language_tag("en-GB"), Some(Locale::En));
+    }
+
+    /// ⭐ 이 테스트가 §3.1.1 의 결정("번체 중국어를 간체로 접지 않는다")의
+    /// 근거를 코드에 붙들어 둔다. `zh-Hant`·`zh-TW`·`zh-HK` 는 전부 `None` 을
+    /// 돌려줘 `en` 으로 폴백해야 한다 — 대소문자·서브태그 순서와 무관하게.
+    #[test]
+    fn traditional_chinese_falls_back_to_english() {
+        assert_eq!(Locale::from_language_tag("zh-Hant"), None);
+        assert_eq!(Locale::from_language_tag("zh-TW"), None);
+        assert_eq!(Locale::from_language_tag("zh-HK"), None);
+        assert_eq!(Locale::from_language_tag("ZH-Hant-TW"), None);
+
+        // 대조군: 간체·중립 zh 태그는 정상적으로 Zh 로 매핑된다.
+        assert_eq!(Locale::from_language_tag("zh"), Some(Locale::Zh));
+        assert_eq!(Locale::from_language_tag("zh-Hans"), Some(Locale::Zh));
+        assert_eq!(Locale::from_language_tag("zh-CN"), Some(Locale::Zh));
+        assert_eq!(Locale::from_language_tag("zh-SG"), Some(Locale::Zh));
+    }
+
+    /// endonym 다섯 개가 서로 다르고 비어 있지 않은지 확인한다.
+    #[test]
+    fn endonyms_are_distinct_and_non_empty() {
+        let names: Vec<&str> = Locale::all().iter().map(|l| l.endonym()).collect();
+        for name in &names {
+            assert!(!name.is_empty(), "endonym 이 비어 있다");
+        }
+        let unique: BTreeSet<&str> = names.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "endonym 이 서로 겹친다: {names:?}"
+        );
     }
 
     #[test]
@@ -261,6 +477,22 @@ mod tests {
     fn resolve_falls_back_to_en_when_nothing_matches() {
         let catalog = Catalog::resolve(&[]);
         assert_eq!(catalog.locale(), Locale::En);
+    }
+
+    /// 지원하지 않는 언어만 나열되면 `en` 으로 폴백한다.
+    #[test]
+    fn resolve_falls_back_to_english_for_unsupported_language() {
+        let tags = vec!["de-DE".to_string(), "fr".to_string()];
+        let catalog = Catalog::resolve(&tags);
+        assert_eq!(catalog.locale(), Locale::En);
+    }
+
+    /// 뒤가 아니라 **앞에서부터** 처음 매칭되는 태그를 채택해야 한다.
+    #[test]
+    fn resolve_picks_first_supported_language_in_order() {
+        let tags = vec!["de".to_string(), "ja".to_string(), "ko".to_string()];
+        let catalog = Catalog::resolve(&tags);
+        assert_eq!(catalog.locale(), Locale::Ja);
     }
 
     #[test]
@@ -286,16 +518,6 @@ mod tests {
         assert_eq!(modern, "Open System Settings");
         assert_eq!(legacy, "Open System Preferences");
         assert_ne!(modern, legacy);
-    }
-
-    /// §3.1.3: 브랜드 고유명사는 번역 대상이 아니다 — `app.name` 은 로케일과
-    /// 무관하게 항상 `Ultrakey` 다.
-    #[test]
-    fn app_name_is_not_translated() {
-        let en = Catalog::for_locale(Locale::En);
-        let ko = Catalog::for_locale(Locale::Ko);
-        assert_eq!(en.get("app.name"), "Ultrakey");
-        assert_eq!(ko.get("app.name"), "Ultrakey");
     }
 
     /// ko 카탈로그의 `entries()` 가 en 과 키 집합이 같고, 값 중 하나 이상이

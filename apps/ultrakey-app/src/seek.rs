@@ -203,7 +203,7 @@ impl SeekController {
         let frames = overlay.frames();
         let bar = overlay.search_bar_frame();
         if let Err(e) = self.renderer.present(&frames, &bar) {
-            tracing::warn!(error = ?e, "Seek 오버레이 렌더 실패");
+            tracing::warn!(error = ?e, "failed to render the Seek overlay");
         }
     }
 
@@ -213,7 +213,7 @@ impl SeekController {
         let Some(snapshot) = snapshot_activation_context(&env.app) else {
             tracing::error!(
                 ?path,
-                "메인 스레드 화면 스냅샷을 얻지 못해 Seek 활성화를 건너뛴다"
+                "failed to get main-thread screen snapshot; skipping Seek activation"
             );
             return;
         };
@@ -262,7 +262,7 @@ impl SeekController {
                             ?mode,
                             elapsed_ms,
                             matches = 0,
-                            "⭐ Seek 세션을 열었다"
+                            "seek session opened"
                         );
                     }
                 }
@@ -278,13 +278,13 @@ impl SeekController {
                             point_y = py,
                             modifiers = m.modifiers.0,
                             query = %m.query,
-                            "⭐ 확정"
+                            "confirmed"
                         );
                     }
                     // ⭐ ① 오버레이 해제가 항상 먼저다(F-04 §3.6) — ② 클릭 실행보다도.
                     let _ = self.renderer.hide();
                     if let Err(e) = self.executor.execute(&m) {
-                        tracing::error!(error = ?e, "Seek 클릭 실행 실패");
+                        tracing::error!(error = ?e, "failed to execute Seek click");
                     }
                     let more = self.machine.notify_click_finished();
                     self.apply_effects(more, env);
@@ -296,9 +296,9 @@ impl SeekController {
                         .store(false, Ordering::Release);
                     let _ = self.renderer.hide();
                     if env.trace {
-                        tracing::warn!(?reason, "세션 종료");
+                        tracing::warn!(?reason, "session ended");
                     } else {
-                        tracing::debug!(?reason, "Seek 세션 종료");
+                        tracing::debug!(?reason, "Seek session ended");
                     }
                 }
             }
@@ -354,7 +354,7 @@ fn spawn_detection(generation: u64, tx: Sender<SeekSignal>) {
             });
         });
     if let Err(e) = spawned {
-        tracing::error!(error = %e, "Seek 검출 스레드를 만들지 못했다");
+        tracing::error!(error = %e, "failed to create the Seek detection thread");
     }
 }
 
@@ -385,7 +385,7 @@ fn spawn_hotkey_forwarder(tx: Sender<SeekSignal>) {
             }
         });
     if let Err(e) = spawned {
-        tracing::error!(error = %e, "Seek 전역 단축키 포워더 스레드를 만들지 못했다");
+        tracing::error!(error = %e, "failed to spawn the Seek global-shortcut forwarder thread");
     }
 }
 
@@ -510,7 +510,7 @@ pub fn spawn(
             );
         });
     if let Err(e) = spawned {
-        tracing::error!(error = %e, "Seek 워커 스레드를 만들지 못했다 — Seek 은 이 세션에서 동작하지 않는다");
+        tracing::error!(error = %e, "failed to spawn the Seek worker thread; Seek will not work in this session");
     }
 
     tx
@@ -613,7 +613,7 @@ fn run_worker(
                         candidates = n,
                         arrived_at_ms,
                         matches,
-                        "⭐ 증분 수신"
+                        "incremental receive"
                     );
                 }
             }
@@ -646,7 +646,7 @@ fn run_worker(
                         .machine
                         .overlay()
                         .map_or(0, |o| o.search_bar_frame().total_matches);
-                    tracing::warn!(total_ms, ocr, ax, merged, matches, "검출 완료");
+                    tracing::warn!(total_ms, ocr, ax, merged, matches, "detection finished");
                 }
             }
         }
@@ -666,7 +666,7 @@ fn log_key_trace(controller: &SeekController, key_kind: SessionKey) {
                 .selected()
                 .map(|c| c.text.as_str())
                 .unwrap_or_default();
-            tracing::warn!(index = ?bar.selected_index, text, "선택 이동");
+            tracing::warn!(index = ?bar.selected_index, text, "selection moved");
         }
         SessionKey::Text(_) | SessionKey::Backspace => {
             let bar = overlay.search_bar_frame();
@@ -674,7 +674,7 @@ fn log_key_trace(controller: &SeekController, key_kind: SessionKey) {
                 query = %controller.machine.query(),
                 matches = bar.total_matches,
                 state = ?controller.machine.state(),
-                "키 입력"
+                "key input"
             );
         }
         _ => {}
@@ -738,7 +738,7 @@ pub fn apply_global_shortcut(
 ) {
     if let Some(old) = previous.take() {
         if let Err(e) = manager.unregister(old) {
-            tracing::warn!(error = %e, "이전 Seek 전역 단축키 해제 실패");
+            tracing::warn!(error = %e, "failed to unregister the previous Seek global shortcut");
         }
     }
 
@@ -746,7 +746,7 @@ pub fn apply_global_shortcut(
     let Some(hotkey) = to_global_hotkey(shortcut) else {
         tracing::warn!(
             code = %shortcut.code,
-            "Seek 전역 단축키 코드가 알려진 KeyboardEvent.code 가 아니다 — 등록을 건너뛴다"
+            "Seek global shortcut code is not a known KeyboardEvent.code; skipping registration"
         );
         return;
     };
@@ -756,7 +756,7 @@ pub fn apply_global_shortcut(
         Err(e) => tracing::warn!(
             error = %e,
             code = %shortcut.code,
-            "Seek 전역 단축키 등록 실패 — 이미 다른 앱이 쓰는 조합일 수 있다"
+            "failed to register the Seek global shortcut; another app may already use this combination"
         ),
     }
 }

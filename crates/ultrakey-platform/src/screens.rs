@@ -59,7 +59,7 @@ mod macos_impl {
     /// 오버레이가 못 뜨는 것이 앱이 죽는 것보다 낫다).
     pub fn screens() -> Vec<ScreenInfo> {
         let Some(mtm) = MainThreadMarker::new() else {
-            tracing::error!("screens() 를 메인 스레드가 아닌 곳에서 불렀다 — 빈 목록을 돌려준다");
+            tracing::error!("screens() called off the main thread; returning empty list");
             return Vec::new();
         };
         let all = NSScreen::screens(mtm);

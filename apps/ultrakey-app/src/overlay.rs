@@ -146,7 +146,7 @@ impl WebviewOverlayRenderer {
             let window = match built {
                 Ok(w) => w,
                 Err(e) => {
-                    tracing::error!(%label, error = %e, "오버레이 창 생성 실패");
+                    tracing::error!(%label, error = %e, "failed to create overlay window");
                     return;
                 }
             };
@@ -176,7 +176,7 @@ impl WebviewOverlayRenderer {
             let raw = match window.ns_window() {
                 Ok(p) => p,
                 Err(e) => {
-                    tracing::error!(%label, error = %e, "ns_window() 실패 — 네이티브 설정을 걸지 못한다");
+                    tracing::error!(%label, error = %e, "ns_window() failed; could not apply native configuration");
                     return;
                 }
             };
@@ -214,11 +214,11 @@ impl WebviewOverlayRenderer {
                 outer_position = ?window.outer_position(),
                 outer_size = ?window.outer_size(),
                 scale_factor = ?window.scale_factor(),
-                "오버레이 창 네이티브 설정 완료"
+                "overlay window native configuration applied"
             );
         });
         if let Err(e) = dispatched {
-            tracing::error!(error = %e, "오버레이 창 생성을 메인 스레드로 디스패치하지 못했다");
+            tracing::error!(error = %e, "failed to dispatch overlay window creation to the main thread");
         }
     }
 
@@ -227,7 +227,7 @@ impl WebviewOverlayRenderer {
         let app = self.app.clone();
         let dispatched = self.app.run_on_main_thread(move || {
             let Some(window) = app.get_webview_window(&label) else {
-                tracing::warn!(%label, "창을 찾지 못해 표시/숨김을 걸지 못했다");
+                tracing::warn!(%label, "window not found; could not apply show/hide");
                 return;
             };
             let Ok(raw) = window.ns_window() else { return };
@@ -242,7 +242,7 @@ impl WebviewOverlayRenderer {
             }
         });
         if let Err(e) = dispatched {
-            tracing::error!(error = %e, "표시/숨김을 메인 스레드로 디스패치하지 못했다");
+            tracing::error!(error = %e, "failed to dispatch show/hide to the main thread");
         }
     }
 
@@ -261,7 +261,7 @@ impl WebviewOverlayRenderer {
             .app
             .emit_to(EventTarget::webview_window(label), "overlay://frame", frame)
         {
-            tracing::warn!(%label, error = %e, "프레임 emit 실패");
+            tracing::warn!(%label, error = %e, "failed to emit frame");
         }
     }
 }
@@ -292,7 +292,7 @@ impl OverlayRenderer for WebviewOverlayRenderer {
             let to_close = label.clone();
             let _ = self.app.run_on_main_thread(move || {
                 if let Some(w) = app.get_webview_window(&to_close) {
-                    tracing::info!(label = %to_close, "디스플레이가 사라져 오버레이 창을 닫는다");
+                    tracing::info!(label = %to_close, "display disappeared; closing overlay window");
                     let _ = w.close();
                 }
             });
@@ -322,7 +322,7 @@ impl OverlayRenderer for WebviewOverlayRenderer {
     fn present(&mut self, frames: &[OverlayFrame], bar: &SearchBarFrame) -> Result<(), RenderError> {
         for frame in frames {
             let Some(label) = self.surfaces.get(&frame.display_id).cloned() else {
-                tracing::warn!(display_id = frame.display_id, "이 디스플레이의 창이 없다 — 프레임을 버린다");
+                tracing::warn!(display_id = frame.display_id, "no window for this display; dropping frame");
                 continue;
             };
             // ⭐ 연결선이 이 창 몫으로 잘려 들어왔는지까지 남긴다 — 다중
@@ -332,7 +332,7 @@ impl OverlayRenderer for WebviewOverlayRenderer {
                 highlights = frame.highlights.len(),
                 omitted = frame.omitted,
                 line = ?frame.line,
-                "프레임"
+                "frame"
             );
             self.emit_frame(&label, frame);
         }
@@ -365,7 +365,7 @@ impl OverlayRenderer for WebviewOverlayRenderer {
                 "overlay://searchbar",
                 bar,
             ) {
-                tracing::warn!(error = %e, "검색 바 emit 실패");
+                tracing::warn!(error = %e, "failed to emit search bar");
             }
         }
         Ok(())
@@ -425,7 +425,7 @@ pub fn overlay_surface_ready(app: tauri::AppHandle, label: String) {
         s.ready.insert(label.clone());
         (s.last_frames.get(&label).cloned(), s.last_bar.clone())
     };
-    tracing::debug!(%label, has_frame = frame.is_some(), "오버레이 서피스 준비 완료");
+    tracing::debug!(%label, has_frame = frame.is_some(), "overlay surface ready");
     if label == SEARCH_BAR_LABEL {
         if let Some(bar) = bar {
             let _ =
@@ -444,7 +444,7 @@ pub fn overlay_surface_ready(app: tauri::AppHandle, label: String) {
 /// 있으면 F-01 이 붙일 자리가 명확해진다.
 #[tauri::command]
 pub fn overlay_select_match(index: usize) {
-    tracing::debug!(index, "검색 바 매치 행 클릭 — 선택 반영은 F-01 범위다");
+    tracing::debug!(index, "search bar match row clicked; applying the selection is F-01's scope");
 }
 
 // ── 검색 바 위치 영속화 (F-15 "부재 = 기본값") ──────────────────────────────
@@ -461,10 +461,10 @@ pub fn stored_search_bar_origin(store: &SettingsStore) -> Option<(f64, f64)> {
 /// 검색 바 위치를 즉시 기록한다(원본의 `persistPosition` 과 같은 규약, §1.1).
 pub fn persist_search_bar_origin(store: &mut SettingsStore, x: f64, y: f64) {
     if let Err(e) = store.set(keys::SEEK_SEARCH_BAR_X, &x) {
-        tracing::error!(error = %e, "검색 바 x 를 저장하지 못했다");
+        tracing::error!(error = %e, "failed to persist search bar x");
     }
     if let Err(e) = store.set(keys::SEEK_SEARCH_BAR_Y, &y) {
-        tracing::error!(error = %e, "검색 바 y 를 저장하지 못했다");
+        tracing::error!(error = %e, "failed to persist search bar y");
     }
 }
 
@@ -582,7 +582,7 @@ impl OverlayController {
         if self.session.displays() == displays.as_slice() {
             return;
         }
-        tracing::info!(count = displays.len(), "디스플레이 구성이 바뀌었다 — 오버레이를 재배치한다");
+        tracing::info!(count = displays.len(), "display configuration changed; repositioning overlay");
         self.refresh_displays(displays);
     }
 
@@ -632,7 +632,7 @@ impl OverlayController {
         let frames = self.session.frames();
         let bar = self.session.search_bar_frame();
         if let Err(e) = self.renderer.present(&frames, &bar) {
-            tracing::warn!(error = ?e, "오버레이 렌더 실패");
+            tracing::warn!(error = ?e, "overlay render failed");
         }
     }
 }

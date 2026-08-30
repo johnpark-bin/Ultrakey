@@ -22,6 +22,10 @@ ultrakey-i18n = { workspace = true }
 ultrakey-seek = { workspace = true }
 ultrakey-overlay = { workspace = true }
 ultrakey-seek-session = { workspace = true }
+# ⭐ General 탭 언어 선택(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) —
+# `AppState.catalog` 를 재시작 없이 교체하기 위해 쓴다. `ultrakey-engine` 이 이미
+# 워크스페이스에 들여온 크레이트라 새로 추가하는 것이 아니다.
+arc-swap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -42,6 +46,15 @@ tauri-plugin-opener = { workspace = true }
 # ⭐ F-01 활성화 경로 1 — `Toggle Seek with shortcut:`. 명세 §6·§7 이 지목했고,
 # `rdev` 는 명시적으로 기각됐다(3년간 릴리스 없음 · 이벤트 소비 제어 제한).
 global-hotkey = { workspace = true }
+# F-15 §3.4 설정 export/import(이슈 #39 Phase 2) — 네이티브 열기/저장 대화상자.
+# ⭐ Rust 쪽에서만 쓴다 — 프런트엔드는 `settings_export`/`settings_import` 커맨드만
+# invoke 하고, 대화상자는 이 커맨드들이 Rust API(`DialogExt::dialog().file()`)로
+# 직접 연다. 그러면 `capabilities/` 의 ACL 을 건드릴 필요가 없다: ACL 은 웹뷰가
+# `plugin:dialog|...` 를 직접 invoke 할 때만 관문 역할을 하고, Rust 코드가 플러그인의
+# Rust API 를 호출하는 경로는 그 관문을 거치지 않는다. `settings` 창은 지금도
+# `capabilities/overlay.json` 밖의 아무 capability 도 없고(기존 커맨드들이 이미 그
+# 상태로 동작한다), 이 크레이트를 더해도 그 상태를 그대로 유지한다.
+tauri-plugin-dialog = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }

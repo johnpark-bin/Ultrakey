@@ -66,6 +66,9 @@ global-hotkey           = "0.8.0"
 tauri                   = "2.11.5"
 tauri-build             = "2.6.3"
 tauri-plugin-opener     = "2.5.4"
+# F-15 설정 export/import (이슈 #39 Phase 2) — 네이티브 열기/저장 대화상자.
+# `tauri ^2.10` 를 요구해 2.11.5 와 호환된다(2026-08-31 crates.io 조회로 검증).
+tauri-plugin-dialog     = "2.7.2"
 
 [profile.release]
 lto = "thin"

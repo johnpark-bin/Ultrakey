@@ -37,12 +37,13 @@
 // 릴리스 빌드에서 콘솔 창을 띄우지 않는다(macOS 에서는 무해하지만 관례를 따른다).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::Write as _;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use arc_swap::ArcSwap;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
 use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
@@ -52,11 +53,11 @@ use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate
 use ultrakey_core::keycode::{KeyCode, SourceKey};
 use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
 use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger};
-use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
+use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
-use ultrakey_i18n::Catalog;
+use ultrakey_i18n::{Catalog, Locale};
 use ultrakey_korean::KoreanSettings;
 use ultrakey_permissions::{
     dev_build_warning, onboarding_copy, open_accessibility_settings, out_of_sync_copy,
@@ -114,6 +115,10 @@ mod settings_keys {
     pub const GENERAL_LAUNCH_ON_LOGIN: &str = "general.launchOnLogin";
     /// F-10 §3 `Hide menu bar icon` 체크박스.
     pub const GENERAL_HIDE_MENU_BAR_ICON: &str = "general.hideMenuBarIcon";
+    /// ⭐ `General` 탭 언어 선택 팝업(D6, 이슈 #39,
+    /// `localization-and-input-sources.md` §3.1.2-a). **부재 = 시스템 언어를
+    /// 따른다**(F-15 "부재 = 기본값") — `System` 을 고르면 이 키 자체를 지운다.
+    pub const GENERAL_LANGUAGE: &str = "general.language";
 
     // ⭐ `ultrakey-core` 가 소유한 키를 재수출한다 — 여기서 문자열을 다시 쓰면
     // 오타가 컴파일을 통과해 버린다(`keys.rs` 상단 주석과 같은 이유).
@@ -512,17 +517,52 @@ fn korean_view(k: &KoreanSettings) -> KoreanView {
 #[serde(rename_all = "camelCase")]
 struct GeneralView {
     launch_on_login: bool,
+    /// ⭐ B-1(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a) — OS 정본
+    /// (`login_item::status()`)의 로그용 안정 식별자를 그대로 UI 에도 실어
+    /// 보낸다. `requires-approval` 일 때만 프런트가 안내 행을 보인다.
+    launch_on_login_status: String,
     hide_menu_bar_icon: bool,
+    /// ⭐ 저장된 `general.language`(D6, 이슈 #39). `None` = "시스템 설정 따름"
+    /// (키 부재 또는 알 수 없는 값 — §3.1.2-a "폴백"). 언어 선택 팝업의 초기값에
+    /// 쓴다.
+    language: Option<String>,
+}
+
+/// ⭐ A-2(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) — 저장된
+/// `general.language` 값을 로케일로 해석한다. 키가 없으면 `None`("시스템 설정
+/// 따름", F-15 "부재 = 기본값"). 값이 있는데 알 수 없는 언어 코드면(손으로 고친
+/// 설정 파일 등) 실패시키지 않고 `None` 으로 폴백하며 영어 로그를 남긴다.
+fn resolve_stored_language(store: &SettingsStore) -> Option<Locale> {
+    let code: String = store.get(settings_keys::GENERAL_LANGUAGE)?;
+    let found = Locale::all().iter().copied().find(|l| l.code() == code);
+    if found.is_none() {
+        tracing::warn!(
+            value = %code,
+            "unknown general.language value in settings; falling back to the system language"
+        );
+    }
+    found
 }
 
 fn general_view(store: &SettingsStore) -> GeneralView {
-    GeneralView {
-        launch_on_login: store
+    // ⭐ B-1 — 정본은 언제나 OS 다. 저장된 값(거울)은 판정 자체가 불가능할 때
+    // (`Unsupported`)만 폴백으로 쓴다.
+    let status = login_item::status();
+    let launch_on_login = if status == login_item::LoginItemStatus::Unsupported {
+        store
             .get(settings_keys::GENERAL_LAUNCH_ON_LOGIN)
-            .unwrap_or(false),
+            .unwrap_or(false)
+    } else {
+        status.is_active()
+    };
+
+    GeneralView {
+        launch_on_login,
+        launch_on_login_status: status.as_log_str().to_string(),
         hide_menu_bar_icon: store
             .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
             .unwrap_or(false),
+        language: resolve_stored_language(store).map(|locale| locale.code().to_string()),
     }
 }
 
@@ -705,23 +745,23 @@ fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
 /// (엔진이 부른다)만의 채널이다.
 fn validate_per_device_key(key: &str) -> Result<(), String> {
     if key == keys::PER_DEVICE_MANAGED {
-        return Err(format!("{key} 는 원장 키다 — 이 커맨드로 바꿀 수 없다"));
+        return Err(format!("{key} is a ledger key; it cannot be changed through this command"));
     }
     let rest = key
         .strip_prefix("perDevice.")
-        .ok_or_else(|| format!("알 수 없는 설정 키: {key}"))?;
+        .ok_or_else(|| format!("unknown settings key: {key}"))?;
     let (scope, tail) = rest
         .split_once('.')
-        .ok_or_else(|| format!("알 수 없는 설정 키: {key}"))?;
+        .ok_or_else(|| format!("unknown settings key: {key}"))?;
     if scope != keys::PER_DEVICE_COMMON_SCOPE && DeviceId::parse(scope).is_none() {
-        return Err(format!("알 수 없는 디바이스 식별자: {scope}"));
+        return Err(format!("unknown device identifier: {scope}"));
     }
     let is_key_remap = tail == "keyRemap.rows";
     let is_function_key = FKey::all()
         .iter()
         .any(|f| tail == format!("functionKeys.{}", f.key_segment()));
     if !is_key_remap && !is_function_key {
-        return Err(format!("알 수 없는 설정 키: {key}"));
+        return Err(format!("unknown settings key: {key}"));
     }
     Ok(())
 }
@@ -759,7 +799,7 @@ fn validate_per_device_function_key_value(
         return Ok(());
     };
     if destinations::resolve_stored(s).is_none() {
-        return Err(format!("알 수 없는 목적지 id: {s}"));
+        return Err(format!("unknown destination id: {s}"));
     }
     Ok(())
 }
@@ -791,7 +831,7 @@ fn settings_set_per_device(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save setting");
                 Some(e.to_string())
             }
         }
@@ -839,7 +879,7 @@ fn remove_setting_key(store: &mut SettingsStore, key: &str) -> Result<(), String
         Ok(raw) => raw,
         // 파일이 아예 없으면 지울 키도 없다 — 조용히 성공 취급한다.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("설정 파일을 읽을 수 없다: {e}")),
+        Err(e) => return Err(format!("could not read settings file: {e}")),
     };
     let mut envelope: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("설정 파일 파싱 실패: {e}"))?;
@@ -889,7 +929,7 @@ impl LedgerStore for AppLedgerStore {
         let value = ultrakey_core::perdevice::write_managed_ledger(ledger);
         let mut store = self.app_state.store.lock().map_err(|e| e.to_string())?;
         store.set(keys::PER_DEVICE_MANAGED, &value).map_err(|e| {
-            tracing::error!(error = %e, "perDevice._managed 원장 저장 실패");
+            tracing::error!(error = %e, "failed to save perDevice._managed ledger");
             e.to_string()
         })
     }
@@ -936,7 +976,7 @@ fn disable_label_key_for_setting(store_key: &str) -> &'static str {
         k if k == keys::HYPERKEY_BLEH_ENABLED => "settings.hyperkey.bleh.label",
         other => {
             // 방어적 — conflicts.rs 가 이 네 개 밖의 키를 내놓는 일은 없어야 한다.
-            tracing::error!(key = other, "충돌 해소 목록에 알 수 없는 설정 키가 있다");
+            tracing::error!(key = other, "unknown settings key in conflict resolution list");
             "settings.presets.heading"
         }
     }
@@ -1051,7 +1091,7 @@ fn build_preset_warnings(
             .into_iter()
             .any(|(enabled, source)| enabled && source == SourceKey::F18)
         {
-            tracing::warn!("D-1 caps lock alias(F18)가 hyper/meh/bleh 소스로 고른 F18 과 충돌한다");
+            tracing::warn!("D-1 caps lock alias (F18) conflicts with the F18 chosen as the hyper/meh/bleh source");
             warnings.push(WarningView {
                 kind: "duplicate",
                 key: SourceKey::F18.label().to_string(),
@@ -1263,6 +1303,20 @@ struct SettingsBootstrap {
     state: SettingsState,
     meta: AppMeta,
     notice: Option<Notice>,
+    /// ⭐ A-4(이슈 #39, §3.1.2-a) — 언어 선택 팝업이 그릴 선택지. ⚠️ `endonym`
+    /// 은 **번역하지 않는다** — 지금 UI 를 못 읽는 사람도 자기 언어를 찾을 수
+    /// 있어야 하는 유일한 컨트롤이라, 목록 자체가 현재 로케일과 무관해야 한다.
+    languages: Vec<LanguageOption>,
+}
+
+/// `bootstrap.languages` 항목 하나. 프런트가 하드코딩하지 않도록(로케일이 늘 때
+/// 두 곳을 고쳐야 하는 drift 를 막는다) 백엔드가 `Locale::endonym()` 을 그대로
+/// 실어 보낸다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LanguageOption {
+    code: &'static str,
+    endonym: &'static str,
 }
 
 /// hyper/meh/bleh 규칙에 영향을 주는 키인가.
@@ -1400,7 +1454,7 @@ fn apply_setting(
             hyperkey.trackpad.change_menu_bar_icon = parse(value, key)?
         }
         keys::HYPERKEY_TRACKPAD_HAPTIC => hyperkey.trackpad.haptic_feedback = parse(value, key)?,
-        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+        _ => return Err(format!("{key} cannot be changed through this command")),
     }
     Ok(())
 }
@@ -1413,7 +1467,7 @@ fn validate_and_apply(
     value: &serde_json::Value,
 ) -> Result<(), String> {
     if !keys::all().contains(&key) {
-        return Err(format!("알 수 없는 설정 키: {key}"));
+        return Err(format!("unknown settings key: {key}"));
     }
     apply_setting(hyperkey, key, value)
 }
@@ -1497,7 +1551,7 @@ fn apply_preset_setting(
         k if k == keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP => {
             presets.synthesize_caps_lock_remap = parse(value, key)?
         }
-        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+        _ => return Err(format!("{key} cannot be changed through this command")),
     }
     Ok(())
 }
@@ -1508,13 +1562,19 @@ fn validate_and_apply_preset(
     value: &serde_json::Value,
 ) -> Result<(), String> {
     if !keys::all().contains(&key) {
-        return Err(format!("알 수 없는 설정 키: {key}"));
+        return Err(format!("unknown settings key: {key}"));
     }
     apply_preset_setting(presets, key, value)
 }
 
 struct AppState {
-    catalog: Catalog,
+    /// ⭐ A-1(D6, 이슈 #39, `localization-and-input-sources.md` §3.1.2-a) —
+    /// `Catalog`(불변)가 아니라 `ArcSwap<Catalog>` 다. 읽는 쪽(커맨드·트레이
+    /// 메뉴 구성)이 여럿이고 쓰기는 사람이 `General` 탭에서 언어를 바꿀 때뿐이라
+    /// `architecture.md` §2.2 가 설정 테이블에 쓴 것과 같은 근거로 이 자료구조를
+    /// 쓴다. ⛔ 탭 콜백(hyperkey/presets/korean/perDevice)은 이 값을 읽지 않는다
+    /// — 문자열은 UI 표면(설정 창·트레이 메뉴·온보딩 모달)에만 있다.
+    catalog: ArcSwap<Catalog>,
     /// 엔진은 권한이 생긴 뒤에야 시작된다 — 그전에는 `None`.
     engine: Mutex<Option<Engine>>,
     gate: Arc<AtomicAppGate>,
@@ -1574,11 +1634,17 @@ struct AppState {
     /// 창 크기 저장 디바운스 스레드의 손잡이. `wire_window_size_persistence` 가
     /// `setup()` 안에서 한 번 채운다 — 이벤트마다 스레드를 새로 만들지 않는다.
     window_size_debouncer: Mutex<Option<WindowSizeDebouncer>>,
+    // ── F-18 Event Viewer(이슈 #39 Phase 3) ─────────────────────────────────
+    /// 드레인 스레드가 채우는 화면용 버퍼(§3.5, 상한 [`EVENT_VIEWER_BUFFER_CAP`]) —
+    /// 넘치면 앞에서 버린다. `open_event_viewer` 가 등록하는 싱크가 여기 쓰고,
+    /// `eventviewer_poll` 이 여기서 읽는다. 창을 닫으면 비운다(§3.2).
+    event_viewer_buffer: Mutex<VecDeque<ultrakey_engine::trace::ViewerRecord>>,
 }
 
 #[tauri::command]
 fn modal_copy(state: State<'_, Arc<AppState>>) -> ModalCopy {
-    let catalog = &state.catalog;
+    let catalog = state.catalog.load_full();
+    let catalog = catalog.as_ref();
     let permission_state = state
         .monitor
         .lock()
@@ -1618,7 +1684,7 @@ fn modal_copy(state: State<'_, Arc<AppState>>) -> ModalCopy {
 
     // ⭐ 프런트엔드가 실제로 invoke 에 성공했는지 판별하는 핵심 신호 — 이 로그가 없으면
     // 모달이 안 보이는 이유가 "커맨드가 실패했다" 인지 "창이 안 보인다" 인지 구분이 안 된다.
-    tracing::info!(kind = copy.kind, "modal_copy 커맨드 호출됨");
+    tracing::info!(kind = copy.kind, "modal_copy command invoked");
     copy
 }
 
@@ -1639,7 +1705,7 @@ fn quit_app(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) {
 /// 돌려준다(`preferences-ui.md`, ModalCopy 문서 주석과 같은 "단일 카탈로그" 근거).
 #[tauri::command]
 fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) -> SettingsBootstrap {
-    let catalog = &state.catalog;
+    let catalog = state.catalog.load_full();
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
@@ -1651,7 +1717,7 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
 
-    tracing::info!("settings_bootstrap 커맨드 호출됨");
+    tracing::info!("settings_bootstrap command invoked");
 
     SettingsBootstrap {
         locale: catalog.locale().code().to_string(),
@@ -1659,7 +1725,22 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
         state: settings_state,
         meta,
         notice,
+        languages: language_options(),
     }
+}
+
+/// ⭐ A-4 — 언어 선택 팝업의 선택지. `Locale::all()` 순서를 그대로 따른다
+/// (en·ko·zh·es·ja). "System" 항목은 여기 없다 — 그것은 카탈로그 키
+/// (`settings.general.language.system`)로 번역되는 유일한 항목이라 프런트가
+/// 직접 덧붙인다.
+fn language_options() -> Vec<LanguageOption> {
+    Locale::all()
+        .iter()
+        .map(|locale| LanguageOption {
+            code: locale.code(),
+            endonym: locale.endonym(),
+        })
+        .collect()
 }
 
 /// 현재 저장된 값 그대로 `SettingsState` 를 다시 조립한다 — `general.*` 커맨드처럼
@@ -1723,16 +1804,19 @@ fn settings_set(
     if key == settings_keys::GENERAL_LAUNCH_ON_LOGIN {
         let on = value
             .as_bool()
-            .ok_or_else(|| format!("{key} 는 bool 값이어야 한다"))?;
+            .ok_or_else(|| format!("{key} must be a boolean"))?;
         set_launch_on_login_internal(&state, on)?;
         return current_settings_state(&state);
     }
     if key == settings_keys::GENERAL_HIDE_MENU_BAR_ICON {
         let on = value
             .as_bool()
-            .ok_or_else(|| format!("{key} 는 bool 값이어야 한다"))?;
+            .ok_or_else(|| format!("{key} must be a boolean"))?;
         set_hide_menu_bar_icon_internal(&state, on)?;
         return current_settings_state(&state);
+    }
+    if key == settings_keys::GENERAL_LANGUAGE {
+        return settings_set_general_language(&app, &state, value);
     }
 
     if key.starts_with("presets.") {
@@ -1756,6 +1840,49 @@ fn settings_set(
     }
 
     settings_set_hyperkey(&state, &key, &value)
+}
+
+/// `settings_set` 의 `general.language` 경로(D6, 이슈 #39, §3.1.2-a). 값이
+/// 로케일 코드 문자열이면 그 로케일로, `null`(`System`)이면 키를 지워 시스템
+/// 로케일을 따르게 한다. 두 경우 모두 ⭐ **즉시** 카탈로그를 교체하고 트레이
+/// 메뉴를 다시 만든다 — 재시작을 요구하지 않는다. 프런트엔드는 이 반환값을
+/// 쓰지 않고 `settings_bootstrap` 을 다시 불러 전체를 재렌더한다(§3.1.2-a "적용
+/// 시점" 표 — 환경설정 창 표면) — 그래도 계약을 지키기 위해 유효한
+/// `SettingsState` 를 돌려준다.
+fn settings_set_general_language(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    value: serde_json::Value,
+) -> Result<SettingsState, String> {
+    let new_catalog = if value.is_null() {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        remove_setting_key(&mut store, settings_keys::GENERAL_LANGUAGE)?;
+        drop(store);
+        tracing::info!("general.language unset; following the system language again");
+        Catalog::resolve(&bundle::preferred_languages())
+    } else {
+        let code = value.as_str().ok_or_else(|| {
+            format!("{} must be a language code string or null", settings_keys::GENERAL_LANGUAGE)
+        })?;
+        let locale = Locale::all()
+            .iter()
+            .copied()
+            .find(|l| l.code() == code)
+            .ok_or_else(|| format!("unknown language code: {code}"))?;
+        {
+            let mut store = state.store.lock().map_err(|e| e.to_string())?;
+            store
+                .set(settings_keys::GENERAL_LANGUAGE, &code)
+                .map_err(|e| e.to_string())?;
+        }
+        tracing::info!(locale = locale.code(), "general.language set");
+        Catalog::for_locale(locale)
+    };
+
+    state.catalog.store(Arc::new(new_catalog));
+    rebuild_tray_menu(app, state);
+
+    current_settings_state(state)
 }
 
 /// F-17 §3.3 "공통 따름" — `settings_unset` 커맨드. `settings_set` 에 `value: null`
@@ -1818,7 +1945,7 @@ fn open_keyboard_settings() -> Result<(), String> {
     if bundle::open_url(KEYBOARD_FUNCTION_KEYS_SETTINGS_URL) {
         Ok(())
     } else {
-        Err("키보드 시스템 설정을 열지 못했다".to_string())
+        Err("failed to open keyboard system settings".to_string())
     }
 }
 
@@ -1841,6 +1968,480 @@ fn open_keyboard_settings() -> Result<(), String> {
 #[tauri::command]
 fn keyboard_fn_state() -> Option<bool> {
     fn_state::f_keys_are_standard()
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// F-15 §3.4 — 설정 export/import (이슈 #39 Phase 2)
+// ════════════════════════════════════════════════════════════════════════════
+
+fn epoch_secs_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 유닉스 일수(1970-01-01 = 0) → (년, 월, 일). Howard Hinnant 의
+/// `civil_from_days` 알고리즘(그레고리력, 공개 도메인) — 새 시간 크레이트를 들이지
+/// 말라는 지시(위임 지시서, `crates/ultrakey-core/src/time.rs` 가 이미 "시계는
+/// 호출자가 주입한다"고 선언한 것과 같은 근거) 때문에 순수 정수 연산으로 직접 쓴다.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m, d)
+}
+
+/// `exported_at` 용 RFC3339 UTC 문자열(`"2026-08-31T00:12:34Z"`) — `SystemTime`
+/// 에서 직접 만든다(A-2 지시: 새 시간 크레이트를 들이지 않는다).
+fn rfc3339_utc(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let tod = epoch_secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let (h, m, s) = (tod / 3600, (tod / 60) % 60, tod % 60);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// export 기본 파일명 — `ultrakey-settings-<YYYYMMDD>.json`(위임 지시서 A-2).
+fn export_default_file_name(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("ultrakey-settings-{year:04}{month:02}{day:02}.json")
+}
+
+/// `settings_export` 커맨드의 응답.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportResultView {
+    path: String,
+}
+
+/// `settings_import` 커맨드의 응답 — `transfer::ImportOutcome` 을 프런트가 그대로
+/// 쓸 수 있게 camelCase 로 옮긴 것뿐이다(§3.4).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResultView {
+    applied_keys: usize,
+    removed_keys: usize,
+    absent_devices: Vec<String>,
+    backup_path: Option<String>,
+}
+
+impl From<transfer::ImportOutcome> for ImportResultView {
+    fn from(outcome: transfer::ImportOutcome) -> Self {
+        ImportResultView {
+            applied_keys: outcome.applied_keys,
+            removed_keys: outcome.removed_keys,
+            absent_devices: outcome.absent_devices,
+            backup_path: outcome.backup.map(|p| p.display().to_string()),
+        }
+    }
+}
+
+/// F-15 §3.4 — `General` 탭의 `Export…` 버튼.
+///
+/// ⭐ 파일 대화상자는 Rust 쪽에서만 연다(위임 지시서, `settings-store-and-
+/// integrity.md` §3.4). 프런트엔드는 이 커맨드만 부르고, `capabilities/` 는
+/// 건드리지 않는다 — ACL 은 웹뷰가 `plugin:dialog|...` 를 직접 invoke 할 때만
+/// 관문 역할을 하고, 이 커맨드처럼 Rust 코드가 플러그인의 Rust API
+/// (`DialogExt::dialog()`)를 직접 호출하는 경로는 그 관문을 거치지 않는다.
+/// `settings` 창은 지금도 `capabilities/overlay.json` 밖의 아무 capability 도
+/// 없고(기존 커맨드들이 이미 그 상태로 동작한다), 이 변경도 그 상태를 유지한다.
+///
+/// ⭐ **왜 `async fn` + `blocking_save_file()`인가.** macOS 의 저장 패널
+/// (`NSSavePanel`)은 메인 스레드 API 일 수 있다. `tauri_plugin_dialog` 의
+/// `blocking_*` 계열은 자기 문서에 "메인 스레드에서 부르면 안 된다"고 적어
+/// 두었고, 내부적으로 메인 스레드로 디스패치한 뒤 **호출 스레드만** 블로킹하며
+/// 응답을 기다린다 — 그 크레이트 자신의 예제 코드도 정확히 `async fn` 커맨드
+/// 안에서 이 함수를 쓴다. Tauri 커맨드 핸들러(`async fn` 이든 아니든)는 메인
+/// 스레드가 아니라 별도 실행기 위에서 돈다는 사실은 이 파일의
+/// `set_launch_on_login_internal` 주석(최대 0.8초 블로킹이 커맨드 스레드에서
+/// 안전하다는 근거)과 같다 — 그래서 `blocking_save_file()` 을 그대로 쓴다.
+#[tauri::command]
+async fn settings_export(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<ExportResultView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let state = state.inner().clone();
+    let now = epoch_secs_now();
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(export_default_file_name(now))
+        .add_filter("JSON", &["json"])
+        .blocking_save_file();
+
+    // 사용자가 대화상자를 취소했다 — 오류가 아니다(위임 지시서 A-2).
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path.into_path().map_err(|e| e.to_string())?;
+
+    let envelope = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        transfer::build_export(&store, env!("CARGO_PKG_VERSION"), rfc3339_utc(now))
+    };
+    let json = transfer::serialize_export(&envelope).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        path = %path.display(),
+        keys = envelope.values.len(),
+        "settings exported"
+    );
+
+    Ok(Some(ExportResultView {
+        path: path.display().to_string(),
+    }))
+}
+
+/// F-15 §3.4 — `General` 탭의 `Import…` 버튼.
+///
+/// 순서를 반드시 지킨다(결정 6·7): 1) 파일을 읽고 파싱 — 실패하면 저장소를
+/// 전혀 건드리지 않는다. 2) 지금 연결된 디바이스 목록(F-17 의 기존 열거 경로
+/// `hid_device::list_attached_keyboards()` 를 재사용한다 — 새로 만들지 않는다).
+/// 3) `transfer::apply_import` 로 교체(백업 → 교체). 4) **부팅과 같은 일을
+/// 다시 한다** — [`reload_settings_after_replace`] 가 그 함수들을 그대로
+/// 재호출한다(새 반영 경로를 만들지 않는다 — 부팅 경로는 이미 실기기로
+/// 검증됐다).
+#[tauri::command]
+async fn settings_import(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<ImportResultView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let state = state.inner().clone();
+
+    let picked = app.dialog().file().add_filter("JSON", &["json"]).blocking_pick_file();
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path.into_path().map_err(|e| e.to_string())?;
+
+    // 1) 읽기 + 파싱 — 여기서 실패하면 저장소를 전혀 건드리지 않는다(§3.4 결정 7).
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let envelope = transfer::parse_export(&raw).map_err(|e| e.to_string())?;
+
+    // 2) 지금 연결된 디바이스 — F-17 의 기존 열거 경로를 그대로 쓴다.
+    let present_devices: Vec<String> = hid_device::list_attached_keyboards()
+        .into_iter()
+        .map(|info| DeviceId::new(info.vendor_id, info.product_id).as_str().to_string())
+        .collect();
+
+    // 3) 백업 → 교체.
+    let backup_suffix = format!("pre-import-{}", epoch_secs_now());
+    let outcome = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        transfer::apply_import(&mut store, &envelope, &present_devices, &backup_suffix)
+            .map_err(|e| e.to_string())?
+    };
+
+    // 4) 부팅과 같은 일을 다시 한다.
+    reload_settings_after_replace(&app, &state)?;
+
+    tracing::info!(
+        path = %path.display(),
+        applied = outcome.applied_keys,
+        removed = outcome.removed_keys,
+        absent_devices = outcome.absent_devices.len(),
+        "settings imported"
+    );
+
+    Ok(Some(ImportResultView::from(outcome)))
+}
+
+/// import 뒤 "부팅과 같은 일을 다시 한다"(§3.4 결정 6)의 실제 구현. **새 반영
+/// 경로가 아니다** — `setup()` 이 기동 시 쓰는 것과 같은 함수들
+/// (`HyperkeySettings::from_store` 등, `reconfigure_engine`, `rebuild_tray_menu`)을
+/// 저장소 교체 뒤 그대로 다시 부를 뿐이다. 부팅 경로는 이미 실기기로 검증된
+/// 경로라 여기서 별도로 검증할 새 코드를 만들지 않는다.
+fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(), String> {
+    // ⚠️ `seek` 도 함께 되살린다 — F-01(이슈 #39 와 병렬로 머지된 M3-3)이 `AppState`
+    // 에 네 번째 메모리 정본을 더했다. 빠뜨리면 import 가 Seek 설정만 조용히
+    // 반영하지 않는 "부분 교체"가 되어 §3.4 결정 4(교체)가 깨진다.
+    let (hyperkey, presets, korean, seek, disabled_apps) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let hyperkey = HyperkeySettings::from_store(&store);
+        let presets = PresetSettings::from_store(&store);
+        let korean = KoreanSettings::from_store(&store);
+        let seek = SeekSettings::from_store(&store);
+        let disabled_apps: Vec<String> =
+            store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
+        (hyperkey, presets, korean, seek, disabled_apps)
+    };
+
+    *state.hyperkey.lock().map_err(|e| e.to_string())? = hyperkey.clone();
+    *state.presets.lock().map_err(|e| e.to_string())? = presets;
+    *state.korean.lock().map_err(|e| e.to_string())? = korean;
+    *state.seek.lock().map_err(|e| e.to_string())? = seek.clone();
+
+    // ⭐ 게이트도 boot 만큼 되돌린다 — `general.disabledApps`/
+    // `korean.disableInRemoteDesktop` 도 import 로 바뀔 수 있는 값이다(D-K3 과
+    // 같은 이유로 엔진 설정이 아니라 게이트라 `reconfigure_engine` 이 대신
+    // 해주지 않는다).
+    state.gate_controller.set_disabled_apps(disabled_apps);
+    state
+        .gate_controller
+        .set_korean_exclusion_enabled(korean.disable_in_remote_desktop);
+
+    // 규칙 테이블이 통째로 바뀔 수 있으므로 항상 force_reset 한다
+    // (`settings_set_preset`/`settings_set_korean` 과 같은 이유).
+    reconfigure_engine(state, &hyperkey, &presets, &korean, &seek, true)?;
+
+    // 5) `general.language` 가 import 로 바뀌었으면 카탈로그도 교체한다
+    // (A-2 언어 선택 경로, `settings_set_general_language` 와 같은 판정).
+    let new_catalog = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        match resolve_stored_language(&store) {
+            Some(locale) => Catalog::for_locale(locale),
+            None => Catalog::resolve(&bundle::preferred_languages()),
+        }
+    };
+    state.catalog.store(Arc::new(new_catalog));
+
+    rebuild_tray_menu(app, state);
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// F-18 Event Viewer (이슈 #39 Phase 3, `docs/spec/event-viewer.md`)
+// ════════════════════════════════════════════════════════════════════════════
+
+const EVENT_VIEWER_WINDOW_LABEL: &str = "eventviewer";
+/// §3.5 — 화면용 버퍼 상한. `eventviewer.html` 의 `MAX_ROWS` 와 같은 크기를 맞춘다.
+const EVENT_VIEWER_BUFFER_CAP: usize = 500;
+
+/// F-08 프리셋 번호(`RuleId::Preset(n)`) → 카탈로그 키(§3.4, `event-viewer.md` §9
+/// 항목 1). ⭐ **`ultrakey-presets` 에는 이 대응표가 없다** — `rules.rs` 는
+/// `RuleId::Preset(n)` 리터럴만 흩어 둘 뿐 이름을 모른다(탐색 완료). 그래서 대응을
+/// 여기(앱 계층)에 둔다 — 숫자는 `ultrakey_presets::rules::PresetSettings::to_rules`
+/// 의 `RuleId::Preset(n)` 배정과 반드시 같아야 한다(F-08.1~16). `3` 은 결번이다
+/// (F-08.3 은 존재하지 않는다 — 실수가 아니다). `6`(F-08.8 vim 방향)은 라벨이
+/// 문장 앞뒤로 쪼개져 있어(`caps_hjkl.prefix`/`.suffix`) 이 표에 넣지 않고
+/// [`preset_rule_label`] 이 따로 이어붙인다.
+///
+/// ⚠️ **이 대응이 깨져도 아무도 못 잡는다는 위험**(§9 항목 1)을 막는 것이
+/// `preset_rule_label_keys_exist_in_every_catalog` 테스트다 — 카탈로그 키
+/// 오타·삭제를 5개 로케일 전부에서 잡는다.
+const PRESET_RULE_LABEL_KEYS: &[(u8, &str)] = &[
+    (1, "settings.presets.caps_remap"),
+    (2, "settings.presets.caps_quick_press"),
+    (4, "settings.presets.caps_space_enter"),
+    (5, "settings.presets.caps_wasd"),
+    (7, "settings.presets.caps_home_row"),
+    (8, "settings.presets.double_tap_shift"),
+    (9, "settings.presets.left_right_shift"),
+    (10, "settings.presets.shift_caps"),
+    (11, "settings.presets.shift_quick_press"),
+    (12, "settings.presets.hyper_delete"),
+    (13, "settings.presets.remap_delete"),
+    (14, "settings.presets.shift_delete"),
+    (15, "settings.presets.paste_plain"),
+    (16, "settings.presets.home_end_lines"),
+];
+
+/// F-16 한국어 규칙 번호(`RuleId::Korean(n)`) → 카탈로그 키. `ultrakey_korean::
+/// settings::KoreanSettings::to_rules` 의 `RuleId::Korean(n)` 배정과 같아야 한다.
+const KOREAN_RULE_LABEL_KEYS: &[(u8, &str)] = &[
+    (13, "settings.korean.shift_space"),
+    (14, "settings.korean.han_eng"),
+    (15, "settings.korean.hanja"),
+    (16, "settings.korean.won_backtick"),
+];
+
+fn preset_rule_label(catalog: &Catalog, n: u8) -> Option<String> {
+    if n == 6 {
+        // §3.4 — 문장이 팝업 앞뒤로 쪼개져 있다(`settings.html` 의 같은 패턴).
+        return Some(format!(
+            "{} {}",
+            catalog.get("settings.presets.caps_hjkl.prefix"),
+            catalog.get("settings.presets.caps_hjkl.suffix"),
+        ));
+    }
+    PRESET_RULE_LABEL_KEYS
+        .iter()
+        .find(|(idx, _)| *idx == n)
+        .map(|(_, key)| catalog.get(key).to_string())
+}
+
+fn korean_rule_label(catalog: &Catalog, n: u8) -> Option<String> {
+    KOREAN_RULE_LABEL_KEYS
+        .iter()
+        .find(|(idx, _)| *idx == n)
+        .map(|(_, key)| catalog.get(key).to_string())
+}
+
+/// `ViewerRecord.rule`(`"preset:5"`·`"korean:13"`·`"hyperkey"`) → 사람이 읽는
+/// 이름(§3.4). 못 찾으면 `None` — 프런트가 계층 이름만 보여준다(명세 그대로).
+fn rule_label(catalog: &Catalog, rule: &str) -> Option<String> {
+    if rule == "hyperkey" {
+        // `settings.tab.hyperkey` 를 그대로 쓴다 — 사용자가 탭에서 본 그 이름이다.
+        return Some(catalog.get("settings.tab.hyperkey").to_string());
+    }
+    if let Some(n) = rule.strip_prefix("preset:") {
+        return preset_rule_label(catalog, n.parse().ok()?);
+    }
+    if let Some(n) = rule.strip_prefix("korean:") {
+        return korean_rule_label(catalog, n.parse().ok()?);
+    }
+    None
+}
+
+/// §5 항목 1·2 — 왜 이벤트가 오지 않는지 알린다. 빈 화면으로 두지 않는다.
+fn event_viewer_notice(catalog: &Catalog, state: &Arc<AppState>) -> Option<String> {
+    let permission_state = state
+        .monitor
+        .lock()
+        .ok()
+        .and_then(|m| m.as_ref().map(|m| m.state()))
+        .unwrap_or(PermissionState::Unknown);
+    if permission_state != PermissionState::Granted {
+        return Some(catalog.get("eventviewer.notice.no_permission").to_string());
+    }
+    let engine_running = state.engine.lock().map(|g| g.is_some()).unwrap_or(false);
+    if !engine_running {
+        return Some(catalog.get("eventviewer.notice.engine_not_running").to_string());
+    }
+    None
+}
+
+/// `ultrakey_engine::trace::ViewerRecord` + `ruleLabel`(§3.4).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewerRecordView {
+    #[serde(flatten)]
+    record: ultrakey_engine::trace::ViewerRecord,
+    rule_label: Option<String>,
+}
+
+/// `eventviewer_poll` 의 응답(§3.5).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventViewerPoll {
+    records: Vec<ViewerRecordView>,
+    /// 계측 링이 가득 차 **버려진** 레코드의 누적 개수(`Engine::trace_dropped_count`).
+    ///
+    /// ⭐ 진단 도구가 자기 표시의 불완전함을 숨기면 사용자가 "이 키는 왜 안 보이지"를
+    /// 잘못 해석하게 된다(§4·§5 항목 3). 엔진이 아직 없으면 0 이다 — 그때는 애초에
+    /// 기록될 이벤트도 없다.
+    dropped: u64,
+    notice: Option<String>,
+}
+
+/// F-18 §3.1·§3.2 — `General` 탭의 `Open Event Viewer` 버튼.
+///
+/// 오버레이 창(`overlay.rs`)과 같은 관례로 `tauri.conf.json` 에 미리 선언하지
+/// 않고 여기서 동적으로 만든다 — 그 파일은 병렬 위임(#40)과 충돌할 수 있다
+/// (위임 지시서). 이미 열려 있으면 새로 만들지 않고 최전면으로 올린다.
+#[tauri::command]
+fn open_event_viewer(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(EVENT_VIEWER_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        EVENT_VIEWER_WINDOW_LABEL,
+        tauri::WebviewUrl::App("eventviewer.html".into()),
+    )
+    .title("Ultrakey — Event Viewer")
+    .inner_size(700.0, 520.0)
+    .resizable(true)
+    // ⭐ §3.1 — `NSFloatingWindowLevel` 로 항상 위. 오버레이(`overlay.rs`)의
+    // `ns_window()` 직접 조작(`NsWindowHandle::configure`, 스크린세이버 레벨 +
+    // 비활성 클래스 치환)은 **여기 필요 없다** — 이 창은 오버레이와 달리
+    // 활성화되어도 되고 키 윈도우를 뺏어도 된다(§3.1: 사용자가 스크롤·클릭해야
+    // 한다). Tauri 의 `always_on_top(true)` 는 macOS 에서 그대로
+    // `NSFloatingWindowLevel` 을 건다 — 그것으로 충분하다.
+    .always_on_top(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    let state_for_close = state.inner().clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { .. } = event {
+            // ⭐ §3.2 — 창이 닫히면 계측을 끈다. 사용자가 끄는 것을 잊어 계측이
+            // 계속 도는 상태를 만들지 않는다. `ULTRAKEY_TRACE_TAP` 은 독립이라
+            // 여기서 건드리지 않는다(그 환경변수 계측은 계속 돈다).
+            ultrakey_engine::trace::set_viewer_enabled(false);
+            ultrakey_engine::trace::set_viewer_sink(None);
+            if let Ok(mut buf) = state_for_close.event_viewer_buffer.lock() {
+                buf.clear();
+            }
+        }
+    });
+
+    let state_for_sink = state.inner().clone();
+    let sink: ultrakey_engine::trace::ViewerSink = Arc::new(move |record| {
+        if let Ok(mut buf) = state_for_sink.event_viewer_buffer.lock() {
+            buf.push_back(record);
+            while buf.len() > EVENT_VIEWER_BUFFER_CAP {
+                buf.pop_front();
+            }
+        }
+    });
+    ultrakey_engine::trace::set_viewer_sink(Some(sink));
+    ultrakey_engine::trace::set_viewer_enabled(true);
+
+    tracing::info!("event viewer window opened");
+    Ok(())
+}
+
+/// 프런트엔드가 100ms 마다 부른다(§3.5).
+#[tauri::command]
+fn eventviewer_poll(state: State<'_, Arc<AppState>>, after_seq: u64) -> EventViewerPoll {
+    let catalog = state.catalog.load_full();
+    let catalog: &Catalog = catalog.as_ref();
+
+    let records: Vec<ViewerRecordView> = state
+        .event_viewer_buffer
+        .lock()
+        .map(|buf| {
+            buf.iter()
+                .filter(|r| r.seq > after_seq)
+                .cloned()
+                .map(|record| {
+                    let rule_label = record.rule.as_deref().and_then(|r| rule_label(catalog, r));
+                    ViewerRecordView { record, rule_label }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 엔진 잠금은 짧게 잡는다 — 100ms 주기 폴링이라 여기서 오래 붙들면 안 된다.
+    let dropped = state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|e| e.as_ref().map(|engine| engine.trace_dropped_count()))
+        .unwrap_or(0);
+
+    EventViewerPoll {
+        records,
+        dropped,
+        notice: event_viewer_notice(catalog, &state),
+    }
+}
+
+/// `Clear` 버튼 — 앱 쪽 버퍼를 비운다(§3.2, 화면 쪽은 `eventviewer.html` 이 직접 비운다).
+#[tauri::command]
+fn eventviewer_clear(state: State<'_, Arc<AppState>>) {
+    if let Ok(mut buf) = state.event_viewer_buffer.lock() {
+        buf.clear();
+    }
 }
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
@@ -1906,7 +2507,7 @@ fn settings_set_hyperkey(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save setting");
                 Some(e.to_string())
             }
         }
@@ -2012,7 +2613,7 @@ fn settings_set_preset(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save setting");
                 Some(e.to_string())
             }
         }
@@ -2077,7 +2678,7 @@ fn settings_set_korean(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save setting");
                 Some(e.to_string())
             }
         }
@@ -2127,7 +2728,7 @@ fn apply_korean_setting(
         k if k == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP => {
             korean.disable_in_remote_desktop = parse(value, key)?
         }
-        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+        _ => return Err(format!("{key} cannot be changed through this command")),
     }
     Ok(())
 }
@@ -2138,7 +2739,7 @@ fn validate_and_apply_korean(
     value: &serde_json::Value,
 ) -> Result<(), String> {
     if !keys::all().contains(&key) {
-        return Err(format!("알 수 없는 설정 키: {key}"));
+        return Err(format!("unknown settings key: {key}"));
     }
     apply_korean_setting(korean, key, value)
 }
@@ -2250,14 +2851,14 @@ fn reapply_global_shortcut(state: &Arc<AppState>, app: &tauri::AppHandle, seek: 
     let dispatched = app.run_on_main_thread(move || {
         let manager_guard = state.global_hotkey_manager.lock().unwrap();
         let Some(manager) = manager_guard.as_ref() else {
-            tracing::warn!("GlobalHotKeyManager 가 없다 — Seek 전역 단축키를 등록하지 못한다");
+            tracing::warn!("no GlobalHotKeyManager; cannot register the Seek global shortcut");
             return;
         };
         let mut registered = state.global_hotkey_registered.lock().unwrap();
         seek::apply_global_shortcut(manager, &mut registered, shortcut.as_ref());
     });
     if let Err(e) = dispatched {
-        tracing::error!(error = %e, "Seek 전역 단축키 재등록을 메인 스레드로 디스패치하지 못했다");
+        tracing::error!(error = %e, "failed to dispatch Seek global shortcut re-registration to the main thread");
     }
 }
 
@@ -2304,7 +2905,7 @@ fn settings_set_seek(
         match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
-                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                tracing::error!(key = %key, error = %e, "failed to save settings");
                 Some(e.to_string())
             }
         }
@@ -2339,7 +2940,7 @@ fn settings_resolve_conflict(
     let caps_slots = caps_modifier_slot_keys(&hyperkey_snapshot);
     let new_value = value
         .as_bool()
-        .ok_or_else(|| format!("{key} 충돌 해소는 bool 값만 지원한다"))?;
+        .ok_or_else(|| format!("{key} conflict resolution only supports a boolean value"))?;
 
     let to_disable: Vec<String> = {
         let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
@@ -2401,13 +3002,13 @@ fn settings_set_tab(
     persist: bool,
 ) -> Result<(), String> {
     if !is_known_tab(&tab) {
-        return Err(format!("알 수 없는 탭: {tab}"));
+        return Err(format!("unknown tab: {tab}"));
     }
 
     if persist {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
         if let Err(e) = store.set(keys::UI_LAST_TAB, &tab) {
-            tracing::error!(error = %e, "마지막 탭 저장 실패");
+            tracing::error!(error = %e, "failed to save last tab");
         }
     }
 
@@ -2509,6 +3110,94 @@ fn open_log_file() -> Option<std::fs::File> {
 // ⛔ **이것은 F-01(세션 활성화)이 아니다.** 단축키도 오버레이도 없다. F-02 의
 // 범위는 "후보 목록을 만드는 것" 까지이고, 이 프로브는 그 산출물을 눈으로 볼
 // 수단일 뿐이다. F-01 이 들어오면 이 프로브는 그대로 두거나 지워도 된다.
+/// ⭐ F-10 로그인 항목 진단 프로브(이슈 #39). `ULTRAKEY_LOGIN_ITEM_PROBE=1` 로만
+/// 돈다. 등록·해제 왕복을 돌면서 매 단계의 **OS 정본 상태**(`SMAppService.status`)를
+/// 남긴다 — "등록됐다고 보고했는데 로그인 시 뜨지 않는다"가 어느 상태에서 벌어지는지
+/// 가설이 아니라 실측으로 확정하기 위한 것이다.
+///
+/// ⚠️ 이 프로브는 로그인 항목을 **실제로 등록했다가 해제한다.** 끝나면 시작 시점의
+/// 상태로 되돌린다(원래 켜져 있었으면 다시 켜 둔다).
+fn run_login_item_probe() {
+    use ultrakey_platform::login_item;
+
+    // `ULTRAKEY_LOGIN_ITEM_PROBE` 의 값으로 무엇을 할지 고른다.
+    //   `status`     — 지금 상태만 읽고 끝낸다(아무것도 바꾸지 않는다)
+    //   `register`   — 등록하고 그대로 둔다
+    //   `unregister` — 해제하고 그대로 둔다
+    //   그 외(`1` 등) — 등록·해제 왕복 후 시작 상태로 되돌린다
+    let mode = std::env::var("ULTRAKEY_LOGIN_ITEM_PROBE").unwrap_or_default();
+
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    let bundle_id = ultrakey_platform::bundle::bundle_identifier().unwrap_or_default();
+
+    let before = login_item::status();
+    tracing::info!(
+        step = "initial",
+        status = before.as_log_str(),
+        active = before.is_active(),
+        exe = %exe,
+        bundle_id = %bundle_id,
+        "login item probe"
+    );
+
+    if mode == "status" {
+        return;
+    }
+
+    if mode == "unregister" {
+        match login_item::set_enabled(false) {
+            Ok(()) => tracing::info!(step = "unregister-only", result = "ok", "login item probe"),
+            Err(e) => tracing::error!(step = "unregister-only", result = "error", error = %e, "login item probe"),
+        }
+        tracing::info!(
+            step = "after-unregister-only",
+            status = login_item::status().as_log_str(),
+            "login item probe"
+        );
+        return;
+    }
+
+    match login_item::set_enabled(true) {
+        Ok(()) => tracing::info!(step = "register", result = "ok", "login item probe"),
+        Err(e) => tracing::error!(step = "register", result = "error", error = %e, "login item probe"),
+    }
+    let after_register = login_item::status();
+    tracing::info!(
+        step = "after-register",
+        status = after_register.as_log_str(),
+        active = after_register.is_active(),
+        "login item probe"
+    );
+
+    if mode == "register" {
+        return;
+    }
+
+    match login_item::set_enabled(false) {
+        Ok(()) => tracing::info!(step = "unregister", result = "ok", "login item probe"),
+        Err(e) => tracing::error!(step = "unregister", result = "error", error = %e, "login item probe"),
+    }
+    let after_unregister = login_item::status();
+    tracing::info!(
+        step = "after-unregister",
+        status = after_unregister.as_log_str(),
+        active = after_unregister.is_active(),
+        "login item probe"
+    );
+
+    // 시작 상태로 되돌린다 — 진단이 사용자의 설정을 바꿔 놓고 끝나면 안 된다.
+    if before.is_active() {
+        let _ = login_item::set_enabled(true);
+    }
+    tracing::info!(
+        step = "restored",
+        status = login_item::status().as_log_str(),
+        "login item probe"
+    );
+}
+
 fn run_seek_detect_probe() {
     use ultrakey_seek::detect::{detect_candidates, DetectionParams};
 
@@ -2531,10 +3220,7 @@ fn run_seek_detect_probe() {
         && !ultrakey_platform::screen_recording::has_screen_recording_access()
     {
         let granted = ultrakey_platform::screen_recording::request_screen_recording_access();
-        tracing::info!(
-            granted,
-            "CGRequestScreenCaptureAccess 호출 — 시스템 프롬프트 경로"
-        );
+        tracing::info!(granted, "CGRequestScreenCaptureAccess called; system prompt path");
     }
 
     tracing::info!(
@@ -2542,7 +3228,7 @@ fn run_seek_detect_probe() {
         ?langs,
         screen_recording = ?ultrakey_platform::screen_recording::status(),
         accessibility = ultrakey_platform::accessibility::is_process_trusted(),
-        "F-02 검출 프로브 시작"
+        "F-02 detection probe started"
     );
 
     let outcome = detect_candidates(&params, |per_display| {
@@ -2552,7 +3238,7 @@ fn run_seek_detect_probe() {
             display_id = per_display.display_id,
             candidates = per_display.candidates.len(),
             elapsed_ms = per_display.elapsed_ms,
-            "F-02 디스플레이 OCR 완료 (증분 전달)"
+            "F-02 display OCR complete (incremental delivery)"
         );
     });
 
@@ -2565,16 +3251,16 @@ fn run_seek_detect_probe() {
         total_ms = outcome.total_ms,
         screen_recording = ?outcome.screen_recording,
         ax_error = ?outcome.ax_error,
-        "F-02 검출 프로브 완료"
+        "F-02 detection probe complete"
     );
 
     if outcome.ocr_blocked_by_permission() {
         tracing::error!(
             ocr_count = outcome.ocr_count,
-            "⚠️ Screen Recording 권한이 없다 — 소스 A 는 조용히 실패한 상태다. 캡처는 \
-             성공했지만 담긴 것은 데스크톱 배경과 메뉴 막대뿐이므로, 후보가 몇 개 \
-             나왔든 화면의 실제 내용이 아니다. 화면 기록 권한을 부여하고 앱을 \
-             재시작해야 한다(F-11 §1.3)"
+            "no screen recording permission; source A has failed silently. capture \
+             succeeded but it only contains the desktop background and menu bar, so \
+             no matter how many candidates came back, none reflect actual screen \
+             content. grant screen recording permission and restart the app (F-11 §1.3)"
         );
     }
 
@@ -2589,7 +3275,7 @@ fn run_seek_detect_probe() {
             source = ?c.source,
             display = ?c.display_id,
             confidence = ?c.confidence,
-            "F-02 후보"
+            "F-02 candidate"
         );
     }
 
@@ -2600,12 +3286,12 @@ fn run_seek_detect_probe() {
         match serde_json::to_string_pretty(&outcome.candidates) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    tracing::warn!(?path, %e, "F-02 후보 덤프 쓰기 실패");
+                    tracing::warn!(?path, %e, "failed to write F-02 candidate dump");
                 } else {
-                    tracing::info!(?path, "F-02 후보 전량 덤프 완료");
+                    tracing::info!(?path, "F-02 candidate dump complete");
                 }
             }
-            Err(e) => tracing::warn!(%e, "F-02 후보 직렬화 실패"),
+            Err(e) => tracing::warn!(%e, "failed to serialize F-02 candidates"),
         }
     }
 }
@@ -2618,8 +3304,22 @@ fn main() {
     tracing::info!(
         pid = std::process::id(),
         exe = ?std::env::current_exe(),
-        "=== Ultrakey 기동 ==="
+        "=== Ultrakey starting ==="
     );
+
+    // 1-a-2) ⭐ F-10 로그인 항목 프로브 (이슈 #39) — 실기기 진단 전용. 환경변수가
+    // 없으면 아무 일도 하지 않는다. `register → status → unregister → status` 를
+    // 돌면서 각 단계의 OS 정본 상태를 로그로 남긴다. 이것이 "Launch on login 이
+    // 동작하지 않는다"의 원인을 가설이 아니라 실측으로 확정하는 도구다.
+    //
+    // ⭐ 단일 인스턴스 판정 **앞**에 둔다. F-03 스파이크·데모와 같은 근거다 — 이
+    // 프로브는 `CGEventTap` 도 트레이도 만들지 않고 바로 반환하므로 §5 항목 1 이
+    // 막으려는 상황(탭 두 개)이 발생하지 않는다. 뒤에 두면 이미 떠 있는 인스턴스
+    // (병렬 위임의 검증용 빌드 등)를 **죽여야만** 진단할 수 있게 된다.
+    if std::env::var_os("ULTRAKEY_LOGIN_ITEM_PROBE").is_some() {
+        run_login_item_probe();
+        return;
+    }
 
     // 1-b) ⭐ 단일 인스턴스 보장(`menu-bar-and-lifecycle.md` §2 시나리오 D, §5
     // 항목 1, §8) — Tauri 를 아예 띄우기 전에 판정한다. 그래야 두 번째 프로세스가
@@ -2634,8 +3334,8 @@ fn main() {
     // 띄워 볼 수도, 렌더링 지연을 잴 수도 없다.
     if !overlay_spike::enabled() && !overlay_demo::enabled() && bundle::other_instance_running() {
         tracing::warn!(
-            "같은 번들 ID 로 이미 실행 중인 인스턴스가 있다 — 새 CGEventTap 을 설치하지 \
-             않고 이 프로세스를 즉시 종료한다(§5 항목 1)"
+            "another instance with the same bundle id is already running; exiting \
+             without installing a CGEventTap (F-10 §5 item 1)"
         );
         return;
     }
@@ -2649,18 +3349,21 @@ fn main() {
 
     // 2) 로케일 → 카탈로그 (D4: ko + en)
     let catalog = Catalog::resolve(&bundle::preferred_languages());
-    tracing::info!(locale = catalog.locale().code(), "문자열 카탈로그 로드됨");
+    tracing::info!(locale = catalog.locale().code(), "string catalog loaded");
 
     // ⭐ F-11 §8: `tauri dev` 산출물은 권한 검증에 쓸 수 없다는 경고.
-    if let Some((title, body)) = dev_build_warning(&catalog) {
-        tracing::warn!(%title, %body, "앱 번들 밖에서 실행 중 — 권한 기능을 검증할 수 없다");
+    if dev_build_warning(&catalog).is_some() {
+        tracing::warn!(
+            copy_key = "dev.not_app_bundle.title",
+            "running outside an .app bundle; permission-dependent features cannot be verified"
+        );
     }
 
     let gate = Arc::new(AtomicAppGate::new());
     let gate_controller = Arc::new(AppGateController::new(gate.clone()));
 
     let state = Arc::new(AppState {
-        catalog,
+        catalog: ArcSwap::from_pointee(catalog),
         engine: Mutex::new(None),
         gate: gate.clone(),
         gate_controller,
@@ -2682,10 +3385,16 @@ fn main() {
         system_event_observer: Mutex::new(None),
         last_applied_window_size: Mutex::new(None),
         window_size_debouncer: Mutex::new(None),
+        event_viewer_buffer: Mutex::new(VecDeque::new()),
     });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // F-15 §3.4 설정 export/import(이슈 #39 Phase 2) — 네이티브 파일 대화상자.
+        // `settings_export`/`settings_import` 커맨드가 Rust 쪽에서만 이 플러그인의
+        // Rust API 를 쓴다(위 Cargo.toml 주석 참고) — 웹뷰가 직접 invoke 하지 않으므로
+        // capability 파일이 필요 없다.
+        .plugin(tauri_plugin_dialog::init())
         .manage(state.clone())
         // ⭐ F-03 P3 스파이크가 웹뷰에서 ack 을 받는 통로(이슈 #34). 스파이크가
         // 꺼져 있으면 아무도 쓰지 않는 빈 상자로 남는다.
@@ -2707,6 +3416,11 @@ fn main() {
             general_set_hide_menu_bar_icon,
             open_keyboard_settings,
             keyboard_fn_state,
+            settings_export,
+            settings_import,
+            open_event_viewer,
+            eventviewer_poll,
+            eventviewer_clear,
             overlay_spike::overlay_spike_ack,
             overlay_spike::overlay_spike_ready,
             overlay::overlay_surface_ready,
@@ -2722,9 +3436,7 @@ fn main() {
             // 스스로 프로세스를 끝낸다. 권한 감시·엔진 기동보다 **앞**에 두어
             // 측정 중에 엔진이 끼어들지 않게 한다.
             if overlay_spike::enabled() {
-                tracing::warn!(
-                    "⭐ ULTRAKEY_OVERLAY_SPIKE — F-03 P3 렌더링 지연 실측 모드로 기동한다"
-                );
+                tracing::warn!("ULTRAKEY_OVERLAY_SPIKE set; starting in F-03 P3 render-latency measurement mode");
                 overlay_spike::start(app.handle());
                 return Ok(());
             }
@@ -2739,7 +3451,7 @@ fn main() {
                 Err(e) => {
                     tracing::error!(
                         error = %e,
-                        "앱 데이터 디렉터리를 얻지 못함 — 설정을 메모리 전용으로 격하한다"
+                        "failed to get app data directory; downgrading settings to memory-only"
                     );
                     None
                 }
@@ -2750,7 +3462,7 @@ fn main() {
             };
             let hyperkey_settings = HyperkeySettings::from_store(&settings_store);
             for warning in hyperkey_settings.validate() {
-                tracing::warn!(?warning, "Hyperkey 설정 경고(부팅 시점)");
+                tracing::warn!(?warning, "Hyperkey settings warning (at boot)");
             }
             *state.hyperkey.lock().unwrap() = hyperkey_settings;
             // ⭐ F-08 Presets — hyperkey 와 같은 "부재 = 기본값" 조립 규약.
@@ -2782,7 +3494,23 @@ fn main() {
             state
                 .gate_controller
                 .set_korean_exclusion_enabled(korean_settings.disable_in_remote_desktop);
+
+            // ⭐ A-2(이슈 #39, §3.1.2-a) — 저장된 `general.language` 가 있으면 그
+            // 로케일로 카탈로그를 교체한다. 없으면 main() 이 이미 만들어 둔
+            // 시스템 로케일 기반 카탈로그를 그대로 쓴다. `setup_tray()`(트레이
+            // 메뉴 최초 조립)보다 반드시 앞에 있어야 한다.
+            if let Some(locale) = resolve_stored_language(&settings_store) {
+                state.catalog.store(Arc::new(Catalog::for_locale(locale)));
+                tracing::info!(locale = locale.code(), "applied stored general.language at boot");
+            }
+
             *state.store.lock().unwrap() = settings_store;
+
+            // ⭐ B-2(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a) — 거울
+            // (`general.launchOnLogin`)과 OS 정본을 맞춘다. `login_item::
+            // set_enabled` 가 최대 약 0.8초 블로킹하므로 별도 스레드에서 돈다 —
+            // 기동을 늦추지 않는다.
+            reconcile_login_item_at_boot(&state);
 
             // 4-b) ⭐ F-03 실기기 검증 하네스(이슈 #34) — 환경변수가 있을 때만.
             // 설정 저장소가 채워진 **뒤**에 둔다: 검색 바 위치(F-15 "부재 =
@@ -2792,10 +3520,7 @@ fn main() {
                     let store = state.store.lock().unwrap();
                     overlay_demo::read_stored_origin(&store)
                 };
-                tracing::warn!(
-                    ?stored,
-                    "⭐ ULTRAKEY_OVERLAY_DEMO — F-03 오버레이 검증 모드"
-                );
+                tracing::warn!(?stored, "ULTRAKEY_OVERLAY_DEMO set; F-03 overlay verification mode");
                 overlay_demo::start(app.handle(), stored);
                 // ⛔ 여기서 반환한다 — 데모 모드는 **엔진(CGEventTap)을 켜지
                 // 않는다.** 오버레이 검증에 리매핑이 필요 없고, 탭을 안 켜야
@@ -2827,7 +3552,7 @@ fn main() {
                 }
                 Err(e) => tracing::error!(
                     error = %e,
-                    "GlobalHotKeyManager 를 만들지 못했다 — Seek 전역 단축키 경로가 동작하지 않는다"
+                    "failed to create GlobalHotKeyManager; the Seek global shortcut path will not work"
                 ),
             }
 
@@ -2852,7 +3577,7 @@ fn main() {
             // 으로 시작하고, 아래 최초 `on_permission_transition` 호출이 곧바로
             // 실제 상태에 맞는 메뉴로 갈아 끼운다.
             if let Err(e) = setup_tray(app.handle(), &state) {
-                tracing::error!(error = %e, "메뉴바(NSStatusItem) 초기화 실패");
+                tracing::error!(error = %e, "failed to initialize menu bar (NSStatusItem)");
             }
             setup_front_app_tracking(app.handle(), &state);
 
@@ -2862,7 +3587,7 @@ fn main() {
                 timings.permission_poll_onboarding_ms,
                 timings.permission_poll_background_ms,
                 Box::new(move |transition| {
-                    tracing::info!(?transition, "권한 상태 전이");
+                    tracing::info!(?transition, "permission state transition");
                     on_permission_transition(&handle, &state_for_monitor, transition.to);
                 }),
             );
@@ -2873,7 +3598,7 @@ fn main() {
 
             tracing::info!(
                 windows = ?app.webview_windows().keys().collect::<Vec<_>>(),
-                "setup() 완료 — 웹뷰 창 목록"
+                "setup() complete; webview window list"
             );
 
             Ok(())
@@ -2891,10 +3616,10 @@ fn main() {
                 // `shutdown_and_exit` 안에서 `app.exit()` 보다 **먼저** 이미 끝나
                 // 있다 — 여기서 더 할 일이 없다.
                 if code.is_none() {
-                    tracing::info!("창 닫힘으로 인한 종료 요청 — 계속 실행한다");
+                    tracing::info!("exit requested due to window close; continuing to run");
                     api.prevent_exit();
                 } else {
-                    tracing::info!("종료 요청 — 엔진 정리는 이미 끝났다");
+                    tracing::info!("exit requested; engine cleanup already done");
                 }
             }
             tauri::RunEvent::Reopen { .. } => {
@@ -2902,7 +3627,7 @@ fn main() {
                 // (M2 1차 임시 조치였던 자동 오픈은 걷어낸다 — 원래 계획대로).
                 // Accessory 앱은 Dock 아이콘이 없어 이 이벤트가 사실상 발생하지
                 // 않지만(§1), 발생하더라도 로그만 남긴다.
-                tracing::debug!("Reopen 이벤트 수신 — Accessory 앱이라 창을 자동으로 열지 않는다");
+                tracing::debug!("reopen event received; not auto-opening a window because this is an accessory app");
             }
             _ => {}
         });
@@ -2910,7 +3635,7 @@ fn main() {
 
 /// 권한 상태에 따라 엔진을 켜거나 모달을 띄운다.
 fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to: PermissionState) {
-    tracing::info!(?to, "on_permission_transition 진입");
+    tracing::info!(?to, "on_permission_transition entered");
     match to {
         PermissionState::Granted => {
             hide_modal(handle);
@@ -2931,7 +3656,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let mut slot = match state.engine.lock() {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "엔진 잠금 획득 실패");
+            tracing::error!(error = %e, "failed to acquire engine lock");
             return;
         }
     };
@@ -2967,7 +3692,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         Box::new(move |event| on_engine_event(&handle_for_events, &state_for_events, event)),
     ) {
         Ok(engine) => {
-            tracing::info!(state = ?engine.tap_state(), "엔진 시작됨");
+            tracing::info!(state = ?engine.tap_state(), "engine started");
             let shared = engine.shared();
             *slot = Some(engine);
             drop(slot);
@@ -3002,7 +3727,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             );
             *state.seek_tx.lock().unwrap() = Some(tx);
         }
-        Err(e) => tracing::error!(error = %e, "엔진을 시작하지 못했다"),
+        Err(e) => tracing::error!(error = %e, "failed to start engine"),
     }
 }
 
@@ -3011,21 +3736,21 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
 /// 온다 — 모듈 문서의 "블록하지 마라" 계약이 특히 무겁게 적용되는 자리다).
 fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: EngineEvent) {
     match event {
-        EngineEvent::TapStateChanged(s) => tracing::info!(state = ?s, "탭 상태 변경"),
+        EngineEvent::TapStateChanged(s) => tracing::info!(state = ?s, "tap state changed"),
         EngineEvent::NotTrusted => {
             // 권한이 없어 탭을 못 연 것은 정상 경로다 — F-11 온보딩이 처리한다.
-            tracing::info!("권한 없음 — 온보딩 모달로 넘긴다");
+            tracing::info!("no permission; handing off to onboarding modal");
             show_modal(handle);
         }
         EngineEvent::FatalTapCreateFailed => {
             // ⛔ `key-remapping-engine.md` §3-a·§5#16: 재시도가 아니라 종료다.
-            tracing::error!("권한이 확인된 상태에서 탭 생성 실패 — 프로세스를 종료한다");
+            tracing::error!("tap creation failed despite confirmed permission; exiting process");
             show_modal(handle);
         }
         EngineEvent::NeedsRelaunch => {
             // §5#17 — 재활성화·재생성이 반복 실패. M1 은 로그만 남긴다(자동 재실행은
             // F-10/M2 의 `AppRelauncher` 소관).
-            tracing::error!("탭 복구가 반복 실패했다 — 앱 재실행이 필요할 수 있다");
+            tracing::error!("tap recovery failed repeatedly; the app may need to be relaunched");
         }
         EngineEvent::SeekOpenRequested => send_seek_signal(state, seek::SeekSignal::OpenRequested),
         EngineEvent::SeekTriggerDown => send_seek_signal(state, seek::SeekSignal::TriggerDown),
@@ -3088,7 +3813,7 @@ fn on_main_thread(
     let dispatched = handle.run_on_main_thread(move || {
         match handle_for_closure.get_webview_window(window_label) {
             Some(w) => {
-                tracing::info!(window_label, what, "창을 찾았다");
+                tracing::info!(window_label, what, "window found");
                 action(&w);
                 tracing::info!(
                     window_label,
@@ -3098,16 +3823,16 @@ fn on_main_thread(
                     outer_size = ?w.outer_size(),
                     is_focused = ?w.is_focused(),
                     is_minimized = ?w.is_minimized(),
-                    "창 조작 후 상태"
+                    "window state after operation"
                 );
             }
             None => {
-                tracing::error!(window_label, what, "창을 찾지 못했다");
+                tracing::error!(window_label, what, "window not found");
             }
         }
     });
     if let Err(e) = dispatched {
-        tracing::error!(window_label, what, error = %e, "메인 스레드로 디스패치하지 못했다");
+        tracing::error!(window_label, what, error = %e, "failed to dispatch to the main thread");
     }
 }
 
@@ -3260,10 +3985,10 @@ fn window_size_debounce_loop(shared: Arc<WindowSizeDebounceShared>, state: Arc<A
 fn persist_window_size(state: &Arc<AppState>, size: (u32, u32)) {
     let mut store = state.store.lock().unwrap();
     if let Err(e) = store.set(keys::UI_WINDOW_WIDTH, &size.0) {
-        tracing::error!(error = %e, "설정 창 너비 저장 실패");
+        tracing::error!(error = %e, "failed to save settings window width");
     }
     if let Err(e) = store.set(keys::UI_WINDOW_HEIGHT, &size.1) {
-        tracing::error!(error = %e, "설정 창 높이 저장 실패");
+        tracing::error!(error = %e, "failed to save settings window height");
     }
 }
 
@@ -3295,7 +4020,7 @@ fn wire_window_size_persistence(handle: &tauri::AppHandle, state: &Arc<AppState>
                 tracing::warn!(
                     ?raw_width,
                     ?raw_height,
-                    "저장된 설정 창 크기가 방어적 범위를 벗어나 기본값을 쓴다"
+                    "stored settings window size is outside the defensive range; using default"
                 );
             }
         }
@@ -3320,7 +4045,7 @@ fn wire_window_size_persistence(handle: &tauri::AppHandle, state: &Arc<AppState>
             });
         }
         None => {
-            tracing::error!("설정 창을 찾지 못해 창 크기 저장 배선을 걸지 못했다");
+            tracing::error!("settings window not found; could not wire up window size persistence");
         }
     }
 }
@@ -3506,7 +4231,8 @@ fn synthesize_caps_lock_remap_enabled(store: &SettingsStore) -> bool {
 /// 트레이(`NSStatusItem`)를 만들고 `AppState` 에 손잡이를 채운다. `setup()` 안에서
 /// 한 번만 불린다.
 fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result<()> {
-    let catalog = &state.catalog;
+    let catalog = state.catalog.load_full();
+    let catalog = catalog.as_ref();
 
     // ⭐ 전용 모노크롬 template 아이콘을 쓴다(이슈 #16). 앱 번들 아이콘(둥근
     // 타일 + 밝은 글리프)을 그대로 재사용하던 과거 코드는 메뉴바에서 **타일
@@ -3550,7 +4276,7 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
     // §5 항목 2·§4 "Hide menu bar icon" — 마지막으로 저장된 값을 기동 시 반영한다.
     if hide_menu_bar_icon {
         if let Err(e) = tray.set_visible(false) {
-            tracing::warn!(error = %e, "트레이 아이콘 숨김 반영 실패");
+            tracing::warn!(error = %e, "failed to apply tray icon hidden state");
         }
     }
 
@@ -3584,13 +4310,63 @@ fn apply_tray_menu_for_permission(handle: &tauri::AppHandle, state: &Arc<AppStat
         };
         if let Some(menu) = menu {
             if let Err(e) = tray.set_menu(Some(menu)) {
-                tracing::warn!(error = %e, "트레이 메뉴 교체 실패");
+                tracing::warn!(error = %e, "failed to replace tray menu");
             }
         }
     });
     if let Err(e) = dispatched {
-        tracing::error!(error = %e, "트레이 메뉴 교체를 메인 스레드로 디스패치하지 못했다");
+        tracing::error!(error = %e, "failed to dispatch tray menu replacement to the main thread");
     }
+}
+
+/// ⭐ A-3 3단계(D6, 이슈 #39, §3.1.2-a) — `general.language` 가 바뀐 뒤 트레이
+/// 메뉴를 새 카탈로그로 다시 만든다. `setup_tray()` 가 부팅 시 쓰는 것과 같은
+/// 조립 함수(`build_normal_menu`/`build_unauthorized_menu`)와, 권한 전이 때
+/// 이미 쓰는 교체 절차(`apply_tray_menu_for_permission` 의 메인 스레드 디스패치)
+/// 를 그대로 재사용한다 — 새 경로를 만들지 않는다. `TrayIcon` 자체는 다시
+/// 만들지 않고 메뉴 두 벌만 갈아 끼운다.
+fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let catalog = state.catalog.load_full();
+    let catalog = catalog.as_ref();
+    let store = state.store.lock().unwrap();
+    let synth_caps_checked = synthesize_caps_lock_remap_enabled(&store);
+    drop(store);
+
+    // ⛔ 최전면 앱 이름은 여기서 다시 조회하지 않는다 — `refresh_ignore_menu_item`
+    // 이 그 일을 전담한다. 새 `ignore_item` 을 조립한 뒤 곧바로 그 함수를 한 번
+    // 더 불러 실제 최전면 앱 라벨로 채운다.
+    let (normal_menu, ignore_item) =
+        match build_normal_menu(handle, catalog, None, false, synth_caps_checked) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to rebuild tray normal menu after a language change");
+                return;
+            }
+        };
+    let unauthorized_menu = match build_unauthorized_menu(handle, catalog) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to rebuild tray unauthorized menu after a language change");
+            return;
+        }
+    };
+
+    *state.normal_menu.lock().unwrap() = Some(normal_menu);
+    *state.unauthorized_menu.lock().unwrap() = Some(unauthorized_menu);
+    *state.ignore_item.lock().unwrap() = Some(ignore_item);
+
+    // 지금 보여야 하는 것이 정상 메뉴인지 unauthorized 메뉴인지는 권한
+    // 모니터의 현재 상태로 판정한다 — `apply_tray_menu_for_permission` 이
+    // 권한 전이 때 쓰는 것과 같은 신호.
+    let granted = state
+        .monitor
+        .lock()
+        .ok()
+        .and_then(|m| m.as_ref().map(|m| m.state()))
+        .map(|s| s == PermissionState::Granted)
+        .unwrap_or(false);
+    apply_tray_menu_for_permission(handle, state, granted);
+    refresh_ignore_menu_item(state);
 }
 
 /// 트레이 메뉴 클릭 처리. `TrayIconBuilder::on_menu_event` 콜백은 항상 메인
@@ -3606,7 +4382,7 @@ fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuE
         menu_ids::RELAUNCH => on_menu_relaunch(app, state),
         menu_ids::QUIT => on_menu_quit(app, state),
         menu_ids::AUTHORIZE => show_modal(app),
-        other => tracing::debug!(id = other, "알 수 없는 메뉴 이벤트 id"),
+        other => tracing::debug!(id = other, "unknown menu event id"),
     }
 }
 
@@ -3615,7 +4391,7 @@ fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuE
 /// 종료 시점 flush 에 기대지 않는다).
 fn on_menu_ignore_app(state: &Arc<AppState>) {
     let now_disabled = state.gate_controller.toggle_front_app();
-    tracing::info!(now_disabled, "Ignore <앱> 토글됨");
+    tracing::info!(now_disabled, "Ignore <app> toggled");
     persist_disabled_apps(state);
     refresh_ignore_menu_item(state);
 }
@@ -3624,7 +4400,7 @@ fn persist_disabled_apps(state: &Arc<AppState>) {
     let bundle_ids = state.gate_controller.disabled_apps();
     let mut store = state.store.lock().unwrap();
     if let Err(e) = store.set(settings_keys::GENERAL_DISABLED_APPS, &bundle_ids) {
-        tracing::error!(error = %e, "general.disabledApps 저장 실패");
+        tracing::error!(error = %e, "failed to save general.disabledApps");
     }
 }
 
@@ -3637,7 +4413,8 @@ fn refresh_ignore_menu_item(state: &Arc<AppState>) {
     let Some(item) = item_guard.as_ref() else {
         return;
     };
-    let _ = item.set_text(ignore_menu_text(&state.catalog, front_app.as_ref()));
+    let catalog = state.catalog.load_full();
+    let _ = item.set_text(ignore_menu_text(&catalog, front_app.as_ref()));
     let _ = item.set_enabled(front_app.is_some());
     let _ = item.set_checked(disabled);
 }
@@ -3673,7 +4450,7 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
         let mut presets = match state.presets.lock() {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!(error = %e, "presets 정본 잠금 실패 — 토글을 반영하지 못했다");
+                tracing::error!(error = %e, "failed to lock presets source of truth; could not apply toggle");
                 return;
             }
         };
@@ -3683,21 +4460,21 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
     let hyperkey_snapshot = match state.hyperkey.lock() {
         Ok(h) => h.clone(),
         Err(e) => {
-            tracing::error!(error = %e, "hyperkey 정본 잠금 실패 — 토글을 반영하지 못했다");
+            tracing::error!(error = %e, "failed to lock hyperkey source of truth; could not apply toggle");
             return;
         }
     };
     let korean_snapshot = match state.korean.lock() {
         Ok(k) => *k,
         Err(e) => {
-            tracing::error!(error = %e, "korean 정본 잠금 실패 — 토글을 반영하지 못했다");
+            tracing::error!(error = %e, "failed to lock korean source of truth; could not apply toggle");
             return;
         }
     };
     let seek_snapshot = match state.seek.lock() {
         Ok(s) => s.clone(),
         Err(e) => {
-            tracing::error!(error = %e, "seek 정본 잠금 실패 — 토글을 반영하지 못했다");
+            tracing::error!(error = %e, "failed to lock seek source of truth; could not apply toggle");
             return;
         }
     };
@@ -3711,19 +4488,19 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
         &seek_snapshot,
         true,
     ) {
-        tracing::error!(error = %e, "Synthesize Caps Lock Remap 을 엔진에 반영하지 못했다");
+        tracing::error!(error = %e, "failed to apply Synthesize Caps Lock Remap to the engine");
     }
 
     // 3) 저장.
     {
         let mut store = state.store.lock().unwrap();
         if let Err(e) = store.set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &next) {
-            tracing::error!(error = %e, "presets.synthesizeCapsLockRemap 저장 실패");
+            tracing::error!(error = %e, "failed to save presets.synthesizeCapsLockRemap");
         }
     }
     tracing::info!(
         value = next,
-        "Synthesize Caps Lock Remap 토글됨 — 엔진·경로 B 에 반영했다"
+        "Synthesize Caps Lock Remap toggled; applied to engine and path B"
     );
 }
 
@@ -3733,16 +4510,16 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
 /// 않는 것이 정상이지만, 방어적으로 한 번 더 확인한다.
 fn on_menu_relaunch(app: &tauri::AppHandle, state: &Arc<AppState>) {
     if !bundle::is_running_from_app_bundle() {
-        tracing::warn!(".app 번들 밖에서 실행 중이라 Relaunch 를 건너뛴다");
+        tracing::warn!("running outside an .app bundle; skipping relaunch");
         return;
     }
     let Some(bundle_id) = bundle::bundle_identifier() else {
-        tracing::warn!("번들 ID 를 얻지 못해 Relaunch 를 건너뛴다");
+        tracing::warn!("failed to get bundle id; skipping relaunch");
         return;
     };
     tracing::info!(
         bundle_id,
-        "Relaunch 요청 — open -n -b 로 새 인스턴스를 띄운다"
+        "relaunch requested; starting a new instance with open -n -b"
     );
     match std::process::Command::new("open")
         .args(["-n", "-b", &bundle_id])
@@ -3750,14 +4527,14 @@ fn on_menu_relaunch(app: &tauri::AppHandle, state: &Arc<AppState>) {
     {
         Ok(_) => shutdown_and_exit(app, state),
         Err(e) => {
-            tracing::error!(error = %e, "Relaunch 를 위한 open 실행 실패 — 기존 인스턴스를 유지한다")
+            tracing::error!(error = %e, "failed to run open for relaunch; keeping the existing instance")
         }
     }
 }
 
 /// `Quit Ultrakey` 클릭.
 fn on_menu_quit(app: &tauri::AppHandle, state: &Arc<AppState>) {
-    tracing::info!("Quit Ultrakey 선택 — 정상 종료 절차를 시작한다");
+    tracing::info!("Quit Ultrakey selected; starting graceful shutdown");
     shutdown_and_exit(app, state);
 }
 
@@ -3819,8 +4596,16 @@ fn on_front_app_changed(
 // 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을 복제하지 않는다.
 // ============================================================================
 
-/// `Launch on login` 체크박스 — `login_item::set_enabled` 로 OS 에 등록/해제하고,
-/// 결과와 무관하게 사용자의 마지막 의도를 `general.launchOnLogin` 에 기록한다.
+/// `Launch on login` 체크박스 — `login_item::set_enabled` 로 OS 에 등록/해제한 뒤
+/// **결과를 확인하고** 거울(`general.launchOnLogin`)에는 실제로 도달한 상태를
+/// 기록한다.
+///
+/// ⭐ B-3(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a 결함 ②) — 예전 순서는
+/// OS 호출이 실패해도 거울에 사용자 의도(`on`)를 먼저 썼다. 그러면 실패한 상태가
+/// `true` 로 굳어 "켜 놨는데 안 된다"가 영구화된다. 지금은: 1) OS 호출 2)
+/// `login_item::status()` 로 **실제 도달한 상태**를 다시 읽는다(`Ok` 를 받았다는
+/// 것과 로그인 시 실제로 뜬다는 것은 다르다) 3) 거울에는 그 실제 상태를 쓴다
+/// 4) `RequiresApproval` 은 재시도하지 않고 전용 문구로 알린다.
 ///
 /// ⚠️ `login_item::set_enabled` 는 상한 있는 재시도(§5 항목 3, 최대 5회·0.2초
 /// 간격 — 최악 약 0.8초)로 **동기 블로킹**한다. Tauri 커맨드 핸들러는 메인
@@ -3829,19 +4614,114 @@ fn on_front_app_changed(
 /// 스레드에서 직접 부르는 새 경로가 생기면 반드시 스레드를 분리해야 한다
 /// (`login_item` 모듈 문서 참고).
 fn set_launch_on_login_internal(state: &Arc<AppState>, on: bool) -> Result<(), String> {
-    let result = login_item::set_enabled(on);
+    let op_result = login_item::set_enabled(on);
+    if let Err(e) = &op_result {
+        tracing::error!(error = %e, on, "failed to register/unregister login item");
+    }
 
+    // OS 조작 뒤 상태를 다시 읽는다 — 이것이 §3.5-a 가 확정한 "정본은 OS" 다.
+    let status = login_item::status();
     {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
-        if let Err(e) = store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &on) {
-            tracing::error!(error = %e, "general.launchOnLogin 저장 실패");
+        if let Err(e) = store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &status.is_active()) {
+            tracing::error!(error = %e, "failed to save general.launchOnLogin");
         }
     }
 
-    result.map_err(|e| {
-        tracing::error!(error = %e, on, "로그인 항목 등록/해제 실패");
-        state.catalog.get("menu.launch_on_login.failed").to_string()
-    })
+    if status == login_item::LoginItemStatus::RequiresApproval {
+        // ⛔ 재등록을 시도하지 않는다 — 사용자만 되돌릴 수 있다(§3.5-a 결정 4).
+        tracing::warn!(
+            on,
+            status = status.as_log_str(),
+            "login item requires user approval in System Settings; not retrying"
+        );
+        return Err(state
+            .catalog
+            .load()
+            .get("menu.launch_on_login.requires_approval")
+            .to_string());
+    }
+
+    if op_result.is_err() || status.is_active() != on {
+        tracing::error!(
+            on,
+            status = status.as_log_str(),
+            reached = status.is_active(),
+            "login item did not reach the requested state"
+        );
+        return Err(state
+            .catalog
+            .load()
+            .get("menu.launch_on_login.failed")
+            .to_string());
+    }
+
+    Ok(())
+}
+
+/// ⭐ B-2(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a 결함 ③) — 기동 시 거울과
+/// OS 정본을 맞춘다. 이 프로젝트가 워크트리의 `target/` 빌드 디렉터리에서
+/// 실행되므로, 등록된 절대 경로가 그 디렉터리를 가리킨다(BTM 실측). 그
+/// 디렉터리가 사라지면 로그인 시 아무것도 뜨지 않는데, 이 재조정이 없으면
+/// 아무도 다시 등록해 주지 않는다.
+///
+/// ⚠️ `login_item::set_enabled` 는 최대 약 0.8초 블로킹한다 — 별도 스레드에서
+/// 돌려 `setup()` 을 늦추지 않는다.
+fn reconcile_login_item_at_boot(state: &Arc<AppState>) {
+    let mirror: bool = {
+        let store = state.store.lock().unwrap();
+        store
+            .get(settings_keys::GENERAL_LAUNCH_ON_LOGIN)
+            .unwrap_or(false)
+    };
+    let state = state.clone();
+    thread::spawn(move || {
+        let status = login_item::status();
+        tracing::info!(
+            mirror,
+            status = status.as_log_str(),
+            "reconciling login item mirror against OS state at boot"
+        );
+
+        match status {
+            login_item::LoginItemStatus::RequiresApproval => {
+                // ⛔ 재등록을 시도하지 않는다 — 사용자만 되돌릴 수 있다.
+                tracing::warn!(
+                    "login item requires user approval in System Settings > General > \
+                     Login Items; not attempting to re-register at boot"
+                );
+            }
+            login_item::LoginItemStatus::NotRegistered | login_item::LoginItemStatus::NotFound
+                if mirror =>
+            {
+                tracing::warn!(
+                    status = status.as_log_str(),
+                    "the launch-on-login mirror says enabled but the OS has no active \
+                     registration; re-registering at the current executable path"
+                );
+                match login_item::set_enabled(true) {
+                    Ok(()) => tracing::info!("login item re-registered at boot"),
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to re-register login item at boot")
+                    }
+                }
+            }
+            login_item::LoginItemStatus::Enabled if !mirror => {
+                tracing::info!(
+                    "OS reports the login item enabled but the mirror was false; \
+                     syncing the mirror to true"
+                );
+                let mut store = state.store.lock().unwrap();
+                if let Err(e) = store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &true) {
+                    tracing::error!(
+                        error = %e,
+                        "failed to sync the general.launchOnLogin mirror at boot"
+                    );
+                }
+            }
+            _ => {}
+        }
+    });
 }
 
 /// F-10 이 이미 등록해 둔 전용 커맨드 — 실제 OS 상태(`login_item::is_enabled()`)를
@@ -3891,6 +4771,34 @@ mod tests {
             assert!(is_known_tab(tab), "`{tab}` 은 KNOWN_TABS 에 있어야 한다");
         }
         assert!(!is_known_tab("bogus"));
+    }
+
+    /// A-2(이슈 #39) — 저장된 값이 없으면 `None`("시스템 설정 따름" 경로를 탄다).
+    #[test]
+    fn resolve_stored_language_is_none_when_key_absent() {
+        let store = SettingsStore::in_memory();
+        assert_eq!(resolve_stored_language(&store), None);
+    }
+
+    /// A-2 — 저장된 값이 있으면 그 로케일이 선택된다.
+    #[test]
+    fn resolve_stored_language_returns_the_stored_locale() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(settings_keys::GENERAL_LANGUAGE, &"ko")
+            .unwrap();
+        assert_eq!(resolve_stored_language(&store), Some(Locale::Ko));
+    }
+
+    /// A-2 ⚠️ — 알 수 없는 값(손으로 고친 설정 파일 등)이면 실패시키지 않고
+    /// `None`(시스템 로케일 폴백)으로 돌아간다.
+    #[test]
+    fn resolve_stored_language_falls_back_to_none_for_unknown_value() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(settings_keys::GENERAL_LANGUAGE, &"klingon")
+            .unwrap();
+        assert_eq!(resolve_stored_language(&store), None);
     }
 
     /// ⭐ **회귀 방지 — 프론트의 탭 목록과 Rust 의 탭 화이트리스트가 어긋나지 않는다.**
@@ -4637,7 +5545,7 @@ mod tests {
             &serde_json::json!(true),
         )
         .unwrap_err();
-        assert!(err.contains("알 수 없는"));
+        assert!(err.contains("unknown settings key"));
     }
 
     // ── F-16 korean.* — validate_and_apply_korean ───────────────────────────────
@@ -4675,7 +5583,7 @@ mod tests {
         let err =
             validate_and_apply_korean(&mut korean, "korean.doesNotExist", &serde_json::json!(true))
                 .unwrap_err();
-        assert!(err.contains("알 수 없는"));
+        assert!(err.contains("unknown settings key"));
     }
 
     // ============================================================================
@@ -5082,5 +5990,123 @@ mod tests {
             ids.len(),
             "중복된 메뉴 항목 id 가 있다: {ids:?}"
         );
+    }
+
+    // ── 이슈 #39 Phase 2 — 설정 export/import 날짜 헬퍼 ──────────────────────
+    //
+    // ⭐ 새 시간 크레이트를 들이지 않고 직접 쓴 `civil_from_days`/`rfc3339_utc`/
+    // `export_default_file_name` 이 실제로 맞는지, 잘 알려진 유닉스 시각 세 개로
+    // 확인한다(값은 파이썬 `datetime.utcfromtimestamp` 로 교차 검증했다).
+
+    #[test]
+    fn civil_from_days_matches_known_epoch_values() {
+        // 1970-01-01T00:00:00Z (day 0).
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // 1700000000 초 = 2023-11-14T22:13:20Z.
+        assert_eq!(civil_from_days((1_700_000_000u64 / 86_400) as i64), (2023, 11, 14));
+        // 1893456000 초 = 2030-01-01T00:00:00Z.
+        assert_eq!(civil_from_days((1_893_456_000u64 / 86_400) as i64), (2030, 1, 1));
+    }
+
+    #[test]
+    fn rfc3339_utc_formats_known_epoch_values() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_utc(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn export_default_file_name_uses_yyyymmdd() {
+        assert_eq!(
+            export_default_file_name(1_700_000_000),
+            "ultrakey-settings-20231114.json"
+        );
+    }
+
+    // ── 이슈 #39 Phase 2 — `ImportOutcome` → `ImportResultView` ──────────────
+
+    #[test]
+    fn import_result_view_carries_outcome_fields_in_camel_case() {
+        let outcome = transfer::ImportOutcome {
+            applied_keys: 3,
+            removed_keys: 1,
+            absent_devices: vec!["dead:beef".to_string()],
+            backup: Some(std::path::PathBuf::from("/tmp/settings.json.pre-import-1")),
+            migrated_from: None,
+        };
+        let view = ImportResultView::from(outcome);
+        assert_eq!(view.applied_keys, 3);
+        assert_eq!(view.removed_keys, 1);
+        assert_eq!(view.absent_devices, vec!["dead:beef".to_string()]);
+        assert_eq!(
+            view.backup_path,
+            Some("/tmp/settings.json.pre-import-1".to_string())
+        );
+
+        let json = serde_json::to_value(&view).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("appliedKeys"), "{obj:?}");
+        assert!(obj.contains_key("removedKeys"), "{obj:?}");
+        assert!(obj.contains_key("absentDevices"), "{obj:?}");
+        assert!(obj.contains_key("backupPath"), "{obj:?}");
+    }
+
+    #[test]
+    fn import_result_view_has_no_backup_path_when_there_was_no_backup() {
+        let outcome = transfer::ImportOutcome {
+            applied_keys: 0,
+            removed_keys: 0,
+            absent_devices: vec![],
+            backup: None,
+            migrated_from: None,
+        };
+        assert_eq!(ImportResultView::from(outcome).backup_path, None);
+    }
+
+    // ── F-18 Event Viewer — 규칙 식별자 → 사람이 읽는 이름 ───────────────────
+
+    #[test]
+    fn rule_label_resolves_a_preset_identifier() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "preset:5"),
+            Some(catalog.get("settings.presets.caps_wasd").to_string())
+        );
+    }
+
+    #[test]
+    fn rule_label_resolves_the_split_sentence_hjkl_preset() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        let label = rule_label(&catalog, "preset:6").expect("preset:6 은 이름이 있어야 한다");
+        assert!(label.contains(catalog.get("settings.presets.caps_hjkl.prefix")));
+        assert!(label.contains(catalog.get("settings.presets.caps_hjkl.suffix")));
+    }
+
+    #[test]
+    fn rule_label_resolves_a_korean_identifier() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "korean:14"),
+            Some(catalog.get("settings.korean.han_eng").to_string())
+        );
+    }
+
+    #[test]
+    fn rule_label_resolves_hyperkey_to_the_tab_name() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "hyperkey"),
+            Some(catalog.get("settings.tab.hyperkey").to_string())
+        );
+    }
+
+    /// 결번(F-08.3)·모르는 프리셋 번호·모르는 규칙 문자열은 전부 `None` — 프런트가
+    /// 계층 이름만 보여준다(명세 §3.4 그대로).
+    #[test]
+    fn rule_label_is_none_for_unknown_identifiers() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(rule_label(&catalog, "preset:3"), None);
+        assert_eq!(rule_label(&catalog, "preset:255"), None);
+        assert_eq!(rule_label(&catalog, "korean:1"), None);
+        assert_eq!(rule_label(&catalog, "bogus"), None);
     }
 }

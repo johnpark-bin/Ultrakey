@@ -35,6 +35,13 @@ fn read_settings_html() -> String {
         .unwrap_or_else(|e| panic!("ui/settings.html 을 읽지 못했다({path:?}): {e}"))
 }
 
+/// F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창 HTML.
+fn read_eventviewer_html() -> String {
+    let path = manifest_dir().join("ui/eventviewer.html");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("ui/eventviewer.html 을 읽지 못했다({path:?}): {e}"))
+}
+
 fn read_en_catalog() -> serde_json::Value {
     // resources/ 는 이 워크트리에서 다른 세션이 동시에 작업 중이라 손대지 않는다
     // — 여기서는 읽기만 한다. 경로는 워크스페이스 루트 기준(`i18n` 크레이트가
@@ -52,6 +59,23 @@ fn read_ko_catalog() -> serde_json::Value {
         .unwrap_or_else(|e| panic!("resources/i18n/ko.json 을 읽지 못했다({path:?}): {e}"));
     serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("resources/i18n/ko.json 파싱 실패({path:?}): {e}"))
+}
+
+/// ⭐ 클론이 지원하는 로케일 5종(en·ko·zh·es·ja, `ultrakey-i18n::Locale::all()`
+/// 과 같은 집합). 이슈 #39 부터 en·ko 두 개만 보던 몇몇 재발 방지 테스트를 이
+/// 목록으로 일반화한다 — en·ko 만 보면 zh·es·ja 쪽에서만 키가 빠지는 회귀를
+/// 놓친다.
+const LOCALES: &[&str] = &["en", "ko", "zh", "es", "ja"];
+
+/// `resources/i18n/<locale>.json` 을 읽는다. `read_en_catalog`/`read_ko_catalog`
+/// 와 같은 근거(resources/ 는 다른 세션이 동시에 작업 중이라 읽기만 한다)로
+/// zh·es·ja 도 같은 방식으로 연다.
+fn read_catalog(locale: &str) -> serde_json::Value {
+    let path = manifest_dir().join(format!("../../resources/i18n/{locale}.json"));
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("resources/i18n/{locale}.json 을 읽지 못했다({path:?}): {e}"));
+    serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("resources/i18n/{locale}.json 파싱 실패({path:?}): {e}"))
 }
 
 fn read_main_rs() -> String {
@@ -354,6 +378,19 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // 카탈로그를 거치지 않는 이유는 위 3개와 동일하다(진단 전용, 카탈로그
         // 자체가 죽었을 수도 있는 경로).
         "Failed to open keyboard settings: ",
+        // D6(General 탭 언어 선택, 이슈 #39) — `settings_set("general.language",
+        // …)` 실패 진단 문구. 위와 같은 이유로 카탈로그를 거치지 않는다(언어를
+        // 바꾸다가 실패한 경로라 카탈로그 자체를 못 믿는 상황일 수 있다).
+        "Failed to change language: ",
+        // F-15 §3.4(이슈 #39 Phase 2) — `settings_export` 실패 진단 문구. 대화상자
+        // 취소는 `Ok(None)`(오류가 아니다)이라 여기 걸리지 않는다 — 이 문구는
+        // 디스크 I/O 등 드문 실패 전용이라 위임 지시서 A-4 의 카탈로그 키 목록에
+        // export 전용 실패 키가 없다(반대로 import 실패는 흔한 사용자 실수라
+        // `settings.general.import.failed` 카탈로그 키로 안내 줄에 보여준다).
+        "Failed to export settings: ",
+        // F-18(이슈 #39 Phase 3) — `open_event_viewer` invoke 실패 진단 문구. 위
+        // 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
+        "Failed to open the Event Viewer: ",
     ];
 
     let html = read_settings_html();
@@ -618,35 +655,28 @@ fn main_rs_의_menu_점_리터럴은_전부_en_카탈로그_키다() {
     );
 }
 
-/// (b) 트레이 메뉴가 참조하는 i18n 키가 en·ko 양쪽에 모두 있다. `ultrakey-i18n` 의
-/// `en_ko_key_sets_are_identical` 이 카탈로그 전체에 대해 이미 이걸 검증하지만,
+/// (b) 트레이 메뉴가 참조하는 i18n 키가 5개 카탈로그 전부에 있다. `ultrakey-i18n`
+/// 의 카탈로그 간 키 집합 동일성 테스트가 전체에 대해 이미 이걸 검증하지만,
 /// 여기서는 "메뉴가 실제로 쓰는 키 집합"을 자체적으로 다시 좁혀서 확인한다 —
 /// 이 테스트만 보고도 메뉴 관련 키 누락을 바로 알 수 있어야 한다.
+///
+/// ⚠️ 원래는 en·ko 두 카탈로그만 봤다 — 이슈 #39 부터 클론이 zh·es·ja 로
+/// 늘었으므로(`LOCALES`), en·ko 만 보면 그 세 로케일에서만 키가 빠지는 회귀를
+/// 이 테스트가 놓친다. `menu.launch_on_login.requires_approval`(이슈 #39, B-3)
+/// 도 이 스캔이 자동으로 잡는다 — 별도 목록에 손으로 추가할 필요가 없다.
 #[test]
-fn main_rs_의_menu_점_리터럴은_en_ko_양쪽_카탈로그에_모두_있다() {
-    let en_keys = flatten_catalog(&read_en_catalog());
-    let ko_keys = flatten_catalog(&read_ko_catalog());
-
+fn main_rs_의_menu_점_리터럴은_다섯_카탈로그_모두에_있다() {
     let menu_keys = menu_dot_literals_in_main_rs();
     assert!(!menu_keys.is_empty());
 
-    let missing_en: Vec<_> = menu_keys
-        .iter()
-        .filter(|k| !en_keys.contains(k.as_str()))
-        .collect();
-    let missing_ko: Vec<_> = menu_keys
-        .iter()
-        .filter(|k| !ko_keys.contains(k.as_str()))
-        .collect();
-
-    assert!(
-        missing_en.is_empty(),
-        "en.json 에 없는 메뉴 키: {missing_en:?}"
-    );
-    assert!(
-        missing_ko.is_empty(),
-        "ko.json 에 없는 메뉴 키: {missing_ko:?}"
-    );
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = menu_keys.iter().filter(|k| !keys.contains(k.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는 메뉴 키: {missing:?}"
+        );
+    }
 }
 
 /// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
@@ -1424,4 +1454,218 @@ fn seek_modifier_비트값이_ultrakey_core_flags와_일치한다() {
         js_command, rs_command,
         "settings.html 의 SEEK_SHORTCUT_MOD_COMMAND 가 flags.rs 의 EventFlags::COMMAND 와 다르다"
     );
+}
+
+// ============================================================================
+// D6 — `General` 탭 언어 선택 + Launch on login 수정(이슈 #39,
+// `localization-and-input-sources.md` §3.1.2-a, `menu-bar-and-lifecycle.md`
+// §3.5-a).
+// ============================================================================
+
+/// 이번 회차가 5개 카탈로그 전부에 새로 넣은 키 — `settings_html_의_settings_점_
+/// 리터럴은_전부_카탈로그_키다`(en 만 봄)와 `ultrakey-i18n` 의 자체 키 집합 동일성
+/// 테스트가 이미 이걸 간접적으로 보장하지만, ⚠️ 이 위임은 "5개 카탈로그의 키
+/// 집합이 정확히 같아야 한다"가 수용 기준이라 여기서도 명시적으로 5개 전부를
+/// 직접 확인한다 — 이 테스트만 보고도 회귀를 바로 알 수 있어야 한다.
+const NEW_KEYS_FOR_ISSUE_39: &[&str] = &[
+    "settings.general.language",
+    "settings.general.language.system",
+    "settings.general.language.hint",
+    "settings.general.launch_on_login.requires_approval",
+    "menu.launch_on_login.requires_approval",
+];
+
+#[test]
+fn 이슈_39_신규_카탈로그_키가_다섯_카탈로그_모두에_있다() {
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = NEW_KEYS_FOR_ISSUE_39
+            .iter()
+            .filter(|k| !keys.contains(**k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는 이슈 #39 신규 키: {missing:?}"
+        );
+    }
+}
+
+/// A-4 — `General` 탭에 언어 선택 팝업이 있다.
+#[test]
+fn settings_html_에_general_language_select가_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"id="general-language""#),
+        "settings.html 에 <select id=\"general-language\"> 가 없다"
+    );
+    // ⭐ §3.1.2-a — endonym 목록은 프런트에 하드코딩하지 않고 백엔드가 보내는
+    // `bootstrap.languages` 로 채운다. `data-key` 로 범용 commit() 위임 경로에
+    // 태우면 "System" 선택이 `null`(키 삭제)이 아니라 문자열 "system" 으로
+    // 저장되므로, 이 select 에는 `data-key` 가 없어야 한다(전용 change 리스너를
+    // 따로 둔다).
+    assert!(
+        !html.contains(r#"id="general-language" data-key"#),
+        "general-language select 에 data-key 가 붙어 있다 — 전용 change 리스너와 \
+         충돌한다(범용 commit() 경로로 새면 \"System\" 이 키 삭제가 아니라 문자열로 저장된다)"
+    );
+    assert!(
+        html.contains("bootstrap.languages"),
+        "settings.html 이 settings_bootstrap 응답의 languages 필드를 쓰지 않는다"
+    );
+}
+
+/// B-1/B-4 — `main.rs` 가 `general.language` 키를 다룬다.
+#[test]
+fn main_rs_가_general_language_키를_다룬다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("settings_keys::GENERAL_LANGUAGE"),
+        "main.rs 에 general.language 저장 키 상수 사용이 없다"
+    );
+    assert!(
+        main_rs.contains(r#""general.language""#),
+        "main.rs 에 \"general.language\" 문자열 리터럴이 없다"
+    );
+}
+
+/// B-1 — `general_view` 가 저장된 거울이 아니라 `login_item::status()`(OS 정본)를
+/// 읽는다. 문자열 검사로 충분하다(§3.5-a 결정 1 — "정본은 언제나 OS 다").
+#[test]
+fn general_view가_login_item_status를_읽는다() {
+    let main_rs = read_main_rs();
+    let start = main_rs
+        .find("fn general_view(")
+        .expect("main.rs 에 general_view 함수가 없다");
+    // 다음 함수 정의 전까지만 잘라 본다(대략의 함수 본문 범위).
+    let body = &main_rs[start..];
+    let end = body[10..]
+        .find("\nfn ")
+        .map(|i| i + 10)
+        .unwrap_or(body.len());
+    let body = &body[..end];
+    assert!(
+        body.contains("login_item::status()"),
+        "general_view 가 login_item::status() 를 읽지 않는다 — 저장된 거울만 보고 있다"
+    );
+}
+
+// ============================================================================
+// 이슈 #39 Phase 2·3 — 설정 export/import + Event Viewer
+// (`settings-store-and-integrity.md` §3.4, `event-viewer.md`).
+// ============================================================================
+
+/// A-4·B-3 — 이번 회차가 5개 카탈로그 전부에 새로 넣은 키 13개(export/import 8개 +
+/// Event Viewer 5개). 위임 지시서의 수용 기준이 "키 집합이 정확히 같아야 한다"라
+/// 기존 `NEW_KEYS_FOR_ISSUE_39`(D6, 앞선 회차)와 별도 목록으로 명시적으로 잡는다.
+const NEW_KEYS_FOR_ISSUE_39_PHASE_2_3: &[&str] = &[
+    "settings.general.transfer",
+    "settings.general.export",
+    "settings.general.import",
+    "settings.general.transfer.hint",
+    "settings.general.export.done",
+    "settings.general.import.done",
+    "settings.general.import.absent_devices",
+    "settings.general.import.failed",
+    "settings.general.diagnostics",
+    "settings.general.event_viewer",
+    "settings.general.event_viewer.hint",
+    "eventviewer.notice.no_permission",
+    "eventviewer.notice.engine_not_running",
+];
+
+#[test]
+fn 이슈_39_phase_2_3_신규_카탈로그_키가_다섯_카탈로그_모두에_있다() {
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = NEW_KEYS_FOR_ISSUE_39_PHASE_2_3
+            .iter()
+            .filter(|k| !keys.contains(**k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는 이슈 #39 Phase 2·3 신규 키: {missing:?}"
+        );
+    }
+}
+
+/// A-3 — `General` 탭에 export/import 버튼이 있고, 대응 커맨드를 invoke 한다.
+/// 파일 대화상자는 Rust 쪽에서만 연다는 결정(위임 지시서 A-1)의 프런트 쪽
+/// 증거이기도 하다 — `settings.html` 에는 `tauri_plugin_dialog` 관련 문자열이
+/// 전혀 없어야 정상이다.
+#[test]
+fn settings_html_에_export_import_이벤트뷰어_버튼이_있고_커맨드를_invoke_한다() {
+    let html = read_settings_html();
+    for id in ["settings-export-btn", "settings-import-btn", "open-event-viewer-btn"] {
+        assert!(
+            html.contains(&format!(r#"id="{id}""#)),
+            "settings.html 에 <button id=\"{id}\"> 가 없다"
+        );
+    }
+    for command in ["settings_export", "settings_import", "open_event_viewer"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+    assert!(
+        !html.contains("plugin:dialog"),
+        "settings.html 이 tauri_plugin_dialog 를 웹뷰에서 직접 부른다 — \
+         Rust 쪽(settings_export/settings_import 커맨드)에서만 열어야 한다(위임 지시서 A-1)"
+    );
+}
+
+/// B-1 — `eventviewer.html` 이 `eventviewer_poll`·`eventviewer_clear` 를 invoke 한다.
+#[test]
+fn eventviewer_html이_eventviewer_poll과_clear를_invoke_한다() {
+    let html = read_eventviewer_html();
+    for command in ["eventviewer_poll", "eventviewer_clear"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/eventviewer.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+}
+
+/// B-1 — `main.rs` 의 프리셋/한국어 규칙 번호 ↔ 이름 대응표(`PRESET_RULE_LABEL_KEYS`·
+/// `KOREAN_RULE_LABEL_KEYS`)가 가리키는 카탈로그 키가 실제로 존재한다.
+///
+/// ⭐ `event-viewer.md` §9 항목 1 이 지적한 위험 — "이 대응이 깨져도 아무도 못
+/// 잡는다" — 을 막는 테스트다. `main.rs` 안에서 `"settings.presets.*"`·
+/// `"settings.korean.*"`·`"settings.tab.hyperkey"` 꼴의 문자열 리터럴을 전부
+/// 긁어 5개 카탈로그 모두에 있는지 확인한다 — 대응표 두 개만이 아니라 같은
+/// 접두사를 쓰는 다른 위치(예: 충돌 대화상자 라벨)의 오타도 함께 잡는 부수효과가
+/// 있지만, 그것도 이 스캔의 의도에 부합한다("카탈로그의 실제 키를 가리킨다").
+#[test]
+fn main_rs의_프리셋_한국어_규칙_라벨_키가_카탈로그에_실재한다() {
+    let main_rs = read_main_rs();
+    let no_comments = strip_line_comments(&main_rs);
+    let literals: Vec<String> = extract_double_quoted_literals(&no_comments)
+        .into_iter()
+        .filter(|s| {
+            s.starts_with("settings.presets.") || s.starts_with("settings.korean.") || s == "settings.tab.hyperkey"
+        })
+        .collect();
+
+    // 새 대응표가 실제로 이 스캔에 걸리는지부터 확인한다 — 추출 로직 자체가
+    // 깨지면(예: 상수 배열 문법이 바뀌면) 아래 검증이 공허하게 통과해 버린다.
+    for must_have in [
+        "settings.presets.caps_wasd",
+        "settings.presets.remap_delete",
+        "settings.korean.won_backtick",
+        "settings.tab.hyperkey",
+    ] {
+        assert!(
+            literals.iter().any(|s| s == must_have),
+            "main.rs 스캔에서 \"{must_have}\" 를 찾지 못했다 — 추출 로직이 깨졌을 수 있다"
+        );
+    }
+
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = literals.iter().filter(|k| !keys.contains(k.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는, main.rs 의 규칙 라벨 카탈로그 키: {missing:?}"
+        );
+    }
 }

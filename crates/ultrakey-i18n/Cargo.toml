@@ -1,6 +1,6 @@
 [package]
 name = "ultrakey-i18n"
-description = "F-14(A) 문자열 카탈로그 — 제품 결정 D4 (한국어 + 영어)"
+description = "F-14(A) 문자열 카탈로그 — 제품 결정 D4 (en/ko/zh/es/ja 5종, 이슈 #39 확장)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

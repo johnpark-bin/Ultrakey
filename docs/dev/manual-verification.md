@@ -416,6 +416,61 @@ mach 메시지 속도로 무한 반복된다. 게다가 `tap.is_enabled()` 가 �
 
 ⚠️ macOS 12 의 LaunchAgent 폴백 경로는 **이 기기에서 확인할 수 없다**(macOS 26.5.2). 미검증으로 남긴다.
 
+#### 📌 재판정 (2026-08-31, 이슈 #39) — 🟡 **여전히 부분 통과. 다만 "왜 안 되는가"가 실측으로 좁혀졌다**
+
+사용자 보고: *"로그인 시에 자동으로 시작하기 기능은 지금 현재 구현이 안 되어 있는 것 같아"*.
+
+⭐ **가설을 채택하지 않고 실측부터 했다.** 앱에 진단 프로브(`ULTRAKEY_LOGIN_ITEM_PROBE`)를 넣어
+`register → status → unregister → status` 를 돌리고, 매 단계의 **OS 정본**(`SMAppService.status`)과
+BTM 데이터베이스(`sfltool dumpbtm`)를 함께 읽었다.
+
+**✅ 실측으로 확정 — `SMAppService` 계층은 정상이다**
+
+| 확인한 것 | 결과 |
+| :--- | :--- |
+| 등록 | ✅ `register` 성공 → `status = Enabled(1)` |
+| BTM 기록 | ✅ `Type: app (0x2)` · `Disposition: [enabled, allowed, notified] (0xb)` · `URL` = 실행 중인 `.app` 절대 경로 |
+| 해제 | ✅ `status = NotRegistered(0)`, BTM 은 `Disposition: [disabled, ...]` 묘비로 남는다(macOS 정상 동작) |
+| 해제 후 재등록 | ✅ 다시 `Enabled` — 앱 자신의 해제는 `RequiresApproval` 을 유발하지 않는다 |
+| ⭐ 번들 재빌드 후(cdhash 변경) | ✅ 여전히 `Enabled` — **"재빌드가 등록을 깬다"는 가설은 기각** |
+| macOS 12 폴백 오발동 | ✅ 없음. `~/Library/LaunchAgents` 에 plist 가 생기지 않는다 |
+
+⭐ **부수 발견**: 등록 레코드가 아예 없을 때 `status` 는 `NotRegistered(0)` 가 아니라 **`NotFound(3)`** 다.
+기존 코드는 `status == 1` 이 아니면 전부 "꺼짐"으로 접어 이 구분을 잃고 있었다.
+
+**⭐ 그래서 무엇이 문제였나 — 코드에서 확정한 결함 셋** (상세: [`../spec/menu-bar-and-lifecycle.md`](../spec/menu-bar-and-lifecycle.md) §3.5-a)
+
+| # | 결함 | 사용자에게 어떻게 보이는가 |
+| :--- | :--- | :--- |
+| ① | UI 가 OS 정본이 아니라 저장된 "거울"을 읽는다 | OS 에서 항목이 사라져도 **체크박스는 계속 ☑** — "켜 놨는데 안 된다" |
+| ② | 등록 실패해도 거울에 사용자 의도가 먼저 쓰인다 | 실패 상태가 `true` 로 굳어 ① 과 합쳐져 영구적 거짓 표시 |
+| ③ | 기동 시 재조정이 없다 | ⭐ 이 앱은 **워크트리의 `target/` 빌드 디렉터리에서 실행**되고 BTM 에 그 절대 경로가 박힌다(실측). 워크트리가 정리되면 그 경로는 사라지고 **로그인 시 아무것도 뜨지 않는다.** 다른 위치의 빌드를 실행해도 아무도 다시 등록해 주지 않는다 |
+
+셋 다 고쳤다 — 정본을 OS 로 바꾸고, 기동 시 재조정하고, 등록 결과를 `status()` 로 재검증한다.
+
+**⬜ 그래도 판정은 🟡 다 — 로그아웃 → 로그인 왕복은 이번에도 수행하지 않았다.**
+
+⭐ **PR #17 이 정확히 여기서 멈췄다가 이 사고가 났으므로, 이번에는 넘기더라도 명시적으로 넘긴다.**
+사용자 세션을 끊는 되돌리기 어려운 조작이라 위임 경계 밖이다. **사용자가 직접 아래를 수행해야 이 항목이 닫힌다.**
+
+```
+1. General 탭에서 `Launch on login` 을 켠다
+2. 체크박스 아래에 "승인 필요" 안내가 뜨는지 본다
+   → 뜬다면: 시스템 설정 ▸ 일반 ▸ 로그인 항목에서 Ultrakey 를 켜고 다시 확인한다
+3. 시스템 설정 ▸ 일반 ▸ 로그인 항목 에 Ultrakey 가 있는지 확인한다
+4. ⭐ 로그아웃 → 로그인
+5. 앱이 자동으로 떴는가? 수동 개입 없이 리매핑이 동작하는가?
+6. ~/Library/Logs/Ultrakey/ultrakey.log 에 기동 로그가 있는지 본다
+```
+
+⚠️ **`RequiresApproval` 상태 자체는 실측하지 못했다.** 재현하려면 시스템 설정을 바꿔야 하는데
+그것은 이 작업의 경계 밖이다(⛔ 시스템 설정 변경 금지). `SMAppServiceStatus` 헤더가 정의하는
+값이라는 것과, 우리 코드가 그 값을 받으면 어떻게 행동하는지까지가 확정된 범위다.
+
+⚠️ **검증 중 되돌린 것**: 프로브가 로그인 항목을 등록했다가 해제했다. 확인 시작 시점의 상태
+(`general.launchOnLogin: false`, 등록 없음)로 되돌려 두었다. `~/Library/LaunchAgents` 에는
+아무것도 만들지 않았다.
+
 ⚠️ 부수 관찰: 로그아웃 시 **graceful shutdown 경로가 실행되지 않는다**(`종료 요청` 로그 0건).
 M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(null)` 로 깨끗했지만,
 **M2 에서 실제 리매핑 규칙이 생기면 종료 정리가 아예 돌지 않는 경로가 된다.** 다음 기동 시 정리하는
@@ -1011,6 +1066,117 @@ kd key="(" code=KeyA kc=65 shift=false
 
 ⚠️ **macOS 12 경로(LaunchAgent plist 폴백)는 이 기기에서 확인할 수 없다** — 검증 기기는 macOS 26 이다.
 `SMAppService` 경로만 실측하고, macOS 12 경로는 **미검증으로 남긴다.**
+
+### 7-f. ⭐ 언어 선택 (D6 / 이슈 #39)
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `General` 탭의 `Language` 팝업 | `System` · `English` · `한국어` · `中文` · `Español` · `日本語` 6개 항목. ⭐ **각 언어 이름이 그 언어로** 쓰여 있다(현재 UI 언어로 번역되어 있으면 안 된다) |
+| 2 | `한국어` 를 고른다 | **재시작 없이 즉시** 환경설정 창 전체가 한국어로 바뀐다 |
+| 3 | 메뉴바 아이콘을 클릭한다 | 메뉴 항목도 한국어다(창만 바뀌면 안 된다) |
+| 4 | `中文` → `Español` → `日本語` 로 차례로 바꾼다 | 매번 즉시 바뀌고, 라벨이 잘리거나 빈 문자열이 되지 않는다 |
+| 5 | `settings.json` 을 본다 | `general.language` 키가 있다 |
+| 6 | `System` 을 고른다 | 시스템 언어로 돌아가고, ⭐ `settings.json` 에서 **키가 사라진다**("부재 = 기본값") |
+| 7 | ⭐⭐ **`~/Library/Logs/Ultrakey/ultrakey.log` 를 본다** | ⭐ **어느 언어를 골랐든 로그는 전부 영어다.** 한글이 한 줄도 없어야 한다 |
+
+### 7-g. ⭐ 설정 export / import (D7 / 이슈 #39)
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `General` 탭의 `Export…` | 저장 대화상자가 뜨고 `.json` 을 쓴다 |
+| 2 | 그 파일을 연다 | `kind: "ultrakey.settings-export"` · ⭐ **`values` 에 "건드린 키만"** 들어 있다(수백 줄이면 안 된다). `perDevice._managed` 와 `ui.*` 는 **없다** |
+| 3 | 설정 두어 개를 바꾼다 | 바뀐다 |
+| 4 | `Import…` 로 1의 파일을 고른다 | ⭐ **교체**된다 — 3에서 바꾼 것이 파일의 상태로 되돌아간다. 파일에 없던 키는 **기본값으로** 돌아간다 |
+| 5 | 저장 디렉터리를 본다 | `settings.json.pre-import-<epoch>` 백업이 있다 |
+| 6 | 연결되지 않은 키보드 설정이 든 파일을 import | 거절하지 않는다. **보존하되** "지금 연결되어 있지 않은 키보드 N종" 안내가 뜬다 |
+| 7 | 엉뚱한 JSON(예: `package.json`)을 import | 거절한다. ⭐ **저장소가 전혀 바뀌지 않는다** |
+| 8 | import 직후 | 재시작 없이 엔진·메뉴·UI 에 반영된다 |
+
+### 7-h. ⭐ Event Viewer (D8 / F-18 / 이슈 #39)
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `General` 탭의 `Open Event Viewer` | 별도 창이 뜬다(설정 창 안의 탭이 아니다) |
+| 2 | 다른 앱(편집기 등)에 포커스를 주고 키를 누른다 | ⭐ 뷰어 창이 **항상 위**에 있어 타이핑하면서 볼 수 있다. 줄이 실시간으로 쌓인다 |
+| 3 | 평범한 글자 키를 누른다 | `Pass` · 규칙 없음 · 출력 없음 |
+| 4 | ⭐ 켜 둔 프리셋의 조합을 누른다 | `Consume` 로 표시되고 색 막대가 붙는다. **어느 프리셋인지 이름이 보인다**(계층 이름만 보이면 안 된다) |
+| 5 | `Pause` | 화면이 멈춘다. 다시 `Resume` 하면 이어진다 |
+| 6 | `Clear` | 비워진다 |
+| 7 | 창을 닫는다 | 계측이 멈춘다 |
+| 8 | ⭐ **권한이 없는 상태에서 연다** | 안내가 뜬다(빈 화면으로 두지 않는다) |
+
+⚠️ **"뷰어가 꺼져 있을 때 비용 0"은 단위 테스트가 지킨다** — `trace.rs` 의 `viewer_off_and_env_off_means_no_trace`.
+실기기에서 "느려지지 않았다"를 눈으로 확인하는 것은 의미 있는 측정이 아니므로 그렇게 적지 않는다.
+
+## 📌 실측 결과 (2026-08-31, 이슈 #39 / General 탭 확장)
+
+빌드: `./scripts/build-signed.sh` → `target/universal-apple-darwin/release/bundle/macos/Ultrakey.app` 를 `open` 으로 실행.
+조작은 AX(`System Events`)로 구동했고, 판정은 **스크린샷 · `settings.json` · 로그 파일**로 했다.
+
+### ✅ 통과한 것
+
+| 항목 | 결과 · 증거 |
+| :--- | :--- |
+| **7-f #1 언어 팝업** | ✅ `General` 탭에 `언어` 팝업이 있고 항목이 각 언어의 자기 이름이다([스크린샷](screenshots/39-general-tab-en.png)) |
+| **7-f #2 즉시 적용** | ✅ `한국어` 선택 → **재시작 없이** 창 전체가 한국어로 바뀌었다([스크린샷](screenshots/39-general-tab-ko.png)) |
+| **7-f #3 메뉴바도 함께** | ✅ 트레이 메뉴가 `[Firefox Developer Edition 무시하기][설정…][정보][고급][Ultrakey 종료]` 로 바뀌었다 — 창만이 아니라 **네이티브 표면도** 갱신된다 |
+| **7-f #5 저장** | ✅ `settings.json` 에 `general.language: "ko"` 가 즉시 나타났다 |
+| **7-f #6 System 복귀** | ✅ 키를 지우면 시스템 언어로 돌아간다("부재 = 기본값") |
+| ⭐⭐ **7-f #7 로그는 항상 영어** | ✅ **UI 가 한국어인 상태로 이번 실행 로그 전체를 검사해 한글이 0줄이었다.** 언어를 바꾼 그 줄조차 영어다 — `general.language set locale="ko"` |
+| **7-g #1·#2 export** | ✅ 저장 대화상자가 뜨고 파일이 쓰였다. ⭐ **키 28개만** 담겼고(수백 개가 아니다), `perDevice._managed` 와 `ui.*` 가 **없다.** `perDevice.5ac:24f.*`·`perDevice.all.*`(실제 사용자 설정)는 들어 있다 |
+| ⭐ **7-g #4 import 는 교체다** | ✅ 파일에 **없는** 키(`korean.hanjaKeyConvertsHanja`)를 먼저 켠 뒤 import → **그 키가 사라졌다**(32개 → 31개). 병합이었다면 살아남았을 것이다. 로그: `settings imported … applied=31 removed=1 absent_devices=0` |
+| **7-g #5 백업** | ✅ `settings.json.pre-import-1788105992` 가 생겼다 |
+| **7-g #8 즉시 반영** | ✅ 재시작 없이 엔진 재구성 로그가 이어졌다(`reconfigured the Arbiter to reflect the settings change`) |
+| ⭐ **기기 상태 키 보존** | ✅ import 후에도 `perDevice._managed` 와 `ui.lastTab` 이 **이 기기의 값 그대로** 남았다 |
+| **7-h #1 별도 창** | ✅ `Event Viewer 열기` → 독립 창이 떴다(`windows = [Ultrakey — Event Viewer][Ultrakey]`) |
+| ⭐ **7-h #3·#4 입력 → 해석 대조** | ✅ [스크린샷](screenshots/39-event-viewer.png). 평범한 키는 `Passthrough / Pass`, `⇧`·`⌘` 조합은 수정자가 표시된다. ⭐ **`KeyDown 0x4F fn → 0x39`** 로 D-1 alias 환원이 보이고, 그 줄이 `HyperModifier / Consume` 로 소비된 뒤 KeyUp 에서 `PresetCombo / Consume` + **`ToggleCapsLock ok off->on`** 효과가 찍혔다. 소비된 줄은 색 막대로 구분된다 |
+| **7-d 로그인 항목 기동 재조정** | ✅ 기동 로그에 `reconciling login item mirror against OS state at boot mirror=false status="not-found"` — 새 재조정 경로가 실제로 돈다 |
+
+### ⬜ 확인하지 못한 것 — 통과했다고 적지 않는다
+
+| 항목 | 왜 |
+| :--- | :--- |
+| ⭐ **7-d #4 로그아웃 → 로그인 왕복 (= 1-b #6)** | 사용자 세션을 끊는 되돌리기 어려운 조작이라 수행하지 않았다. **여전히 미확인이다** — 절차는 1-b #6 절에 적어 두었고 사용자가 직접 마쳐야 한다 |
+| `RequiresApproval` 상태 | 재현하려면 **시스템 설정을 바꿔야** 하는데 이 작업의 경계 밖이다(⛔ 시스템 설정 변경 금지) |
+| macOS 12 LaunchAgent 폴백 | 검증 기기가 macOS 26 이다. 이전 회차와 같은 이유로 미검증 |
+| 7-f #4 `中文`·`Español`·`日本語` 실제 전환 | `한국어` 전환만 실기기로 확인했다. 나머지 셋은 **카탈로그 키 집합 동일성·플레이스홀더 일치 단위 테스트**로만 담보된다 |
+| 7-h #8 권한 없는 상태의 뷰어 안내 | 권한이 이미 부여된 기기라 그 상태를 만들지 못했다 |
+| 뷰어 링 오버플로 표시 | 링(512칸)을 채울 만큼 빠른 입력을 만들지 못했다. 배선(`Engine::trace_dropped_count`)과 표시 코드는 있으나 **실제로 넘치는 것을 보지는 못했다** |
+
+### ⚠️ 이 회차에서 새로 발견한 버그 (이 이슈 범위 밖 — 별도 처리가 필요하다)
+
+⭐ **설정 창을 닫으면 다시 열 수 없다.**
+
+```
+ERROR ultrakey_app: window not found window_label="settings" what="show_settings"
+```
+
+메뉴바 `설정…` 을 눌러도 창이 뜨지 않는다. Tauri 는 창을 닫으면 기본적으로 **파괴**하는데,
+`show_settings` 는 라벨로 기존 창을 찾기만 하고 없으면 새로 만들지 않는다.
+
+- **이 회차의 변경이 원인이 아니다.** Event Viewer 의 `CloseRequested` 핸들러는 그 창 하나에만
+  걸려 있고(`window.on_window_event`), 설정 창에는 아무것도 걸지 않았다. **기존 버그다** —
+  7-a 는 메뉴 구조만 봤고 "닫았다가 다시 열기"를 한 적이 없다.
+- 영향은 크다: 설정 창이 **모든 설정과 Event Viewer 로 가는 유일한 입구**다. 한 번 닫으면
+  앱을 재시작해야 한다.
+- 고치는 방법은 작다(라벨로 못 찾으면 `WebviewWindowBuilder` 로 다시 만든다). 이 이슈의
+  범위 밖이라 **고치지 않고 기록만 한다.**
+
+### ⚠️ 검증 중 바꿨다가 되돌린 것
+
+| 바꾼 것 | 되돌림 |
+| :--- | :--- |
+| 로그인 항목 등록(프로브) | ✅ 해제. `sfltool dumpbtm` 에 `disabled` 묘비만 남는다(macOS 정상 동작) |
+| `general.language = ko` | ✅ 키를 지웠다(= 시작 시점의 "부재") |
+| `korean.hanjaKeyConvertsHanja` | ✅ import 가 지웠다(원래 부재였다) |
+| `settings.json.pre-import-*` 백업 | ✅ 삭제 |
+| caps lock 잠금(합성 F18 이 토글) | ✅ 다시 꺼서 `HIDCapsLockState=No` 확인 |
+| 메인 체크아웃에서 돌던 인스턴스 종료 | ✅ 검증 후 다시 실행해 두었다 |
+
+시작 시점 `settings.json` 과 최종 상태의 차이는 **없다**(`ui.lastTab` 까지 되돌렸다).
+`~/Library/LaunchAgents` 에는 아무것도 만들지 않았고, `hidutil property --get UserKeyMapping` 은 비어 있다.
+
+---
 
 ### 7-e. 단일 인스턴스
 
