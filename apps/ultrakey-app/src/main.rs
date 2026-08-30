@@ -2030,12 +2030,58 @@ fn refresh_ignore_menu_item(state: &Arc<AppState>) {
 /// 이벤트를 보내므로(objc2 macOS 백엔드 관찰), 여기서 다시 `set_checked` 를
 /// 부를 필요가 없다 — 저장 값만 그 새 상태와 맞춰 주면 된다.
 fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
-    let mut store = state.store.lock().unwrap();
-    let next = !synthesize_caps_lock_remap_enabled(&store);
-    if let Err(e) = store.set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &next) {
-        tracing::error!(error = %e, "presets.synthesizeCapsLockRemap 저장 실패");
+    let next = {
+        let store = state.store.lock().unwrap();
+        !synthesize_caps_lock_remap_enabled(&store)
+    };
+
+    // ⭐ 1) 메모리 정본 갱신 + 2) 엔진 반영 (2026-08-30, 이슈 #19 / 증상 B).
+    //
+    // **이전 구현은 `SettingsStore` 에만 값을 썼다.** 위임 지시서가 "이 값을 실제로
+    // 읽어 경로 B 설치 여부를 바꾸는 쪽은 F-08 소관" 이라고 경계를 그었던 것을,
+    // "메뉴는 저장만 한다"로 좁게 구현한 결과다. 그래서 이 항목을 눌러도
+    // `AppState::presets`(탭 스레드가 실제로 보는 정본)와 `EngineConfig::
+    // caps_lock_alias` 가 그대로였고, **경로 B 커널 매핑이 토글과 어긋난 채 남았다.**
+    //
+    // 실측 근거(이슈 #19 로그): `05:39:52 Synthesize Caps Lock Remap 토글됨 value=true`
+    // 직후인 `05:40:49` 의 경로 B 재적용이 여전히 `count=1` 이었다 — 토글이 매핑을
+    // 전혀 바꾸지 못했다는 뜻이다. `architecture.md` §6.1 이 이 스위치에 부여한 역할
+    // ("켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다")이 성립하지 않았다.
+    //
+    // ⚠️ 락을 겹쳐 잡지 않는다 — `reconfigure_engine` 은 `state.engine` 을 잡으므로
+    // `store`/`presets` 잠금을 놓은 뒤에 부른다.
+    let presets_snapshot = {
+        let mut presets = match state.presets.lock() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "presets 정본 잠금 실패 — 토글을 반영하지 못했다");
+                return;
+            }
+        };
+        presets.synthesize_caps_lock_remap = next;
+        *presets
+    };
+    let hyperkey_snapshot = match state.hyperkey.lock() {
+        Ok(h) => h.clone(),
+        Err(e) => {
+            tracing::error!(error = %e, "hyperkey 정본 잠금 실패 — 토글을 반영하지 못했다");
+            return;
+        }
+    };
+    // `force_reset = true` — alias 가 바뀌면 추적 키 집합(F18 ↔ caps lock)이 통째로
+    // 바뀌므로, 규칙 변경과 같은 이유로 stuck modifier 위험이 있다(D-D).
+    if let Err(e) = reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, true) {
+        tracing::error!(error = %e, "Synthesize Caps Lock Remap 을 엔진에 반영하지 못했다");
     }
-    tracing::info!(value = next, "Synthesize Caps Lock Remap 토글됨");
+
+    // 3) 저장.
+    {
+        let mut store = state.store.lock().unwrap();
+        if let Err(e) = store.set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &next) {
+            tracing::error!(error = %e, "presets.synthesizeCapsLockRemap 저장 실패");
+        }
+    }
+    tracing::info!(value = next, "Synthesize Caps Lock Remap 토글됨 — 엔진·경로 B 에 반영했다");
 }
 
 /// `Relaunch` 클릭 — 현재 실행 파일을 `open -n -b <bundle-id>` 로 새로 띄우고

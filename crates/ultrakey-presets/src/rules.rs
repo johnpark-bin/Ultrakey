@@ -623,4 +623,99 @@ mod tests {
         assert!(!PresetSettings { double_tap_shift_to_caps: true, ..base }.needs_caps_lock_alias(false));
         assert!(!PresetSettings { left_right_shift_to_caps: true, ..base }.needs_caps_lock_alias(false));
     }
+
+    // ── F-08 → 엔진 규칙 실 설정 통합 테스트 — 이슈 #19 회귀 방지 ────────────────────────
+    //
+    // ⭐ 이것이 가장 값진 테스트다 — 사용자가 실제로 켜는 `PresetSettings` 에서 출발해
+    // `to_rules` → `EngineConfig` → `Arbiter` 까지 전체 파이프라인을 통과시킨다. 이 크레이트
+    // (`ultrakey-presets`)는 `ultrakey-core` 를 이미 일반 의존성으로 갖고 있으므로(Cargo.toml)
+    // 별도 dev-dependency 없이 바로 쓴다.
+    use ultrakey_core::arbitration::{Arbiter, Disposition};
+    use ultrakey_core::event::{EventKind, InputEvent};
+    use ultrakey_core::settings::EngineConfig;
+    use ultrakey_core::time::Millis;
+
+    /// `Remap caps lock to: left control`(F-08.1) — D-1 이 켜지는 실 설정에서 출발해
+    /// F18 의 `KeyDown` 이 `left control` 의 `FlagsChanged` 로 바르게 옮겨지는지 끝까지
+    /// 확인한다.
+    #[test]
+    fn caps_lock_remap_to_left_control_end_to_end_under_d1() {
+        let settings = PresetSettings {
+            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::LeftControl },
+            ..PresetSettings::default()
+        };
+        assert!(settings.needs_caps_lock_alias(false), "D-1 이 켜지는 구성이어야 한다");
+
+        let preset_rules = settings.to_rules(false);
+        let mut cfg = EngineConfig::default();
+        cfg.rules.combo_rules = preset_rules.combos;
+        cfg.rules.simple_remaps = preset_rules.simple_remaps;
+        cfg.rules.source_actions = preset_rules.source_actions;
+        // D-1 이 실제로 설치했을 경로 B 매핑을 재현 — 탭에는 F18 의 KeyDown/KeyUp 이 도착한다.
+        cfg.caps_lock_alias = Some(KeyCode::F18);
+
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::F18, flags: EventFlags::NONE, autorepeat: false },
+            false,
+            Millis(0),
+        );
+
+        assert_eq!(out.emitted().len(), 1);
+        assert_eq!(out.emitted()[0].kind, EventKind::FlagsChanged);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
+        // 기대값의 출처는 macOS 헤더다: kCGEventFlagMaskControl = 0x00040000
+        // (`CGEventTypes.h`), NX_DEVICELCTLKEYMASK = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`).
+        const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
+        assert_eq!(out.emitted()[0].flags.0 & LEFT_CONTROL_HELD, LEFT_CONTROL_HELD);
+    }
+
+    /// `Double tap shift = caps lock`(F-08.8) — architecture.md §6.1 의 D-1 목록에
+    /// 없으므로 alias 를 요구하지 않고, shift 는 `Arbiter::has_substitute_output` 판정에
+    /// 따라 원본 그대로 통과한다(`Disposition::Pass`) — 이 프리셋이 shift 를 죽이지
+    /// 않는다는 것을 실 설정에서 끝까지 확인한다.
+    #[test]
+    fn double_tap_shift_preset_keeps_shift_working_end_to_end() {
+        let settings = PresetSettings { double_tap_shift_to_caps: true, ..PresetSettings::default() };
+        assert!(!settings.needs_caps_lock_alias(false), "F-08.8 은 D-1 을 켜지 않는다(architecture.md §6.1)");
+
+        let preset_rules = settings.to_rules(false);
+        let mut cfg = EngineConfig::default();
+        cfg.rules.combo_rules = preset_rules.combos;
+        cfg.rules.simple_remaps = preset_rules.simple_remaps;
+        cfg.rules.source_actions = preset_rules.source_actions;
+        // alias 는 기본값 None 그대로 둔다 — D-1 이 꺼져 있다.
+
+        let mut arb = Arbiter::new(&cfg);
+
+        let shift_down = arb.arbitrate(
+            &cfg,
+            &InputEvent {
+                kind: EventKind::FlagsChanged,
+                keycode: KeyCode::LEFT_SHIFT,
+                flags: EventFlags::SHIFT,
+                autorepeat: false,
+            },
+            false,
+            Millis(0),
+        );
+        assert_eq!(
+            shift_down.disposition(),
+            Disposition::Pass,
+            "shift 가 통째로 삼켜진다 — `Double tap shift = caps lock` 을 켜면 Shift+a 가 소문자로 나간다"
+        );
+
+        let a_down = arb.arbitrate(
+            &cfg,
+            &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::ANSI_A, flags: EventFlags::NONE, autorepeat: false },
+            false,
+            Millis(10),
+        );
+        assert_eq!(
+            a_down.disposition(),
+            Disposition::Pass,
+            "shift 가 통째로 삼켜진다 — `Double tap shift = caps lock` 을 켜면 Shift+a 가 소문자로 나간다"
+        );
+    }
 }

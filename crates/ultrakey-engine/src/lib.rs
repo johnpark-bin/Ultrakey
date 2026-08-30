@@ -21,6 +21,7 @@ pub mod lifecycle;
 pub mod path_b;
 pub mod state;
 pub mod system_hooks;
+pub mod trace;
 pub mod watchdog;
 
 pub use command::{CommandChannel, EngineCommand};

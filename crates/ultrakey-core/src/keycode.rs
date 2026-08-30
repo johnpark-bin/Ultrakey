@@ -81,6 +81,47 @@ impl KeyCode {
     pub const VOLUME_UP: KeyCode = KeyCode(0x48);
     /// `kVK_VolumeDown`.
     pub const VOLUME_DOWN: KeyCode = KeyCode(0x49);
+
+    /// ⭐ 이 키가 **modifier 키**이면, 그것이 눌려 있는 동안 이벤트에 실려야 하는
+    /// `CGEventFlags` 비트(일반 마스크 + 좌/우 구분 비트). modifier 가 아니면 `None`.
+    ///
+    /// **왜 필요한가 (2026-08-30, 이슈 #19 / 증상 A).** macOS 는 modifier 키의
+    /// 눌림/뗌을 `kCGEventKeyDown`/`KeyUp` 이 **아니라** `kCGEventFlagsChanged` 와
+    /// 그 이벤트의 flags 비트로만 표현한다 — `key-remapping-engine.md` §5 #18 이
+    /// 입력 쪽에서 이미 확정한 사실이다. 그런데 **출력 쪽**은 그 사실을 반영하지
+    /// 않고 있었다: `Remap caps lock to: left control`(F-08.1)이 `left control` 의
+    /// `KeyDown`(flags 0)을 합성해 내보내면, 받는 앱은 control 비트가 켜진 적이
+    /// 없으므로 **control 이 눌린 것으로 보지 않는다.** 이 함수는 그 대칭을 회복하는
+    /// 자리다 — 대상이 modifier 면 여기서 얻은 비트를 실은 `FlagsChanged` 로 낸다.
+    ///
+    /// ⚠️ **caps lock 은 `None` 이다.** caps lock 의 `alphaShift` 비트는 키의 눌림이
+    /// 아니라 **잠금(lock) 상태**를 뜻한다(§5 #18 (b)). 그것을 "눌림" 표현으로 쓰면
+    /// 잠금이 켜진 것처럼 보이게 되어, `Arbiter::strip_caps_lock_bit` 이 이슈 #13 에서
+    /// 고친 결함을 되살린다. caps lock 을 **대상 키로** 고른 리매핑은 잠금 토글이
+    /// 목적이므로 경로 C 가 다룬다(`key-remapping-engine.md` §3-d).
+    pub fn modifier_flags(self) -> Option<crate::flags::EventFlags> {
+        use crate::flags::EventFlags as F;
+        let f = match self {
+            KeyCode::LEFT_SHIFT => F(F::SHIFT.0 | F::DEVICE_LEFT_SHIFT.0),
+            KeyCode::RIGHT_SHIFT => F(F::SHIFT.0 | F::DEVICE_RIGHT_SHIFT.0),
+            KeyCode::LEFT_CONTROL => F(F::CONTROL.0 | F::DEVICE_LEFT_CONTROL.0),
+            KeyCode::RIGHT_CONTROL => F(F::CONTROL.0 | F::DEVICE_RIGHT_CONTROL.0),
+            KeyCode::LEFT_OPTION => F(F::ALTERNATE.0 | F::DEVICE_LEFT_OPTION.0),
+            KeyCode::RIGHT_OPTION => F(F::ALTERNATE.0 | F::DEVICE_RIGHT_OPTION.0),
+            KeyCode::LEFT_COMMAND => F(F::COMMAND.0 | F::DEVICE_LEFT_COMMAND.0),
+            KeyCode::RIGHT_COMMAND => F(F::COMMAND.0 | F::DEVICE_RIGHT_COMMAND.0),
+            KeyCode::FUNCTION => F::SECONDARY_FN,
+            _ => return None,
+        };
+        Some(f)
+    }
+
+    /// 이 키가 macOS 가 `flagsChanged` 로만 전달하는 modifier 키인가
+    /// — `modifier_flags()` 가 값을 내는 키 **와 caps lock**. caps lock 은 flags 비트를
+    /// 갖지 않지만(위 참고) 이벤트 종류만은 `flagsChanged` 다.
+    pub fn is_modifier_key(self) -> bool {
+        self == KeyCode::CAPS_LOCK || self.modifier_flags().is_some()
+    }
 }
 
 /// hyper/meh/bleh·Seek 소스 키 팝업에 실제로 나열되는 35종(`hyperkey.md` §4, 표시 순서 그대로).
@@ -286,5 +327,73 @@ mod tests {
         assert_eq!(SourceKey::CapsLock.label(), "caps lock");
         assert_eq!(SourceKey::MenuPc.label(), "menu (PC)");
         assert_eq!(SourceKey::Globe.label(), "globe");
+    }
+
+    // ── modifier_flags() — 이슈 #19 증상 A ────────────────────────────────────────
+    //
+    // ⭐ **기대값을 구현이 쓰는 상수에서 가져오지 않는다.** PR #17 이 지적한 함정이
+    // 그것이었다("테스트가 코드와 같은 상수를 기대값으로 써서 무엇이 옳은가가 아니라
+    // 코드가 무엇을 하는가를 검증했다"). 여기서는 **macOS 헤더의 값을 리터럴로 직접**
+    // 적는다 — 출처는 아래 주석에 남긴다.
+    //
+    //   `CoreGraphics/CGEventTypes.h`
+    //     kCGEventFlagMaskShift      = 0x00020000
+    //     kCGEventFlagMaskControl    = 0x00040000
+    //     kCGEventFlagMaskAlternate  = 0x00080000
+    //     kCGEventFlagMaskCommand    = 0x00100000
+    //     kCGEventFlagMaskSecondaryFn= 0x00800000
+    //   `IOKit/hidsystem/IOLLEvent.h`
+    //     NX_DEVICELCTLKEYMASK   = 0x00000001   NX_DEVICERCTLKEYMASK   = 0x00002000
+    //     NX_DEVICELSHIFTKEYMASK = 0x00000002   NX_DEVICERSHIFTKEYMASK = 0x00000004
+    //     NX_DEVICELCMDKEYMASK   = 0x00000008   NX_DEVICERCMDKEYMASK   = 0x00000010
+    //     NX_DEVICELALTKEYMASK   = 0x00000020   NX_DEVICERALTKEYMASK   = 0x00000040
+    #[test]
+    fn modifier_flags_match_macos_header_values() {
+        let expect: &[(KeyCode, u64)] = &[
+            (KeyCode::LEFT_SHIFT, 0x0002_0002),
+            (KeyCode::RIGHT_SHIFT, 0x0002_0004),
+            (KeyCode::LEFT_CONTROL, 0x0004_0001),
+            (KeyCode::RIGHT_CONTROL, 0x0004_2000),
+            (KeyCode::LEFT_OPTION, 0x0008_0020),
+            (KeyCode::RIGHT_OPTION, 0x0008_0040),
+            (KeyCode::LEFT_COMMAND, 0x0010_0008),
+            (KeyCode::RIGHT_COMMAND, 0x0010_0010),
+            (KeyCode::FUNCTION, 0x0080_0000),
+        ];
+        for (k, want) in expect {
+            assert_eq!(
+                k.modifier_flags().map(|f| f.0),
+                Some(*want),
+                "keycode {:#04X} 의 modifier flags 가 macOS 헤더 값과 다르다",
+                k.0
+            );
+        }
+    }
+
+    /// ⚠️ caps lock 은 `None` 이다 — `alphaShift` 비트는 눌림이 아니라 잠금을 뜻한다
+    /// (`key-remapping-engine.md` §5 #18 (b)). 그것을 눌림 표현으로 쓰면 이슈 #13 에서
+    /// 고친 "다른 앱이 caps lock 이 켜진 것으로 인식" 결함이 되살아난다.
+    #[test]
+    fn caps_lock_has_no_press_flags_but_is_still_a_modifier_key() {
+        assert_eq!(KeyCode::CAPS_LOCK.modifier_flags(), None);
+        assert!(KeyCode::CAPS_LOCK.is_modifier_key());
+    }
+
+    /// modifier 가 아닌 키는 `None` — 과잉 교정 방지(esc·tab·방향키 리매핑은
+    /// 종전대로 `KeyDown`/`KeyUp` 으로 나가야 한다).
+    #[test]
+    fn non_modifier_keys_have_no_modifier_flags() {
+        for k in [
+            KeyCode::ESCAPE,
+            KeyCode::TAB,
+            KeyCode::SPACE,
+            KeyCode::RETURN,
+            KeyCode::LEFT_ARROW,
+            KeyCode::F18,
+            KeyCode::ANSI_A,
+        ] {
+            assert_eq!(k.modifier_flags(), None, "keycode {:#04X}", k.0);
+            assert!(!k.is_modifier_key(), "keycode {:#04X}", k.0);
+        }
     }
 }
