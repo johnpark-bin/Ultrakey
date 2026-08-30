@@ -35,6 +35,13 @@ fn read_settings_html() -> String {
         .unwrap_or_else(|e| panic!("ui/settings.html 을 읽지 못했다({path:?}): {e}"))
 }
 
+/// F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창 HTML.
+fn read_eventviewer_html() -> String {
+    let path = manifest_dir().join("ui/eventviewer.html");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("ui/eventviewer.html 을 읽지 못했다({path:?}): {e}"))
+}
+
 fn read_en_catalog() -> serde_json::Value {
     // resources/ 는 이 워크트리에서 다른 세션이 동시에 작업 중이라 손대지 않는다
     // — 여기서는 읽기만 한다. 경로는 워크스페이스 루트 기준(`i18n` 크레이트가
@@ -375,6 +382,15 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // …)` 실패 진단 문구. 위와 같은 이유로 카탈로그를 거치지 않는다(언어를
         // 바꾸다가 실패한 경로라 카탈로그 자체를 못 믿는 상황일 수 있다).
         "Failed to change language: ",
+        // F-15 §3.4(이슈 #39 Phase 2) — `settings_export` 실패 진단 문구. 대화상자
+        // 취소는 `Ok(None)`(오류가 아니다)이라 여기 걸리지 않는다 — 이 문구는
+        // 디스크 I/O 등 드문 실패 전용이라 위임 지시서 A-4 의 카탈로그 키 목록에
+        // export 전용 실패 키가 없다(반대로 import 실패는 흔한 사용자 실수라
+        // `settings.general.import.failed` 카탈로그 키로 안내 줄에 보여준다).
+        "Failed to export settings: ",
+        // F-18(이슈 #39 Phase 3) — `open_event_viewer` invoke 실패 진단 문구. 위
+        // 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
+        "Failed to open the Event Viewer: ",
     ];
 
     let html = read_settings_html();
@@ -1529,4 +1545,125 @@ fn general_view가_login_item_status를_읽는다() {
         body.contains("login_item::status()"),
         "general_view 가 login_item::status() 를 읽지 않는다 — 저장된 거울만 보고 있다"
     );
+}
+
+// ============================================================================
+// 이슈 #39 Phase 2·3 — 설정 export/import + Event Viewer
+// (`settings-store-and-integrity.md` §3.4, `event-viewer.md`).
+// ============================================================================
+
+/// A-4·B-3 — 이번 회차가 5개 카탈로그 전부에 새로 넣은 키 13개(export/import 8개 +
+/// Event Viewer 5개). 위임 지시서의 수용 기준이 "키 집합이 정확히 같아야 한다"라
+/// 기존 `NEW_KEYS_FOR_ISSUE_39`(D6, 앞선 회차)와 별도 목록으로 명시적으로 잡는다.
+const NEW_KEYS_FOR_ISSUE_39_PHASE_2_3: &[&str] = &[
+    "settings.general.transfer",
+    "settings.general.export",
+    "settings.general.import",
+    "settings.general.transfer.hint",
+    "settings.general.export.done",
+    "settings.general.import.done",
+    "settings.general.import.absent_devices",
+    "settings.general.import.failed",
+    "settings.general.diagnostics",
+    "settings.general.event_viewer",
+    "settings.general.event_viewer.hint",
+    "eventviewer.notice.no_permission",
+    "eventviewer.notice.engine_not_running",
+];
+
+#[test]
+fn 이슈_39_phase_2_3_신규_카탈로그_키가_다섯_카탈로그_모두에_있다() {
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = NEW_KEYS_FOR_ISSUE_39_PHASE_2_3
+            .iter()
+            .filter(|k| !keys.contains(**k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는 이슈 #39 Phase 2·3 신규 키: {missing:?}"
+        );
+    }
+}
+
+/// A-3 — `General` 탭에 export/import 버튼이 있고, 대응 커맨드를 invoke 한다.
+/// 파일 대화상자는 Rust 쪽에서만 연다는 결정(위임 지시서 A-1)의 프런트 쪽
+/// 증거이기도 하다 — `settings.html` 에는 `tauri_plugin_dialog` 관련 문자열이
+/// 전혀 없어야 정상이다.
+#[test]
+fn settings_html_에_export_import_이벤트뷰어_버튼이_있고_커맨드를_invoke_한다() {
+    let html = read_settings_html();
+    for id in ["settings-export-btn", "settings-import-btn", "open-event-viewer-btn"] {
+        assert!(
+            html.contains(&format!(r#"id="{id}""#)),
+            "settings.html 에 <button id=\"{id}\"> 가 없다"
+        );
+    }
+    for command in ["settings_export", "settings_import", "open_event_viewer"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+    assert!(
+        !html.contains("plugin:dialog"),
+        "settings.html 이 tauri_plugin_dialog 를 웹뷰에서 직접 부른다 — \
+         Rust 쪽(settings_export/settings_import 커맨드)에서만 열어야 한다(위임 지시서 A-1)"
+    );
+}
+
+/// B-1 — `eventviewer.html` 이 `eventviewer_poll`·`eventviewer_clear` 를 invoke 한다.
+#[test]
+fn eventviewer_html이_eventviewer_poll과_clear를_invoke_한다() {
+    let html = read_eventviewer_html();
+    for command in ["eventviewer_poll", "eventviewer_clear"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/eventviewer.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+}
+
+/// B-1 — `main.rs` 의 프리셋/한국어 규칙 번호 ↔ 이름 대응표(`PRESET_RULE_LABEL_KEYS`·
+/// `KOREAN_RULE_LABEL_KEYS`)가 가리키는 카탈로그 키가 실제로 존재한다.
+///
+/// ⭐ `event-viewer.md` §9 항목 1 이 지적한 위험 — "이 대응이 깨져도 아무도 못
+/// 잡는다" — 을 막는 테스트다. `main.rs` 안에서 `"settings.presets.*"`·
+/// `"settings.korean.*"`·`"settings.tab.hyperkey"` 꼴의 문자열 리터럴을 전부
+/// 긁어 5개 카탈로그 모두에 있는지 확인한다 — 대응표 두 개만이 아니라 같은
+/// 접두사를 쓰는 다른 위치(예: 충돌 대화상자 라벨)의 오타도 함께 잡는 부수효과가
+/// 있지만, 그것도 이 스캔의 의도에 부합한다("카탈로그의 실제 키를 가리킨다").
+#[test]
+fn main_rs의_프리셋_한국어_규칙_라벨_키가_카탈로그에_실재한다() {
+    let main_rs = read_main_rs();
+    let no_comments = strip_line_comments(&main_rs);
+    let literals: Vec<String> = extract_double_quoted_literals(&no_comments)
+        .into_iter()
+        .filter(|s| {
+            s.starts_with("settings.presets.") || s.starts_with("settings.korean.") || s == "settings.tab.hyperkey"
+        })
+        .collect();
+
+    // 새 대응표가 실제로 이 스캔에 걸리는지부터 확인한다 — 추출 로직 자체가
+    // 깨지면(예: 상수 배열 문법이 바뀌면) 아래 검증이 공허하게 통과해 버린다.
+    for must_have in [
+        "settings.presets.caps_wasd",
+        "settings.presets.remap_delete",
+        "settings.korean.won_backtick",
+        "settings.tab.hyperkey",
+    ] {
+        assert!(
+            literals.iter().any(|s| s == must_have),
+            "main.rs 스캔에서 \"{must_have}\" 를 찾지 못했다 — 추출 로직이 깨졌을 수 있다"
+        );
+    }
+
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = literals.iter().filter(|k| !keys.contains(k.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는, main.rs 의 규칙 라벨 카탈로그 키: {missing:?}"
+        );
+    }
 }

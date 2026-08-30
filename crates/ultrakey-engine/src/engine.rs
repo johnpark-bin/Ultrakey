@@ -133,9 +133,23 @@ pub struct Engine {
     path_b: Arc<PathBManager>,
     /// ⭐ 이슈 #19 진단 계측(`trace.rs`) — `ULTRAKEY_TRACE_TAP=1` 일 때만 `Some`.
     trace_drain: Option<TraceDrainHandle>,
+    /// ⭐ F-18 Event Viewer(이슈 #39) — 링이 가득 차 버려진 개수를 뷰어가 읽는다.
+    /// 드레인 스레드가 링을 소유하지만 `Arc` 이므로 여기서도 같은 링을 가리킨다.
+    /// 뷰어는 **표시가 실제보다 적다는 사실을 숨기지 않아야** 한다
+    /// (`docs/spec/event-viewer.md` §4·§5 항목 3).
+    trace_ring: Arc<TraceRing>,
 }
 
 impl Engine {
+    /// ⭐ F-18 — 계측 링이 가득 차 **버려진** 레코드의 누적 개수.
+    ///
+    /// Event Viewer 가 이것을 읽어 사용자에게 보여준다. 진단 도구가 자기 표시의
+    /// 불완전함을 숨기면 사용자가 "이 키는 왜 안 보이지"를 잘못 해석하게 된다
+    /// (`docs/spec/event-viewer.md` §4·§5 항목 3).
+    pub fn trace_dropped_count(&self) -> u64 {
+        self.trace_ring.dropped_count()
+    }
+
     /// ⚠️ **호출한 스레드에서 `SystemHooks::start` 를 동기적으로 실행한다** — 그 스레드가
     /// 곧 메인 스레드(Tauri/`NSApplication` 런루프 소유자)여야 한다(`system_hooks.rs`
     /// 모듈 문서 참고). 어기면 경고 로그가 남는다(`warn_if_not_main_thread`).
@@ -227,7 +241,7 @@ impl Engine {
             let system_hooks = SystemHooks::start(Arc::clone(&shared), handshake.commands.clone());
             // `trace::spawn_drain_thread` 는 `trace_enabled()` 가 false 면 스레드를
             // 만들지 않고 `None` 을 돌려준다.
-            let trace_drain = trace::spawn_drain_thread(trace_ring);
+            let trace_drain = trace::spawn_drain_thread(Arc::clone(&trace_ring));
 
             Ok(Engine {
                 shared,
@@ -239,6 +253,7 @@ impl Engine {
                 system_hooks: Some(system_hooks),
                 path_b,
                 trace_drain,
+                trace_ring,
             })
         }
     }

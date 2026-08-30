@@ -37,11 +37,11 @@
 // 릴리스 빌드에서 콘솔 창을 띄우지 않는다(macOS 에서는 무해하지만 관례를 따른다).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::Write as _;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -53,7 +53,7 @@ use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate
 use ultrakey_core::keycode::{KeyCode, SourceKey};
 use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
 use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger};
-use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
+use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
@@ -1634,6 +1634,11 @@ struct AppState {
     /// 창 크기 저장 디바운스 스레드의 손잡이. `wire_window_size_persistence` 가
     /// `setup()` 안에서 한 번 채운다 — 이벤트마다 스레드를 새로 만들지 않는다.
     window_size_debouncer: Mutex<Option<WindowSizeDebouncer>>,
+    // ── F-18 Event Viewer(이슈 #39 Phase 3) ─────────────────────────────────
+    /// 드레인 스레드가 채우는 화면용 버퍼(§3.5, 상한 [`EVENT_VIEWER_BUFFER_CAP`]) —
+    /// 넘치면 앞에서 버린다. `open_event_viewer` 가 등록하는 싱크가 여기 쓰고,
+    /// `eventviewer_poll` 이 여기서 읽는다. 창을 닫으면 비운다(§3.2).
+    event_viewer_buffer: Mutex<VecDeque<ultrakey_engine::trace::ViewerRecord>>,
 }
 
 #[tauri::command]
@@ -1963,6 +1968,475 @@ fn open_keyboard_settings() -> Result<(), String> {
 #[tauri::command]
 fn keyboard_fn_state() -> Option<bool> {
     fn_state::f_keys_are_standard()
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// F-15 §3.4 — 설정 export/import (이슈 #39 Phase 2)
+// ════════════════════════════════════════════════════════════════════════════
+
+fn epoch_secs_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 유닉스 일수(1970-01-01 = 0) → (년, 월, 일). Howard Hinnant 의
+/// `civil_from_days` 알고리즘(그레고리력, 공개 도메인) — 새 시간 크레이트를 들이지
+/// 말라는 지시(위임 지시서, `crates/ultrakey-core/src/time.rs` 가 이미 "시계는
+/// 호출자가 주입한다"고 선언한 것과 같은 근거) 때문에 순수 정수 연산으로 직접 쓴다.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    (year, m, d)
+}
+
+/// `exported_at` 용 RFC3339 UTC 문자열(`"2026-08-31T00:12:34Z"`) — `SystemTime`
+/// 에서 직접 만든다(A-2 지시: 새 시간 크레이트를 들이지 않는다).
+fn rfc3339_utc(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let tod = epoch_secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let (h, m, s) = (tod / 3600, (tod / 60) % 60, tod % 60);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// export 기본 파일명 — `ultrakey-settings-<YYYYMMDD>.json`(위임 지시서 A-2).
+fn export_default_file_name(epoch_secs: u64) -> String {
+    let days = (epoch_secs / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("ultrakey-settings-{year:04}{month:02}{day:02}.json")
+}
+
+/// `settings_export` 커맨드의 응답.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportResultView {
+    path: String,
+}
+
+/// `settings_import` 커맨드의 응답 — `transfer::ImportOutcome` 을 프런트가 그대로
+/// 쓸 수 있게 camelCase 로 옮긴 것뿐이다(§3.4).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResultView {
+    applied_keys: usize,
+    removed_keys: usize,
+    absent_devices: Vec<String>,
+    backup_path: Option<String>,
+}
+
+impl From<transfer::ImportOutcome> for ImportResultView {
+    fn from(outcome: transfer::ImportOutcome) -> Self {
+        ImportResultView {
+            applied_keys: outcome.applied_keys,
+            removed_keys: outcome.removed_keys,
+            absent_devices: outcome.absent_devices,
+            backup_path: outcome.backup.map(|p| p.display().to_string()),
+        }
+    }
+}
+
+/// F-15 §3.4 — `General` 탭의 `Export…` 버튼.
+///
+/// ⭐ 파일 대화상자는 Rust 쪽에서만 연다(위임 지시서, `settings-store-and-
+/// integrity.md` §3.4). 프런트엔드는 이 커맨드만 부르고, `capabilities/` 는
+/// 건드리지 않는다 — ACL 은 웹뷰가 `plugin:dialog|...` 를 직접 invoke 할 때만
+/// 관문 역할을 하고, 이 커맨드처럼 Rust 코드가 플러그인의 Rust API
+/// (`DialogExt::dialog()`)를 직접 호출하는 경로는 그 관문을 거치지 않는다.
+/// `settings` 창은 지금도 `capabilities/overlay.json` 밖의 아무 capability 도
+/// 없고(기존 커맨드들이 이미 그 상태로 동작한다), 이 변경도 그 상태를 유지한다.
+///
+/// ⭐ **왜 `async fn` + `blocking_save_file()`인가.** macOS 의 저장 패널
+/// (`NSSavePanel`)은 메인 스레드 API 일 수 있다. `tauri_plugin_dialog` 의
+/// `blocking_*` 계열은 자기 문서에 "메인 스레드에서 부르면 안 된다"고 적어
+/// 두었고, 내부적으로 메인 스레드로 디스패치한 뒤 **호출 스레드만** 블로킹하며
+/// 응답을 기다린다 — 그 크레이트 자신의 예제 코드도 정확히 `async fn` 커맨드
+/// 안에서 이 함수를 쓴다. Tauri 커맨드 핸들러(`async fn` 이든 아니든)는 메인
+/// 스레드가 아니라 별도 실행기 위에서 돈다는 사실은 이 파일의
+/// `set_launch_on_login_internal` 주석(최대 0.8초 블로킹이 커맨드 스레드에서
+/// 안전하다는 근거)과 같다 — 그래서 `blocking_save_file()` 을 그대로 쓴다.
+#[tauri::command]
+async fn settings_export(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<ExportResultView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let state = state.inner().clone();
+    let now = epoch_secs_now();
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(export_default_file_name(now))
+        .add_filter("JSON", &["json"])
+        .blocking_save_file();
+
+    // 사용자가 대화상자를 취소했다 — 오류가 아니다(위임 지시서 A-2).
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path.into_path().map_err(|e| e.to_string())?;
+
+    let envelope = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        transfer::build_export(&store, env!("CARGO_PKG_VERSION"), rfc3339_utc(now))
+    };
+    let json = transfer::serialize_export(&envelope).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        path = %path.display(),
+        keys = envelope.values.len(),
+        "settings exported"
+    );
+
+    Ok(Some(ExportResultView {
+        path: path.display().to_string(),
+    }))
+}
+
+/// F-15 §3.4 — `General` 탭의 `Import…` 버튼.
+///
+/// 순서를 반드시 지킨다(결정 6·7): 1) 파일을 읽고 파싱 — 실패하면 저장소를
+/// 전혀 건드리지 않는다. 2) 지금 연결된 디바이스 목록(F-17 의 기존 열거 경로
+/// `hid_device::list_attached_keyboards()` 를 재사용한다 — 새로 만들지 않는다).
+/// 3) `transfer::apply_import` 로 교체(백업 → 교체). 4) **부팅과 같은 일을
+/// 다시 한다** — [`reload_settings_after_replace`] 가 그 함수들을 그대로
+/// 재호출한다(새 반영 경로를 만들지 않는다 — 부팅 경로는 이미 실기기로
+/// 검증됐다).
+#[tauri::command]
+async fn settings_import(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Option<ImportResultView>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let state = state.inner().clone();
+
+    let picked = app.dialog().file().add_filter("JSON", &["json"]).blocking_pick_file();
+    let Some(file_path) = picked else {
+        return Ok(None);
+    };
+    let path = file_path.into_path().map_err(|e| e.to_string())?;
+
+    // 1) 읽기 + 파싱 — 여기서 실패하면 저장소를 전혀 건드리지 않는다(§3.4 결정 7).
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let envelope = transfer::parse_export(&raw).map_err(|e| e.to_string())?;
+
+    // 2) 지금 연결된 디바이스 — F-17 의 기존 열거 경로를 그대로 쓴다.
+    let present_devices: Vec<String> = hid_device::list_attached_keyboards()
+        .into_iter()
+        .map(|info| DeviceId::new(info.vendor_id, info.product_id).as_str().to_string())
+        .collect();
+
+    // 3) 백업 → 교체.
+    let backup_suffix = format!("pre-import-{}", epoch_secs_now());
+    let outcome = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        transfer::apply_import(&mut store, &envelope, &present_devices, &backup_suffix)
+            .map_err(|e| e.to_string())?
+    };
+
+    // 4) 부팅과 같은 일을 다시 한다.
+    reload_settings_after_replace(&app, &state)?;
+
+    tracing::info!(
+        path = %path.display(),
+        applied = outcome.applied_keys,
+        removed = outcome.removed_keys,
+        absent_devices = outcome.absent_devices.len(),
+        "settings imported"
+    );
+
+    Ok(Some(ImportResultView::from(outcome)))
+}
+
+/// import 뒤 "부팅과 같은 일을 다시 한다"(§3.4 결정 6)의 실제 구현. **새 반영
+/// 경로가 아니다** — `setup()` 이 기동 시 쓰는 것과 같은 함수들
+/// (`HyperkeySettings::from_store` 등, `reconfigure_engine`, `rebuild_tray_menu`)을
+/// 저장소 교체 뒤 그대로 다시 부를 뿐이다. 부팅 경로는 이미 실기기로 검증된
+/// 경로라 여기서 별도로 검증할 새 코드를 만들지 않는다.
+fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(), String> {
+    let (hyperkey, presets, korean, disabled_apps) = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let hyperkey = HyperkeySettings::from_store(&store);
+        let presets = PresetSettings::from_store(&store);
+        let korean = KoreanSettings::from_store(&store);
+        let disabled_apps: Vec<String> =
+            store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
+        (hyperkey, presets, korean, disabled_apps)
+    };
+
+    *state.hyperkey.lock().map_err(|e| e.to_string())? = hyperkey.clone();
+    *state.presets.lock().map_err(|e| e.to_string())? = presets;
+    *state.korean.lock().map_err(|e| e.to_string())? = korean;
+
+    // ⭐ 게이트도 boot 만큼 되돌린다 — `general.disabledApps`/
+    // `korean.disableInRemoteDesktop` 도 import 로 바뀔 수 있는 값이다(D-K3 과
+    // 같은 이유로 엔진 설정이 아니라 게이트라 `reconfigure_engine` 이 대신
+    // 해주지 않는다).
+    state.gate_controller.set_disabled_apps(disabled_apps);
+    state
+        .gate_controller
+        .set_korean_exclusion_enabled(korean.disable_in_remote_desktop);
+
+    // 규칙 테이블이 통째로 바뀔 수 있으므로 항상 force_reset 한다
+    // (`settings_set_preset`/`settings_set_korean` 과 같은 이유).
+    reconfigure_engine(state, &hyperkey, &presets, &korean, true)?;
+
+    // 5) `general.language` 가 import 로 바뀌었으면 카탈로그도 교체한다
+    // (A-2 언어 선택 경로, `settings_set_general_language` 와 같은 판정).
+    let new_catalog = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        match resolve_stored_language(&store) {
+            Some(locale) => Catalog::for_locale(locale),
+            None => Catalog::resolve(&bundle::preferred_languages()),
+        }
+    };
+    state.catalog.store(Arc::new(new_catalog));
+
+    rebuild_tray_menu(app, state);
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// F-18 Event Viewer (이슈 #39 Phase 3, `docs/spec/event-viewer.md`)
+// ════════════════════════════════════════════════════════════════════════════
+
+const EVENT_VIEWER_WINDOW_LABEL: &str = "eventviewer";
+/// §3.5 — 화면용 버퍼 상한. `eventviewer.html` 의 `MAX_ROWS` 와 같은 크기를 맞춘다.
+const EVENT_VIEWER_BUFFER_CAP: usize = 500;
+
+/// F-08 프리셋 번호(`RuleId::Preset(n)`) → 카탈로그 키(§3.4, `event-viewer.md` §9
+/// 항목 1). ⭐ **`ultrakey-presets` 에는 이 대응표가 없다** — `rules.rs` 는
+/// `RuleId::Preset(n)` 리터럴만 흩어 둘 뿐 이름을 모른다(탐색 완료). 그래서 대응을
+/// 여기(앱 계층)에 둔다 — 숫자는 `ultrakey_presets::rules::PresetSettings::to_rules`
+/// 의 `RuleId::Preset(n)` 배정과 반드시 같아야 한다(F-08.1~16). `3` 은 결번이다
+/// (F-08.3 은 존재하지 않는다 — 실수가 아니다). `6`(F-08.8 vim 방향)은 라벨이
+/// 문장 앞뒤로 쪼개져 있어(`caps_hjkl.prefix`/`.suffix`) 이 표에 넣지 않고
+/// [`preset_rule_label`] 이 따로 이어붙인다.
+///
+/// ⚠️ **이 대응이 깨져도 아무도 못 잡는다는 위험**(§9 항목 1)을 막는 것이
+/// `preset_rule_label_keys_exist_in_every_catalog` 테스트다 — 카탈로그 키
+/// 오타·삭제를 5개 로케일 전부에서 잡는다.
+const PRESET_RULE_LABEL_KEYS: &[(u8, &str)] = &[
+    (1, "settings.presets.caps_remap"),
+    (2, "settings.presets.caps_quick_press"),
+    (4, "settings.presets.caps_space_enter"),
+    (5, "settings.presets.caps_wasd"),
+    (7, "settings.presets.caps_home_row"),
+    (8, "settings.presets.double_tap_shift"),
+    (9, "settings.presets.left_right_shift"),
+    (10, "settings.presets.shift_caps"),
+    (11, "settings.presets.shift_quick_press"),
+    (12, "settings.presets.hyper_delete"),
+    (13, "settings.presets.remap_delete"),
+    (14, "settings.presets.shift_delete"),
+    (15, "settings.presets.paste_plain"),
+    (16, "settings.presets.home_end_lines"),
+];
+
+/// F-16 한국어 규칙 번호(`RuleId::Korean(n)`) → 카탈로그 키. `ultrakey_korean::
+/// settings::KoreanSettings::to_rules` 의 `RuleId::Korean(n)` 배정과 같아야 한다.
+const KOREAN_RULE_LABEL_KEYS: &[(u8, &str)] = &[
+    (13, "settings.korean.shift_space"),
+    (14, "settings.korean.han_eng"),
+    (15, "settings.korean.hanja"),
+    (16, "settings.korean.won_backtick"),
+];
+
+fn preset_rule_label(catalog: &Catalog, n: u8) -> Option<String> {
+    if n == 6 {
+        // §3.4 — 문장이 팝업 앞뒤로 쪼개져 있다(`settings.html` 의 같은 패턴).
+        return Some(format!(
+            "{} {}",
+            catalog.get("settings.presets.caps_hjkl.prefix"),
+            catalog.get("settings.presets.caps_hjkl.suffix"),
+        ));
+    }
+    PRESET_RULE_LABEL_KEYS
+        .iter()
+        .find(|(idx, _)| *idx == n)
+        .map(|(_, key)| catalog.get(key).to_string())
+}
+
+fn korean_rule_label(catalog: &Catalog, n: u8) -> Option<String> {
+    KOREAN_RULE_LABEL_KEYS
+        .iter()
+        .find(|(idx, _)| *idx == n)
+        .map(|(_, key)| catalog.get(key).to_string())
+}
+
+/// `ViewerRecord.rule`(`"preset:5"`·`"korean:13"`·`"hyperkey"`) → 사람이 읽는
+/// 이름(§3.4). 못 찾으면 `None` — 프런트가 계층 이름만 보여준다(명세 그대로).
+fn rule_label(catalog: &Catalog, rule: &str) -> Option<String> {
+    if rule == "hyperkey" {
+        // `settings.tab.hyperkey` 를 그대로 쓴다 — 사용자가 탭에서 본 그 이름이다.
+        return Some(catalog.get("settings.tab.hyperkey").to_string());
+    }
+    if let Some(n) = rule.strip_prefix("preset:") {
+        return preset_rule_label(catalog, n.parse().ok()?);
+    }
+    if let Some(n) = rule.strip_prefix("korean:") {
+        return korean_rule_label(catalog, n.parse().ok()?);
+    }
+    None
+}
+
+/// §5 항목 1·2 — 왜 이벤트가 오지 않는지 알린다. 빈 화면으로 두지 않는다.
+fn event_viewer_notice(catalog: &Catalog, state: &Arc<AppState>) -> Option<String> {
+    let permission_state = state
+        .monitor
+        .lock()
+        .ok()
+        .and_then(|m| m.as_ref().map(|m| m.state()))
+        .unwrap_or(PermissionState::Unknown);
+    if permission_state != PermissionState::Granted {
+        return Some(catalog.get("eventviewer.notice.no_permission").to_string());
+    }
+    let engine_running = state.engine.lock().map(|g| g.is_some()).unwrap_or(false);
+    if !engine_running {
+        return Some(catalog.get("eventviewer.notice.engine_not_running").to_string());
+    }
+    None
+}
+
+/// `ultrakey_engine::trace::ViewerRecord` + `ruleLabel`(§3.4).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewerRecordView {
+    #[serde(flatten)]
+    record: ultrakey_engine::trace::ViewerRecord,
+    rule_label: Option<String>,
+}
+
+/// `eventviewer_poll` 의 응답(§3.5).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventViewerPoll {
+    records: Vec<ViewerRecordView>,
+    /// 계측 링이 가득 차 **버려진** 레코드의 누적 개수(`Engine::trace_dropped_count`).
+    ///
+    /// ⭐ 진단 도구가 자기 표시의 불완전함을 숨기면 사용자가 "이 키는 왜 안 보이지"를
+    /// 잘못 해석하게 된다(§4·§5 항목 3). 엔진이 아직 없으면 0 이다 — 그때는 애초에
+    /// 기록될 이벤트도 없다.
+    dropped: u64,
+    notice: Option<String>,
+}
+
+/// F-18 §3.1·§3.2 — `General` 탭의 `Open Event Viewer` 버튼.
+///
+/// 오버레이 창(`overlay.rs`)과 같은 관례로 `tauri.conf.json` 에 미리 선언하지
+/// 않고 여기서 동적으로 만든다 — 그 파일은 병렬 위임(#40)과 충돌할 수 있다
+/// (위임 지시서). 이미 열려 있으면 새로 만들지 않고 최전면으로 올린다.
+#[tauri::command]
+fn open_event_viewer(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(EVENT_VIEWER_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        EVENT_VIEWER_WINDOW_LABEL,
+        tauri::WebviewUrl::App("eventviewer.html".into()),
+    )
+    .title("Ultrakey — Event Viewer")
+    .inner_size(700.0, 520.0)
+    .resizable(true)
+    // ⭐ §3.1 — `NSFloatingWindowLevel` 로 항상 위. 오버레이(`overlay.rs`)의
+    // `ns_window()` 직접 조작(`NsWindowHandle::configure`, 스크린세이버 레벨 +
+    // 비활성 클래스 치환)은 **여기 필요 없다** — 이 창은 오버레이와 달리
+    // 활성화되어도 되고 키 윈도우를 뺏어도 된다(§3.1: 사용자가 스크롤·클릭해야
+    // 한다). Tauri 의 `always_on_top(true)` 는 macOS 에서 그대로
+    // `NSFloatingWindowLevel` 을 건다 — 그것으로 충분하다.
+    .always_on_top(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    let state_for_close = state.inner().clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { .. } = event {
+            // ⭐ §3.2 — 창이 닫히면 계측을 끈다. 사용자가 끄는 것을 잊어 계측이
+            // 계속 도는 상태를 만들지 않는다. `ULTRAKEY_TRACE_TAP` 은 독립이라
+            // 여기서 건드리지 않는다(그 환경변수 계측은 계속 돈다).
+            ultrakey_engine::trace::set_viewer_enabled(false);
+            ultrakey_engine::trace::set_viewer_sink(None);
+            if let Ok(mut buf) = state_for_close.event_viewer_buffer.lock() {
+                buf.clear();
+            }
+        }
+    });
+
+    let state_for_sink = state.inner().clone();
+    let sink: ultrakey_engine::trace::ViewerSink = Arc::new(move |record| {
+        if let Ok(mut buf) = state_for_sink.event_viewer_buffer.lock() {
+            buf.push_back(record);
+            while buf.len() > EVENT_VIEWER_BUFFER_CAP {
+                buf.pop_front();
+            }
+        }
+    });
+    ultrakey_engine::trace::set_viewer_sink(Some(sink));
+    ultrakey_engine::trace::set_viewer_enabled(true);
+
+    tracing::info!("event viewer window opened");
+    Ok(())
+}
+
+/// 프런트엔드가 100ms 마다 부른다(§3.5).
+#[tauri::command]
+fn eventviewer_poll(state: State<'_, Arc<AppState>>, after_seq: u64) -> EventViewerPoll {
+    let catalog = state.catalog.load_full();
+    let catalog: &Catalog = catalog.as_ref();
+
+    let records: Vec<ViewerRecordView> = state
+        .event_viewer_buffer
+        .lock()
+        .map(|buf| {
+            buf.iter()
+                .filter(|r| r.seq > after_seq)
+                .cloned()
+                .map(|record| {
+                    let rule_label = record.rule.as_deref().and_then(|r| rule_label(catalog, r));
+                    ViewerRecordView { record, rule_label }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 엔진 잠금은 짧게 잡는다 — 100ms 주기 폴링이라 여기서 오래 붙들면 안 된다.
+    let dropped = state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|e| e.as_ref().map(|engine| engine.trace_dropped_count()))
+        .unwrap_or(0);
+
+    EventViewerPoll {
+        records,
+        dropped,
+        notice: event_viewer_notice(catalog, &state),
+    }
+}
+
+/// `Clear` 버튼 — 앱 쪽 버퍼를 비운다(§3.2, 화면 쪽은 `eventviewer.html` 이 직접 비운다).
+#[tauri::command]
+fn eventviewer_clear(state: State<'_, Arc<AppState>>) {
+    if let Ok(mut buf) = state.event_viewer_buffer.lock() {
+        buf.clear();
+    }
 }
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
@@ -2906,10 +3380,16 @@ fn main() {
         system_event_observer: Mutex::new(None),
         last_applied_window_size: Mutex::new(None),
         window_size_debouncer: Mutex::new(None),
+        event_viewer_buffer: Mutex::new(VecDeque::new()),
     });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // F-15 §3.4 설정 export/import(이슈 #39 Phase 2) — 네이티브 파일 대화상자.
+        // `settings_export`/`settings_import` 커맨드가 Rust 쪽에서만 이 플러그인의
+        // Rust API 를 쓴다(위 Cargo.toml 주석 참고) — 웹뷰가 직접 invoke 하지 않으므로
+        // capability 파일이 필요 없다.
+        .plugin(tauri_plugin_dialog::init())
         .manage(state.clone())
         // ⭐ F-03 P3 스파이크가 웹뷰에서 ack 을 받는 통로(이슈 #34). 스파이크가
         // 꺼져 있으면 아무도 쓰지 않는 빈 상자로 남는다.
@@ -2931,6 +3411,11 @@ fn main() {
             general_set_hide_menu_bar_icon,
             open_keyboard_settings,
             keyboard_fn_state,
+            settings_export,
+            settings_import,
+            open_event_viewer,
+            eventviewer_poll,
+            eventviewer_clear,
             overlay_spike::overlay_spike_ack,
             overlay_spike::overlay_spike_ready,
             overlay::overlay_surface_ready,
@@ -5500,5 +5985,123 @@ mod tests {
             ids.len(),
             "중복된 메뉴 항목 id 가 있다: {ids:?}"
         );
+    }
+
+    // ── 이슈 #39 Phase 2 — 설정 export/import 날짜 헬퍼 ──────────────────────
+    //
+    // ⭐ 새 시간 크레이트를 들이지 않고 직접 쓴 `civil_from_days`/`rfc3339_utc`/
+    // `export_default_file_name` 이 실제로 맞는지, 잘 알려진 유닉스 시각 세 개로
+    // 확인한다(값은 파이썬 `datetime.utcfromtimestamp` 로 교차 검증했다).
+
+    #[test]
+    fn civil_from_days_matches_known_epoch_values() {
+        // 1970-01-01T00:00:00Z (day 0).
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // 1700000000 초 = 2023-11-14T22:13:20Z.
+        assert_eq!(civil_from_days((1_700_000_000u64 / 86_400) as i64), (2023, 11, 14));
+        // 1893456000 초 = 2030-01-01T00:00:00Z.
+        assert_eq!(civil_from_days((1_893_456_000u64 / 86_400) as i64), (2030, 1, 1));
+    }
+
+    #[test]
+    fn rfc3339_utc_formats_known_epoch_values() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_utc(1_700_000_000), "2023-11-14T22:13:20Z");
+    }
+
+    #[test]
+    fn export_default_file_name_uses_yyyymmdd() {
+        assert_eq!(
+            export_default_file_name(1_700_000_000),
+            "ultrakey-settings-20231114.json"
+        );
+    }
+
+    // ── 이슈 #39 Phase 2 — `ImportOutcome` → `ImportResultView` ──────────────
+
+    #[test]
+    fn import_result_view_carries_outcome_fields_in_camel_case() {
+        let outcome = transfer::ImportOutcome {
+            applied_keys: 3,
+            removed_keys: 1,
+            absent_devices: vec!["dead:beef".to_string()],
+            backup: Some(std::path::PathBuf::from("/tmp/settings.json.pre-import-1")),
+            migrated_from: None,
+        };
+        let view = ImportResultView::from(outcome);
+        assert_eq!(view.applied_keys, 3);
+        assert_eq!(view.removed_keys, 1);
+        assert_eq!(view.absent_devices, vec!["dead:beef".to_string()]);
+        assert_eq!(
+            view.backup_path,
+            Some("/tmp/settings.json.pre-import-1".to_string())
+        );
+
+        let json = serde_json::to_value(&view).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("appliedKeys"), "{obj:?}");
+        assert!(obj.contains_key("removedKeys"), "{obj:?}");
+        assert!(obj.contains_key("absentDevices"), "{obj:?}");
+        assert!(obj.contains_key("backupPath"), "{obj:?}");
+    }
+
+    #[test]
+    fn import_result_view_has_no_backup_path_when_there_was_no_backup() {
+        let outcome = transfer::ImportOutcome {
+            applied_keys: 0,
+            removed_keys: 0,
+            absent_devices: vec![],
+            backup: None,
+            migrated_from: None,
+        };
+        assert_eq!(ImportResultView::from(outcome).backup_path, None);
+    }
+
+    // ── F-18 Event Viewer — 규칙 식별자 → 사람이 읽는 이름 ───────────────────
+
+    #[test]
+    fn rule_label_resolves_a_preset_identifier() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "preset:5"),
+            Some(catalog.get("settings.presets.caps_wasd").to_string())
+        );
+    }
+
+    #[test]
+    fn rule_label_resolves_the_split_sentence_hjkl_preset() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        let label = rule_label(&catalog, "preset:6").expect("preset:6 은 이름이 있어야 한다");
+        assert!(label.contains(catalog.get("settings.presets.caps_hjkl.prefix")));
+        assert!(label.contains(catalog.get("settings.presets.caps_hjkl.suffix")));
+    }
+
+    #[test]
+    fn rule_label_resolves_a_korean_identifier() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "korean:14"),
+            Some(catalog.get("settings.korean.han_eng").to_string())
+        );
+    }
+
+    #[test]
+    fn rule_label_resolves_hyperkey_to_the_tab_name() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(
+            rule_label(&catalog, "hyperkey"),
+            Some(catalog.get("settings.tab.hyperkey").to_string())
+        );
+    }
+
+    /// 결번(F-08.3)·모르는 프리셋 번호·모르는 규칙 문자열은 전부 `None` — 프런트가
+    /// 계층 이름만 보여준다(명세 §3.4 그대로).
+    #[test]
+    fn rule_label_is_none_for_unknown_identifiers() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(rule_label(&catalog, "preset:3"), None);
+        assert_eq!(rule_label(&catalog, "preset:255"), None);
+        assert_eq!(rule_label(&catalog, "korean:1"), None);
+        assert_eq!(rule_label(&catalog, "bogus"), None);
     }
 }

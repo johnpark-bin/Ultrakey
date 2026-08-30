@@ -818,6 +818,25 @@
       </div>
       <p class="hint why" id="purchase-why"></p>
 
+      <!-- ⭐ F-15 §3.4 설정 export/import(이슈 #39 Phase 2). 파일 대화상자는
+           Rust 쪽(`settings_export`/`settings_import` 커맨드)에서만 연다 — 이
+           버튼은 그 커맨드를 부를 뿐이다. -->
+      <h2 class="group" id="general-transfer-heading"></h2>
+      <div class="row">
+        <button id="settings-export-btn"></button>
+        <button id="settings-import-btn"></button>
+      </div>
+      <p class="hint" id="general-transfer-hint"></p>
+      <p id="general-transfer-result" hidden></p>
+
+      <!-- ⭐ F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창. 이 버튼은 `open_event_viewer`
+           커맨드로 그 창을 연다(`docs/spec/event-viewer.md` §3.1). -->
+      <h2 class="group" id="general-diagnostics-heading"></h2>
+      <div class="row">
+        <button id="open-event-viewer-btn"></button>
+      </div>
+      <p class="hint" id="general-event-viewer-hint"></p>
+
     </section>
   </main>
 </div>
@@ -985,6 +1004,17 @@ if (!tauri || !tauri.core) {
     $("remove-activation-why").textContent = t("settings.general.license.why");
     $("purchase-btn").textContent = t("settings.general.purchase");
     $("purchase-why").textContent = t("settings.general.license.why");
+
+    // ⭐ 이슈 #39 Phase 2 — 설정 export/import.
+    $("general-transfer-heading").textContent = t("settings.general.transfer");
+    $("settings-export-btn").textContent = t("settings.general.export");
+    $("settings-import-btn").textContent = t("settings.general.import");
+    $("general-transfer-hint").textContent = t("settings.general.transfer.hint");
+
+    // ⭐ 이슈 #39 Phase 3 — Event Viewer.
+    $("general-diagnostics-heading").textContent = t("settings.general.diagnostics");
+    $("open-event-viewer-btn").textContent = t("settings.general.event_viewer");
+    $("general-event-viewer-hint").textContent = t("settings.general.event_viewer.hint");
 
     const badgeText = t("settings.badge.unimplemented");
     for (const id of [
@@ -1972,6 +2002,14 @@ if (!tauri || !tauri.core) {
     el.hidden = false;
   }
 
+  // ⭐ 이슈 #39 Phase 2 — export/import 결과를 General 탭의 안내 줄에 보여준다
+  // (위임 지시서 A-3, `#notice` 와 별도 — 그쪽은 전역 안내라 탭을 넘나든다).
+  function setTransferResult(text) {
+    const el = $("general-transfer-result");
+    el.textContent = text;
+    el.hidden = !text;
+  }
+
   function activateTab(tab, { persist = true } = {}) {
     activeTab = tab;
     for (const name of TABS) {
@@ -2079,6 +2117,48 @@ if (!tauri || !tauri.core) {
   $("version-btn").addEventListener("click", () => {
     const about = $("about");
     about.hidden = !about.hidden;
+  });
+
+  // ⭐ 이슈 #39 Phase 2(A-1·A-2) — 대화상자는 Rust 쪽(`settings_export` 커맨드)
+  // 에서만 연다. 사용자가 취소하면 `null` 이 온다 — 오류가 아니므로 조용히 넘어간다.
+  $("settings-export-btn").addEventListener("click", async () => {
+    try {
+      const result = await invoke("settings_export");
+      if (result) setTransferResult(tf("settings.general.export.done", [result.path]));
+    } catch (err) {
+      // ⭐ 대화상자/디스크 I/O 실패는 드문 진단 상황이라 다른 커맨드들과 같은
+      // 관례(카탈로그를 거치지 않는 진단 전용 문구)를 따른다 — export 에는
+      // 전용 카탈로그 키가 없다(위임 지시서 A-4 목록 참고).
+      showFatal("Failed to export settings: " + String(err));
+    }
+  });
+
+  // ⭐ A-2 결정 6·7 — import 는 실패해도(잘못된 파일 등) 페이지를 깨뜨리지
+  // 않는다. 흔한 사용자 실수(엉뚱한 파일 선택)라 `settings.general.import.failed`
+  // 로 안내 줄에만 보여준다. 성공하면 `settings_bootstrap` 을 다시 불러 전체를
+  // 재렌더한다(A-2 결정 6의 마지막 단계, `general-language` 재렌더와 같은 패턴).
+  $("settings-import-btn").addEventListener("click", async () => {
+    try {
+      const result = await invoke("settings_import");
+      if (!result) return; // 취소 — 오류가 아니다.
+      const parts = [tf("settings.general.import.done", [result.appliedKeys, result.backupPath || "—"])];
+      if (result.absentDevices.length > 0) {
+        parts.push(tf("settings.general.import.absent_devices", [result.absentDevices.length]));
+      }
+      setTransferResult(parts.join(' '));
+      await loadAndRenderBootstrap(activeTab);
+    } catch (err) {
+      setTransferResult(tf("settings.general.import.failed", [String(err)]));
+    }
+  });
+
+  // ⭐ F-18(§3.1) — 창 자체의 수명주기(계측 on/off, 버퍼 비움)는 전부 Rust 쪽
+  // (`open_event_viewer` 커맨드, 창 close 이벤트)이 맡는다. 이 버튼은 그 커맨드를
+  // 부를 뿐이다.
+  $("open-event-viewer-btn").addEventListener("click", () => {
+    invoke("open_event_viewer").catch((err) => {
+      showFatal("Failed to open the Event Viewer: " + String(err));
+    });
   });
 
   // ⭐ A-3(D6, 이슈 #39, §3.1.2-a) — `settings_bootstrap` 을 (다시) 불러 화면
