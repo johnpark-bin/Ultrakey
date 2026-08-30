@@ -22,6 +22,13 @@ ultrakey-i18n = { workspace = true }
 ultrakey-seek = { workspace = true }
 ultrakey-overlay = { workspace = true }
 ultrakey-seek-session = { workspace = true }
+# ⭐ F-04(이슈 #44) — 순수 판정은 `ultrakey-click`, unsafe FFI 프리미티브는
+# `ultrakey-platform::click_synthesis`. 실 executor(`src/click_executor.rs`)가
+# 오케스트레이션(포커스 전환·AX 재조회/press)에 직접 쓰는 건 전부 **기존
+# 워크스페이스 의존**뿐이다 — 신규 크레이트 추가 없음(지시 §MUST NOT DO).
+ultrakey-click = { workspace = true }
+axuielement = { workspace = true }
+objc2-app-kit = { workspace = true }
 # ⭐ General 탭 언어 선택(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) —
 # `AppState.catalog` 를 재시작 없이 교체하기 위해 쓴다. `ultrakey-engine` 이 이미
 # 워크스페이스에 들여온 크레이트라 새로 추가하는 것이 아니다.

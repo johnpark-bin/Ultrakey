@@ -64,6 +64,42 @@ pub trait ClickExecutor {
     /// # Errors
     /// 클릭 합성이 실패하면 [`ClickError`] 를 반환한다.
     fn execute(&mut self, target: &ConfirmedMatch) -> Result<(), ClickError>;
+
+    /// 클릭 설정(`Focus window before clicking`·`Change click modes with
+    /// modifier keys`) 변경 통지 — F-04 가 `SeekSignal::ConfigChanged` 를 받을
+    /// 때 함께 호출된다(A6, 결정 이슈 #44).
+    ///
+    /// 기본 구현은 no-op 이다 — `NullClickExecutor` 와 기존 테스트를 무변경으로
+    /// 두기 위함이며, 즉 이 메서드가 생겨도 F-04 설치 전의 이음매는 그대로
+    /// 컴파일·동작한다.
+    fn configure(&mut self, _settings: ClickSettings) {}
+}
+
+/// F-04 의 클릭 실행 설정 — `Seek` 탭의 두 체크박스(명세 §4).
+///
+/// ⭐ **출고 기본값 실측**(명세 §4): `focus_window_before_clicking = false`(☐),
+/// `change_click_modes_with_modifiers = true`(☑). 후자는 **Seek 탭에서 유일하게
+/// 출고 기본값이 켜진 항목**이다 — 그래서 `Default` 는 파생이 아니라 수동
+/// 구현이다(파생 `Default` 는 전부 `false` 를 만들기 때문).
+///
+/// ⛔ 저장 표현이 아니다 — 실제 영속화는 `SeekSettings`(+ `keys.rs`)가 맡고,
+/// 이 타입은 저장소에서 조립된 값이 워커 → executor 로 전달되는 **런타임
+/// 경계 타입**이다(A6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClickSettings {
+    /// `Focus window before clicking` — 기본 ☐.
+    pub focus_window_before_clicking: bool,
+    /// `Change click modes with modifier keys` — 기본 ☑.
+    pub change_click_modes_with_modifiers: bool,
+}
+
+impl Default for ClickSettings {
+    fn default() -> Self {
+        Self {
+            focus_window_before_clicking: false,
+            change_click_modes_with_modifiers: true,
+        }
+    }
 }
 
 /// F-04 가 아직 없다 — 요청을 기록만 하고 성공을 돌려준다.
@@ -139,5 +175,34 @@ mod tests {
 
         assert!(executor.execute(&target).is_ok());
         assert_eq!(executor.calls, 2);
+    }
+
+    /// ⭐ `ClickSettings::default()` — 출고 기본값 실측(명세 §4) 그대로:
+    /// F-04 의 두 체크박스는 ☐ / ☑ 이다. 파생 `Default` 였다면 전부 `false` 가
+    /// 되므로, 이 테스트가 수동 `Default` 구현을 고정한다(A4).
+    #[test]
+    fn click_settings_default_matches_measured_shipping_defaults() {
+        let s = ClickSettings::default();
+        assert!(!s.focus_window_before_clicking);
+        assert!(
+            s.change_click_modes_with_modifiers,
+            "Change click modes with modifier keys 는 Seek 탭에서 유일하게 출고 기본값이 켜진 항목이다(§4)"
+        );
+    }
+
+    /// `configure` 의 기본 구현은 no-op — `NullClickExecutor` 는 설정을 받아도
+    /// 아무 일도 하지 않고 `execute` 왕복이 그대로 성립해야 한다(F-04 설치 전
+    /// 이음매 호환성, A6).
+    #[test]
+    fn null_click_executor_configure_is_a_noop_and_keeps_round_trip_working() {
+        let mut boxed: Box<dyn ClickExecutor> = Box::new(NullClickExecutor::default());
+        boxed.configure(ClickSettings::default());
+        boxed.configure(ClickSettings {
+            focus_window_before_clicking: true,
+            change_click_modes_with_modifiers: false,
+        });
+
+        let target = sample();
+        assert!(boxed.execute(&target).is_ok());
     }
 }

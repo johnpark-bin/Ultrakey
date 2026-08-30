@@ -4327,8 +4327,10 @@ name = "ultrakey-app"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "axuielement",
  "crossbeam-channel",
  "global-hotkey",
+ "objc2-app-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -4337,6 +4339,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tracing",
  "tracing-subscriber",
+ "ultrakey-click",
  "ultrakey-core",
  "ultrakey-engine",
  "ultrakey-hyperkey",
@@ -4349,6 +4352,14 @@ dependencies = [
  "ultrakey-presets",
  "ultrakey-seek",
  "ultrakey-seek-session",
+]
+
+[[package]]
+name = "ultrakey-click"
+version = "0.1.0"
+dependencies = [
+ "ultrakey-core",
+ "ultrakey-seek",
 ]
 
 [[package]]

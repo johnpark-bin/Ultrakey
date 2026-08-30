@@ -16,6 +16,7 @@
 pub mod accessibility;
 pub mod ax_text;
 pub mod bundle;
+pub mod click_synthesis;
 pub mod event;
 pub mod event_tap;
 pub mod fn_state;

@@ -72,11 +72,12 @@ use ultrakey_presets::{
     ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
     QuickPressCapsAction, RemapCapsTarget,
 };
-use ultrakey_seek_session::{SeekSettings, SeekShortcut};
+use ultrakey_seek_session::{ClickSettings, SeekSettings, SeekShortcut};
 
 /// ⭐ F-10 메뉴 항목 id — 그대로 i18n 카탈로그 키이기도 하다(고유하고, 라벨을
 /// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
 /// ⭐ F-03 Seek 오버레이 (이슈 #34) — 창 생성·네이티브 설정·증분 수신.
+mod click_executor;
 mod overlay;
 /// ⭐ F-03 실기기 검증 하네스 (이슈 #34). `ULTRAKEY_OVERLAY_DEMO` 가 없으면
 /// 아무것도 하지 않는다. F-01(세션 상태 머신)이 들어오면 지워도 된다.
@@ -1127,6 +1128,10 @@ struct SeekView {
     remap_key: String,
     execute_on_close: bool,
     semicolon_cycles: bool,
+    /// ⭐ F-04(이슈 #44) — 체크박스 2종. 저장 키 `seek.focusWindowBeforeClicking`.
+    focus_window_before_clicking: bool,
+    /// 저장 키 `seek.changeClickModesWithModifiers`. 출고 기본값 ☑.
+    change_click_modes_with_modifiers: bool,
     /// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 인가(읽기 전용
     /// 표시용).
     quick_press_opens: bool,
@@ -1165,6 +1170,8 @@ fn seek_view(seek: &SeekSettings, quick_press_opens: bool) -> SeekView {
             .unwrap_or_else(|| "-".to_string()),
         execute_on_close: seek.execute_on_close,
         semicolon_cycles: seek.semicolon_cycles,
+        focus_window_before_clicking: seek.focus_window_before_clicking,
+        change_click_modes_with_modifiers: seek.change_click_modes_with_modifiers,
         quick_press_opens,
         any_activation_configured: seek
             .to_config(quick_press_opens)
@@ -2816,6 +2823,14 @@ fn apply_seek_setting(
         k if k == keys::SEEK_REMAP_KEY => seek.remap_key = parse_seek_remap_key(value)?,
         k if k == keys::SEEK_EXECUTE_ON_CLOSE => seek.execute_on_close = parse(value, key)?,
         k if k == keys::SEEK_SEMICOLON_CYCLE => seek.semicolon_cycles = parse(value, key)?,
+        // ⭐ F-04(이슈 #44) — 체크박스 2종. ⚠️ 이 매치를 빼먹으면 폴스루로
+        // "{key} 는 이 커맨드로 바꿀 수 없다" 조용한 거부가 된다(A4).
+        k if k == keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING => {
+            seek.focus_window_before_clicking = parse(value, key)?
+        }
+        k if k == keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS => {
+            seek.change_click_modes_with_modifiers = parse(value, key)?
+        }
         _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
     }
     Ok(())
@@ -2834,9 +2849,27 @@ fn validate_and_apply_seek(
 
 /// Seek 워커에 현재 설정을 다시 알린다 — 워커가 아직 없으면(엔진 시작 전)
 /// 조용히 버린다(`send_seek_signal` 과 같은 규약).
+///
+/// ⭐ F-04(이슈 #44, A6) — F-04 클릭 설정(`ClickSettings`)도 같은 저장
+/// 갱신(`settings_set_seek`)에서 태어나므로 `SeekConfig` 와 **한 신호**에 함께
+/// 실어 보낸다(단일 소스 → 단일 신호 원칙 — 별도 신호로 갈라면 "config 는
+/// 갱신됐는데 click 설정은 안 갱신된" 중간 상태가 신호 스트림에 생긴다).
 fn push_seek_config(state: &Arc<AppState>, seek: &SeekSettings, presets: &PresetSettings) {
     let config = seek.to_config(quick_press_opens_seek(presets));
-    send_seek_signal(state, seek::SeekSignal::ConfigChanged(config));
+    let click_settings = click_settings_from_seek(seek);
+    send_seek_signal(
+        state,
+        seek::SeekSignal::ConfigChanged(config, click_settings),
+    );
+}
+
+/// `SeekSettings` → `ClickSettings` — 저장 표현에서 F-04 가 쓰는 런타임 경계
+/// 타입으로 옮긴다(기본값은 전부 `SeekSettings` 쪽이 이미 반영했다).
+fn click_settings_from_seek(seek: &SeekSettings) -> ClickSettings {
+    ClickSettings {
+        focus_window_before_clicking: seek.focus_window_before_clicking,
+        change_click_modes_with_modifiers: seek.change_click_modes_with_modifiers,
+    }
 }
 
 /// `Toggle Seek with shortcut:` 등록을 새 설정과 맞춘다 — **메인 스레드에서**
@@ -3717,11 +3750,16 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             });
             let quick_press_opens = quick_press_opens_seek(&presets);
             let seek_config = seek_settings.to_config(quick_press_opens);
+            // ⭐ F-04(이슈 #44) — executor 의 초기 설정도 같은 저장 표현에서
+            // 조립한다(부재 = 기본값 규약은 `SeekSettings::from_store` 쪽이
+            // 이미 반영했다).
+            let click_settings = click_settings_from_seek(&seek_settings);
             let tx = seek::spawn(
                 handle.clone(),
                 shared,
                 surface_state,
                 seek_config,
+                click_settings,
                 stored_origin,
                 persist_origin,
             );
@@ -5704,6 +5742,68 @@ mod tests {
         assert!(seek.semicolon_cycles);
     }
 
+    // ⭐ F-04(이슈 #44, A4) — 새 키 2종. ⚠️ 이 매치가 빠지면 폴스루로 조용히
+    // 거부되므로(true 저장이 안 됨), 반드시 매치가 있는지 단정한다.
+    #[test]
+    fn apply_seek_setting_updates_focus_window_and_change_click_modes() {
+        let mut seek = SeekSettings::default();
+        // 출고 기본값(명세 §4): focusWindow ☐, changeClickModes ☑.
+        assert!(!seek.focus_window_before_clicking);
+        assert!(seek.change_click_modes_with_modifiers);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(seek.focus_window_before_clicking);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS,
+            &serde_json::json!(false),
+        )
+        .unwrap();
+        assert!(!seek.change_click_modes_with_modifiers);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(seek.change_click_modes_with_modifiers);
+
+        // 타입이 안 맞으면 거부 — 다른 Seek 키와 같은 계약.
+        assert!(
+            apply_seek_setting(
+                &mut seek,
+                keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
+                &serde_json::json!("yes"),
+            )
+            .is_err()
+        );
+    }
+
+    // ⭐ F-04 — `click_settings_from_seek` 가 저장 표현을 경계 타입으로
+    // 옮긴다(기본값은 `SeekSettings` 쪽이 이미 반영 — 부재 = 기본값).
+    #[test]
+    fn click_settings_from_seek_maps_the_two_fields() {
+        let settings = click_settings_from_seek(&SeekSettings::default());
+        assert!(!settings.focus_window_before_clicking);
+        assert!(settings.change_click_modes_with_modifiers);
+
+        let flipped = SeekSettings {
+            focus_window_before_clicking: true,
+            change_click_modes_with_modifiers: false,
+            ..SeekSettings::default()
+        };
+        let settings = click_settings_from_seek(&flipped);
+        assert!(settings.focus_window_before_clicking);
+        assert!(!settings.change_click_modes_with_modifiers);
+    }
+
     // ⚠️ 위임 지시 §5-5 — `seek.searchBar.x/y` 는 이 커맨드로 바꿀 수 없다(F-03 이
     // 직접 저장한다).
     #[test]
@@ -5760,16 +5860,21 @@ mod tests {
         assert_eq!(view.remap_key_options.len(), 35);
         assert_eq!(view.remap_key_options[0].value, "-");
         assert_eq!(view.remap_key_options[0].label, "-");
+        // ⭐ F-04(이슈 #44) — 출고 기본값 그대로: focusWindow ☐, changeModes ☑.
+        assert!(!view.focus_window_before_clicking);
+        assert!(view.change_click_modes_with_modifiers);
 
         let with_caps_lock = seek_view(
             &SeekSettings {
                 remap_key: Some(SourceKey::CapsLock),
+                focus_window_before_clicking: true,
                 ..SeekSettings::default()
             },
             false,
         );
         assert_eq!(with_caps_lock.remap_key, "CapsLock");
         assert!(with_caps_lock.any_activation_configured);
+        assert!(with_caps_lock.focus_window_before_clicking);
     }
 
     // SettingsState 직렬화가 camelCase 인지 — 프런트엔드가 기대하는 필드 이름 계약.
@@ -5811,6 +5916,9 @@ mod tests {
         assert_eq!(seek_json["remapKey"], "-");
         assert!(seek_json.contains_key("executeOnClose"));
         assert!(seek_json.contains_key("semicolonCycles"));
+        // ⭐ F-04(이슈 #44) — 체크박스 2종도 camelCase 로 실린다.
+        assert_eq!(seek_json["focusWindowBeforeClicking"], false);
+        assert_eq!(seek_json["changeClickModesWithModifiers"], true);
         assert!(seek_json.contains_key("quickPressOpens"));
         assert_eq!(seek_json["anyActivationConfigured"], false);
         assert_eq!(seek_json["remapKeyOptions"].as_array().unwrap().len(), 35);

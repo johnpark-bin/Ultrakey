@@ -275,12 +275,34 @@
       </div>
       <p class="hint" id="seek-execute-on-close-hint"></p>
 
+      <!-- ⭐ F-04(seek-click-execution.md §4) — 항목 7. F-09 §4.1 배치 순서:
+           executeOnClose(3) 와 semicolonCycle(8) 사이. 출고 기본값 ☐(실측). -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="seek-focus-window-before-clicking"
+            data-key="seek.focusWindowBeforeClicking" />
+          <span id="seek-focus-window-before-clicking-label"></span>
+        </label>
+      </div>
+
       <div class="row">
         <label class="checkbox-row">
           <input type="checkbox" id="seek-semicolon-cycle" data-key="seek.semicolonCycle" />
           <span id="seek-semicolon-cycle-label"></span>
         </label>
       </div>
+
+      <!-- 항목 9 — Seek 탭에서 유일하게 출고 기본값이 ☑ 인 항목(명세 §4).
+           ⓘ 팝오버는 구현하지 않는다(현재 설정 UI 에 팝오버 인프라가 없음 —
+           범위 밖 결정, 이슈 #44). 원문 부제를 힌트로 대체한다. -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="seek-change-click-modes-with-modifiers"
+            data-key="seek.changeClickModesWithModifiers" />
+          <span id="seek-change-click-modes-with-modifiers-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="seek-change-click-modes-with-modifiers-hint"></p>
 
       <p class="hint" id="seek-quick-press-hint"></p>
     </section>
@@ -913,6 +935,17 @@ if (!tauri || !tauri.core) {
     $("seek-execute-on-close-label").textContent = t("settings.seek.execute_on_close");
     $("seek-execute-on-close-hint").textContent = t("settings.seek.execute_on_close.hint");
     $("seek-semicolon-cycle-label").textContent = t("settings.seek.semicolon_cycle");
+    // ⭐ F-04(이슈 #44) — 체크박스 2종 + 부제 힌트(`change_click_modes` 만 —
+    // 원본에 focus_window 부제가 없으므로 지어내지 않는다).
+    $("seek-focus-window-before-clicking-label").textContent = t(
+      "settings.seek.focus_window_before_clicking",
+    );
+    $("seek-change-click-modes-with-modifiers-label").textContent = t(
+      "settings.seek.change_click_modes_with_modifiers",
+    );
+    $("seek-change-click-modes-with-modifiers-hint").textContent = t(
+      "settings.seek.change_click_modes_with_modifiers.hint",
+    );
     $("seek-quick-press-hint").textContent = t("settings.seek.quick_press.hint");
     $("presets-heading").textContent = t("settings.presets.heading");
     $("presets-group-caps").textContent = t("settings.presets.group.caps_lock");
@@ -1913,6 +1946,12 @@ if (!tauri || !tauri.core) {
     $("seek-execute-on-close").disabled = seek.remapKey === "-";
 
     $("seek-semicolon-cycle").checked = seek.semicolonCycles;
+
+    // ⭐ F-04(이슈 #44) — 체크박스 2종. 출고 기본값(명세 §4): focusWindow ☐,
+    // changeClickModes ☑ — 저장 키 부재 시 SeekSettings 가 이미 기본값을
+    // 반영해 온다(부재 = 기본값).
+    $("seek-focus-window-before-clicking").checked = seek.focusWindowBeforeClicking;
+    $("seek-change-click-modes-with-modifiers").checked = seek.changeClickModesWithModifiers;
 
     if (!seekRecording) {
       renderSeekShortcutButtons(seek);

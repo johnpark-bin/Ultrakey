@@ -46,7 +46,13 @@ mod macos_impl {
 
     static EVENT_SOURCE: OnceLock<Option<SharedEventSource>> = OnceLock::new();
 
-    fn shared_event_source() -> Option<&'static CGEventSource> {
+    /// 프로세스당 하나인 공유 `CGEventSource` — 이 크레이트 안의 합성 경로들
+    /// (키보드 `SyntheticEvent`·마우스 `click_synthesis`)이 함께 쓴다(스펙
+    /// 지시: "이벤트 소스는 프로세스당 하나").
+    ///
+    /// SAFETY 불변식: 돌려주는 참조는 `OnceLock` 이 프로세스 생애주기 동안
+    /// 보관하는 정적 소스이므로 언제 읽어도 유효하다.
+    pub(crate) fn shared_event_source() -> Option<&'static CGEventSource> {
         EVENT_SOURCE
             .get_or_init(|| {
                 CGEventSource::new(CGEventSourceStateID::HIDSystemState).map(SharedEventSource)
@@ -55,9 +61,13 @@ mod macos_impl {
             .map(|s| &*s.0)
     }
 
-    /// SAFETY 불변식: `mark_synthetic` 은 우리가 방금 만든(따라서 유효함이
-    /// 보장된) `CGEvent` 에만 호출한다.
-    fn mark_synthetic(event: &CGEvent) {
+    /// 자기 합성 이벤트 식별 마커를 심는다 — `click_synthesis`(F-04 마우스
+    /// 합성)가 `SyntheticEvent::keyboard` 와 같은 메커니즘으로 마우스 이벤트에도
+    /// 이 마커를 실어, 탭 트램폴린 0-a 가 통과시키게 한다(D6, `event_tap.rs`).
+    ///
+    /// SAFETY 불변식: 방금 우리가 만든(따라서 유효함이 보장된) `CGEvent` 에만
+    /// 호출한다.
+    pub(crate) fn mark_synthetic(event: &CGEvent) {
         CGEvent::set_integer_value_field(
             Some(event),
             CGEventField::EventSourceUserData,
@@ -204,6 +214,11 @@ mod macos_impl {
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::{CgEventRef, SyntheticEvent};
+
+// F-04 마우스 합성(`click_synthesis.rs`)이 키보드 합성과 같은 공유 소스·마커
+// 메커니즘을 쓰도록 크레이트 내부로 노출한다.
+#[cfg(target_os = "macos")]
+pub(crate) use macos_impl::{mark_synthetic, shared_event_source};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {

@@ -37,7 +37,7 @@ pub mod machine;
 pub mod settings;
 
 pub use config::{ActivationPath, SeekConfig, SessionMode};
-pub use confirm::{ClickError, ClickExecutor, ConfirmedMatch, NullClickExecutor};
+pub use confirm::{ClickError, ClickExecutor, ClickSettings, ConfirmedMatch, NullClickExecutor};
 pub use keys::{classify, SessionKey};
 pub use machine::{CloseReason, SeekSessionMachine, SessionEffect, SessionState};
 pub use settings::{SeekSettings, SeekShortcut};

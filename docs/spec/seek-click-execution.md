@@ -99,6 +99,9 @@ Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01
                  clickReturnClick / Press 미지원)
                  → CGEventCreateMouseEvent + CGEventPost (좌표 기반),
                    OFF 상태였다면 3단계에서 보류한 modifier 를 CGEventFlags 로 부여.
+                   doubleClickCopy/tripleClickCopy 는 클릭 뒤 ⌘C 키 합성 1회를
+                   부가한다(⭐ 결정 D11 — 클론 설계 결정(미검증), 이슈 #44:
+                   macOS 더블/트리플클릭은 선택만 만들고 복사하지 않는다).
                    합성 클릭이 자기 이벤트 탭으로 되돌아오는 것을 막기 위해
                    blockClicksUntil / stopNextMouseDown / stopNextMouseUp 을
                    병행한다(§3.8, ⭐ 신규)
@@ -133,8 +136,8 @@ Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01
 | `Click at end of match` | `clickEndMatch` | 매치 영역의 **끝 지점**을 클릭한다 |
 | `Click and return cursor` | `clickAndReturn` | 클릭한 뒤 커서를 원래 위치로 되돌린다. §3.5 의 "항상 커서를 복구한다"는 기존 결정은 **이 모드 하나의 정의**였다 — 다른 모드에는 적용되지 않는다 |
 | `Click, return, click` | `clickReturnClick` | 클릭 → 커서 원위치 복귀 → 다시 클릭(원래 위치에서). 두 번째 클릭의 좌표는 커서를 되돌린 원래 위치다 |
-| `Double click and copy` | `doubleClickCopy` | 매치 위치를 더블클릭해 단어를 선택하고 복사한다(macOS 기본 더블클릭 단어 선택 동작에 의존) |
-| `Triple click and copy` | `tripleClickCopy` | 매치 위치를 트리플클릭해 줄/문단을 선택하고 복사한다(macOS 기본 트리플클릭 동작에 의존) |
+| `Double click and copy` | `doubleClickCopy` | 매치 **시작 지점**을 더블클릭해 단어를 선택하고 **클립보드에 복사한다**. ⭐ 복사는 더블클릭 뒤 **⌘C 키 합성 1회** — macOS 더블클릭은 선택만 만들고 복사하지 않기 때문이다(결정 D11, 이슈 #44 — **클론 설계 결정(미검증)**, 명세 GAP 해소) |
+| `Triple click and copy` | `tripleClickCopy` | 매치 **시작 지점**을 트리플클릭해 줄/문단을 선택하고 클립보드에 복사한다. 상동 — 트리플클릭 뒤 ⌘C 키 합성 1회(D11) |
 
 관련 저장 키(존재만 확인, 의미는 이름으로부터의 해석 `(미확정)`): `justClick` · `clickCount` · `clickNumber` · `humanClickDownUp` · `programmaticClickDown` · `programmaticClickDownUp` · `onProgrammaticClickDown` · `onProgrammaticClickDownUp` · `programmaticMove` · `blockClicksUntil` · `stopNextMouseDown` · `stopNextMouseUp` · `cursorFreeze` · `middleClick` · `rightClick` · `modifierPassthrough` · `ModifierSeekMode` · `MouseButtonDivision` · `TwoButtonSwapped`.
 
@@ -215,11 +218,11 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 | # | 케이스 | 처리 방침 |
 | :--- | :--- | :--- |
 | 1 | 클릭 직전 대상 창이 닫힘 | AX 조회(`AXUIElementCopyElementAtPosition` 또는 저장해 둔 핸들 접근)가 `kAXErrorInvalidUIElement`/`kAXErrorCannotComplete` 로 실패 → 클릭을 조용히 취소하고 세션 종료(F-01). 사용자에게 별도 오류 UI는 띄우지 않는다(원본 제품이 이런 실패에 대해 오류 다이얼로그를 노출한다는 근거 없음) |
-| 2 | 대상 창이 확정 직전에 이동함 | 좌표 기반(OCR) 매치는 이동을 반영하지 못해 빈 공간을 클릭할 수 있음. AX 기반 매치는 클릭 직전 `kAXPositionAttribute` 를 재조회해 최신 좌표를 반영. OCR 경로는 이 재조회 수단이 없다는 근본적 한계를 인정하고 넘어간다(F-02 범위, 여기서는 완화책 없음) |
+| 2 | 대상 창이 확정 직전에 이동함 | ⭐ **재조회 구조(A1, 이슈 #44)** — 좌표 기반(OCR) 매치는 이동을 반영하지 못해 빈 공간을 클릭할 수 있음(근본 한계 인정, 완화책 없음). AX 기반 매치도 **보관된 핸들이 없다**(`TextCandidate` 는 좌표·텍스트만 보유 — A1 실측) — 그래서 예전 서술("클릭 직전 `kAXPositionAttribute` 재조회")은 **구조적으로 불가능**하다. 대신 클릭 지점 좌표로 `AXUIElementCopyElementAtPosition` **재조회**가 "이동 후 그 위치의 요소"를 다시 잡는다 — 창이 이동했어도 요소가 그 좌표에 있으면 press 가 성공하므로 실질적으로는 이동 추적에 가깝게 동작한다. 재조회 실패(요소 없음→`Ok(None)`, IPC 실패→`Err`)는 엣지 1(취소)로 흡수한다. 절대 좌표 재조회라 창이 크게 옮겨진 뒤에는 그 위치의 엉뚱한 요소를 누를 위험이 남는다는 한계는 그대로 인정하고 넘어간다 |
 | 3 | 대상이 다른 Space(가상 데스크톱) | `Focus window before clicking` ON 이면 `activate` 가 Space 전환까지 유발할 수 있음(대상 앱의 `NSWindowCollectionBehavior` 에 의존). OFF 면 클릭이 현재 Space 의 좌표에 합성되어 엉뚱한 화면을 클릭할 위험 — 이 경우는 사용자 설정(OFF)의 명시적 트레이드오프로 취급하고 별도 감지·경고는 하지 않는다 |
 | 4 | 전체화면 앱이 대상 | 전체화면 앱은 자신만의 Space 를 갖는다. 오버레이(F-03)가 전체화면 Space 위에 뜨는 것 자체가 별도 과제이며, 클릭 합성 자체는 좌표만 맞으면 정상 동작 — 좌표계 이슈는 F-02/F-03 의존 |
 | 5 | 대상 요소가 비활성/disabled 상태 | `kAXPressAction` 수행 시 `kAXErrorActionUnsupported` 또는 액션은 성공해도 UI 반응 없음. 전자는 좌표 기반 폴백(§3.3)으로 전환, 후자(비활성 버튼에 조용히 씹히는 클릭)는 SuperKey 도 감지 수단이 없으므로 그대로 둔다 |
-| 6 | AX 요소 핸들이 확정 시점에 만료(stale) | `AXUIElementPerformAction` 호출이 `kAXErrorInvalidUIElement` 반환 → 좌표 기반(bounding box 재계산 불가 시 마지막으로 알려진 AX frame)으로 1회 폴백 시도, 그것도 실패하면 클릭 포기 |
+| 6 | AX 요소 핸들이 확정 시점에 만료(stale) | ⭐ **원천 소멸(A1, 이슈 #44)** — 재조회 설계는 핸들을 보관하지 않으므로 만료될 핸들이 없다. "좌표 폴백"은 재조회 **성공** + press 실패(`kAXErrorActionUnsupported` 등, 엣지 5)일 때만 일어나고, 재조회 실패는 엣지 1(취소)로 흡수한다 — 예전 서술이 말하던 "마지막으로 알려진 AX frame 폴백" 경로를 재조회 설계가 대신한다 |
 | 7 | 계산된 좌표가 화면 밖(디스플레이 구성 변경 등) | 클릭 전 전역 좌표가 현재 `NSScreen.screens` 유니온 프레임 안에 있는지 검증하고, 벗어나면 클릭을 실행하지 않고 세션을 취소한다 (v1.55 다중 디스플레이 이력에 대한 방어) |
 | 8 | 클릭이 드래그로 오인됨 | `CGEventCreateMouseEvent` 의 mouseDown/mouseUp 을 같은 좌표로, 앱이 드래그로 해석하지 않을 만큼 짧은 간격으로 발행한다. 정확한 임계값은 미실측(§9) |
 | 9 | 포커스 전환이 느린 앱(activate 후 실제 키 창이 되기까지 지연) | 고정 딜레이 삽입은 지어내지 않는다 — 대신 AX 관찰(`kAXFocusedWindowChangedNotification` 구독 등)로 전환 완료를 확인하는 방식을 후보로 남기고 §9 미해결 질문으로 승계 |
@@ -305,22 +308,24 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 
 이번 실측으로 다음이 확정되어 더 이상 열린 질문이 아니다: 클릭 모드의 존재와 7종 목록(§1.1) · 클릭 지점이 중심이 아니라 시작/끝 지점이라는 것(§3.4) · `Change click modes with modifier keys` 의 이중 의미(모드 선택 vs modifier 그대로 전달, §3.2) · 두 체크박스의 출고 기본값(§4) · 클릭 합성 API 목록(§6).
 
+⭐ **이슈 #44 에서 추가 확정(2026-08-31)**: 아래 열린 질문 중 Q10·Q10-b·Q10-c·Q12·Q13·Q14·Q17·Q18·Q19·Q20 은 **구현값으로 결정**됐다 — 전부 **클론의 설계 결정(원본 미검증 항목 포함)** 이며 근거·기각 대안은 표의 각 행과 결정 기록(이슈 #44 · `docs/dev/f04-plan-draft.md` Part 1)에 있다. Q10-a 는 범위 밖으로 유지되고, Q16·Q16-a 는 F-02 소관으로 종결됐다.
+
 ### 열린 질문
 
 | # | 질문 | 상태 |
 | :--- | :--- | :--- |
-| Q10 | ⭐ `Change click modes with modifier keys` 의 modifier ↔ 클릭 모드(7종) 매핑 | **미확정.** ⓘ 팝오버 원문(§1.1)은 "Hold the corresponding modifier keys when pressing enter"라고만 말할 뿐 어떤 modifier 가 어느 모드인지 명시하지 않는다. nib 정적 판독·AX 트리 어디에도 매핑표가 없다. **추측으로 매핑표를 만들지 않는다** — 실행 파일에 `Record Modifiers` 문자열과 `KeyboardShortcuts.RecorderModifierCocoa` 타입이 있어 **사용자가 모드별 modifier 를 직접 녹화**하는 구조로 보이나, 그 UI 는 4개 탭 어디에서도 관찰되지 않았다. 구현 전 반드시 확인 필요 |
-| Q10-a | `Record Modifiers` UI 가 실제로 어디에 있는지(어느 탭·어느 진입점) | 관찰되지 않음. 조건부 표시(예: `Change click modes with modifier keys` ⓘ 팝오버 내부, 또는 별도 서브패널)일 가능성 `(미확정)` |
-| Q10-b | 7종 모드 중 **무-modifier 기본값**이 무엇인지(예: `clickStartMatch` 가 기본이고 나머지가 modifier 로 전환되는 구조인지) | 팝오버 원문에 언급 없음. `justClick`/`clickNumber` 등 관련 키(§3.3)의 정확한 의미도 미확정 |
-| Q10-c | 위 매핑에서 **복수 modifier 조합**(예: ⌃⇧ 동시)이 눌렸을 때의 동작 — 우선순위 규칙이 있는지, 혹은 정의되지 않은 조합은 무시하는지 | 미확정 |
+| Q10 | ⭐ `Change click modes with modifier keys` 의 modifier ↔ 클릭 모드(7종) 매핑 | **결정됨(이슈 #44 — 클론 설계 결정, 원본 미검증).** D1 표: 무-modifier→`clickStartMatch` · ⌘→`doubleClickCopy` · ⌥→`clickEndMatch` · ⌃→`clickAndReturn` · ⇧→`clickReturnClick` · ⌘⌥→`tripleClickCopy` · ⌃⌥→`onlyMoveCursor` · 미정의 조합→기본 모드. 근거와 기각 대안은 이슈 #44 결정 기록(계획 초안 Part 1 D1). ⭐ **추측으로 매핑표를 만들지 않는다** 는 원칙은 유지하되, 구현이 구체적 값 없이는 불가능하므로 막힌 자리를 설계 결정으로 확정하고 원본 실기 대조를 교정 수단으로 남긴다 — 수동 대조 절차: `docs/dev/manual-verification.md` F-04 항목 8 |
+| Q10-a | `Record Modifiers` UI 가 실제로 어디에 있는지(어느 탭·어느 진입점) | **범위 밖(이슈 #44).** 관찰되지 않음(조건부 표시 가능성 `(미확정)` 그대로). `Record Modifiers` 사용자 지정 매핑은 명세에 없는 기능이라 클론은 구현하지 않는다 — 이슈 #44 에 기록만 남긴다 |
+| Q10-b | 7종 모드 중 **무-modifier 기본값**이 무엇인지(예: `clickStartMatch` 가 기본이고 나머지가 modifier 로 전환되는 구조인지) | **결정됨(이슈 #44 — 클론 설계 결정, 원본 미검증).** `clickStartMatch`(매치 시작 지점 단일 클릭) — 기본 안전성(실패율 최저)·시작 지점이 6개 모드의 공통 기준점이라는 설계 원칙으로 확정 |
+| Q10-c | 위 매핑에서 **복수 modifier 조합**(예: ⌃⇧ 동시)이 눌렸을 때의 동작 — 우선순위 규칙이 있는지, 혹은 정의되지 않은 조합은 무시하는지 | **결정됨(이슈 #44 — 클론 설계 결정, 원본 미검증).** 정의된 7조합만 **정확히** 매칭, 미정의 조합은 기본 모드(`clickStartMatch`)로 안전하게 떨어진다. 임의 우선순위 규칙을 만들지 않는다 |
 | Q10-d | 두 가지 다른 표기(팝오버 "Just move cursor" 류 vs 실행 파일 문자열 "Click and Return" 류, §1.1)가 같은 모드의 다른 UI 노출(팝오버 vs 다른 화면)인지, 아니면 실제로 다른 개념인지 | `(미확정)` — 표기 차이만 확인, 의미 차이 여부는 확인 못 함 |
 | Q11 | `EntrySearchButton`/`ClickablePlaceholderView`(F-03 §1.1)와 F-04 의 클릭 실행 로직이 공유되는 부분이 있는지(검색 바 안의 클릭 가능 요소도 같은 클릭 합성 경로를 쓰는지) | F-03 범위와 겹침, 확인 안 됨 |
-| Q12 | `clickStartMatch`/`clickEndMatch` 의 "시작/끝" 이 텍스트 진행 방향 기준인지 bounding box 모서리 기준인지(§3.4) | 팝오버 원문에 상세 없음. 구현 시작점만 제안, 확정 아님 |
-| Q13 | `onlyMoveCursor`/`doubleClickCopy`/`tripleClickCopy` 모드가 클릭 지점을 시작/끝/중심 중 무엇으로 삼는지(§3.4) | 팝오버 원문에 언급 없음 |
-| Q14 | `blockClicksUntil`/`stopNextMouseDown`/`stopNextMouseUp`(§3.8)이 시간 창 기반인지 이벤트 카운트 기반인지, 정확한 임계값·구현 방식 | 존재만 확인, 구현 상세는 실측 안 됨 |
-| Q16 | OCR 캡처 픽셀 좌표 → `CGEvent` 포인트 좌표 변환 시, 캡처 시점과 클릭 시점 사이 디스플레이 구성이 바뀌지 않았다는 전제가 실제로 F-02/F-03 파이프라인에서 얼마나 촘촘히 보장되는지 | 실측 필요(§5 #2, #7, #13 과 연결) |
-| Q16-a | 다중 디스플레이에서의 실제 클릭 좌표 변환 규칙(배율이 다른 디스플레이 간 전환 등) | 실기 관찰 못 함 — F-03 §3.3 의 창 구조 논의와 연결 |
-| Q17 | 클릭이 드래그로 오인되지 않기 위한 mouseDown-mouseUp 간격의 구체적 임계값(ms) | SuperKey 실측값 없음. 지어내지 않음 — 프로토타입 단계에서 실측 필요 |
-| Q18 | `Focus window before clicking` 의 "활성화 완료" 판정 방법 — 고정 딜레이 / `kAXFocusedWindowChangedNotification` 구독 / 폴링 중 무엇을 쓸지 | 조사 문서에 근거 없음. §5 #9 에서 후보만 나열, 결정은 보류 |
-| Q19 | `kAXPressAction` 지원 여부를 `AXUIElementCopyActionNames` 로 사전 질의하는 것이 모든 대상 앱에서 신뢰할 수 있는지(일부 앱이 액션 이름은 보고하되 실제 수행은 실패하는 사례가 있는지) | 실측 필요 |
-| Q20 | 다중 modifier 스냅샷을 "누른 시점"이 아니라 "확정 시점"으로 고정하는 것이 사용자 기대와 맞는지(예: Control 을 먼저 누르고 이후 확정하는 동안 손을 뗀 경우) | UX 검증 필요, 본 문서는 확정 시점 스냅샷을 설계 결정으로 채택했으나 재검토 여지 있음 |
+| Q12 | `clickStartMatch`/`clickEndMatch` 의 "시작/끝" 이 텍스트 진행 방향 기준인지 bounding box 모서리 기준인지(§3.4) | **결정됨(이슈 #44 — 클론 설계 결정, 원본 미검증).** D4: 시작 = 프레임 좌변 × 세로 중심, 끝 = 프레임 우변 × 세로 중심(LTR 진행 기준, **인셋 없음**) |
+| Q13 | `onlyMoveCursor`/`doubleClickCopy`/`tripleClickCopy` 모드가 클릭 지점을 시작/끝/중심 중 무엇으로 삼는지(§3.4) | **결정됨(이슈 #44 — 클론 설계 결정, 원본 미검증).** D5: 나머지 5종 전부 **시작 지점** 재사용(§3.4 의 구현 제안 채택). `clickReturnClick` 의 두 번째 클릭 좌표는 모드 규칙으로 원래 커서 위치(§3.3 표) |
+| Q14 | `blockClicksUntil`/`stopNextMouseDown`/`stopNextMouseUp`(§3.8)이 시간 창 기반인지 이벤트 카운트 기반인지, 정확한 임계값·구현 방식 | **결정됨(이슈 #44).** 클론은 시간 창·카운트 방식이 아니라 **이벤트 필드 마커**(`kCGEventSourceUserData` = 42 에 `ULTRAKEY_MAGIC`)를 사용한다 — 이 메커니즘은 키보드 합성이 이미 실측 검증한 것이고(§3.8), 합성 마우스 이벤트에도 같은 마커를 실어 탭 트램폴린 0-a 가 통과시킨다(D6 — 원본의 정확한 구현 방식은 여전히 미검증) |
+| Q16 | OCR 캡처 픽셀 좌표 → `CGEvent` 포인트 좌표 변환 시, 캡처 시점과 클릭 시점 사이 디스플레이 구성이 바뀌지 않았다는 전제가 실제로 F-02/F-03 파이프라인에서 얼마나 촘촘히 보장되는지 | **종결(F-02 소관, 이슈 #44).** 좌표 공급의 완결성은 F-02 의 책임이고, F-04 는 입력값을 그대로 신뢰한다(§3.4, A2). F-04 몫의 방어(화면 밖 검증, 엣지 7)는 §5 에 반영됨 |
+| Q16-a | 다중 디스플레이에서의 실제 클릭 좌표 변환 규칙(배율이 다른 디스플레이 간 전환 등) | **종결(F-02 소관, 이슈 #44).** F-02 가 이미 포인트 환산을 완료해(A2), F-04 는 변환을 수행하지 않는다 |
+| Q17 | 클릭이 드래그로 오인되지 않기 위한 mouseDown-mouseUp 간격의 구체적 임계값(ms) | **결정됨(이슈 #44 — 클론 설계 결정, 실기기 미검증).** D7: **인공 딜레이 없음** — 같은 좌표 연속 down/up 에는 mouseDragged 가 없어 드래그로 오인될 수 없다. 더블/트리플 연결은 간격이 아니라 `kCGMouseEventClickState` 필드로 표시하고, 연결 타이밍 판정은 macOS 가 수행한다 |
+| Q18 | `Focus window before clicking` 의 "활성화 완료" 판정 방법 — 고정 딜레이 / `kAXFocusedWindowChangedNotification` 구독 / 폴링 중 무엇을 쓸지 | **결정됨(이슈 #44 — 설계 판단, 실기기 미검증).** D8: `NSRunningApplication.isActive` **폴링(간격 20ms × 상한 300ms)** — 조건부 대기(사건 발생 시 조기 종료)라 고정 딜레이 금지(§5 #9)를 지킨다. 상한 초과 시 클릭을 그대로 진행(첫 클릭이 활성화에 소모되는 macOS 기본 동작으로 열화). AX 알림 구독은 일회성 대기에 비동기 구독 생명주기 관리가 필요해 기각 |
+| Q19 | `kAXPressAction` 지원 여부를 `AXUIElementCopyActionNames` 로 사전 질의하는 것이 모든 대상 앱에서 신뢰할 수 있는지(일부 앱이 액션 이름은 보고하되 실제 수행은 실패하는 사례가 있는지) | **결정됨(이슈 #44 — 판정 구조는 설계 결정, 앱별 신뢰성은 수동 검증 항목).** D9: `action_names` 는 **참고·로그용만**(게이트 아님) — 실제 성패는 `perform_action` 결과로 판정하고, 실패 시 좌표 폴백(§5 #5). 앱별 신뢰성 실측은 `docs/dev/manual-verification.md` F-04 항목 1 |
+| Q20 | 다중 modifier 스냅샷을 "누른 시점"이 아니라 "확정 시점"으로 고정하는 것이 사용자 기대와 맞는지(예: Control 을 먼저 누르고 이후 확정하는 동안 손을 뗀 경우) | **결정됨(이슈 #44).** D10: **확정 시점 스냅샷 채택** — 명세 §5 #10 이 요구하는 그대로이고, F-01 이 이미 `ConfirmedMatch.modifiers` 로 전달한다(실측 — confirm.rs). 클릭 시점 재조회는 하지 않는다(hold 모드의 확정 시점은 F-01 만 안다). UX 적 정답 여부는 여전히 원본 대조·사용자 관찰 대상 |

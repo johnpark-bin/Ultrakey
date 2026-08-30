@@ -2387,3 +2387,126 @@ grep "ultrakey_app::seek" ~/Library/Logs/Ultrakey/ultrakey.log
 | **경로 B(`hidutil`)** | 검증 전·중·후 모두 `( )`. 잔재 없음 |
 | **Karabiner** | ⛔ **건드리지 않았다.** 설정 파일을 읽기만 했다(수정 시각이 검증 전과 같다) |
 | 검증용 앱 프로세스 | 전부 종료했다 |
+
+---
+
+## 항목 11 — F-04 Seek 클릭 실행 · 클릭 모드 7종 (M3 4차 / 이슈 #44 신설)
+
+> 대상 명세: `docs/spec/seek-click-execution.md` · 결정 기록: 이슈 #44
+> (`docs/dev/f04-plan-draft.md` Part 1 — **클론의 설계 결정, 원본 미검증 항목 포함**).
+> 이 항목이 확인하는 것은 **합성 클릭이 실제로 대상에 도달하는가**와 **7종 모드가
+> 계획 표(§2.2)대로 실행되는가**다. 자동화된 것(모드 해석·지점·계획·경로·화면 밖
+> 판정 — `cargo test -p ultrakey-click`)은 여기서 다시 확인하지 않는다.
+>
+> ⚠️ **클릭 실행은 워커 스레드에서 일어난다** — 앱 로그(`tail -f
+> ~/Library/Logs/Ultrakey/ultrakey.log`)의 `synthesized click:`(debug)·
+> `performed AX press on element at`(debug)·`AX press action failed`(warn)·
+> `click point ... off-screen`(warn) 라인이 실행 경로의 직접 증거다.
+> debug 레벨이 안 보이면 `open --env ULTRAKEY_LOG=ultrakey=debug` 로 켠다(§0-5).
+
+### 11-0. 사전 준비
+
+```sh
+# 1) 서명된 .app 을 `open` 으로 (권한이 TCC 에 유지되는 유일한 방법 — §0)
+./scripts/build-signed.sh
+open <경로>/Ultrakey.app
+
+# 2) Seek 발동 준비 — `Remap key to Seek:` 를 Caps Lock 으로 설정하고
+#    `Only show while the remapped key is held`(hold 모드)를 켠다(항목 10 과 동일).
+#    설정 UI 가 없으면 settings.json 에 아래 값을 넣었다가 삭제한다(항목 10 의
+#    "되돌린 것" 표 참고):
+#   seek.remapKey = "CapsLock" · seek.executeOnClose = true
+
+# 3) Safari(또는 시스템 설정)에서 "Save"·"Settings" 식 검색어와 일치하는 보기 좋은
+#    버튼/링크를 화면에 띄워 둔다. 매치 프레임이 화면 안에 확실히 보여야 한다.
+```
+
+### 11-1. 실제 AX 클릭 (Q19 · D9 — press 가 좌표 클릭과 같은 결과를 내는가)
+
+**준비물**: 항목 11-0 + 두 설정 모두 **OFF**(`seek.focusWindowBeforeClicking =
+false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 ☑ 가 출고
+기본이므로 명시적으로 끈다).
+
+| 단계 | 조작 | 판정 기준 |
+| :--- | :--- | :--- |
+| a | Safari 의 버튼 텍스트를 매치로 선택하고 hold 릴리즈로 확정 | 로그에 `performed AX press on element at (x, y)` — 대상 버튼이 눌리고 실제 액션이 일어난다(예: 새 창/화면 이동). 좌표 기반 클릭과 구분이 안 될 만큼 같은 결과면 통과 |
+| b | 컨트롤이 **없는** 순수 텍스트(본문 단락의 단어)를 대상으로 같은 조작 | 로그에 `AX press action failed (...); falling back to coordinate click` → 그러고 나서 `synthesized click:` 로 **좌표 폴백**이 실제 클릭을 완성한다. 텍스트에 클릭 결과(커서 위치 이동)가 있으면 통과 |
+| c | 대상 앱을 종료시킨 직후(창 닫힘, §5 #1) 확정 | 크래시 없음 · `failed to get AX element at click point; canceling click` 로 **조용히 취소**되고 엉뚱한 창에 클릭이 가지 않는다 |
+
+### 11-2. 포커스 전환 (Focus window before clicking — §8 수용 기준 10·11)
+
+**준비물**: Safari 뒤에 다른 창을 최전면으로 둔다(대상 Safari 창은 **비활성**).
+
+| 단계 | 설정 | 조작·판정 기준 |
+| :--- | :--- | :--- |
+| a | `focusWindowBeforeClicking` **ON** | Safari 창의 링크를 매치로 확정 → **클릭 1회로** Safari 가 최전면이 되고 클릭까지 도달한다(첫 클릭이 활성화에만 소모되지 않는다). Safari 가 최전면이 됐는지·클릭 결과가 일어났는지 눈으로 확인 |
+| b | 상동 | 로그에서 `focus activation timed out`(느린 앱, D8 열화)이 없어야 하고, 있어도 **클릭은 진행**되어야 한다(상한 초과 = 안전판) |
+| c | 상동 **OFF** | 같은 조작 → 로그에 `NSRunningApplication` 관련 활성화/`isActive` 흔적이 **전혀** 없어야 한다(§8 수용 기준 11: 활성화 API 미호출). macOS 기본 동작대로 첫 클릭이 활성화에 소모될 수 있음 — 그것이 정상 |
+
+### 11-3. 클립보드 복사 (doubleClickCopy / tripleClickCopy — D11)
+
+**준비물**: 클립보드를 비운다(`pbcopy < /dev/null`), Safari 의 텍스트 본문.
+
+| 단계 | 조작 | 판정 기준 |
+| :--- | :--- | :--- |
+| a | 매치로 단어 하나를 잡고 **⌘** 를 누른 채 확정(`doubleClickCopy`) | 로그에 `synthesized click:` click_state=1 → 2 → `⌘C`(키 합성은 로그 없음 — 키보드 이벤트) → `pbpaste` 로 그 단어가 그대로 나온다(따옴표 등 macOS 단어 선택 경계 기준). 단어가 **선택되고 복사**됐으면 통과 |
+| b | **⌘⌥** 를 누른 채 확정(`tripleClickCopy`) | `pbpaste` 로 줄/문단이 나온다. 통과 |
+| c | ⚠️ D11 한계(로그 아님) — `focusWindowBeforeClicking` OFF + **비활성 창** 대상 | 첫 클릭의 click-through 가 없으면 ⌘C 가 최전면 앱으로 갈 수 있다. 이 경우 `pbpaste` 에 대상 텍스트가 안 들어와도 **알려진 열화**로 기록하고 통과 처리 — 이후 원본 대조 항목(11-8)으로 넘긴다 |
+
+### 11-4. 워프 체감 (clickAndReturn / clickReturnClick / onlyMoveCursor — D7·엣지 12)
+
+**준비물**: 매치 프레임과 먼 곳에 커서를 둔다. 단일 디스플레이부터, 가능하면 다중 디스플레이로 반복.
+
+| 단계 | 조작 | 판정 기준 |
+| :--- | :--- | :--- |
+| a | **⌃** 확정(`clickAndReturn`) | 커서가 매치 지점으로 갔다가 클릭 후 **원래 위치로 돌아온다**. 클릭 자체(창 액션)도 발생한다 |
+| b | **⇧** 확정(`clickReturnClick`) | 클릭 → 커서 원위치 복귀 → **원위치에서 재클릭**. 대상 앱에 두 번째 클릭 결과(예: 원래 위치 요소의 액션)가 보인다 |
+| c | **⌃⌥** 확정(`onlyMoveCursor`) | 클릭 이벤트가 **전혀 없고**(로그에 `synthesized click` 없음) 커서만 매치 지점으로 이동한다 |
+| d | 워프 중 물리 마우스를 흔든다 | 커서가 워프 뒤 물리 마우스 델타로 튀지 않는다(`CGAssociate…` 감싸기). 튀면 로그의 `failed to warp cursor back` 여부와 함께 기록 |
+| e | (엣지 12) — 워프 실패를 인위적으로 내기 어려우므로 **코드 리뷰로 확인**한다 | `warp_cursor` 가 실패 시 warn 로그만 남기고 커서가 클릭 지점에 남는 열화를 수용하는지 |
+
+### 11-5. Self-click — 합성 클릭이 탭에 되돌아오지 않는다 (§8 수용 기준 18 · D6)
+
+| 단계 | 조작 | 판정 기준 |
+| :--- | :--- | :--- |
+| a | 더블클릭(⌘)·트리플클릭(⌘⌥)·클릭-복사 조합을 각각 실행 | 클릭이 **한 번만** 일어난다(대상 앱이 이중 처리하지 않는다 — 예: 링크가 두 번 열리지 않는다). 세션 로그에 합성 이벤트가 콜백에 재진입한 흔적(`seek session opened` 재등장 등)이 없다 |
+| b | 클릭 직후 곧바로 사용자 클릭을 한다 | 사용자 클릭이 정상 처리된다(마커가 사라질 상태가 없으므로 영구 소비 상태에 빠지지 않는다 — D6) |
+
+### 11-6. 엣지 — 창 닫힘·화면 밖·드래그 오인·hold 스냅샷
+
+| 단계 | 케이스 | 조작·판정 기준 |
+| :--- | :--- | :--- |
+| a | 창 닫힘(§5 #1) | 11-1-c 와 동일 — 재확인 불필요(앞서 통과) |
+| b | 화면 밖(§5 #7) | 디스플레이 구성을 바꾼 뒤(미러 해제 등) **옛 화면 밖 좌표의 매치를 그대로 확정**하거나, 화면 밖을 가리키도록 검색 바를 옮긴 뒤 확정 → `click point ... off-screen; canceling click` 로 클릭 미실행·크래시 없음. 화면 구성 변경 후엔 검출 좌표도 새 구성 기준이므로 자연 재현이 어려우면 **코드 리뷰**(`point_visible` 단위 테스트)로 갈음하고 기록 |
+| c | 드래그 오인(§5 #8) | 11-3-a(더블클릭) 중 커서가 매치를 **드래그**하거나 텍스트를 끌지 않는다(같은 좌표 down/up 이므로 원리적으로 없음 — 이상이면 기록) |
+| d | hold 확정 스냅샷(§5 #10) | hold 모드에서 **확정 순간(릴리즈)에 modifier 를 누른 채** 놓는다 → 그 modifier 의 모드가 실행된다. 릴리즈 후에 modifier 를 눌러도 아무 일 없음(`ConfirmedMatch.modifiers` = 릴리즈 순간 스냅샷, F-01 이 전달) |
+| e | 느린 포커스 앱(§5 #9) | (가능하면) 앱 정지를 만들어 `focus activation timed out` → 클릭이 진행되는지(11-2-b 와 동일) |
+
+### 11-7. 설정 4조합 — `Focus window...` × `Change click modes...`
+
+| 조합 | 판정 기준 |
+| :--- | :--- |
+| focus OFF × changeModes ON(출고 기본) | modifier 로 7종 전환이 동작한다(11-3·11-4 의 각 조합) |
+| focus OFF × changeModes OFF | 기본 클릭 + modifier 가 클릭 이벤트에 실린다 — **브라우저 링크에서 ⌘+클릭 = 새 탭**으로 열리면 ⌘ 플래그 전달 확인(§8 수용 기준 5) |
+| focus ON × changeModes ON | 11-2-a 후 그 modifier 의 모드가 대상 창에 실행된다 |
+| focus ON × changeModes OFF | 활성화 + modifier 를 실은 기본 클릭(§3.2 표) |
+
+### 11-8. (원본 대조 — 저장소 필수 검증은 아님) 원본 SuperKey 실기
+
+슈퍼키를 설치한 기기에서 **D1 매핑표(이슈 #44)** 와 **복사 방식(⌘C 합성인지)** 을
+실제로 눌러 기록한다. 이 기록이 Q10·D11 의 **최종 교정 수단**이다 — clon 의
+매핑표가 원본과 다르면 `docs/spec/seek-click-execution.md` §3.3·
+`ultrakey-click/src/mode.rs` 만 고치면 된다(판정·계획 로직과 분리돼 있다).
+
+### ✅ 통과 판정 요약
+
+| 항목 | 확인 수단 |
+| :--- | :--- |
+| 11-1 a·b·c (AX press·폴백·취소) | 로그 3종 + 실제 액션 |
+| 11-2 a·b·c (포커스 ON/OFF) | 클릭 1회 달성 + 로그 |
+| 11-3 a·b (⌘C 복사) | `pbpaste` |
+| 11-4 a·b·c (워프 3모드) | 커서·클릭 결과 |
+| 11-5 (self-click) | 이중 처리 없음 |
+| 11-6 b (화면 밖) | 로그 + 크래시 없음 |
+| 11-7 (설정 4조합) | 브라우저 새 탭 등 |
+| 11-8 (원본 대조) | 📝 기록(필수 검증 아님) |
