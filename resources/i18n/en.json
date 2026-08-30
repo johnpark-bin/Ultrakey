@@ -154,7 +154,7 @@
   "settings.presets.conflict.title.capsLockHomeRow": "The home row overlaps the arrow keys",
   "settings.presets.conflict.body": "Switching this on will switch off:",
   "settings.presets.conflict.continue": "Switch it on",
-  "settings.korean.heading": "Korean Input",
+  "settings.korean.heading": "Korean",
   "settings.korean.shift_space": "Change input source with Shift + Space",
   "settings.korean.shift_space.hint": "Works only while the macOS \"Select the previous input source\" shortcut is ⌃Space.",
   "settings.korean.han_eng": "Change input source with the Han/Eng key",
