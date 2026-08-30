@@ -19,4 +19,4 @@ pub mod conflicts;
 pub use popups::*;
 pub use rules::PresetRules;
 pub use settings::PresetSettings;
-pub use conflicts::{detect_conflict, Conflict, ConflictKind};
+pub use conflicts::{detect_conflict, detect_modifier_slot_conflict, Conflict, ConflictKind};

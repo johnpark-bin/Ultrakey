@@ -89,6 +89,12 @@ mod settings_keys {
     pub const GENERAL_LAUNCH_ON_LOGIN: &str = "general.launchOnLogin";
     /// F-10 §3 `Hide menu bar icon` 체크박스.
     pub const GENERAL_HIDE_MENU_BAR_ICON: &str = "general.hideMenuBarIcon";
+
+    // ⭐ `ultrakey-core` 가 소유한 키를 재수출한다 — 여기서 문자열을 다시 쓰면
+    // 오타가 컴파일을 통과해 버린다(`keys.rs` 상단 주석과 같은 이유).
+    pub use ultrakey_core::settings::keys::{
+        HYPERKEY_BLEH_ENABLED, HYPERKEY_HYPER_ENABLED, HYPERKEY_MEH_ENABLED,
+    };
 }
 
 /// 프런트엔드(권한 모달)가 조회하는 문구 묶음.
@@ -506,6 +512,10 @@ fn disable_label_key_for_setting(store_key: &str) -> &'static str {
         k if k == keys::PRESETS_CAPS_WASD_ARROWS => "settings.presets.caps_wasd",
         k if k == keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED => "settings.presets.caps_hjkl.prefix",
         k if k == keys::PRESETS_CAPS_HOME_ROW_ENABLED => "settings.presets.caps_home_row",
+        // ⭐ 대화상자 #1 의 배타 대상 — caps lock 을 점유한 hyper/meh/bleh 슬롯.
+        k if k == keys::HYPERKEY_HYPER_ENABLED => "settings.hyperkey.hyper.label",
+        k if k == keys::HYPERKEY_MEH_ENABLED => "settings.hyperkey.meh.label",
+        k if k == keys::HYPERKEY_BLEH_ENABLED => "settings.hyperkey.bleh.label",
         other => {
             // 방어적 — conflicts.rs 가 이 네 개 밖의 키를 내놓는 일은 없어야 한다.
             tracing::error!(key = other, "충돌 해소 목록에 알 수 없는 설정 키가 있다");
@@ -533,6 +543,25 @@ fn caps_is_modifier_source(h: &HyperkeySettings) -> bool {
     (h.hyper.enabled && h.hyper.source == SourceKey::CapsLock)
         || (h.meh.enabled && h.meh.source == SourceKey::CapsLock)
         || (h.bleh.enabled && h.bleh.source == SourceKey::CapsLock)
+}
+
+/// caps lock 을 소스로 쓰고 있는 **활성** hyper/meh/bleh 슬롯의 저장 키 목록.
+///
+/// ⭐ 충돌 대화상자 #1(`CapsLockAlreadyRemapped`)의 **배타 대상**이 이것이다 —
+/// `Remap caps lock to:` 를 켜려 할 때 꺼야 하는 것은 그 설정 자신이 아니라 caps lock
+/// 을 이미 점유하고 있는 이 슬롯들이다(architecture.md §6.5).
+fn caps_modifier_slot_keys(h: &HyperkeySettings) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if h.hyper.enabled && h.hyper.source == SourceKey::CapsLock {
+        out.push(settings_keys::HYPERKEY_HYPER_ENABLED);
+    }
+    if h.meh.enabled && h.meh.source == SourceKey::CapsLock {
+        out.push(settings_keys::HYPERKEY_MEH_ENABLED);
+    }
+    if h.bleh.enabled && h.bleh.source == SourceKey::CapsLock {
+        out.push(settings_keys::HYPERKEY_BLEH_ENABLED);
+    }
+    out
 }
 
 /// D-1 — 이 설정 조합에서 경로 B 가 실제로 설치해야 할 alias(`docs/dev/
@@ -1074,10 +1103,45 @@ fn settings_set(
         return settings_set_preset(&state, &key, &value);
     }
 
-    // 1) + 2)
+    settings_set_hyperkey(&state, &key, &value)
+}
+
+/// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
+/// 재사용한다(배타 대상이 hyper 슬롯일 수 있으므로).
+///
+/// ⭐ **충돌 감지는 여기서도 대칭으로 한다** — hyper/meh/bleh 슬롯을 caps lock 소스로
+/// 켜려는데 `Remap caps lock to:`(F-08.1)가 이미 켜져 있으면 같은 대화상자를 띄운다.
+/// 두 설정은 서로 다른 탭에 있어, 한쪽에서만 물어보면 사용자가 켜는 순서에 따라
+/// 동작이 달라진다(architecture.md §6.5).
+///
+/// 순서를 반드시 지킨다: 1) 충돌 감지 2) `key` 검증 + 메모리 갱신 3) **엔진 반영**
+/// (저장 성공 여부와 무관하게 먼저 — D-B) 4) **저장** 5) 새 `SettingsState`.
+fn settings_set_hyperkey(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    // 1) 충돌 감지 — 적용 전에. caps lock 을 소스로 삼는 슬롯을 **켜는** 경우만 해당한다.
+    if value.as_bool() == Some(true) && slot_key_would_claim_caps_lock(state, key)? {
+        let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
+        if let Some(conflict) = ultrakey_presets::detect_modifier_slot_conflict(&presets_before) {
+            let pending = pending_conflict_view(conflict, key, value);
+            let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            return Ok(build_settings_state(
+                &hyperkey_snapshot,
+                &presets_before,
+                &store,
+                None,
+                Some(pending),
+            ));
+        }
+    }
+
+    // 2)
     let hyperkey_snapshot = {
         let mut hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?;
-        validate_and_apply(&mut hyperkey, &key, &value)?;
+        validate_and_apply(&mut hyperkey, key, value)?;
         hyperkey.clone()
     };
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
@@ -1085,16 +1149,16 @@ fn settings_set(
     // 3) 엔진 반영.
     // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
     reconfigure_engine(
-        &state,
+        state,
         &hyperkey_snapshot,
         &presets_snapshot,
-        key_affects_modifier_rules(&key),
+        key_affects_modifier_rules(key),
     )?;
 
     // 4) 저장.
     let save_error = {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
-        match store.set(&key, &value) {
+        match store.set(key, value) {
             Ok(()) => None,
             Err(e) => {
                 tracing::error!(key = %key, error = %e, "설정 저장 실패");
@@ -1106,6 +1170,18 @@ fn settings_set(
     // 5) 새 SettingsState.
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(&hyperkey_snapshot, &presets_snapshot, &store, save_error, None))
+}
+
+/// 이 `hyperkey.*` 키를 켜면 그 슬롯이 caps lock 을 점유하게 되는가 —
+/// 즉 슬롯 활성화 키이고 그 슬롯의 **현재 소스가 caps lock** 인가.
+fn slot_key_would_claim_caps_lock(state: &Arc<AppState>, key: &str) -> Result<bool, String> {
+    let h = state.hyperkey.lock().map_err(|e| e.to_string())?;
+    Ok(match key {
+        k if k == settings_keys::HYPERKEY_HYPER_ENABLED => h.hyper.source == SourceKey::CapsLock,
+        k if k == settings_keys::HYPERKEY_MEH_ENABLED => h.meh.source == SourceKey::CapsLock,
+        k if k == settings_keys::HYPERKEY_BLEH_ENABLED => h.bleh.source == SourceKey::CapsLock,
+        _ => false,
+    })
 }
 
 /// `settings_set` 의 `presets.*` 경로 — [`settings_resolve_conflict`] 도 이 함수를
@@ -1126,13 +1202,13 @@ fn settings_set_preset(
     value: &serde_json::Value,
 ) -> Result<SettingsState, String> {
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
-    let caps_is_source = caps_is_modifier_source(&hyperkey_snapshot);
+    let caps_slots = caps_modifier_slot_keys(&hyperkey_snapshot);
 
     // 1) 충돌 감지 — 적용하기 전에.
     if let Some(new_value) = value.as_bool() {
         let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
         if let Some(conflict) =
-            ultrakey_presets::detect_conflict(&presets_before, caps_is_source, key, new_value)
+            ultrakey_presets::detect_conflict(&presets_before, &caps_slots, key, new_value)
         {
             let pending = pending_conflict_view(conflict, key, value);
             let store = state.store.lock().map_err(|e| e.to_string())?;
@@ -1188,23 +1264,42 @@ fn settings_resolve_conflict(
     value: serde_json::Value,
 ) -> Result<SettingsState, String> {
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
-    let caps_is_source = caps_is_modifier_source(&hyperkey_snapshot);
+    let caps_slots = caps_modifier_slot_keys(&hyperkey_snapshot);
     let new_value = value
         .as_bool()
         .ok_or_else(|| format!("{key} 충돌 해소는 bool 값만 지원한다"))?;
 
     let to_disable: Vec<String> = {
         let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
-        ultrakey_presets::detect_conflict(&presets_before, caps_is_source, &key, new_value)
-            .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default()
+        if key.starts_with("presets.") {
+            ultrakey_presets::detect_conflict(&presets_before, &caps_slots, &key, new_value)
+        } else if new_value {
+            // ⭐ 반대 방향 — hyper/meh/bleh 슬롯을 caps lock 소스로 켜려는데
+            // `Remap caps lock to:` 가 이미 켜져 있는 경우(대칭 처리).
+            ultrakey_presets::detect_modifier_slot_conflict(&presets_before)
+        } else {
+            None
+        }
+        .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default()
     };
 
+    // ⭐ 배타 대상은 `presets.*` 일 수도 `hyperkey.*` 일 수도 있다 — 각각 자기 경로로
+    // 끈다(엔진 반영·write-through 는 양쪽 경로가 이미 책임진다).
     for disable_key in &to_disable {
-        settings_set_preset(&state, disable_key, &serde_json::Value::Bool(false))?;
+        let off = serde_json::Value::Bool(false);
+        if disable_key.starts_with("presets.") {
+            settings_set_preset(&state, disable_key, &off)?;
+        } else {
+            settings_set_hyperkey(&state, disable_key, &off)?;
+        }
     }
 
-    settings_set_preset(&state, &key, &value)
+    if key.starts_with("presets.") {
+        settings_set_preset(&state, &key, &value)
+    } else {
+        settings_set_hyperkey(&state, &key, &value)
+    }
 }
 
 /// 탭 전환 — 창 리사이즈(§3.1·§3.3, D-E) + (`persist` 일 때만) `ui.lastTab` 저장.
@@ -2213,6 +2308,43 @@ mod tests {
     }
 
     // caps_is_modifier_source() — hyper/meh/bleh 중 활성화된 슬롯만 본다.
+    /// ⭐ 충돌 대화상자 #1 의 배타 대상은 **caps lock 을 점유한 슬롯**이지 지금 켜려는
+    /// 설정 자신이 아니다 — 실기기 검증에서 잡은 회귀의 재발 방지.
+    #[test]
+    fn caps_modifier_slot_keys_lists_only_enabled_caps_lock_slots() {
+        let mut h = HyperkeySettings::default();
+        assert!(caps_modifier_slot_keys(&h).is_empty(), "기본값은 전부 꺼져 있다");
+
+        h.hyper.enabled = true;
+        h.hyper.source = SourceKey::CapsLock;
+        assert_eq!(caps_modifier_slot_keys(&h), vec![settings_keys::HYPERKEY_HYPER_ENABLED]);
+
+        // 소스가 caps lock 이 아니면 세지 않는다.
+        h.hyper.source = SourceKey::RightCommand;
+        assert!(caps_modifier_slot_keys(&h).is_empty());
+
+        // 여러 슬롯이 동시에 caps lock 을 쓰면 전부 나열한다.
+        h.hyper.source = SourceKey::CapsLock;
+        h.meh.enabled = true;
+        h.meh.source = SourceKey::CapsLock;
+        assert_eq!(
+            caps_modifier_slot_keys(&h),
+            vec![settings_keys::HYPERKEY_HYPER_ENABLED, settings_keys::HYPERKEY_MEH_ENABLED]
+        );
+    }
+
+    /// 배타 대상의 라벨 키가 실제로 카탈로그에 있는 것이어야 한다.
+    #[test]
+    fn disable_label_key_covers_modifier_slots() {
+        for (store_key, expected) in [
+            (settings_keys::HYPERKEY_HYPER_ENABLED, "settings.hyperkey.hyper.label"),
+            (settings_keys::HYPERKEY_MEH_ENABLED, "settings.hyperkey.meh.label"),
+            (settings_keys::HYPERKEY_BLEH_ENABLED, "settings.hyperkey.bleh.label"),
+        ] {
+            assert_eq!(disable_label_key_for_setting(store_key), expected);
+        }
+    }
+
     #[test]
     fn caps_is_modifier_source_only_counts_enabled_slots() {
         let mut hyperkey = HyperkeySettings::default();
@@ -2293,7 +2425,7 @@ mod tests {
     fn pending_conflict_view_shape() {
         let conflict = Conflict {
             kind: ConflictKind::CapsLockArrows,
-            to_disable: &[keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED],
+            to_disable: vec![keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED],
         };
         let view = pending_conflict_view(conflict, keys::PRESETS_CAPS_WASD_ARROWS, &serde_json::json!(true));
         assert_eq!(view.kind, "capsLockArrows");
