@@ -71,7 +71,18 @@
   .sidebar button[aria-selected="true"] .tab-icon { opacity: 1; }
 
   .panel { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; }
-  .tabpanel h1 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
+  /* ⭐ 상세 헤딩(이슈 #45) — 제목 좌측에 해당 탭의 아이콘을 표시한다. 아이콘은
+     사이드바 탭 button 의 인라인 SVG 를 JS 가 `cloneNode` 로 복제해 넣는다
+     (`mountTabHeadingIcons` 참고 — 마크업을 두 벌로 복제하지 않아 drift 가 없다).
+     텍스트는 `applyStrings()` 가 h1 자체가 아니라 안의 `<span>` 에 채운다 —
+     사이드바 라벨과 같은 이유(이슈 #40 ②, `textContent` 는 SVG 를 지운다). */
+  .tabpanel h1 {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 15px; font-weight: 600; margin: 0 0 14px;
+  }
+  /* 헤딩 아이콘은 지금 선택된 탭의 것이라 사이드바의 **선택 상태**와 같이
+     완전 불투명하게 그린다(기본 `.tab-icon` 의 .7 은 사이드바 비선택 상태용). */
+  .tabpanel h1 .tab-icon { opacity: 1; }
 
   .row { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
   .checkbox-row { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
@@ -252,7 +263,10 @@
          체크박스→팝업 dimmed 방향과 반대로, 여기서는 팝업이 체크박스를
          좌우한다(값은 지우지 않고 보존). -->
     <section id="panel-seek" class="tabpanel" role="tabpanel" aria-labelledby="tab-seek" hidden>
-      <h1 id="seek-heading"></h1>
+      <!-- ⭐ 6개 탭 공통(이슈 #45): 헤딩은 `아이콘 + 텍스트 span` 구조다.
+           아이콘은 사이드바 탭 button 의 SVG 를 cloneNode 로 복제해 붙이고
+           (mountTabHeadingIcons), 텍스트 span 을 카탈로그가 채운다. -->
+      <h1 id="seek-heading"><span id="seek-heading-text"></span></h1>
 
       <p class="hint" id="seek-not-configured" hidden></p>
 
@@ -309,7 +323,7 @@
 
     <!-- Hyperkey 탭 — hyperkey.md §4 의 배치 순서 그대로. -->
     <section id="panel-hyperkey" class="tabpanel" role="tabpanel" aria-labelledby="tab-hyperkey" hidden>
-      <h1 id="hyperkey-heading"></h1>
+      <h1 id="hyperkey-heading"><span id="hyperkey-heading-text"></span></h1>
 
       <!-- 1. hyper 슬롯 — 체크박스 + 소스 키 팝업(35종). 체크박스가 꺼지면 팝업만
            ① dimmed(select:disabled) 된다 — 값은 지우지 않고 보존한다(§4.2 실측). -->
@@ -394,7 +408,7 @@
            ③ 문장 중간 삽입 — `Caps lock +` [팝업] `= ◀▼▲▶`(중간) ·
                        `Caps lock + home row = ` [팝업](끝에 부착) -->
     <section id="panel-presets" class="tabpanel" role="tabpanel" aria-labelledby="tab-presets" hidden>
-      <h1 id="presets-heading"></h1>
+      <h1 id="presets-heading"><span id="presets-heading-text"></span></h1>
 
       <!-- ② 숨김 — D-1(architecture.md §6.1)이 실제로 커널 매핑을 설치했을 때만 나타난다. -->
       <div id="presets-caps-alias"></div>
@@ -552,7 +566,7 @@
          사용자가 조작할 수 있는 사실이 아니다. 대신 부제로 "이 키가 있는 키보드에서만
          동작한다"는 조작 가능한 사실을 안내한다. -->
     <section id="panel-korean" class="tabpanel" role="tabpanel" aria-labelledby="tab-korean" hidden>
-      <h1 id="korean-heading"></h1>
+      <h1 id="korean-heading"><span id="korean-heading-text"></span></h1>
 
       <div class="row">
         <label class="checkbox-row">
@@ -662,7 +676,7 @@
          없는 컨트롤(예: 별도 "끔" 체크박스)을 임의로 추가하지 않았다. 이 간극은
          구현 보고서에 그대로 남긴다. -->
     <section id="panel-keyboards" class="tabpanel" role="tabpanel" aria-labelledby="tab-keyboards" hidden>
-      <h1 id="keyboards-heading"></h1>
+      <h1 id="keyboards-heading"><span id="keyboards-heading-text"></span></h1>
 
       <!-- ⭐ 고정 컨트롤 2 — macOS Function Keys 상태 표시줄(§3.5.1). 이슈 #40 ①
            로 `.keyboards-detail-pane` 안에서 **탭 최상단**으로 올라왔다. 근거:
@@ -767,7 +781,7 @@
     <!-- General 탭 — §4.4 의 7개 컨트롤 전부를 만들되, 버전 버튼만 동작한다.
          나머지 6개는 disabled + 배지 + 사유 문구로 "왜 안 되는지"를 바로 보여준다. -->
     <section id="panel-general" class="tabpanel" role="tabpanel" aria-labelledby="tab-general" hidden>
-      <h1 id="general-heading"></h1>
+      <h1 id="general-heading"><span id="general-heading-text"></span></h1>
 
       <!-- ⭐ 언어 선택(D6, 이슈 #39, `localization-and-input-sources.md` §3.1.2-a).
            "System" 만 카탈로그에서 번역하고, 나머지 선택지는 각 언어의 자기
@@ -927,7 +941,10 @@ if (!tauri || !tauri.core) {
     $("tab-keyboards-label").textContent = t("settings.tab.keyboards");
     $("tab-general-label").textContent = t("settings.tab.general");
 
-    $("seek-heading").textContent = t("settings.seek.heading");
+    // ⭐ 헤딩은 탭 아이콘(인라인 SVG)과 한 h1 안에 있으므로 텍스트는 안의
+    // `<span>` 에 넣는다 — h1.textContent 는 아이콘까지 지운다(사이드바 라벨을
+    // button 이 아닌 <span> 에 채우는 것과 같은 규약, 이슈 #40 ② · #45).
+    $("seek-heading-text").textContent = t("settings.seek.heading");
     $("seek-not-configured").textContent = t("settings.seek.not_configured");
     $("seek-shortcut-label").textContent = t("settings.seek.toggle_shortcut");
     $("seek-shortcut-clear").textContent = t("settings.seek.clear_shortcut");
@@ -947,7 +964,7 @@ if (!tauri || !tauri.core) {
       "settings.seek.change_click_modes_with_modifiers.hint",
     );
     $("seek-quick-press-hint").textContent = t("settings.seek.quick_press.hint");
-    $("presets-heading").textContent = t("settings.presets.heading");
+    $("presets-heading-text").textContent = t("settings.presets.heading");
     $("presets-group-caps").textContent = t("settings.presets.group.caps_lock");
     $("presets-group-shift").textContent = t("settings.presets.group.shift");
     $("presets-group-delete").textContent = t("settings.presets.group.delete");
@@ -974,7 +991,7 @@ if (!tauri || !tauri.core) {
     $("conflict-cancel").textContent = t("common.cancel");
     $("conflict-continue").textContent = t("settings.presets.conflict.continue");
 
-    $("hyperkey-heading").textContent = t("settings.hyperkey.heading");
+    $("hyperkey-heading-text").textContent = t("settings.hyperkey.heading");
     $("hyper-label").textContent = t("settings.hyperkey.hyper.label");
     $("include-shift-label").textContent = t("settings.hyperkey.include_shift");
     $("include-shift-hint").textContent = t("settings.hyperkey.include_shift.hint");
@@ -995,7 +1012,7 @@ if (!tauri || !tauri.core) {
       $(id).setAttribute("aria-label", sourceLabel);
     }
 
-    $("korean-heading").textContent = t("settings.korean.heading");
+    $("korean-heading-text").textContent = t("settings.korean.heading");
     $("korean-shift-space-label").textContent = t("settings.korean.shift_space");
     $("korean-shift-space-hint").textContent = t("settings.korean.shift_space.hint");
     $("korean-han-eng-label").textContent = t("settings.korean.han_eng");
@@ -1013,7 +1030,7 @@ if (!tauri || !tauri.core) {
     // 탭 라벨과 같은 문구이므로 `settings.tab.keyboards` 를 재사용한다(다른
     // 탭들은 값이 같아도 별도 `.heading` 키를 뒀지만, 이 탭은 명세 §4.1 이 정한
     // 24개 키 예산 밖에서 문구가 같은 새 키를 늘리지 않기 위한 선택이다).
-    $("keyboards-heading").textContent = t("settings.tab.keyboards");
+    $("keyboards-heading-text").textContent = t("settings.tab.keyboards");
     $("keyboards-fnstate-label").textContent = t("preferences.keyboards.functionKeys.macosStatus.label");
     $("keyboards-open-system-settings-btn").textContent = t("preferences.keyboards.functionKeys.macosStatus.openButton");
     $("keyboards-keyremap-heading").textContent = t("preferences.keyboards.group.keyRemap.title");
@@ -1022,7 +1039,7 @@ if (!tauri || !tauri.core) {
     $("keyboards-keyremap-inherited").textContent = t("preferences.keyboards.keyRemap.inheritedFromCommon");
     $("keyboards-functionkeys-heading").textContent = t("preferences.keyboards.group.functionKeys.title");
 
-    $("general-heading").textContent = t("settings.general.heading");
+    $("general-heading-text").textContent = t("settings.general.heading");
     $("general-language-label").textContent = t("settings.general.language");
     $("general-language-hint").textContent = t("settings.general.language.hint");
     $("launch-on-login-label").textContent = t("settings.general.launch_on_login");
@@ -1068,6 +1085,24 @@ if (!tauri || !tauri.core) {
     $("about-bundle-id-label").textContent = t("settings.general.about.bundle_id");
     $("about-log-path-label").textContent = t("settings.general.about.log_path");
     $("about-settings-path-label").textContent = t("settings.general.about.settings_path");
+  }
+
+  // ⭐ 이슈 #45 — 상세 헤딩 제목 좌측에 해당 탭의 아이콘을 표시한다. 사이드바
+  // 탭 button 안의 인라인 SVG(이슈 #40 ②)를 `cloneNode(true)` 로 복제해 붙인다 —
+  // SVG 마크업을 헤딩에 한 벌 더 복제하는 대신 **사이드바를 아이콘의 단일
+  // 원천으로 유지**해 양쪽이 조용히 갈라지는 drift 를 막는다(앱 아이콘의
+  // 정본-대조 재발 방지 테스트에 해당하는 장치가 탭 아이콘에는 없다).
+  // 사이드바 button 은 정적 HTML 이라 부팅 시점부터 항상 존재한다. 6탭 전부
+  // 부착한다 — Seek·Hyperkey 도 브랜드인 것은 문자열 라벨뿐이고 아이콘은
+  // 번역 대상이 아니므로 예외가 아니다. 가드: 이미 붙은 헤딩은 건너뛴다
+  // (언어 변경 재렌더 때마다 이 함수가 다시 불려도 중복 부착이 없다).
+  function mountTabHeadingIcons() {
+    for (const name of TABS) {
+      const heading = $(`${name}-heading`);
+      if (heading.querySelector("svg")) continue;
+      const icon = $(`tab-${name}`).querySelector("svg.tab-icon");
+      heading.prepend(icon.cloneNode(true));
+    }
   }
 
   function populateSourceSelects(sourceKeys) {
@@ -2209,6 +2244,10 @@ if (!tauri || !tauri.core) {
     const bootstrap = await invoke("settings_bootstrap");
     STRINGS = bootstrap.strings;
     applyStrings();
+    // ⭐ 이슈 #45 — 상세 헤딩의 탭 아이콘. 문자열 재적용(언어 변경) 경로에서도
+    // 함께 불러 헤딩 구조가 통째로 다시 그려진 뒤 아이콘이 사라지지 않게 한다
+    // (함수 안의 가드가 중복 부착을 막는다).
+    mountTabHeadingIcons();
     populateSourceSelects(bootstrap.state.sourceKeys);
     populateTrackpadAreaSelect(bootstrap.state.trackpadAreas);
     populatePresetSelects(bootstrap.state.presetOptions);
