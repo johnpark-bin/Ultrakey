@@ -895,6 +895,77 @@ fn settings_html_에_keyboards_탭_가변_길이_목록_편집기_컨테이너�
     );
 }
 
+/// ⭐ 이슈 #31 회귀 방지 — 편집 중인 미완성 행이 재렌더에 지워지면 안 된다.
+///
+/// 원인: `saveKeyRemapRows()` 가 **완성된 행 집합이 그대로일 때도** `commit()` 을
+/// 불렀고, `commit()` 은 응답 상태로 화면을 다시 그리면서 목록 DOM 을 통째로 새로
+/// 만들었다. 저장 대상이 아닌 미완성 행(from 만 고른 상태)이 그때 사라져, 첫 행이
+/// 생긴 뒤로는 **두 번째 행을 끝까지 만들 수가 없었다** — 양방향 스왑
+/// (`left_option → left_command` + `left_command → left_option`)이 불가능했다.
+///
+/// 이 테스트는 두 방어선이 소스에 남아 있는지 정적으로 확인한다. 실제 DOM 동작은
+/// 이 저장소에 JS 실행 환경이 없어 자동 검증하지 못한다 — 실기 확인으로 보완한다.
+#[test]
+fn settings_html_이_편집_중인_미완성_키변환_행을_재렌더로_지우지_않는다() {
+    let html = read_settings_html();
+
+    // 방어선 ① — 저장할 것이 달라지지 않았으면 commit 하지 않는다.
+    let save_fn = extract_js_function(&html, "function saveKeyRemapRows()");
+    assert!(
+        save_fn.contains("keyRemapRowsEqual"),
+        "saveKeyRemapRows() 에 \"완성된 행 집합이 그대로면 저장하지 않는다\" 가드가 없다"
+    );
+
+    // 방어선 ② — 목록 DOM 을 **조건 없이** 새로 만들지 않는다.
+    let render_fn = extract_js_function(&html, "function renderKeyRemapGroup(");
+    assert!(
+        render_fn.contains("innerHTML"),
+        "renderKeyRemapGroup() 이 목록을 다시 만드는 코드를 잃었다"
+    );
+    assert!(
+        render_fn.contains("keyRemapRowsEqual"),
+        "renderKeyRemapGroup() 이 목록 DOM 을 조건 없이 새로 만든다 — 편집 중인 \
+         미완성 행이 지워진다(이슈 #31)"
+    );
+    let reset_at = render_fn
+        .find("innerHTML")
+        .expect("바로 위에서 존재를 확인했다");
+    let guard_at = render_fn
+        .find("keyRemapRowsEqual")
+        .expect("바로 위에서 존재를 확인했다");
+    assert!(
+        guard_at < reset_at,
+        "renderKeyRemapGroup() 의 목록 초기화가 가드보다 앞선다 — 가드가 무력하다"
+    );
+}
+
+/// `settings.html` 안의 인라인 JS 함수 하나를 중괄호 균형으로 잘라 낸다.
+/// 정적 검사가 "파일 어딘가에 이 문자열이 있다"가 아니라 "**이 함수 안에** 있다"를
+/// 볼 수 있게 하기 위한 최소 도구다.
+fn extract_js_function<'a>(html: &'a str, signature: &str) -> &'a str {
+    let start = html
+        .find(signature)
+        .unwrap_or_else(|| panic!("settings.html 에서 `{signature}` 를 찾지 못했다"));
+    let body_start = html[start..]
+        .find('{')
+        .unwrap_or_else(|| panic!("`{signature}` 뒤에 여는 중괄호가 없다"))
+        + start;
+    let mut depth = 0usize;
+    for (offset, ch) in html[body_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &html[start..body_start + offset + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("`{signature}` 의 중괄호가 닫히지 않는다");
+}
+
 /// Keyboards 탭이 기대하는 두 백엔드 커맨드를 invoke 한다 — `settings_unset`
 /// ("공통 따름" = 키 삭제, §3.3) 과 `open_keyboard_settings`(macOS 설정 열기, §3.5.1).
 #[test]

@@ -986,6 +986,109 @@ mod tests {
         assert!(find_duplicate_from(&rows).is_empty());
     }
 
+    // ── ⭐ 이슈 #31 회귀 방지 — 충돌은 **source 중복만**이다 ──────────────────────
+    //
+    // 사용자 보고: "Left option -> Left Command, Left Command -> Left option 이렇게
+    // 표현하게 하고 싶은데 … 어떤 한 키가 할당이 되면 다른 방향(Source/Target)으로
+    // 설정할 수 없게 동작하는 것 같음." 양방향 스왑은 이 기능의 대표 사용례이고
+    // (이슈 #21 이 참조한 사용자 Karabiner 설정이 정확히 그것이다), **같은 키가 한
+    // 행에서는 from, 다른 행에서는 to 로 나타나는 것은 충돌이 아니다.** 아래 세 층
+    // (검출·합성·쓰기 전 검증) 전부에서 그것을 고정한다.
+
+    /// 양방향 스왑 2행 — from 은 서로 다르다. 중복 검출에 걸리면 안 된다.
+    #[test]
+    fn bidirectional_swap_is_not_a_duplicate_from() {
+        let rows = vec![
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+        ];
+
+        assert!(
+            find_duplicate_from(&rows).is_empty(),
+            "source↔target 교차는 충돌이 아니다: {rows:?}"
+        );
+    }
+
+    /// 한 키가 여러 행의 **to** 로 나타나는 것도 충돌이 아니다 — 충돌 판정은
+    /// `from` 만 본다.
+    #[test]
+    fn repeated_to_is_not_a_duplicate() {
+        let rows = vec![
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::RightOption, SourceKey::LeftCommand),
+        ];
+
+        assert!(find_duplicate_from(&rows).is_empty(), "{rows:?}");
+    }
+
+    /// 같은 `from` 이 두 번이면 — 그리고 그때만 — 충돌이다.
+    #[test]
+    fn only_repeated_from_is_a_duplicate() {
+        let rows = vec![
+            // from 이 겹치는 유일한 쌍.
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+            row(SourceKey::LeftCommand, SourceKey::LeftControl),
+            // 아래 두 행은 위 행들과 to/from 이 교차하지만 from 은 고유하다.
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::LeftControl, SourceKey::LeftCommand),
+        ];
+
+        assert_eq!(find_duplicate_from(&rows), vec![SourceKey::LeftCommand]);
+    }
+
+    /// 합성 — 양방향 스왑 4행(좌우 각각)이 **한 행도 밀려나지 않고** 전부 배열에
+    /// 들어간다. 이슈 #21 이 참조한 사용자 Karabiner 설정 그대로다.
+    #[test]
+    fn compose_keeps_both_directions_of_a_swap() {
+        let dev = device();
+        let rows = vec![
+            row(SourceKey::LeftCommand, SourceKey::LeftOption),
+            row(SourceKey::LeftOption, SourceKey::LeftCommand),
+            row(SourceKey::RightCommand, SourceKey::RightOption),
+            row(SourceKey::RightOption, SourceKey::RightCommand),
+        ];
+        let values = BTreeMap::from([(
+            settings_keys::per_device_key_remap_rows(dev.as_str()),
+            serde_json::to_value(&rows).unwrap(),
+        )]);
+        let settings = PerDeviceSettings::new(&values);
+
+        let composition = compose(&dev, &settings, None);
+
+        assert!(
+            composition.suppressed.is_empty(),
+            "양방향 스왑은 서로를 밀어내지 않는다: {composition:?}"
+        );
+        assert_eq!(composition.mappings.len(), 4, "{composition:?}");
+        for r in &rows {
+            let want = KeyMapping {
+                src: r.from.hid_usage().unwrap(),
+                dst: r.to.hid_usage().unwrap(),
+            };
+            assert!(composition.mappings.contains(&want), "{r:?} 가 빠졌다: {composition:?}");
+        }
+    }
+
+    /// 쓰기 전 검증 — 양방향 스왑 배열은 `DuplicateSrc` 에 걸리지 않는다.
+    #[test]
+    fn validate_accepts_bidirectional_swap() {
+        let mappings = vec![
+            KeyMapping {
+                src: SourceKey::LeftCommand.hid_usage().unwrap(),
+                dst: SourceKey::LeftOption.hid_usage().unwrap(),
+            },
+            KeyMapping {
+                src: SourceKey::LeftOption.hid_usage().unwrap(),
+                dst: SourceKey::LeftCommand.hid_usage().unwrap(),
+            },
+        ];
+
+        assert_eq!(validate(&device().to_match(), &mappings), Ok(()));
+    }
+
+    // 반대 방향(같은 `src` 가 두 번이면 여전히 거부한다 — 충돌 검사 자체를 없앤 것이
+    // 아니다)은 아래 `validate_rejects_duplicate_src` 가 이미 고정하고 있다.
+
     // ── D-17-2 — 원장 직렬화 ────────────────────────────────────────────────────
 
     #[test]
