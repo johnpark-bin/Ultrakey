@@ -573,3 +573,37 @@ fn bundle_icon_목록의_파일이_전부_존재한다() {
         );
     }
 }
+
+/// ⭐ 이슈 #19 증상 B 의 회귀 방지 — `Synthesize Caps Lock Remap` 메뉴 항목이
+/// **저장만 하고 끝나지 않는지**를 본다.
+///
+/// 이전 구현은 `SettingsStore::set` 만 부르고 `AppState::presets`(탭 스레드가 보는
+/// 정본)도, `Engine::reconfigure`(경로 B 재적용)도 건드리지 않았다. 그래서 이 항목을
+/// 눌러도 `caps lock → F18` 커널 매핑이 그대로 남았다 — 실측 로그가 토글 직후의 경로 B
+/// 재적용을 `count=1` 로 기록한다. `architecture.md` §6.1 이 이 스위치에 부여한 역할은
+/// "켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다" 이므로, 엔진 반영이 없으면 스위치가
+/// 제 역할을 못 한다.
+///
+/// ⚠️ 정적 텍스트 검사다 — 이 파일의 다른 테스트들과 같은 한계를 갖는다(호출이
+/// 존재한다는 것만 확인하고 실제 실행 순서까지는 보지 않는다). 그래도 "저장만 하는
+/// 핸들러로 되돌아가는" 회귀는 정확히 잡는다.
+#[test]
+fn synthesize_caps_lock_remap_토글이_엔진에도_반영된다() {
+    let main_rs = read_main_rs();
+    let start = main_rs
+        .find("fn on_menu_toggle_synthesize_caps_lock_remap")
+        .expect("on_menu_toggle_synthesize_caps_lock_remap 이 없다");
+    // 다음 최상위 `fn ` 선언 전까지를 이 함수의 본문으로 본다.
+    let rest = &main_rs[start..];
+    let end = rest[1..].find("\nfn ").map(|i| i + 1).unwrap_or(rest.len());
+    let body = &rest[..end];
+
+    assert!(
+        body.contains("reconfigure_engine"),
+        "메뉴 토글이 reconfigure_engine 을 부르지 않는다 — 경로 B 매핑이 설정과 어긋난 채 남는다"
+    );
+    assert!(
+        body.contains("synthesize_caps_lock_remap = next"),
+        "메뉴 토글이 AppState::presets 정본을 갱신하지 않는다 — 탭 스레드가 옛 값을 계속 본다"
+    );
+}
