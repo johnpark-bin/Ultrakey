@@ -15,6 +15,7 @@
 | 앱 번들 아이콘 | `apps/ultrakey-app/icons/{32x32,64x64,128x128,128x128@2x,icon}.png` · `icon.icns` |
 | 메뉴바 template | `apps/ultrakey-app/icons/menubar-template.png` (36×36) |
 | 온보딩 모달 | `apps/ultrakey-app/ui/index.html` 의 인라인 `<svg class="app-icon">` |
+| ⚠️ 환경설정 탭 아이콘 | `apps/ultrakey-app/ui/settings.html` 의 인라인 `<svg class="tab-icon">` 6개 — **정본 SVG 의 사본이 아니다**(아래 §1.1) |
 | README | 위 `128x128@2x.png` 를 그대로 참조한다 |
 
 ```sh
@@ -25,6 +26,16 @@ cargo test -p ultrakey-app --test frontend_wiring   # 정본과 사용처 정합
 ⚠️ **디렉터리 이름이 `assets/icon/` 이 아니라 `assets/app-icon/` 인 데는 이유가 있다.** macOS 사용자의 전역 `.gitignore` 에는 관례적으로 클래식 Mac OS 아이콘 리소스 파일용 `Icon` 패턴이 들어 있다. git 은 macOS 에서 기본적으로 대소문자를 구분하지 않으므로(`core.ignorecase`), 그 패턴이 **`assets/icon/` 디렉터리를 통째로 무시해** 정본 SVG 가 조용히 커밋되지 않는다(실측). 이름을 되돌리지 마라.
 
 ⭐ **아이콘을 바꾸고 싶으면 PNG 를 직접 편집하지 말고** 정본 SVG 또는 스크립트 상단의 "디자인 상수"를 고치고 스크립트를 다시 돌린다.
+
+### 1.1 ⚠️ 환경설정 탭 아이콘은 이 파이프라인 밖이다 (이슈 #40 ②)
+
+`settings.html` 의 탭 아이콘 6개는 **앱 아이콘이 아니다** — 앱을 가리키는 하나의 마크가 아니라 탭 여섯 개를 서로 구별하는 별개의 그림이라, 정본 `ultrakey.svg` 에서 파생될 수 있는 것이 아니다. 그래서 이 표의 다른 항목들과 달리:
+
+- **정본 SVG 와 정합 검사를 하지 않는다.** `index_html_의_아이콘_path는_정본_svg_와_같다` 같은 테스트의 대상이 아니다 — 같아야 할 이유가 없다.
+- **`generate-icons.sh` 가 만들지 않는다.** WebView 가 벡터를 그대로 그리므로 래스터 산출물이 아예 없다. 스크립트에 넣을 것이 없다.
+- **"수작업 PNG 금지" 규약은 그대로 지켜진다.** 이 규약이 막는 것은 *재현 불가능한 래스터가 저장소에 들어오는 것*인데, 여기서는 PNG 가 한 장도 생기지 않는다.
+
+⭐ 공유하는 것은 파이프라인이 아니라 **형태 어휘**다 — `viewBox` 24×24 · `fill="none"` · `stroke-width="2"` · 라운드 캡(§2 가 정본 SVG 에 대해 기술한 값 그대로). 색은 하드코딩하지 않고 `stroke: currentColor` 만 쓴다: 메뉴바 template 이 알파만 남기고 macOS 에 색을 맡기는 것과 같은 발상을, WebView 에서는 `color-scheme: light dark` 의 전경색을 상속하는 방식으로 한다. 설계 근거 전문은 [`../spec/preferences-ui.md`](../spec/preferences-ui.md) §3.1 "탭 아이콘".
 
 정합은 테스트가 지킨다 — `index_html_의_아이콘_path는_정본_svg_와_같다`(온보딩 인라인 사본이 정본과 갈라지는 것), `setup_tray_는_전용_메뉴바_template_자산을_쓴다`, `bundle_icon_목록의_파일이_전부_존재한다`.
 
