@@ -21,6 +21,7 @@ pub mod lifecycle;
 pub mod path_b;
 pub mod state;
 pub mod system_hooks;
+pub mod text_output;
 pub mod trace;
 pub mod watchdog;
 
@@ -33,4 +34,5 @@ pub use path_b::{
 };
 pub use state::SharedState;
 pub use system_hooks::SystemHooks;
+pub use text_output::{plan_text_output, TextOutputPlan};
 pub use watchdog::Watchdog;

@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
+use ultrakey_core::flags::EventFlags;
 use ultrakey_core::keycode::KeyCode;
 use ultrakey_platform::text_input_source::LayoutSnapshot;
 
@@ -55,6 +56,24 @@ impl ModifierCombo {
             ModifierCombo::Shift => 0x02,
             ModifierCombo::Option => 0x08,
             ModifierCombo::ShiftOption => 0x0A,
+        }
+    }
+
+    /// 합성 키 이벤트에 얹을 `CGEventFlags` 비트(`localization-and-input-sources.md`
+    /// §3.2.2 (i)).
+    ///
+    /// ⭐ `uc_key_modifiers` 는 `UCKeyTranslate` 를 부르는 **입력**(Carbon
+    /// `modifierKeyState` 규약)이고, 이 메서드는 그 결과로 합성할 `CGEvent` 에 얹는
+    /// **출력**(`CGEventFlags` 비트마스크)이다 — 두 값의 인코딩이 다르므로 서로
+    /// 바꿔 쓸 수 없다. 이 크레이트는 `ultrakey-engine` 이 §3.2.2 (i) 경로에서 실제
+    /// 키 이벤트를 합성할 때 쓸 flags 를 여기서 제공한다(호출자는 `ultrakey-engine::
+    /// text_output::plan_text_output`).
+    pub fn event_flags(self) -> EventFlags {
+        match self {
+            ModifierCombo::None => EventFlags::NONE,
+            ModifierCombo::Shift => EventFlags::SHIFT,
+            ModifierCombo::Option => EventFlags::ALTERNATE,
+            ModifierCombo::ShiftOption => EventFlags::SHIFT | EventFlags::ALTERNATE,
         }
     }
 }
@@ -589,5 +608,18 @@ mod tests {
     fn resolver_default_starts_empty() {
         let resolver = LayoutResolver::default();
         assert!(resolver.current().is_empty());
+    }
+
+    // 10. ⭐ ModifierCombo::event_flags — §3.2.2 (i) 이 합성 이벤트에 얹을 실제
+    //     CGEventFlags 비트. uc_key_modifiers(UCKeyTranslate 입력 인코딩)와는 별개다.
+    #[test]
+    fn event_flags_maps_each_combo_to_expected_bits() {
+        assert_eq!(ModifierCombo::None.event_flags(), EventFlags::NONE);
+        assert_eq!(ModifierCombo::Shift.event_flags(), EventFlags::SHIFT);
+        assert_eq!(ModifierCombo::Option.event_flags(), EventFlags::ALTERNATE);
+        assert_eq!(
+            ModifierCombo::ShiftOption.event_flags(),
+            EventFlags::SHIFT | EventFlags::ALTERNATE
+        );
     }
 }

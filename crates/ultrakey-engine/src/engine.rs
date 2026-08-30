@@ -23,6 +23,8 @@ use ultrakey_core::gate::{AppGate, AtomicAppGate};
 use ultrakey_core::settings::EngineConfig;
 use ultrakey_core::time::Millis;
 
+use ultrakey_layout::LayoutTable;
+
 use ultrakey_platform::event::{CgEventRef, SyntheticEvent};
 use ultrakey_platform::event_tap::{
     EventTap, TapAction, TapCallback, TapCreateError, TapHealthProbe, TapProxy,
@@ -40,6 +42,7 @@ use crate::lifecycle::{
 use crate::path_b::{GlobalD1Migration, HidutilGlobalMigration, LedgerStore, PathBManager};
 use crate::state::SharedState;
 use crate::system_hooks::SystemHooks;
+use crate::text_output::{plan_text_output, TextOutputPlan};
 use crate::trace::{self, TapTrace, TraceDrainHandle, TraceEmit, TraceRing};
 use crate::watchdog::Watchdog;
 
@@ -391,10 +394,38 @@ fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
     (result, before, after)
 }
 
+/// `Effect::TypeChar` 를 §3.2.2 계획대로 down/up 한 쌍의 `SyntheticEvent` 로 만든다.
+///
+/// ⚠️ **하드웨어 shift 잔류 위험(`localization-and-input-sources.md` §3.2.2,
+/// F-08.11)**: 이 함수가 호출되는 시점은 quick press 판정이 막 끝난 직후이고,
+/// 실측(`ULTRAKEY_TRACE_TAP=1` + `tap_listen` 도구)으로 확인한 이벤트 순서는
+/// "우리가 합성한 문자 이벤트가 먼저 나가고, 원본 shift 의 keyUp 이 그 뒤에
+/// 통과한다"이다 — 즉 이 문자를 내보내는 그 순간에도 시스템의 **하드웨어**
+/// modifier 상태는 아직 shift 눌림이다. (i) 경로가 `ModifierCombo::None`(예:
+/// US 배열의 `[`)인 문자를 낼 때, 이 이벤트 자체의 `flags` 필드는 비어 있지만
+/// `CGEvent::new_keyboard_event` 가 이벤트 소스의 그 순간 HID 상태를 flags 에
+/// 반영할 수 있다. 표준 텍스트 입력 경로(이벤트 flags 를 보는 쪽)는 문제가
+/// 없지만, 하드웨어 상태를 별도로 조회하는 앱에서는 `{` 가 나올 수 있다
+/// `(추정 — 실기기로 확인하지 못했다)`. 그래서 `flags` 는 **항상
+/// `combo.event_flags()` 로 명시적으로 덮어써야** 한다 — 아래 두 호출 모두 그렇게
+/// 한다(`SyntheticEvent::keyboard` 가 매 호출마다 `CGEventSetFlags` 를 부른다).
+fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
+    match plan_text_output(table, c) {
+        TextOutputPlan::KeyStroke { keycode, flags } => (
+            SyntheticEvent::keyboard(keycode, true, flags),
+            SyntheticEvent::keyboard(keycode, false, flags),
+        ),
+        TextOutputPlan::UnicodeString(c) => {
+            (SyntheticEvent::unicode(c, true), SyntheticEvent::unicode(c, false))
+        }
+    }
+}
+
 /// `Outcome::effects()` 실행 — 콜백 **안**에서 부른다(`proxy` 가 있다).
 ///
-/// `Effect::TypeChar` 는 `SyntheticEvent::unicode` 로 down+up 한 쌍을 합성해
-/// `post_to_tap` 으로 낸다(architecture.md §6.4 P9). `Effect::OpenSeek` 은 M3(F-01)
+/// `Effect::TypeChar` 는 [`type_char_events`]([`plan_text_output`] 을 거친다)로
+/// down+up 한 쌍을 합성해 `post_to_tap` 으로 낸다(architecture.md §6.4 P9,
+/// `localization-and-input-sources.md` §3.2.2). `Effect::OpenSeek` 은 M3(F-01)
 /// 범위 — 위임 지시서가 명시적으로 요구한 대로 `tracing::info!` 로만 남기고
 /// 아무것도 하지 않는다.
 ///
@@ -408,16 +439,21 @@ fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
 /// `(result, before, after)` 를 반환한다. 트레이스가 꺼져 있어도 이 튜플은 계산된다
 /// (경로 C 실행 자체의 일부이지 계측 전용 비용이 아니다) — 호출자가 `trace_enabled()`
 /// 일 때만 계측 레코드에 채워 넣는다.
-fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) -> Option<(u8, u8, u8)> {
+///
+/// `table` 은 호출자가 콜백 진입 시 `cfg` 를 읽는 바로 그 자리에서 함께 한 번만
+/// `st.shared.layout.current()` 로 읽어 넘긴다 — `ArcSwap` 로드라 락·힙 할당이
+/// 없다(`docs/dev/architecture.md` §2.2).
+fn apply_effects_in_tap(outcome: &Outcome, table: &LayoutTable, proxy: TapProxy) -> Option<(u8, u8, u8)> {
     let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
             Effect::ToggleCapsLock => path_c = Some(toggle_caps_lock_via_path_c()),
             Effect::TypeChar(c) => {
-                if let Some(down) = SyntheticEvent::unicode(*c, true) {
+                let (down, up) = type_char_events(table, *c);
+                if let Some(down) = down {
                     down.post_to_tap(proxy);
                 }
-                if let Some(up) = SyntheticEvent::unicode(*c, false) {
+                if let Some(up) = up {
                     up.post_to_tap(proxy);
                 }
             }
@@ -434,16 +470,17 @@ fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) -> Option<(u8, u8, u
 /// 콜백 밖 경로(타이머 만료, `ForceResetState` 등)는 계측 레코드를 만들지 않는다
 /// (이슈 #19 계측은 탭 콜백 경로의 `arbitrate` 직후만 다룬다) — 그래도
 /// `apply_effects_in_tap` 과 시그니처를 맞춰 둔다. 호출자는 대부분 결과를 버린다.
-fn apply_effects_outside_tap(outcome: &Outcome) -> Option<(u8, u8, u8)> {
+fn apply_effects_outside_tap(outcome: &Outcome, table: &LayoutTable) -> Option<(u8, u8, u8)> {
     let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
             Effect::ToggleCapsLock => path_c = Some(toggle_caps_lock_via_path_c()),
             Effect::TypeChar(c) => {
-                if let Some(down) = SyntheticEvent::unicode(*c, true) {
+                let (down, up) = type_char_events(table, *c);
+                if let Some(down) = down {
                     down.post();
                 }
-                if let Some(up) = SyntheticEvent::unicode(*c, false) {
+                if let Some(up) = up {
                     up.post();
                 }
             }
@@ -500,12 +537,16 @@ fn on_tap_event(
     // `ArcSwap::load_full` 은 원자적 포인터 로드 + `Arc` 참조 카운트 증가일 뿐이라
     // 힙 할당·락이 없다 — 콜백 임계 경로에서 불러도 안전하다(architecture.md §2.2).
     let cfg = st.shared.config.load_full();
+    // ⭐ F-14(B) — `Effect::TypeChar` 가 §3.2.2 (i) 역방향 탐색에 쓸 현재 레이아웃
+    // 표. `cfg` 를 읽는 이 자리에서 함께 한 번만 읽는다 — `LayoutResolver::current`
+    // 도 `ArcSwap` 로드라 위와 같은 이유로 콜백 임계 경로에서 안전하다.
+    let table = st.shared.layout.current();
 
     // 0-c: 앱별 비활성화 게이트(F-10, 계층 0, §3-f).
     if st.shared.gate.is_remapping_disabled() {
         let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
-        apply_effects_in_tap(&reset, proxy);
+        apply_effects_in_tap(&reset, &table, proxy);
         return TapAction::Pass;
     }
 
@@ -513,7 +554,7 @@ fn on_tap_event(
     if st.secure_input.is_enabled() {
         let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
-        apply_effects_in_tap(&reset, proxy);
+        apply_effects_in_tap(&reset, &table, proxy);
         return TapAction::Pass;
     }
 
@@ -548,7 +589,7 @@ fn on_tap_event(
     }
 
     apply_outcome_in_tap(&outcome, proxy);
-    let path_c = apply_effects_in_tap(&outcome, proxy);
+    let path_c = apply_effects_in_tap(&outcome, &table, proxy);
 
     // ⭐ 이슈 #19 진단 계측 — `arbitrate` 호출 직후(위)가 아니라 여기, effects 적용
     // 결과까지 알고 난 뒤에 레코드를 만든다(경로 C 실측을 한 레코드에 함께 담기
@@ -608,14 +649,15 @@ fn on_tap_event(
 
 /// quick press 타이머 만료 처리 — 탭 콜백이 아니므로 로깅 제약이 없다.
 fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
-    let outcome = {
+    let (outcome, table) = {
         let mut st = cell.borrow_mut();
         let cfg = st.shared.config.load_full();
+        let table = st.shared.layout.current();
         let now = Millis(st.start.elapsed().as_millis() as u64);
-        st.arbiter.on_tick(&cfg, now)
+        (st.arbiter.on_tick(&cfg, now), table)
     };
     apply_outcome_outside_tap(&outcome);
-    apply_effects_outside_tap(&outcome);
+    apply_effects_outside_tap(&outcome, &table);
 }
 
 /// `EngineCommand::RecoverTap` — §3-a `Disabled` 전이의 재활성화 시도.
@@ -785,13 +827,14 @@ fn drain_commands(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             EngineCommand::ForceResetState => {
-                let outcome = {
+                let (outcome, table) = {
                     let mut st = cell.borrow_mut();
                     let cfg = st.shared.config.load_full();
-                    st.arbiter.force_reset(&cfg)
+                    let table = st.shared.layout.current();
+                    (st.arbiter.force_reset(&cfg), table)
                 };
                 apply_outcome_outside_tap(&outcome);
-                apply_effects_outside_tap(&outcome);
+                apply_effects_outside_tap(&outcome, &table);
                 tracing::info!(
                     "절전/잠금/Secure Input 대응 — 상태를 강제로 리셋했다(stuck modifier 방지)"
                 );

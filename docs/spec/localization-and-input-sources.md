@@ -131,6 +131,11 @@
 
 **채택 원칙**: 출력이 **문자 그 자체**(`(`, `)`, `/`)라면 (i)를 우선 시도하고, 현재 레이아웃에서 그 문자를 만드는 조합을 찾지 못하면 (ii)로 폴백한다(§5 엣지 케이스). 출력이 **동일 키에 다른 modifier 를 얹은 단축키 합성**(예: paste → paste w/o formatting)이라면, 애초에 역방향 탐색이 필요 없다 — 이미 알고 있는 물리 키(예: `V`, `kVK_ANSI_V`)에 `CGEventSetFlags` 로 목표 modifier 비트를 추가해 재주입하면 되며, 이는 `F-05`(Hyperkey)의 modifier 합성 방식과 동일한 패턴이다. 즉 (ii)는 **단축키 출력에는 원칙적으로 쓰지 않는다.**
 
+> 📌 **구현 갱신 (2026-08-30, 이슈 #32) — 이 채택 원칙이 한동안 지켜지지 않았다.**
+> M2-2(PR #17)가 넣은 `Effect::TypeChar` 구현은 **(ii)만** 했다 — `CGEventKeyboardSetUnicodeString` 에 keycode 0 짜리 이벤트. (i)에 필요한 역방향 테이블(`ultrakey-layout::LayoutTable::keycode_for_char`)은 **만들어져 있고 `(`·`)` 에 대한 레이아웃 독립 테스트까지 있었는데, 부르는 곳이 한 군데도 없었다.** 이 저장소가 이미 세 번 겪은 결함 계열 — *입력 쪽에 있는 대칭이 출력 쪽에 없다*(PR #23) — 의 네 번째다.
+> F-08.11(`Quick press left or right shift to input corresponding:`)이 실기기에서 동작하지 않는다는 사용자 보고가 이것을 드러냈다. 실기기 로그로 확정한 것: 중재 엔진은 `Effect::TypeChar` 를 정확히 냈고(`ULTRAKEY_TRACE_TAP=1` 계측), 합성된 `CGEvent` 도 유니코드 `(`/`)` 를 싣고 세션 이벤트 스트림에 실제로 흘렀다(`examples/tap_listen`). 즉 결함은 **무엇을 내보내는가**가 아니라 **어떤 모양으로 내보내는가**였다.
+> 이제 `ultrakey-engine::text_output::plan_text_output` 이 (i)를 먼저 시도하고 실패할 때만 (ii)로 떨어진다 — §8 수용 기준의 마지막 항목이 요구하는 그대로다.
+
 #### 3.2.3 입력 판정·출력 생성 규칙 표
 
 | 상황 | 키코드로 판정 | 문자로 출력? | 사용 API | 근거 |
