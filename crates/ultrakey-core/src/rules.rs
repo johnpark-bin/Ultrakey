@@ -134,6 +134,12 @@ pub struct RuleTable {
     /// F-16(M?). `RuleId` 오름차순으로 정렬된 상태로 주어진다고 전제한다
     /// (`ultrakey-korean::KoreanSettings::to_rules` 가 정렬해서 반환한다).
     pub korean_rules: Vec<KoreanRule>,
+    /// ⭐ F-01 — `Remap key to Seek:` 소스 키(명세 §4). `None` 이 `-`(미설정)이고
+    /// 출고 기본값이다. 이 키의 down/up 은 `Effect::SeekTriggerDown`/`SeekTriggerUp`
+    /// 으로 올라가며, **계층 2(hyper)·계층 3(preset)보다 먼저** 평가된다 —
+    /// `key-remapping-engine.md` §3-b "동일 소스 키 중복 배정 방지" 가 "Seek(화면 탐색
+    /// 전용 모드 진입)은 다른 어떤 리매핑보다 명백히 상위 의도" 라고 못박은 그대로다.
+    pub seek_trigger: Option<KeyCode>,
 }
 
 impl RuleTable {

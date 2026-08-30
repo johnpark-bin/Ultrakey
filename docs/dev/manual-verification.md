@@ -2075,3 +2075,149 @@ grep -E '검색 바 위치를 저장했다|ULTRAKEY_OVERLAY_DEMO —' ~/Library/
 | TextEdit | 검증용으로 새 문서를 만들어 전체화면으로 두었다가 **전체화면 해제 → 저장하지 않고 닫기 → 종료**까지 완료 |
 | 검증용 앱 프로세스 | `ULTRAKEY_OVERLAY_DEMO`/`ULTRAKEY_OVERLAY_SPIKE` 로 띄운 인스턴스는 전부 종료했다 |
 | 키체인 · 시스템 설정 · Karabiner | **건드리지 않았다** |
+
+---
+
+## 항목 10 — F-01 Seek 활성화·세션 상태 머신 (M3 3차 / 이슈 #38 신설)
+
+> 대상 명세: `docs/spec/seek-activation-and-session.md` · 실측 근거:
+> `docs/dev/seek-ocr-latency-spike.md`(S-1·S-6) · `docs/dev/seek-overlay-render-spike.md`(R-4)
+> 이 항목이 확인하는 것은 **세션이 실제로 열리고 닫히는가**와 **S-6 대로 검출을
+> 기다리지 않는가** 둘이다. 둘 다 단위 테스트로는 원리적으로 확인할 수 없다.
+
+### ⚠️ 10-0. 사전 확인 — 어느 키를 눌러야 하는가
+
+⭐ **항목 6 의 `6-0-bis` 표를 그대로 적용한다.** 이 기능도 caps lock 을 쓰므로
+Karabiner 상태에 따라 눌러야 할 물리 키가 정반대로 바뀐다.
+
+```sh
+# 1 이상이면 Karabiner 가 실제로 키를 가로채고 있다.
+ioreg -c IOHIDDevice -r -d1 | grep -c "Karabiner DriverKit VirtualHIDKeyboard"
+# 사용자 Karabiner 매핑 (⛔ 읽기만 한다. 절대 바꾸지 않는다)
+python3 -c "import json,os;d=json.load(open(os.path.expanduser('~/.config/karabiner/karabiner.json')));print(d['profiles'][0]['simple_modifications'])"
+hidutil property --get UserKeyMapping     # 경로 B(D-1) 잔재
+```
+
+### ⭐ 10-0-bis. 사람이 없을 때 — `key_poke` 로 주입한다
+
+⛔ **`key_poke` 는 `CGEventPost(HIDEventTap)` 으로 주입한다 — 즉 Karabiner 의 가상
+HID 계층보다 **위**다.** 그래서 `0x39`(caps lock)를 주입하면 Karabiner 의
+`caps_lock ↔ left_control` 맞바꿈과 **무관하게** 탭에 caps lock 으로 도착한다.
+이것이 이 항목을 자동으로 수행할 수 있게 해 주는 열쇠다.
+
+⛔ **그 대신 이 도구로는 확인되지 않는 것**(항목 6 과 같다): HID 층 아래는 지나지
+않으므로 **물리 caps lock 의 래칭 동작**(누를 때만 `flagsChanged` 가 오고 뗄 때는
+오지 않는 것, §5 #20)은 재현되지 않는다. 아래 결과의 hold 모드는 **주입된 두 번의
+`flagsChanged`** 로 얻은 것이지, 물리 caps lock 을 실제로 누르고 뗀 것이 아니다.
+
+```sh
+./scripts/build-signed.sh
+open -n target/universal-apple-darwin/release/bundle/macos/Ultrakey.app \
+  --env ULTRAKEY_SEEK_TRACE=1
+cargo build -p ultrakey-platform --release --example key_poke
+```
+
+⚠️ **세션이 열린 채로 두지 마라.** 세션 중에는 계층 1 이 **모든 키 이벤트를
+소비**하므로(§3.1) 키보드가 통째로 먹통이 된다. 모든 주입 시퀀스는 반드시
+`tap:0x35`(Esc)나 확정으로 끝나야 하고, 막히면 앱을 죽이면(`pkill -f Ultrakey.app`)
+탭이 함께 풀린다.
+
+### 10-a. 활성화 경로 3종
+
+설정은 `Seek` 탭(+`Presets` 탭)에서 하거나, 검증용으로 저장소를 직접 편집한다
+(⛔ **끝나면 baseline 으로 되돌리고 대조까지 한다** — 아래 "검증 후 되돌린 것").
+
+| 경로 | 설정 | 주입 |
+| :--- | :--- | :--- |
+| 1 전역 단축키 | `seek.toggleShortcut.code=Space` · `.modifiers=0x80000`(⌥) | `fc:0x3A:0x80000 tap:0x31 fc:0x3A:0x0` |
+| 2 키 리매핑 | `seek.remapKey=CapsLock` · `seek.executeOnClose` | `fc:0x39:0x10000` (다운), 다시 `fc:0x39:0x10000` (업) |
+| 3 quick press | `seek.remapKey=-` · `presets.capsQuickPress.enabled=true` · `.action=Seek` | `fc:0x39:0x10000 sleep:120 fc:0x39:0x0` |
+
+### 10-b. 판정은 로그로 한다
+
+```sh
+grep "ultrakey_app::seek" ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+| 로그 줄 | 무엇을 증명하는가 |
+| :--- | :--- |
+| `⭐ Seek 세션을 열었다 path=… mode=… elapsed_ms=… matches=0` | ⭐ **S-6** — 검출을 기다리지 않고 **후보 0개로 즉시** 열린다 |
+| `⭐ 증분 수신 display_id=… candidates=… arrived_at_ms=…` | ⭐ **S-1** — 디스플레이별로 **하나씩** 도착한다 |
+| `키 입력 query=… matches=… state=…` | 타이핑으로 좁혀진다 |
+| `선택 이동 index=… text=…` | ↑↓Tab⇧Tab`;` 순환 |
+| `⭐ 확정 text=… point=… modifiers=… query=…` | F-04 로 넘길 `ConfirmedMatch`(modifiers 스냅샷 포함) |
+| `세션 종료 reason=…` | `Confirmed`/`Cancelled`/`Toggled`/`ReleasedWithoutMatch` |
+
+### ⛔ 10-c. 이 절차로도 확인할 수 **없는** 것
+
+| 항목 | 왜 |
+| :--- | :--- |
+| **물리 caps lock 의 래칭** | `key_poke` 가 HID 층 위에서 주입한다(10-0-bis). 이 기기는 Karabiner 가 caps lock 을 가로채고 있어 물리 caps lock 자체가 탭에 도달하지 않는다 — ⛔ 사용자 설정을 바꾸지 않는다 |
+| **하위 앱에 문자가 도달하지 않는가** | 텍스트 필드를 띄우고 사람이 확인해야 한다. 중재기가 `Disposition::Consume` 을 낸다는 것은 단위 테스트(`session_active_consumes_key_events_and_routes_them`)가 덮는다 |
+| **F-04 실제 클릭** | 범위 밖. `NullClickExecutor` 가 요청만 기록한다 |
+| **Secure Input 중 동작**(§5 #1) · **세션 중 앱/Space 전환**(§5 #5) | 명세가 `(추정)` 으로 남긴 항목이고 이번 범위 밖 |
+| **Retina(배율 2.0)** | 이 기기의 두 디스플레이가 모두 `backing_scale=1.0`(F-02·F-03 스파이크와 같은 한계) |
+
+### 📌 실측 결과 (2026-08-31, 이슈 #38 / 브랜치 `feat/seek-session`)
+
+기기·배치는 F-02·F-03 스파이크와 같다(M4 Pro / 3840×1600 @ `(0,0)` + 2560×1440 @
+`(-2560,0)`, 둘 다 `backing_scale=1.0`). 전부 **서명된 `.app` 을 `open` 으로 기동**한
+결과다. 키는 `key_poke` 로 주입했다(10-0-bis 의 한계가 그대로 적용된다).
+
+#### ⚠️ 관찰 방법과 그 한계 — 먼저 읽어라
+
+- 사전 확인 결과 **Karabiner 가 켜져 있었다**(`VirtualHIDKeyboard` = 1, 프로필이
+  `caps_lock ↔ left_control` 을 맞바꾼다). ⛔ **사용자 설정은 건드리지 않았다.**
+  대신 `key_poke` 가 HID 층 **위**에서 주입하므로 caps lock 이 그대로 탭에 도착했다.
+- `hidutil property --get UserKeyMapping` 은 검증 전·중·후 모두 `( )` 였다.
+
+#### ✅ 통과한 것
+
+| 절차 | 결과 |
+| :--- | :--- |
+| 10-a 경로 1 전역 단축키 | ✅ **통과.** `path=GlobalShortcut mode=Toggle elapsed_ms=0.354` |
+| 10-a 경로 2 키 리매핑 (hold) | ✅ **통과.** `path=RemapKey mode=Hold elapsed_ms=0.149` |
+| 10-a 경로 2 키 리매핑 (toggle) | ✅ **통과.** `path=RemapKey mode=Toggle`, 재입력 시 `reason=Toggled` |
+| 10-a 경로 3 quick press caps lock | ✅ **통과.** `path=QuickPressCapsLock mode=Toggle elapsed_ms=0.162` |
+| ⭐ **S-6 즉시 열림** | ✅ **통과.** 네 경로 전부 `elapsed_ms < 0.4`, `matches=0` — 검출 완료(≈780~1120 ms)를 **기다리지 않는다** |
+| ⭐ **S-1 증분 수신** | ✅ **통과.** `display_id=3 candidates=84 arrived_at_ms=553` → `display_id=2 candidates=106 arrived_at_ms=901`. 디스플레이별로 따로 도착한다 |
+| 타이핑으로 좁혀짐 | ✅ **통과.** `query=s matches=85` → `query=se matches=24` |
+| ↓ 순환 | ✅ **통과.** `선택 이동 index=Some(1)` → `Some(2)` |
+| `;` 순환(`Semicolon highlights next match` ☑) | ✅ **통과.** `Some(2)` → `Some(3)` |
+| Tab 정방향 / ⇧Tab 역방향 | ✅ **통과.** `Some(1)` → `Some(2)` → (⇧Tab) `Some(1)` |
+| hold 릴리즈 = 확정 | ✅ **통과.** `⭐ 확정 text=… modifiers=536936448 query=se` → `세션 종료 reason=Confirmed` |
+| Esc 취소 | ✅ **통과.** `세션 종료 reason=Cancelled`, 확정 없음 |
+| toggle 재입력이 닫는다(§3.3) | ✅ **통과.** 리매핑 키·전역 단축키 양쪽 모두 `reason=Toggled` |
+| ⭐ 오버레이가 실제로 그려진다 | ✅ **통과.** 스크린샷에 매치 하이라이트와 검색 바 → 선택 매치 **연결선**이 보인다 |
+| 오버레이가 포커스를 뺏지 않는다 | ✅ **통과.** 창 3개 전부 `can_become_key=Some(false)` · `level=Some(1000)` · `collection_behavior=Some(337)` |
+| ⭐ F-04 경계 | ✅ **통과.** `ConfirmedMatch` 가 좌표(`point_x/point_y`)와 **확정 순간 modifier 스냅샷**(F-04 §5 #10)을 싣고 나온다. 실제 클릭은 `NullClickExecutor` 가 받는다(F-04 범위) |
+
+증거 스크린샷: [`screenshots/issue-38-seek-session-overlay.png`](screenshots/issue-38-seek-session-overlay.png)
+
+#### 🐛 이 검증이 **찾아낸 결함 3건** — 전부 단위 테스트가 통과하는 상태에서 나왔다
+
+| # | 증상 | 원인 | 고친 것 |
+| :--- | :--- | :--- | :--- |
+| 1 | ⭐ **전역 단축키로 연 세션이 같은 단축키로 닫히지 않는다** — 열린 채 남아 **키보드 전체가 먹통**이 된다 | 세션 중에는 계층 1 이 모든 키를 소비하므로(§3.1) 그 조합이 **윈도 서버의 핫키 디스패치까지 도달하지 못한다.** `global-hotkey` 는 두 번째 입력을 영영 보지 못한다. 리매핑 키 경로는 트리거 판정이 계층 1 **앞**이라 이 문제가 없었다 | `SeekConfig::global_shortcut` 에 조합을 들고, 세션 중 키 라우팅에서 직접 재입력을 알아본다 |
+| 2 | ⭐ 고치고 나니 이번엔 **세션이 열리는 순간 스스로 닫혔다** | 같은 물리 누름 하나가 **두 경로로** 관측된다 — ① 시스템 핫키(세션을 연다) ② 계층 1 이 넘겨 주는 같은 키 이벤트. ②를 재입력으로 오인했다 | `awaiting_shortcut_release` 빗장 — 그 키가 **한 번 떼어질 때까지** 재입력 판정을 잠근다. ⛔ 시간 창으로 막지 않았다(임계값이 또 하나의 `(미확정)` 상수가 되고 느린 기기에서 다시 깨진다) |
+| 3 | 검증 로그가 한 칸씩 밀려 읽힌다 — 첫 글자를 친 줄에 `query=`(빈 값) | 계측이 `handle_key` **앞**에서 찍혔다 | 뒤로 옮겼다 |
+
+⭐ **1·2 는 실기기 검증이 아니면 찾지 못했을 종류다** — 상태 머신 단독으로는 "핫키
+이벤트가 오지 않는다"도 "같은 누름이 두 경로로 온다"도 표현되지 않기 때문이다.
+셋 다 회귀 테스트를 함께 넣었다(`global_shortcut_re_entry_closes_toggle_session` 외 2종).
+
+#### ⬜ 수행하지 못한 것 — 통과했다고 적지 않는다
+
+10-c 표 그대로다. 특히 **물리 caps lock 을 사람이 실제로 누른 검증은 하지 않았다** —
+이 기기에서는 Karabiner 가 그 키를 가로채고 있고, 그 설정을 바꾸는 것은 작업 경계
+밖이다.
+
+#### 검증 후 되돌린 것
+
+| 항목 | 상태 |
+| :--- | :--- |
+| **앱 설정 저장소**(`settings.json`) | ⭐ 검증용으로 `seek.*` 5개 키와 `presets.capsQuickPress.action` 을 넣었다가, **baseline 사본으로 되돌리고 `diff` 로 글자 그대로 일치함을 확인**했다. 앱을 다시 기동·종료한 뒤에도 그대로였다 |
+| **화면 기록 권한** | ⚠️ **바꾸지 않았다.** 시작 시점에 이미 부여돼 있었고(F-03 검증 때부터) 끝날 때도 그대로다 — 부여도 회수도 하지 않았으므로 되돌릴 것이 없다 |
+| **경로 B(`hidutil`)** | 검증 전·중·후 모두 `( )`. 잔재 없음 |
+| **Karabiner** | ⛔ **건드리지 않았다.** 설정 파일을 읽기만 했다(수정 시각이 검증 전과 같다) |
+| 검증용 앱 프로세스 | 전부 종료했다 |

@@ -1,0 +1,20 @@
+[package]
+name = "ultrakey-seek-session"
+description = "F-01 Seek 활성화·세션 상태 머신의 순수 로직 — 활성화 경로 3종, 세션 생명주기, 세션 중 키 라우팅"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# ⭐ F-01 은 F-07(입력 판정 타입) · F-02(후보) · F-03(오버레이 세션) 의 소비자다.
+# macOS 의존성(objc2*, tauri, global-hotkey)은 전혀 쓰지 않는다 — 그래서
+# `cargo test -p ultrakey-seek-session` 은 macOS 가 아닌 곳에서도 전량 돈다.
+ultrakey-core    = { workspace = true }
+ultrakey-seek    = { workspace = true }
+ultrakey-overlay = { workspace = true }

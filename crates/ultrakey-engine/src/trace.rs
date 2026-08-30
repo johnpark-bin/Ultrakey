@@ -29,7 +29,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ultrakey_core::arbitration::{Disposition, Effect, Layer};
-use ultrakey_core::event::EventKind;
+use ultrakey_core::event::{EventKind, InputEvent};
 
 /// 링 버퍼 용량. 2의 거듭제곱이어야 한다([`ultrakey_platform::trace_ring::SpscRing`]
 /// 이 인덱스 계산에 비트마스크를 쓴다).
@@ -308,19 +308,35 @@ fn disposition_name(code: u8) -> &'static str {
 
 /// `Effect::TypeChar` 도 위와 같은 이유로 판별자만 왕복한다 — `char` 는 계측
 /// 레코드에 담지 않는다(caps lock 진단에 필요 없다).
+///
+/// ⭐ F-01 배선 — `Effect::SeekKey(InputEvent)` 도 같은 이유로 판별자만 담는다.
+/// `InputEvent` 는 `TapTrace` 를 POD 로 유지하는 이 파일의 규약(모듈 문서 §서두)에
+/// 맞지 않는 필드 조합(keycode/flags/kind/autorepeat)이라 계측 레코드에 그대로
+/// 넣지 않는다 — 어차피 `emitted`/`raw_keycode` 등 기존 필드에 이미 같은 정보(어느
+/// keycode 가 도착했는지)가 담겨 있어 caps lock 진단 목적에는 판별자만으로 충분하다.
 pub fn effect_to_code(e: Effect) -> u8 {
     match e {
         Effect::ToggleCapsLock => 0,
         Effect::OpenSeek => 1,
         Effect::TypeChar(_) => 2,
+        Effect::SeekTriggerDown => 3,
+        Effect::SeekTriggerUp(_) => 4,
+        Effect::SeekKey(_) => 5,
     }
 }
 
-pub fn effect_from_code(code: u8, placeholder_char: char) -> Option<Effect> {
+/// `placeholder_char`/`placeholder_seek_key` — `TypeChar`/`SeekKey` 는 판별자만
+/// 왕복하므로(위 `effect_to_code` 문서 참고) 실제 payload 를 복원할 수 없다. 호출자가
+/// 아무 값이나 채워 넣어 돌려받는다 — 왕복 테스트가 "이 코드가 어느 variant 인가"만
+/// 확인하면 되기 때문이다.
+pub fn effect_from_code(code: u8, placeholder_char: char, placeholder_seek_key: InputEvent) -> Option<Effect> {
     Some(match code {
         0 => Effect::ToggleCapsLock,
         1 => Effect::OpenSeek,
         2 => Effect::TypeChar(placeholder_char),
+        3 => Effect::SeekTriggerDown,
+        4 => Effect::SeekTriggerUp(ultrakey_core::flags::EventFlags::NONE),
+        5 => Effect::SeekKey(placeholder_seek_key),
         _ => return None,
     })
 }
@@ -330,6 +346,9 @@ fn effect_name(code: u8) -> &'static str {
         0 => "ToggleCapsLock",
         1 => "OpenSeek",
         2 => "TypeChar",
+        3 => "SeekTriggerDown",
+        4 => "SeekTriggerUp",
+        5 => "SeekKey",
         _ => "Unknown",
     }
 }
@@ -536,13 +555,33 @@ mod tests {
         }
     }
 
+    /// ⭐ F-01 배선 — `InputEvent` 는 macOS 가 실제로 보내는 이벤트 모양을 그대로 써야
+    /// 한다는 이 저장소의 반복된 교훈(PR #35 "출력이 keycode 0 으로 나감")을 따라
+    /// keycode 0 이 아닌 값을 쓴다.
+    fn seek_key_placeholder() -> InputEvent {
+        InputEvent {
+            kind: EventKind::KeyDown,
+            keycode: ultrakey_core::keycode::KeyCode::ANSI_A,
+            flags: EventFlags::NONE,
+            autorepeat: false,
+        }
+    }
+
     #[test]
     fn effect_round_trips_for_every_variant() {
         let ch = 'x';
-        let all = [Effect::ToggleCapsLock, Effect::OpenSeek, Effect::TypeChar(ch)];
+        let seek_key = seek_key_placeholder();
+        let all = [
+            Effect::ToggleCapsLock,
+            Effect::OpenSeek,
+            Effect::TypeChar(ch),
+            Effect::SeekTriggerDown,
+            Effect::SeekTriggerUp(ultrakey_core::flags::EventFlags::NONE),
+            Effect::SeekKey(seek_key),
+        ];
         for e in all {
             let code = effect_to_code(e);
-            let recovered = effect_from_code(code, ch).unwrap();
+            let recovered = effect_from_code(code, ch, seek_key).unwrap();
             assert_eq!(recovered, e, "effect={e:?}");
         }
     }
@@ -552,7 +591,7 @@ mod tests {
         assert_eq!(event_kind_from_code(255), None);
         assert_eq!(layer_from_code(255), None);
         assert_eq!(disposition_from_code(255, EventFlags::NONE), None);
-        assert_eq!(effect_from_code(255, 'x'), None);
+        assert_eq!(effect_from_code(255, 'x', seek_key_placeholder()), None);
     }
 
     // ── 링 버퍼 — TapTrace 전용 래퍼 배선 확인 ────────────────────────────────

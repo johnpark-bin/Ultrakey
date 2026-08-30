@@ -82,7 +82,8 @@ pub const PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS: &str = "presets.leftRightShiftToCaps
 /// F-08.10 `Shift + caps lock = caps lock` — 체크박스.
 pub const PRESETS_SHIFT_CAPS_TO_CAPS: &str = "presets.shiftCapsToCaps";
 /// F-08.11 `Quick press left or right shift to input corresponding:` — 체크박스.
-pub const PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED: &str = "presets.shiftQuickPressBrackets.enabled";
+pub const PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED: &str =
+    "presets.shiftQuickPressBrackets.enabled";
 /// F-08.11 — 팝업(4종 문자 쌍).
 pub const PRESETS_SHIFT_QUICK_PRESS_BRACKETS_PAIR: &str = "presets.shiftQuickPressBrackets.pair";
 /// F-08.12 `Hyper + delete = forward delete` — 체크박스.
@@ -128,6 +129,25 @@ pub const KOREAN_DISABLE_IN_REMOTE_DESKTOP: &str = "korean.disableInRemoteDeskto
 pub const SEEK_SEARCH_BAR_X: &str = "seek.searchBar.x";
 /// 검색 바 창의 좌상단 y — 상동.
 pub const SEEK_SEARCH_BAR_Y: &str = "seek.searchBar.y";
+
+// ── F-01 Seek 활성화·세션(`seek-activation-and-session.md` §4) ──
+//
+// ⭐ **부재 = 기본값**(F-15 §3.6, 이 절 전체가 명세 §4 표의 "오기 정정"이 확정한 실측
+// 기본값을 그대로 따른다) — 세 활성화 경로가 전부 미설정이면 Seek 를 발동할 방법이
+// 없다는 것이 §1 온보딩 함의다.
+
+/// `Toggle Seek with shortcut:` — 웹 `KeyboardEvent.code`(예: `"Space"`).
+/// 부재 = **미설정**(버튼 라벨 `Record Shortcut`, 실측 출고 기본값).
+pub const SEEK_TOGGLE_SHORTCUT_CODE: &str = "seek.toggleShortcut.code";
+/// 같은 단축키의 modifier 비트마스크(`EventFlags` 관례). 부재 = 0.
+pub const SEEK_TOGGLE_SHORTCUT_MODIFIERS: &str = "seek.toggleShortcut.modifiers";
+/// `Remap key to Seek:` — `SourceKey` variant 이름. 부재 = `-`(미설정, 실측 기본값).
+pub const SEEK_REMAP_KEY: &str = "seek.remapKey";
+/// `Only show while the remapped key is held`(명세 §4 저장 키 `seekExecuteOnClose`).
+/// 부재 = ☐.
+pub const SEEK_EXECUTE_ON_CLOSE: &str = "seek.executeOnClose";
+/// `Semicolon highlights next match`(명세 §4 저장 키 `semicolonCycleSeek`). 부재 = ☐.
+pub const SEEK_SEMICOLON_CYCLE: &str = "seek.semicolonCycle";
 
 // ── F-17 키보드별 설정(`per-device-settings.md` §3.3~3.4, D-17-2) —
 // `ultrakey_core::perdevice` 가 소비한다 ──
@@ -208,6 +228,11 @@ pub fn all() -> &'static [&'static str] {
         KOREAN_DISABLE_IN_REMOTE_DESKTOP,
         SEEK_SEARCH_BAR_X,
         SEEK_SEARCH_BAR_Y,
+        SEEK_TOGGLE_SHORTCUT_CODE,
+        SEEK_TOGGLE_SHORTCUT_MODIFIERS,
+        SEEK_REMAP_KEY,
+        SEEK_EXECUTE_ON_CLOSE,
+        SEEK_SEMICOLON_CYCLE,
         PER_DEVICE_MANAGED,
     ]
 }

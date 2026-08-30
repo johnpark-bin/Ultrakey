@@ -12,6 +12,7 @@ members = [
     "crates/ultrakey-i18n",
     "crates/ultrakey-seek",
     "crates/ultrakey-overlay",
+    "crates/ultrakey-seek-session",
     "apps/ultrakey-app",
 ]
 
@@ -37,6 +38,7 @@ ultrakey-permissions = { path = "crates/ultrakey-permissions" }
 ultrakey-i18n        = { path = "crates/ultrakey-i18n" }
 ultrakey-seek        = { path = "crates/ultrakey-seek" }
 ultrakey-overlay     = { path = "crates/ultrakey-overlay" }
+ultrakey-seek-session = { path = "crates/ultrakey-seek-session" }
 
 # 버전은 2026-08-30 crates.io 조회로 검증됨 (docs/spec/platform-constraints.md §6 과 일치)
 objc2                   = "0.6.4"
@@ -58,6 +60,9 @@ thiserror               = "2.0.20"
 tracing                 = "0.1.44"
 tracing-subscriber      = { version = "0.3.23", features = ["env-filter"] }
 plist                   = "1.10.0"
+# F-01 (M3 Seek 활성화) — 전역 단축키 **등록**(가로채기가 아니다).
+# `docs/spec/seek-activation-and-session.md` §6·§7 이 지목한 크레이트다.
+global-hotkey           = "0.8.0"
 tauri                   = "2.11.5"
 tauri-build             = "2.6.3"
 tauri-plugin-opener     = "2.5.4"

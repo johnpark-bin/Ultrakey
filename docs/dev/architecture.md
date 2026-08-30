@@ -20,6 +20,7 @@
 | `ultrakey-hyperkey` | F-05 | hyper·meh·bleh 규칙 정의와 비트마스크 합성. **엔진에 규칙만 등록한다** | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-seek` | **F-02** | Seek 텍스트 후보 검출의 **순수 로직** — 좌표 변환(§3.2.3), 후보 정규화, 두 소스 병합(§3.4), 질의 매칭(§3.6). macOS 의존은 `detect` 모듈 하나에 `#[cfg]` 로 가둬 두어 나머지는 어디서나 테스트된다 | ❌ 없음 | 부분 (`detect` 만) |
 | `ultrakey-overlay` | **F-03** | Seek 오버레이 UI 의 **순수 로직** — 다중 디스플레이 좌표 변환, ⭐ **연결선의 디스플레이 경계 클리핑**(Liang–Barsky), 렌더 모델 산출, 상한 정책(§4.2), ⭐ **증분 수신 세션**(F-02 결정 S-6 의 소비자). 렌더링 계층은 `OverlayRenderer` 트레이트로 분리해 교체 가능하다(`platform-constraints.md` §4.3) | ❌ 없음 | ❌ 불필요 |
+| `ultrakey-seek-session` | **F-01** | Seek **활성화·세션 상태 머신**의 순수 로직 — 활성화 경로 3종의 모드 판정, 세션 생명주기(Opening→Ready→Querying→Selected→Confirming), 세션 중 키 라우팅(물리 키코드 기준), F-04 로 넘길 `ConfirmedMatch`/`ClickExecutor` 경계. ⭐ 질의 버퍼·필터링·순환·200개 상한은 **다시 만들지 않고** `ultrakey-overlay::OverlaySession` 을 소유(compose)한다 | ❌ 없음 | ❌ 불필요 |
 | `ultrakey-permissions` | F-11 | `AXIsProcessTrusted` 폴링, 권한 상태 머신, out-of-sync 진단, 시스템 설정 딥링크 | 간접 | ✅ |
 | `ultrakey-i18n` | F-14 (A) / D4 | 문자열 카탈로그(ko + en), 로케일 결정, OS 버전별 어휘 교체 | ❌ 없음 | ❌ 불필요 |
 | `apps/ultrakey-app` | F-09·F-10 의 껍데기 | Tauri 앱. M1 에서는 권한 안내 모달 + 배선(wiring)만 | 간접 | ✅ |
@@ -190,7 +191,7 @@ impl AppGateController {
 
 | 자리 | 형태 | 언제 |
 | :--- | :--- | :--- |
-| 계층 1 — Seek 세션 | `SharedState::seek_session_active: AtomicBool` (항상 false) | M3 / F-01 |
+| ~~계층 1 — Seek 세션~~ | ⭐ **해소(M3 / 이슈 #38).** `SharedState::seek_session_active` 를 `apps/ultrakey-app/src/seek.rs` 의 워커가 세션 개폐 때마다 게시하고, 중재기가 그 값으로 계층 1 을 판정해 키를 `Effect::SeekKey` 로 F-01 에 라우팅한다 | ✅ M3 |
 | 계층 3 — Preset 조합 | `RuleTable::combo_rules: Vec<ComboRule>` (항상 비어 있음) | M2 / F-08 |
 | 계층 4 — 단순 리매핑 | `RuleTable::simple_remaps` (항상 비어 있음) | M2 / F-08 |
 | 경로 B 규칙 배정 | `HidMappingBackend` 트레이트 + `hidutil` 구현체 | M2 / F-08 |

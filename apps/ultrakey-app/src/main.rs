@@ -47,6 +47,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, 
 use tauri::tray::TrayIcon;
 use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
 
+use ultrakey_core::flags::EventFlags;
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
 use ultrakey_core::keycode::{KeyCode, SourceKey};
 use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
@@ -70,6 +71,7 @@ use ultrakey_presets::{
     ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
     QuickPressCapsAction, RemapCapsTarget,
 };
+use ultrakey_seek_session::{SeekSettings, SeekShortcut};
 
 /// ⭐ F-10 메뉴 항목 id — 그대로 i18n 카탈로그 키이기도 하다(고유하고, 라벨을
 /// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
@@ -81,6 +83,9 @@ mod overlay_demo;
 /// ⭐ F-03 P3 실측 하네스 (이슈 #34). `ULTRAKEY_OVERLAY_SPIKE` 가 없으면
 /// 아무것도 하지 않는다 — 제품 경로에 끼어들지 않는다.
 mod overlay_spike;
+/// ⭐ F-01 — Seek 활성화·세션 워커(이슈 #38). `docs/spec/
+/// seek-activation-and-session.md` 를 코드로 옮긴다.
+mod seek;
 
 mod menu_ids {
     pub const IGNORE_APP: &str = "menu.ignore_app";
@@ -779,6 +784,7 @@ fn settings_set_per_device(
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     let save_error = {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
@@ -798,6 +804,7 @@ fn settings_set_per_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         false,
     )?;
 
@@ -806,6 +813,7 @@ fn settings_set_per_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         &store,
         save_error,
         None,
@@ -982,8 +990,25 @@ fn caps_modifier_slot_keys(h: &HyperkeySettings) -> Vec<&'static str> {
 /// architecture.md` §6.1). `PresetSettings::needs_caps_lock_alias` 가 "필요한가"를
 /// 판정하고, `synthesize_caps_lock_remap`(Advanced 토글)이 그것을 무시하고 경로 A 만
 /// 쓰게 만들 수 있다.
-fn compute_caps_lock_alias(presets: &PresetSettings, caps_is_source: bool) -> Option<KeyCode> {
-    if presets.needs_caps_lock_alias(caps_is_source) && !presets.synthesize_caps_lock_remap {
+///
+/// ⭐ F-01 배선 — `seek_remap_is_caps_lock`(`Remap key to Seek: caps lock`)도 이
+/// alias 를 반드시 요구하는 조건에 더했다. 근거: caps lock 은 **누를 때만**
+/// `flagsChanged` 를 보내고 **뗄 때는 보내지 않는다**(`docs/dev/
+/// manual-verification.md` "caps lock 을 소스로 쓸 때의 알려진 한계",
+/// `key-remapping-engine.md` §5 #20). `Remap key to Seek:` 가 caps lock 을 직접
+/// 감시하면(경로 B 를 거치지 않으면) hold 모드(`Only show while the remapped key
+/// is held`)의 릴리즈가 영영 오지 않아 — 세션이 열린 채 닫힐 방법이 없어진다.
+/// 경로 B 로 F18 에 별칭을 걸면 F18 은 정상적인 `KeyDown`/`KeyUp` 을 내므로 이
+/// 문제가 사라진다. `synthesize_caps_lock_remap`(Advanced) 이 켜져 있으면 다른
+/// 이유와 마찬가지로 이 요구도 무시된다 — 기존 alias 의미(경로 A 강제)를
+/// 그대로 지킨다.
+fn compute_caps_lock_alias(
+    presets: &PresetSettings,
+    caps_is_source: bool,
+    seek_remap_is_caps_lock: bool,
+) -> Option<KeyCode> {
+    let needs_alias = presets.needs_caps_lock_alias(caps_is_source) || seek_remap_is_caps_lock;
+    if needs_alias && !presets.synthesize_caps_lock_remap {
         Some(KeyCode::F18)
     } else {
         None
@@ -1037,6 +1062,89 @@ fn build_preset_warnings(
     warnings
 }
 
+// ============================================================================
+// F-01 Seek 탭(`seek-activation-and-session.md` §4) — `settings.html` 이 기대하는
+// JSON 계약. ⭐ 이 모양은 다른 위임이 이미 그것을 전제로 `settings.html` 을 쓰고
+// 있으므로 **글자 그대로** 지킨다.
+// ============================================================================
+
+/// `Toggle Seek with shortcut:` 하나 — 미설정이면 `SeekView::toggle_shortcut` 가
+/// `None` 이다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SeekShortcutView {
+    code: String,
+    modifiers: u32,
+    display: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SeekView {
+    /// 미설정이면 null.
+    toggle_shortcut: Option<SeekShortcutView>,
+    /// `SourceKey` variant 이름, 미설정이면 "-".
+    remap_key: String,
+    execute_on_close: bool,
+    semicolon_cycles: bool,
+    /// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 인가(읽기 전용
+    /// 표시용).
+    quick_press_opens: bool,
+    /// 세 경로 중 하나라도 설정됐는가 — false 면 UI 가 안내 문구를 띄운다(§1).
+    any_activation_configured: bool,
+    /// 팝업 선택지 35종.
+    remap_key_options: Vec<PresetOptionView>,
+}
+
+/// `Remap key to Seek:` 팝업 항목 하나 — `-`(`None`)은 값·라벨 모두 `"-"`.
+fn seek_remap_key_option_view(k: Option<SourceKey>) -> PresetOptionView {
+    match k {
+        None => PresetOptionView {
+            value: "-".to_string(),
+            label: "-".to_string(),
+            label_key: None,
+        },
+        Some(k) => PresetOptionView {
+            value: serde_variant_name(&k),
+            label: k.label().to_string(),
+            label_key: None,
+        },
+    }
+}
+
+fn seek_view(seek: &SeekSettings, quick_press_opens: bool) -> SeekView {
+    SeekView {
+        toggle_shortcut: seek.toggle_shortcut.as_ref().map(|s| SeekShortcutView {
+            code: s.code.clone(),
+            modifiers: u32::try_from(s.modifiers.0).unwrap_or(u32::MAX),
+            display: s.display(),
+        }),
+        remap_key: seek
+            .remap_key
+            .map(|k| serde_variant_name(&k))
+            .unwrap_or_else(|| "-".to_string()),
+        execute_on_close: seek.execute_on_close,
+        semicolon_cycles: seek.semicolon_cycles,
+        quick_press_opens,
+        any_activation_configured: seek
+            .to_config(quick_press_opens)
+            .any_activation_configured(),
+        remap_key_options: SeekSettings::remap_key_options()
+            .iter()
+            .copied()
+            .map(seek_remap_key_option_view)
+            .collect(),
+    }
+}
+
+/// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 를 가리키는가
+/// (☑ + 팝업 = `Seek`). `SeekView::quick_press_opens`·`SeekConfig::quick_press_opens`
+/// 둘 다 이 판정을 쓴다.
+fn quick_press_opens_seek(presets: &PresetSettings) -> bool {
+    presets.caps_quick_press.enabled
+        && presets.caps_quick_press.action == QuickPressCapsAction::Seek
+}
+
 /// 환경설정 창이 화면을 다시 그리는 데 필요한 전부. `settings_bootstrap`·
 /// `settings_set`·`settings_set_tab`·`settings_resolve_conflict` 이 공통으로
 /// 돌려준다.
@@ -1060,6 +1168,8 @@ struct SettingsState {
     general: GeneralView,
     /// F-16 `Korean` 탭.
     korean: KoreanView,
+    /// F-01 `Seek` 탭.
+    seek: SeekView,
     /// 값을 아직 적용하지 않은 충돌(architecture.md §6.5) — `Some` 이면 그 앞의
     /// `settings_set` 호출은 아무것도 저장·반영하지 않았다.
     pending_conflict: Option<PendingConflictView>,
@@ -1071,6 +1181,7 @@ fn build_settings_state(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    seek: &SeekSettings,
     store: &SettingsStore,
     save_error: Option<String>,
     pending_conflict: Option<PendingConflictView>,
@@ -1079,7 +1190,8 @@ fn build_settings_state(
         .get::<String>(keys::UI_LAST_TAB)
         .unwrap_or_else(|| "hyperkey".to_string());
     let caps_is_source = caps_is_modifier_source(hyperkey);
-    let caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
+    let seek_remap_is_caps_lock = seek.remap_key == Some(SourceKey::CapsLock);
+    let caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source, seek_remap_is_caps_lock);
 
     let mut warnings: Vec<WarningView> =
         hyperkey.validate().into_iter().map(warning_view).collect();
@@ -1106,6 +1218,7 @@ fn build_settings_state(
         caps_lock_alias_active: caps_lock_alias.is_some(),
         general: general_view(store),
         korean: korean_view(korean),
+        seek: seek_view(seek, quick_press_opens_seek(presets)),
         pending_conflict,
         per_device: build_per_device_view(store),
     }
@@ -1214,12 +1327,14 @@ fn is_known_tab(tab: &str) -> bool {
 #[allow(dead_code)]
 const SETTINGS_WINDOW_DEFAULT: (u32, u32) = (825, 821);
 
-/// hyperkey + presets + korean 세 설정 묶음을 합쳐 `EngineConfig` 하나로 조립하는
-/// 단일 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이 함수를 거친다.
+/// hyperkey + presets + korean + seek 네 설정 묶음을 합쳐 `EngineConfig` 하나로
+/// 조립하는 단일 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이
+/// 함수를 거친다.
 fn build_engine_config(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    seek: &SeekSettings,
     store: &SettingsStore,
 ) -> EngineConfig {
     let mut config = EngineConfig::default();
@@ -1232,10 +1347,16 @@ fn build_engine_config(
     config.rules.combo_rules = preset_rules.combos;
     config.rules.simple_remaps = preset_rules.simple_remaps;
     config.rules.source_actions = preset_rules.source_actions;
-    config.caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
+    let seek_remap_is_caps_lock = seek.remap_key == Some(SourceKey::CapsLock);
+    config.caps_lock_alias =
+        compute_caps_lock_alias(presets, caps_is_source, seek_remap_is_caps_lock);
     // F-16 — `korean.disableInRemoteDesktop` 은 여기 들어오지 않는다(엔진 설정이
     // 아니라 게이트다, D-K3) — `gate_controller.set_korean_exclusion_enabled` 이 따로 처리한다.
     config.rules.korean_rules = korean.to_rules();
+    // ⭐ F-01 — `Remap key to Seek:` 트리거 키. `quick_press_opens`/`toggle_shortcut`
+    // 는 `EngineConfig`(F-07 규칙 테이블)의 관심사가 아니다 — F-07 은 리매핑 키
+    // 자체의 감시만 하고, 어느 모드로 세션을 열지는 F-01(Seek 워커)이 판정한다.
+    config.rules.seek_trigger = seek.to_config(quick_press_opens_seek(presets)).remap_key;
     // F-17 — `perDevice.*` 원본 스냅샷(`_managed` 원장 제외). 설정이 바뀔 때마다
     // 이 함수를 다시 거치므로 매번 저장소에서 새로 채운다(계약 §B.1).
     config.per_device_values = collect_per_device_values(store);
@@ -1411,6 +1532,21 @@ struct AppState {
     presets: Mutex<PresetSettings>,
     /// F-16 `Korean` 탭의 메모리 정본. `hyperkey`/`presets` 와 같은 캐시 규약을 쓴다.
     korean: Mutex<KoreanSettings>,
+    /// F-01 `Seek` 탭의 메모리 정본. `hyperkey`/`presets`/`korean` 과 같은 캐시 규약.
+    seek: Mutex<SeekSettings>,
+    /// Seek 워커(`seek.rs`)로 신호를 보내는 채널. 엔진이 아직 시작되지 않았으면
+    /// (권한 대기 중) `None` — `send_seek_signal` 이 조용히 버린다.
+    seek_tx: Mutex<Option<crossbeam_channel::Sender<seek::SeekSignal>>>,
+    /// ⭐ `Toggle Seek with shortcut:` 전역 단축키 등록기. **메인 스레드에서 만들고
+    /// 앱 생애주기 내내 살려 둔다** — `global-hotkey` 크레이트 문서가 "macOS 에서는
+    /// 메인 스레드의 실행 중인 이벤트 루프 위에서 만들어야 한다"고 명시한다
+    /// (`global-hotkey-0.8.0/src/lib.rs` 모듈 문서). `overlay_demo::ScreenObserver`
+    /// 를 `Box::leak` 하는 것과 같은 이유로, 여기서는 `AppState` 에 담아 두는 쪽을
+    /// 골랐다 — 재등록(`Remap 설정 변경`)이 이 손잡이를 다시 써야 하므로 누수시켜
+    /// 버리면 재사용할 수 없다.
+    global_hotkey_manager: Mutex<Option<global_hotkey::GlobalHotKeyManager>>,
+    /// 현재 등록돼 있는 `HotKey` — 설정이 바뀌면 이것부터 해제한 뒤 새로 등록한다.
+    global_hotkey_registered: Mutex<Option<global_hotkey::hotkey::HotKey>>,
     /// 부트스트랩이 프런트엔드에 한 번만 알려줄 로드 경고(손상 복구/미래 스키마).
     load_notice: Mutex<Option<Notice>>,
     // ── F-10 메뉴바 상주(M2 2차) ──────────────────────────────────────────
@@ -1507,8 +1643,10 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
+    let seek = state.seek.lock().unwrap().clone();
     let store = state.store.lock().unwrap();
-    let settings_state = build_settings_state(&hyperkey, &presets, &korean, &store, None, None);
+    let settings_state =
+        build_settings_state(&hyperkey, &presets, &korean, &seek, &store, None, None);
     let meta = build_app_meta(&app, &store);
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
@@ -1530,26 +1668,28 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
     let hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek = state.seek.lock().map_err(|e| e.to_string())?.clone();
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
-        &hyperkey, &presets, &korean, &store, None, None,
+        &hyperkey, &presets, &korean, &seek, &store, None, None,
     ))
 }
 
 /// hyperkey.* 변경 뒤 `Engine::reconfigure` + (필요하면) `force_reset_state` 를
-/// 함께 호출한다. presets.* 경로(`settings_set_preset`)와 이 함수를 공유해 엔진
-/// 반영 로직이 두 곳에 흩어지지 않게 한다.
+/// 함께 호출한다. presets.*/korean.*/seek.* 경로가 전부 이 함수를 공유해 엔진
+/// 반영 로직이 여러 곳에 흩어지지 않게 한다.
 fn reconfigure_engine(
     state: &Arc<AppState>,
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    seek: &SeekSettings,
     force_reset: bool,
 ) -> Result<(), String> {
     let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
     if let Some(engine) = engine_guard.as_ref() {
         let store = state.store.lock().map_err(|e| e.to_string())?;
-        let config = build_engine_config(hyperkey, presets, korean, &store);
+        let config = build_engine_config(hyperkey, presets, korean, seek, &store);
         drop(store);
         engine.reconfigure(config);
         if force_reset {
@@ -1557,8 +1697,8 @@ fn reconfigure_engine(
         }
     }
     // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
-    // 갱신된 `state.hyperkey`/`state.presets`/`state.korean` 으로 조립되므로 이
-    // 변경이 유실되지 않는다.
+    // 갱신된 `state.hyperkey`/`state.presets`/`state.korean`/`state.seek` 으로
+    // 조립되므로 이 변경이 유실되지 않는다.
     Ok(())
 }
 
@@ -1576,7 +1716,7 @@ fn reconfigure_engine(
 #[tauri::command]
 fn settings_set(
     state: State<'_, Arc<AppState>>,
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     key: String,
     value: serde_json::Value,
 ) -> Result<SettingsState, String> {
@@ -1607,6 +1747,14 @@ fn settings_set(
         return settings_set_per_device(&state, &key, &value);
     }
 
+    // ⚠️ `seek.searchBar.x`/`seek.searchBar.y`(F-03) 는 UI 가 이 커맨드로 쓰는
+    // 키가 아니다(검색 바를 끌어 옮기면 `overlay.rs`/`seek.rs` 가 직접 저장한다)
+    // — `settings_set_seek`/`apply_seek_setting` 은 그 둘을 매치하지 않으므로
+    // 자연히 거부된다.
+    if key.starts_with("seek.") {
+        return settings_set_seek(&state, &app, &key, &value);
+    }
+
     settings_set_hyperkey(&state, &key, &value)
 }
 
@@ -1622,6 +1770,7 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
@@ -1633,6 +1782,7 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         false,
     )?;
 
@@ -1641,6 +1791,7 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         &store,
         None,
         None,
@@ -1714,11 +1865,13 @@ fn settings_set_hyperkey(
             let pending = pending_conflict_view(conflict, key, value);
             let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
             let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+            let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
                 &korean_snapshot,
+                &seek_snapshot,
                 &store,
                 None,
                 Some(pending),
@@ -1734,6 +1887,7 @@ fn settings_set_hyperkey(
     };
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 3) 엔진 반영.
     // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
@@ -1742,6 +1896,7 @@ fn settings_set_hyperkey(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         key_affects_modifier_rules(key),
     )?;
 
@@ -1763,6 +1918,7 @@ fn settings_set_hyperkey(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         &store,
         save_error,
         None,
@@ -1809,11 +1965,13 @@ fn settings_set_preset(
         {
             let pending = pending_conflict_view(conflict, key, value);
             let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+            let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
                 &korean_snapshot,
+                &seek_snapshot,
                 &store,
                 None,
                 Some(pending),
@@ -1828,6 +1986,7 @@ fn settings_set_preset(
         *presets
     };
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 3) 엔진 반영 — presets.* 변경은 항상 규칙 테이블을 바꾼다(단순 슬라이더도
     // `quick_press_duration_ms` 를 통해 FSM 타이밍에 영향을 준다) — 언제나
@@ -1837,8 +1996,15 @@ fn settings_set_preset(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         true,
     )?;
+
+    // ⭐ F-01 — `Presets` 탭의 `Quick press caps lock to execute:` 가 Seek 워커의
+    // `SeekConfig::quick_press_opens`(활성화 경로 3)에 영향을 준다. `seek.*` 가
+    // 바뀌지 않았어도 이 값은 presets.* 변경만으로 달라질 수 있으므로 매번 다시
+    // 밀어 넣는다.
+    push_seek_config(state, &seek_snapshot, &presets_snapshot);
 
     // 4) 저장.
     let save_error = {
@@ -1858,6 +2024,7 @@ fn settings_set_preset(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         &store,
         save_error,
         None,
@@ -1878,6 +2045,7 @@ fn settings_set_korean(
 ) -> Result<SettingsState, String> {
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 1)
     let korean_snapshot = {
@@ -1892,6 +2060,7 @@ fn settings_set_korean(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         true,
     )?;
 
@@ -1920,6 +2089,7 @@ fn settings_set_korean(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         &store,
         save_error,
         None,
@@ -1971,6 +2141,186 @@ fn validate_and_apply_korean(
         return Err(format!("알 수 없는 설정 키: {key}"));
     }
     apply_korean_setting(korean, key, value)
+}
+
+// ============================================================================
+// F-01 `settings_set` 의 `seek.*` 경로.
+// ============================================================================
+
+/// `seek.remapKey` 값 파싱 — `"-"` 는 미설정(`None`), 그 밖은 `SourceKey` variant
+/// 이름이어야 한다.
+fn parse_seek_remap_key(value: &serde_json::Value) -> Result<Option<SourceKey>, String> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| "seek.remapKey 는 문자열이어야 한다".to_string())?;
+    if raw == "-" {
+        return Ok(None);
+    }
+    serde_json::from_value(serde_json::Value::String(raw.to_string()))
+        .map(Some)
+        .map_err(|e| format!("알 수 없는 seek.remapKey 값 {raw}: {e}"))
+}
+
+/// `settings_set_seek` 의 1단계(키 검증 + 메모리 갱신)만 담당하는 순수 함수 —
+/// `validate_and_apply`/`validate_and_apply_preset`/`validate_and_apply_korean` 과
+/// 같은 형식.
+///
+/// ⭐ **판단** — `seek.toggleShortcut.code`/`.modifiers` 는 저장 키가 둘로
+/// 나뉘어 있지만(명세 §4, `keys::SEEK_TOGGLE_SHORTCUT_CODE`/`_MODIFIERS`) 논리적으로는
+/// 한 값(`SeekShortcut`)이다 — 한쪽만 갱신되고 와도 다른 쪽의 기존 값을 보존한다.
+/// `null` 은 명시적 지우기(단축키 제거, 버튼 `Record Shortcut` 상태로 되돌림)로
+/// 다룬다. 이 두 필드를 프런트가 어떤 순서·조합으로 보내는지는 `settings.html`
+/// 계약(다른 위임 담당)에 달려 있다 — 이 함수는 "부분 갱신이 안전하다"만 보장한다.
+fn apply_seek_setting(
+    seek: &mut SeekSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        k if k == keys::SEEK_TOGGLE_SHORTCUT_CODE => {
+            if value.is_null() {
+                seek.toggle_shortcut = None;
+            } else {
+                let code: String = parse(value, key)?;
+                let modifiers = seek
+                    .toggle_shortcut
+                    .as_ref()
+                    .map_or(EventFlags::NONE, |s| s.modifiers);
+                seek.toggle_shortcut = Some(SeekShortcut { code, modifiers });
+            }
+        }
+        k if k == keys::SEEK_TOGGLE_SHORTCUT_MODIFIERS => {
+            if value.is_null() {
+                seek.toggle_shortcut = None;
+            } else {
+                let bits: u64 = parse(value, key)?;
+                let code = seek
+                    .toggle_shortcut
+                    .as_ref()
+                    .map_or_else(String::new, |s| s.code.clone());
+                seek.toggle_shortcut = Some(SeekShortcut {
+                    code,
+                    modifiers: EventFlags(bits),
+                });
+            }
+        }
+        k if k == keys::SEEK_REMAP_KEY => seek.remap_key = parse_seek_remap_key(value)?,
+        k if k == keys::SEEK_EXECUTE_ON_CLOSE => seek.execute_on_close = parse(value, key)?,
+        k if k == keys::SEEK_SEMICOLON_CYCLE => seek.semicolon_cycles = parse(value, key)?,
+        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+    }
+    Ok(())
+}
+
+fn validate_and_apply_seek(
+    seek: &mut SeekSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("알 수 없는 설정 키: {key}"));
+    }
+    apply_seek_setting(seek, key, value)
+}
+
+/// Seek 워커에 현재 설정을 다시 알린다 — 워커가 아직 없으면(엔진 시작 전)
+/// 조용히 버린다(`send_seek_signal` 과 같은 규약).
+fn push_seek_config(state: &Arc<AppState>, seek: &SeekSettings, presets: &PresetSettings) {
+    let config = seek.to_config(quick_press_opens_seek(presets));
+    send_seek_signal(state, seek::SeekSignal::ConfigChanged(config));
+}
+
+/// `Toggle Seek with shortcut:` 등록을 새 설정과 맞춘다 — **메인 스레드에서**
+/// 불러야 하므로 `run_on_main_thread` 로 디스패치한다(`seek::apply_global_shortcut`
+/// 문서 참고). 큐잉만 하고 즉시 반환하므로 이 함수를 호출한 커맨드는 등록이 실제로
+/// 끝나기 전에 반환할 수 있다 — 그래도 안전하다: 등록 실패는 `tracing::warn!` 으로
+/// 관측 가능하고, `SettingsState.seek.toggleShortcut` 은 이미 저장된 값을 그대로
+/// 반영해 UI 가 어긋나지 않는다.
+fn reapply_global_shortcut(state: &Arc<AppState>, app: &tauri::AppHandle, seek: &SeekSettings) {
+    let state = state.clone();
+    let shortcut = seek.toggle_shortcut.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let manager_guard = state.global_hotkey_manager.lock().unwrap();
+        let Some(manager) = manager_guard.as_ref() else {
+            tracing::warn!("GlobalHotKeyManager 가 없다 — Seek 전역 단축키를 등록하지 못한다");
+            return;
+        };
+        let mut registered = state.global_hotkey_registered.lock().unwrap();
+        seek::apply_global_shortcut(manager, &mut registered, shortcut.as_ref());
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "Seek 전역 단축키 재등록을 메인 스레드로 디스패치하지 못했다");
+    }
+}
+
+/// `settings_set` 의 `seek.*` 경로(F-01). 순서: 1) `key` 검증 + 메모리 갱신
+/// 2) **엔진 반영**(`Remap key to Seek:` 가 바뀌면 F-07 규칙 테이블의 트리거 키
+/// 자체가 바뀐다 — 항상 force_reset) 3) **전역 핫키 재등록**(메인 스레드로
+/// 디스패치) 4) Seek 워커에 `ConfigChanged` 통지 5) 저장 6) 새 `SettingsState`.
+fn settings_set_seek(
+    state: &Arc<AppState>,
+    app: &tauri::AppHandle,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+
+    // 1)
+    let seek_snapshot = {
+        let mut seek = state.seek.lock().map_err(|e| e.to_string())?;
+        validate_and_apply_seek(&mut seek, key, value)?;
+        seek.clone()
+    };
+
+    // 2) 엔진 반영 — remap_key(트리거 키)·caps lock alias 모두 바뀔 수 있다.
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &seek_snapshot,
+        true,
+    )?;
+
+    // 3)
+    reapply_global_shortcut(state, app, &seek_snapshot);
+
+    // 4)
+    push_seek_config(state, &seek_snapshot, &presets_snapshot);
+
+    // 5) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 6)
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &seek_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
 }
 
 /// 충돌 대화상자의 `계속` 버튼 — `settings_set_preset` 이 돌려준 `pendingConflict`
@@ -2181,7 +2531,10 @@ fn run_seek_detect_probe() {
         && !ultrakey_platform::screen_recording::has_screen_recording_access()
     {
         let granted = ultrakey_platform::screen_recording::request_screen_recording_access();
-        tracing::info!(granted, "CGRequestScreenCaptureAccess 호출 — 시스템 프롬프트 경로");
+        tracing::info!(
+            granted,
+            "CGRequestScreenCaptureAccess 호출 — 시스템 프롬프트 경로"
+        );
     }
 
     tracing::info!(
@@ -2242,7 +2595,8 @@ fn run_seek_detect_probe() {
 
     // 전량을 파일로도 남긴다 — 좌표 검증에 쓴다.
     if let Some(home) = std::env::var_os("HOME") {
-        let path = std::path::PathBuf::from(home).join("Library/Logs/Ultrakey/seek-candidates.json");
+        let path =
+            std::path::PathBuf::from(home).join("Library/Logs/Ultrakey/seek-candidates.json");
         match serde_json::to_string_pretty(&outcome.candidates) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -2316,6 +2670,10 @@ fn main() {
         hyperkey: Mutex::new(HyperkeySettings::default()),
         presets: Mutex::new(PresetSettings::default()),
         korean: Mutex::new(KoreanSettings::default()),
+        seek: Mutex::new(SeekSettings::default()),
+        seek_tx: Mutex::new(None),
+        global_hotkey_manager: Mutex::new(None),
+        global_hotkey_registered: Mutex::new(None),
         load_notice: Mutex::new(None),
         tray: Mutex::new(None),
         ignore_item: Mutex::new(None),
@@ -2333,7 +2691,9 @@ fn main() {
         // 꺼져 있으면 아무도 쓰지 않는 빈 상자로 남는다.
         .manage(std::sync::Arc::new(overlay_spike::SpikeChannel::default()))
         // ⭐ F-03 오버레이 웹뷰 창들의 공유 상태(준비 여부·마지막 프레임).
-        .manage(std::sync::Arc::new(Mutex::new(overlay::SurfaceState::default())))
+        .manage(std::sync::Arc::new(Mutex::new(
+            overlay::SurfaceState::default(),
+        )))
         .invoke_handler(tauri::generate_handler![
             modal_copy,
             open_settings,
@@ -2362,7 +2722,9 @@ fn main() {
             // 스스로 프로세스를 끝낸다. 권한 감시·엔진 기동보다 **앞**에 두어
             // 측정 중에 엔진이 끼어들지 않게 한다.
             if overlay_spike::enabled() {
-                tracing::warn!("⭐ ULTRAKEY_OVERLAY_SPIKE — F-03 P3 렌더링 지연 실측 모드로 기동한다");
+                tracing::warn!(
+                    "⭐ ULTRAKEY_OVERLAY_SPIKE — F-03 P3 렌더링 지연 실측 모드로 기동한다"
+                );
                 overlay_spike::start(app.handle());
                 return Ok(());
             }
@@ -2397,6 +2759,9 @@ fn main() {
             // 로 읽힌다(D-K9 각주, `KoreanSettings::from_store` 가 처리한다).
             let korean_settings = KoreanSettings::from_store(&settings_store);
             *state.korean.lock().unwrap() = korean_settings;
+            // ⭐ F-01 Seek — 같은 "부재 = 기본값" 조립 규약(명세 §4 "오기 정정").
+            let seek_settings = SeekSettings::from_store(&settings_store);
+            *state.seek.lock().unwrap() = seek_settings.clone();
             *state.load_notice.lock().unwrap() = notice_from_outcome(&load_outcome);
             // ⭐ F-10 §3.4 — 앱별 비활성화 목록을 여기서 복원한다. `settings_store` 를
             // `state.store` 로 옮기기 *전에* 이 지역 변수에서 직접 읽는다(둘 다 아직
@@ -2427,7 +2792,10 @@ fn main() {
                     let store = state.store.lock().unwrap();
                     overlay_demo::read_stored_origin(&store)
                 };
-                tracing::warn!(?stored, "⭐ ULTRAKEY_OVERLAY_DEMO — F-03 오버레이 검증 모드");
+                tracing::warn!(
+                    ?stored,
+                    "⭐ ULTRAKEY_OVERLAY_DEMO — F-03 오버레이 검증 모드"
+                );
                 overlay_demo::start(app.handle(), stored);
                 // ⛔ 여기서 반환한다 — 데모 모드는 **엔진(CGEventTap)을 켜지
                 // 않는다.** 오버레이 검증에 리매핑이 필요 없고, 탭을 안 켜야
@@ -2437,6 +2805,43 @@ fn main() {
             }
 
             let handle = app.handle().clone();
+
+            // ⭐ F-01 활성화 경로 1 — `GlobalHotKeyManager` 는 **메인 스레드에서**
+            // 만든다(`global-hotkey` 크레이트 문서: "On macOS, an event loop must be
+            // running on the main thread so you also need to create the global
+            // hotkey manager on the same thread as the event loop"). `setup()` 은
+            // Tauri 가 메인 스레드에서 부르므로 여기가 그 자리다. 앱 생애주기 내내
+            // 살려 둔다(`AppState.global_hotkey_manager` 문서 참고) — 재등록이 이
+            // 손잡이를 다시 써야 하므로 `overlay_demo::ScreenObserver` 처럼 누수시키지
+            // 않고 `AppState` 에 담아 둔다.
+            match global_hotkey::GlobalHotKeyManager::new() {
+                Ok(manager) => {
+                    let mut registered = state.global_hotkey_registered.lock().unwrap();
+                    seek::apply_global_shortcut(
+                        &manager,
+                        &mut registered,
+                        seek_settings.toggle_shortcut.as_ref(),
+                    );
+                    drop(registered);
+                    *state.global_hotkey_manager.lock().unwrap() = Some(manager);
+                }
+                Err(e) => tracing::error!(
+                    error = %e,
+                    "GlobalHotKeyManager 를 만들지 못했다 — Seek 전역 단축키 경로가 동작하지 않는다"
+                ),
+            }
+
+            // ⭐ F-01 §5 #6 — 세션 중 디스플레이 구성 변경(핫플러그). `overlay_demo`
+            // 와 같은 알림(`NSApplicationDidChangeScreenParametersNotification`)을
+            // 구독해 Seek 워커로 넘긴다. 옵저버는 메인 스레드에서 만들고 앱 생애주기
+            // 내내 살아 있어야 하므로 누수시킨다(`overlay_demo.rs` 와 같은 이유 —
+            // `ScreenObserver` 는 `Send` 가 아니다).
+            let state_for_hotplug = state.clone();
+            let hotplug_observer = ultrakey_platform::screens::ScreenObserver::start(move || {
+                send_seek_signal(&state_for_hotplug, seek::SeekSignal::DisplaysChanged);
+            });
+            Box::leak(Box::new(hotplug_observer));
+
             // ⭐ 이슈 #32 Phase 1 — 설정 창 크기 복원 + 디바운스 저장 배선. 저장소를
             // `state.store` 로 옮긴 바로 다음(위 줄)이라야 저장된 크기를 읽을 수 있다.
             wire_window_size_persistence(&handle, &state);
@@ -2541,9 +2946,10 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
+    let seek_settings = state.seek.lock().unwrap().clone();
     let config = {
         let store = state.store.lock().unwrap();
-        build_engine_config(&hyperkey, &presets, &korean, &store)
+        build_engine_config(&hyperkey, &presets, &korean, &seek_settings, &store)
     };
 
     // F-17 — `LedgerStore` 구현(`perDevice._managed`, 계약 §B.2). 엔진이 이것을
@@ -2553,21 +2959,57 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     });
 
     let handle_for_events = handle.clone();
+    let state_for_events = state.clone();
     match Engine::start(
         config,
         state.gate.clone(),
         ledger,
-        Box::new(move |event| on_engine_event(&handle_for_events, event)),
+        Box::new(move |event| on_engine_event(&handle_for_events, &state_for_events, event)),
     ) {
         Ok(engine) => {
             tracing::info!(state = ?engine.tap_state(), "엔진 시작됨");
+            let shared = engine.shared();
             *slot = Some(engine);
+            drop(slot);
+
+            // ⭐ F-01 — Seek 워커 기동(위임 지시 §7). `overlay::SurfaceState` 는
+            // `main()` 의 `.manage(Arc<Mutex<SurfaceState>>)` 로 이미 등록돼 있다.
+            let surface_state = handle
+                .state::<Arc<Mutex<overlay::SurfaceState>>>()
+                .inner()
+                .clone();
+            let state_for_origin = state.clone();
+            let stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync> =
+                Arc::new(move || {
+                    let store = state_for_origin.store.lock().ok()?;
+                    overlay::stored_search_bar_origin(&store)
+                });
+            let state_for_persist = state.clone();
+            let persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync> = Arc::new(move |x, y| {
+                if let Ok(mut store) = state_for_persist.store.lock() {
+                    overlay::persist_search_bar_origin(&mut store, x, y);
+                }
+            });
+            let quick_press_opens = quick_press_opens_seek(&presets);
+            let seek_config = seek_settings.to_config(quick_press_opens);
+            let tx = seek::spawn(
+                handle.clone(),
+                shared,
+                surface_state,
+                seek_config,
+                stored_origin,
+                persist_origin,
+            );
+            *state.seek_tx.lock().unwrap() = Some(tx);
         }
         Err(e) => tracing::error!(error = %e, "엔진을 시작하지 못했다"),
     }
 }
 
-fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
+/// ⭐ F-01 배선 — `Seek*` 4종은 `EngineEvent` 문서 계약대로 채널에 밀어 넣기만 하고
+/// **즉시 반환**한다. `tracing` 호출조차 넣지 않는다(`SeekKey` 는 세션 중 매 키마다
+/// 온다 — 모듈 문서의 "블록하지 마라" 계약이 특히 무겁게 적용되는 자리다).
+fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: EngineEvent) {
     match event {
         EngineEvent::TapStateChanged(s) => tracing::info!(state = ?s, "탭 상태 변경"),
         EngineEvent::NotTrusted => {
@@ -2584,6 +3026,26 @@ fn on_engine_event(handle: &tauri::AppHandle, event: EngineEvent) {
             // §5#17 — 재활성화·재생성이 반복 실패. M1 은 로그만 남긴다(자동 재실행은
             // F-10/M2 의 `AppRelauncher` 소관).
             tracing::error!("탭 복구가 반복 실패했다 — 앱 재실행이 필요할 수 있다");
+        }
+        EngineEvent::SeekOpenRequested => send_seek_signal(state, seek::SeekSignal::OpenRequested),
+        EngineEvent::SeekTriggerDown => send_seek_signal(state, seek::SeekSignal::TriggerDown),
+        // ⭐ 실린 flags 가 **트리거 키를 떼는 그 순간의 modifier 스냅샷**이다 —
+        // F-04(`seek-click-execution.md`) §5 #10 이 요구하는 값이고, 그 순간을 아는
+        // 것은 탭 콜백뿐이다. 여기서 그대로 `ConfirmedMatch::modifiers` 까지 흘려
+        // 보낸다(F-04 가 아직 없어 지금은 로그로만 관측된다).
+        EngineEvent::SeekTriggerUp(flags) => {
+            send_seek_signal(state, seek::SeekSignal::TriggerUp(flags))
+        }
+        EngineEvent::SeekKey(ev) => send_seek_signal(state, seek::SeekSignal::Key(ev)),
+    }
+}
+
+/// `AppState.seek_tx` 로 신호를 보낸다 — 워커가 아직 뜨지 않았으면(엔진 시작 전)
+/// 조용히 버린다.
+fn send_seek_signal(state: &Arc<AppState>, signal: seek::SeekSignal) {
+    if let Ok(guard) = state.seek_tx.lock() {
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.send(signal);
         }
     }
 }
@@ -2775,7 +3237,11 @@ fn window_size_debounce_loop(shared: Arc<WindowSizeDebounceShared>, state: Arc<A
                     if now >= deadline {
                         break;
                     }
-                    guard = shared.condvar.wait_timeout(guard, deadline - now).unwrap().0;
+                    guard = shared
+                        .condvar
+                        .wait_timeout(guard, deadline - now)
+                        .unwrap()
+                        .0;
                 }
             }
         }
@@ -3228,6 +3694,13 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
             return;
         }
     };
+    let seek_snapshot = match state.seek.lock() {
+        Ok(s) => s.clone(),
+        Err(e) => {
+            tracing::error!(error = %e, "seek 정본 잠금 실패 — 토글을 반영하지 못했다");
+            return;
+        }
+    };
     // `force_reset = true` — alias 가 바뀌면 추적 키 집합(F18 ↔ caps lock)이 통째로
     // 바뀌므로, 규칙 변경과 같은 이유로 stuck modifier 위험이 있다(D-D).
     if let Err(e) = reconfigure_engine(
@@ -3235,6 +3708,7 @@ fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &seek_snapshot,
         true,
     ) {
         tracing::error!(error = %e, "Synthesize Caps Lock Remap 을 엔진에 반영하지 못했다");
@@ -3406,7 +3880,14 @@ mod tests {
     /// `is_known_tab` 이 6개 탭을 전부 알고, 모르는 이름은 거부한다.
     #[test]
     fn is_known_tab_knows_all_six_tabs() {
-        for tab in ["seek", "hyperkey", "presets", "korean", "keyboards", "general"] {
+        for tab in [
+            "seek",
+            "hyperkey",
+            "presets",
+            "korean",
+            "keyboards",
+            "general",
+        ] {
             assert!(is_known_tab(tab), "`{tab}` 은 KNOWN_TABS 에 있어야 한다");
         }
         assert!(!is_known_tab("bogus"));
@@ -3486,7 +3967,7 @@ mod tests {
         assert_eq!(restored_window_size(Some(900.0), Some(100.0)), None); // 높이 미달
         assert_eq!(restored_window_size(Some(9000.0), Some(700.0)), None); // 너비 초과
         assert_eq!(restored_window_size(Some(900.0), Some(9000.0)), None); // 높이 초과
-        // 경계값은 포함이다.
+                                                                           // 경계값은 포함이다.
         assert_eq!(
             restored_window_size(Some(320.0), Some(240.0)),
             Some((320, 240))
@@ -3608,6 +4089,7 @@ mod tests {
             &hyperkey,
             &PresetSettings::default(),
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.modifier_rules.len(), 1);
@@ -3630,6 +4112,7 @@ mod tests {
             &hyperkey,
             &presets,
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.combo_rules.len(), 1);
@@ -3646,6 +4129,7 @@ mod tests {
             &hyperkey,
             &PresetSettings::default(),
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(none_needed.caps_lock_alias, None);
@@ -3658,6 +4142,7 @@ mod tests {
             &hyperkey,
             &needs_alias,
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(with_alias.caps_lock_alias, Some(KeyCode::F18));
@@ -3671,9 +4156,63 @@ mod tests {
             &hyperkey,
             &synthesize_on,
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(with_synthesize.caps_lock_alias, None);
+    }
+
+    /// ⭐ F-01 — `Remap key to Seek: caps lock` 만으로도(다른 D-1 이유가 전혀 없어도)
+    /// F18 alias 가 반드시 켜진다. `synthesize_caps_lock_remap` 이 켜지면 이 요구도
+    /// 무시된다(기존 D-1 의미와 같은 override).
+    #[test]
+    fn build_engine_config_forces_caps_lock_alias_when_seek_remap_key_is_caps_lock() {
+        let hyperkey = HyperkeySettings::default();
+        let presets = PresetSettings::default();
+
+        let seek_targets_caps_lock = SeekSettings {
+            remap_key: Some(SourceKey::CapsLock),
+            ..SeekSettings::default()
+        };
+        let with_alias = build_engine_config(
+            &hyperkey,
+            &presets,
+            &KoreanSettings::default(),
+            &seek_targets_caps_lock,
+            &SettingsStore::in_memory(),
+        );
+        assert_eq!(
+            with_alias.caps_lock_alias,
+            Some(KeyCode::F18),
+            "Remap key to Seek: caps lock 이면 hold 모드 릴리즈를 위해 D-1 이 반드시 켜져야 한다"
+        );
+        // ⭐ 다른 소스 키(F13 등)를 골랐을 때는 이 요구가 성립하지 않는다.
+        let seek_targets_f13 = SeekSettings {
+            remap_key: Some(SourceKey::F13),
+            ..SeekSettings::default()
+        };
+        let without_alias = build_engine_config(
+            &hyperkey,
+            &presets,
+            &KoreanSettings::default(),
+            &seek_targets_f13,
+            &SettingsStore::in_memory(),
+        );
+        assert_eq!(without_alias.caps_lock_alias, None);
+
+        // ⭐ Advanced 토글이 켜지면 이 요구도 무시된다(기존 D-1 override 의미 유지).
+        let synthesize_on = PresetSettings {
+            synthesize_caps_lock_remap: true,
+            ..PresetSettings::default()
+        };
+        let overridden = build_engine_config(
+            &hyperkey,
+            &synthesize_on,
+            &KoreanSettings::default(),
+            &seek_targets_caps_lock,
+            &SettingsStore::in_memory(),
+        );
+        assert_eq!(overridden.caps_lock_alias, None);
     }
 
     // build_engine_config() — F-16: korean.* 이 규칙 테이블에 실제로 반영된다.
@@ -3687,6 +4226,7 @@ mod tests {
             &HyperkeySettings::default(),
             &PresetSettings::default(),
             &korean,
+            &SeekSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.korean_rules.len(), 1);
@@ -3711,6 +4251,7 @@ mod tests {
             &HyperkeySettings::default(),
             &PresetSettings::default(),
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &store,
         );
 
@@ -3925,11 +4466,11 @@ mod tests {
     #[test]
     fn compute_caps_lock_alias_matrix() {
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), false),
+            compute_caps_lock_alias(&PresetSettings::default(), false, false),
             None
         );
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), true),
+            compute_caps_lock_alias(&PresetSettings::default(), true, false),
             Some(KeyCode::F18)
         );
 
@@ -3937,7 +4478,33 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        assert_eq!(compute_caps_lock_alias(&synthesize, true), None);
+        assert_eq!(compute_caps_lock_alias(&synthesize, true, false), None);
+    }
+
+    /// ⭐ F-01 — `seek_remap_is_caps_lock` 하나만으로도 다른 이유 없이 F18 alias 가
+    /// 켜진다. Advanced 토글이 켜지면 이 셋째 이유도 다른 이유들과 마찬가지로
+    /// 무시된다.
+    #[test]
+    fn compute_caps_lock_alias_seek_remap_is_caps_lock_forces_alias() {
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), false, true),
+            Some(KeyCode::F18)
+        );
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), false, false),
+            None,
+            "seek_remap_is_caps_lock 이 false 면 이 이유만으로는 alias 가 켜지지 않는다"
+        );
+
+        let synthesize = PresetSettings {
+            synthesize_caps_lock_remap: true,
+            ..PresetSettings::default()
+        };
+        assert_eq!(
+            compute_caps_lock_alias(&synthesize, false, true),
+            None,
+            "Advanced 토글이 켜지면 seek_remap_is_caps_lock 이유도 무시된다"
+        );
     }
 
     // preset_options_view() — 팝업 6종 개수(50/48/2/2/4/4)와 labelKey 배정.
@@ -4111,17 +4678,205 @@ mod tests {
         assert!(err.contains("알 수 없는"));
     }
 
+    // ============================================================================
+    // F-01 `settings_set` 의 `seek.*` 경로 — `apply_seek_setting`/
+    // `parse_seek_remap_key`/`quick_press_opens_seek`/`seek_view`.
+    // ============================================================================
+
+    // apply_seek_setting() — toggleShortcut 의 code/modifiers 는 부분 갱신이다:
+    // 한쪽만 바뀌어도 다른 쪽의 기존 값을 보존한다.
+    #[test]
+    fn apply_seek_setting_updates_toggle_shortcut_code_preserving_modifiers() {
+        let mut seek = SeekSettings {
+            toggle_shortcut: Some(SeekShortcut {
+                code: "Space".to_string(),
+                modifiers: EventFlags::ALTERNATE,
+            }),
+            ..SeekSettings::default()
+        };
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_TOGGLE_SHORTCUT_CODE,
+            &serde_json::json!("KeyA"),
+        )
+        .unwrap();
+        let shortcut = seek.toggle_shortcut.unwrap();
+        assert_eq!(shortcut.code, "KeyA");
+        assert_eq!(
+            shortcut.modifiers,
+            EventFlags::ALTERNATE,
+            "modifiers 는 보존돼야 한다"
+        );
+    }
+
+    #[test]
+    fn apply_seek_setting_updates_toggle_shortcut_modifiers_preserving_code() {
+        let mut seek = SeekSettings {
+            toggle_shortcut: Some(SeekShortcut {
+                code: "Space".to_string(),
+                modifiers: EventFlags::NONE,
+            }),
+            ..SeekSettings::default()
+        };
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_TOGGLE_SHORTCUT_MODIFIERS,
+            &serde_json::json!(EventFlags::COMMAND.0),
+        )
+        .unwrap();
+        let shortcut = seek.toggle_shortcut.unwrap();
+        assert_eq!(shortcut.code, "Space", "code 는 보존돼야 한다");
+        assert_eq!(shortcut.modifiers, EventFlags::COMMAND);
+    }
+
+    // apply_seek_setting() — `null` 은 명시적 지우기(단축키 제거).
+    #[test]
+    fn apply_seek_setting_null_clears_toggle_shortcut() {
+        let mut seek = SeekSettings {
+            toggle_shortcut: Some(SeekShortcut {
+                code: "Space".to_string(),
+                modifiers: EventFlags::NONE,
+            }),
+            ..SeekSettings::default()
+        };
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_TOGGLE_SHORTCUT_CODE,
+            &serde_json::Value::Null,
+        )
+        .unwrap();
+        assert_eq!(seek.toggle_shortcut, None);
+    }
+
+    // apply_seek_setting() — seek.remapKey 는 "-" 를 None 으로, 그 밖은 SourceKey
+    // variant 이름으로 파싱한다.
+    #[test]
+    fn apply_seek_setting_parses_remap_key_dash_and_variant() {
+        let mut seek = SeekSettings::default();
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_REMAP_KEY,
+            &serde_json::json!("CapsLock"),
+        )
+        .unwrap();
+        assert_eq!(seek.remap_key, Some(SourceKey::CapsLock));
+
+        apply_seek_setting(&mut seek, keys::SEEK_REMAP_KEY, &serde_json::json!("-")).unwrap();
+        assert_eq!(seek.remap_key, None);
+    }
+
+    #[test]
+    fn apply_seek_setting_rejects_unknown_remap_key_value() {
+        let mut seek = SeekSettings::default();
+        let err = apply_seek_setting(
+            &mut seek,
+            keys::SEEK_REMAP_KEY,
+            &serde_json::json!("NotARealKey"),
+        )
+        .unwrap_err();
+        assert!(err.contains("알 수 없는"));
+    }
+
+    #[test]
+    fn apply_seek_setting_updates_execute_on_close_and_semicolon_cycles() {
+        let mut seek = SeekSettings::default();
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_EXECUTE_ON_CLOSE,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(seek.execute_on_close);
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEMICOLON_CYCLE,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(seek.semicolon_cycles);
+    }
+
+    // ⚠️ 위임 지시 §5-5 — `seek.searchBar.x/y` 는 이 커맨드로 바꿀 수 없다(F-03 이
+    // 직접 저장한다).
+    #[test]
+    fn apply_seek_setting_rejects_search_bar_position_keys() {
+        let mut seek = SeekSettings::default();
+        assert!(
+            apply_seek_setting(&mut seek, keys::SEEK_SEARCH_BAR_X, &serde_json::json!(1.0))
+                .is_err()
+        );
+        assert!(
+            apply_seek_setting(&mut seek, keys::SEEK_SEARCH_BAR_Y, &serde_json::json!(1.0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_and_apply_seek_rejects_unknown_key() {
+        let mut seek = SeekSettings::default();
+        let err = validate_and_apply_seek(&mut seek, "seek.doesNotExist", &serde_json::json!(true))
+            .unwrap_err();
+        assert!(err.contains("알 수 없는"));
+    }
+
+    // quick_press_opens_seek() — 체크박스 + 팝업 값이 둘 다 맞아야 true.
+    #[test]
+    fn quick_press_opens_seek_requires_enabled_and_seek_action() {
+        assert!(!quick_press_opens_seek(&PresetSettings::default()));
+
+        let enabled_wrong_action = PresetSettings {
+            caps_quick_press: ultrakey_presets::settings::CapsQuickPressSettings {
+                enabled: true,
+                action: QuickPressCapsAction::Esc,
+            },
+            ..PresetSettings::default()
+        };
+        assert!(!quick_press_opens_seek(&enabled_wrong_action));
+
+        let enabled_seek = PresetSettings {
+            caps_quick_press: ultrakey_presets::settings::CapsQuickPressSettings {
+                enabled: true,
+                action: QuickPressCapsAction::Seek,
+            },
+            ..PresetSettings::default()
+        };
+        assert!(quick_press_opens_seek(&enabled_seek));
+    }
+
+    // seek_view() — remap_key_options 35종, `-` 값·라벨, any_activation_configured.
+    #[test]
+    fn seek_view_reflects_settings_and_lists_35_remap_key_options() {
+        let view = seek_view(&SeekSettings::default(), false);
+        assert_eq!(view.remap_key, "-");
+        assert!(!view.any_activation_configured);
+        assert_eq!(view.remap_key_options.len(), 35);
+        assert_eq!(view.remap_key_options[0].value, "-");
+        assert_eq!(view.remap_key_options[0].label, "-");
+
+        let with_caps_lock = seek_view(
+            &SeekSettings {
+                remap_key: Some(SourceKey::CapsLock),
+                ..SeekSettings::default()
+            },
+            false,
+        );
+        assert_eq!(with_caps_lock.remap_key, "CapsLock");
+        assert!(with_caps_lock.any_activation_configured);
+    }
+
     // SettingsState 직렬화가 camelCase 인지 — 프런트엔드가 기대하는 필드 이름 계약.
     #[test]
     fn settings_state_serializes_camel_case() {
         let hyperkey = HyperkeySettings::default();
         let presets = PresetSettings::default();
         let korean = KoreanSettings::default();
+        let seek = SeekSettings::default();
         let store = SettingsStore::in_memory();
         let state = build_settings_state(
             &hyperkey,
             &presets,
             &korean,
+            &seek,
             &store,
             Some("디스크 가득 참".to_string()),
             None,
@@ -4140,6 +4895,17 @@ mod tests {
         assert!(obj.contains_key("general"));
         assert!(obj.contains_key("pendingConflict"));
         assert_eq!(obj["pendingConflict"], serde_json::Value::Null);
+
+        // ⭐ F-01 `Seek` 탭 계약 — 다른 위임의 `settings.html` 이 이 모양을 전제한다.
+        let seek_json = obj["seek"].as_object().unwrap();
+        assert!(seek_json.contains_key("toggleShortcut"));
+        assert_eq!(seek_json["toggleShortcut"], serde_json::Value::Null);
+        assert_eq!(seek_json["remapKey"], "-");
+        assert!(seek_json.contains_key("executeOnClose"));
+        assert!(seek_json.contains_key("semicolonCycles"));
+        assert!(seek_json.contains_key("quickPressOpens"));
+        assert_eq!(seek_json["anyActivationConfigured"], false);
+        assert_eq!(seek_json["remapKeyOptions"].as_array().unwrap().len(), 35);
 
         let hyperkey_json = obj["hyperkey"].as_object().unwrap();
         assert!(hyperkey_json.contains_key("includeShiftInHyper"));
@@ -4208,6 +4974,7 @@ mod tests {
             &hyperkey,
             &PresetSettings::default(),
             &KoreanSettings::default(),
+            &SeekSettings::default(),
             &store,
             None,
             None,

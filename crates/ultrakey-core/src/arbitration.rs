@@ -68,6 +68,26 @@ pub enum Effect {
     ToggleCapsLock,
     OpenSeek,
     TypeChar(char),
+    /// ⭐ F-01 — `Remap key to Seek:` 키가 눌렸다(활성화 경로 2). 세션 모드
+    /// (toggle/hold)는 F-01 이 자기 설정으로 판정한다 — core 는 모른다.
+    SeekTriggerDown,
+    /// ⭐ F-01 — 같은 키가 떼졌다. hold 모드의 "Release the remapped key to click"
+    /// 이 이 이벤트로 성립한다(명세 §3.2).
+    ///
+    /// ⭐ **실린 `EventFlags` 는 키를 뗀 그 순간의 modifier 스냅샷이다.** F-04
+    /// (`seek-click-execution.md`) §5 #10 이 "hold 모드 확정 시 클릭 모드 판정에
+    /// 쓰이는 modifier 는 리매핑 키를 떼는 그 순간의 상태를 반영한다" 고 요구하는데,
+    /// 그 순간을 아는 것은 이 콜백뿐이다 — F-04 가 자기 시점에 다시 조회하면
+    /// 사용자는 이미 손을 뗀 뒤다. 그래서 값을 **여기서 떠서** 실어 보낸다.
+    ///
+    /// ⚠️ 원본 `ev.flags` 를 가공하지 않고 그대로 싣는다. caps lock 트리거라면
+    /// `alphaShift` 비트도 함께 온다 — 어떤 비트를 클릭 모드 판정에 쓸지는
+    /// F-04 의 판단이지 이 크레이트의 판단이 아니다.
+    SeekTriggerUp(EventFlags),
+    /// ⭐ F-01 — 세션이 열려 있는 동안 Seek 으로 라우팅되는 키 하나(계층 1).
+    /// `kind` 는 **정규화된 값**이다 — `FlagsChanged` 는 이미 down/up 으로 환원돼
+    /// 있다(`normalize_kind`). 소비자가 그 환원을 다시 하면 안 된다.
+    SeekKey(InputEvent),
 }
 
 /// 어느 계층이 이 결과를 결정했는지 — short-circuit 을 테스트에서 검증하기 위한 표식.
@@ -231,6 +251,15 @@ impl Arbiter {
     }
 
     /// §3-b 계층 1~5. 계층 0(앱 게이트)·Secure Input 은 호출자가 이미 걸렀다.
+    ///
+    /// ⚠️ **순서가 버그 수정이다(2026-08-30, F-01 배선).** 예전 코드는 `gates.seek_active`
+    /// 를 함수 맨 앞, D-1 alias 되돌리기·`normalize_kind`·눌림 테이블 갱신보다도 앞에서
+    /// 검사했다. `normalize_kind` 는 `FlagsChanged` 를 눌림 테이블로 down/up 으로
+    /// 환원하는데, 세션이 열린 동안 그 테이블을 갱신하지 않으면 (1) caps lock 을 떼는
+    /// `FlagsChanged` 를 "릴리즈"로 볼 수 없고 (2) 세션이 닫힌 뒤에도 테이블이 어긋난
+    /// 채 남아 down/up 판정이 통째로 뒤집힌다 — hold 모드가 원리적으로 동작하지
+    /// 않는다. 그래서 이제 alias 되돌리기 → `normalize_kind` → 눌림 테이블 갱신 →
+    /// Seek 트리거 판정 → 계층 1(세션 활성) 순으로 평가한다.
     pub fn arbitrate(
         &mut self,
         cfg: &EngineConfig,
@@ -238,12 +267,6 @@ impl Arbiter {
         gates: GateSnapshot,
         now: Millis,
     ) -> Outcome {
-        // 계층 1: Seek 세션 활성. M1 은 seek_active 가 항상 false 이지만, 이 분기 자체는
-        // M3(F-01)를 위해 존재해야 한다(architecture.md §5).
-        if gates.seek_active {
-            return Outcome::consume(Layer::SeekSession);
-        }
-
         // D-1 — 진입 즉시 caps lock alias 를 되돌린다. 이후 모든 판정은 이 사본 기준이다.
         let resolved = Self::resolve_caps_lock_alias(cfg, ev_in);
         let ev = &resolved;
@@ -258,6 +281,44 @@ impl Arbiter {
             EventKind::KeyDown => self.state.set_pressed(ev.keycode, true),
             EventKind::KeyUp => self.state.set_pressed(ev.keycode, false),
             _ => {}
+        }
+
+        // ⭐ F-01 활성화 경로 2 — `Remap key to Seek:`. 계층 1 바로 아래, 계층 2 위다.
+        // 이 위치의 근거는 `key-remapping-engine.md` §3-b 의 "Seek 은 다른 어떤
+        // 리매핑보다 명백히 상위 의도" 다. caps lock 이 동시에 hyper 소스이거나
+        // quick press 대상이어도 Seek 트리거가 결정론적으로 이긴다(§5 #7).
+        //
+        // ⭐ 세션이 열려 있든 아니든 이 검사가 먼저다 — 그래야 트리거 키의 릴리즈가
+        // 항상 `SeekTriggerUp` 으로 올라간다. 계층 1(SeekKey)로 흘려보내면 세션이
+        // 열리는 시점과 `seek_session_active` 게시 시점 사이의 경합에서 릴리즈를
+        // 통째로 잃을 수 있다.
+        if cfg.rules.seek_trigger == Some(ev.keycode)
+            && (kind == EventKind::KeyDown || kind == EventKind::KeyUp)
+        {
+            let mut out = Outcome::consume(Layer::SeekSession);
+            match kind {
+                // 명세 §5 #10 · §3.3 — 누르고 있는 동안 오는 반복 다운은 새 활성화
+                // 시도가 아니라 눌림 유지의 연속이다. 소비만 하고 효과를 내지 않는다.
+                EventKind::KeyDown if ev.autorepeat => {}
+                EventKind::KeyDown => out.push_effect(Effect::SeekTriggerDown),
+                _ => out.push_effect(Effect::SeekTriggerUp(ev.flags)),
+            }
+            return out;
+        }
+
+        // 계층 1: Seek 세션 활성(§3-b). 키 이벤트는 전부 소비해 Seek 으로 라우팅한다 —
+        // "세션이 열려 있는 동안 타이핑한 문자는 하위 앱에 도달하지 않는다"(§8).
+        //
+        // ⭐ 마우스 이벤트는 통과시킨다. 명세 §3.1 이 소비 대상으로 지목한 것은 **키**
+        // 이벤트뿐이고, 마우스까지 삼키면 세션이 열린 동안 포인터가 통째로 멈춘다 —
+        // 그리고 F-04 가 합성할 클릭 자체를 우리가 다시 삼키게 된다.
+        if gates.seek_active {
+            if !ev.kind.is_key() {
+                return Outcome::pass(Layer::SeekSession);
+            }
+            let mut out = Outcome::consume(Layer::SeekSession);
+            out.push_effect(Effect::SeekKey(InputEvent { kind, ..*ev }));
+            return out;
         }
 
         // 계층 2/3 통합 소스 키 핸들러(architecture.md §6.4 P1) — 추적 키(hyper/meh/bleh
@@ -1161,6 +1222,302 @@ mod tests {
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle);
+        // ⭐ F-01 배선 — 계층 2(hyper) 는 평가되지 않으므로 hyper 합성 `flagsChanged` 는
+        // 없고, 대신 `Effect::SeekKey` 하나가 실려 나간다(§3.1 "세션이 열려 있는 동안
+        // …CGEventTap 을 통해 들어오는 문자 키 이벤트는 Seek 검색 바로만 라우팅").
+        assert!(out.emitted().is_empty());
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(
+            out.effects()[0],
+            Effect::SeekKey(ev) if ev.keycode == KeyCode::CAPS_LOCK && ev.kind == EventKind::KeyDown
+        ));
+    }
+
+    // ── ⭐ F-01 — Seek 트리거·세션 라우팅 배선(`seek-activation-and-session.md` §3.1~3.3) ──
+
+    /// #1 — `seek_trigger_capslock_flags_changed_emits_down_then_up`.
+    ///
+    /// caps lock 은 물리적으로 `FlagsChanged` 하나로만 도착한다(§3.2 표, "리매핑 키
+    /// 다운"). `KeyDown`/`KeyUp` 으로 흉내 내면 M1 hyper 미발동 사고(이 크레이트 문서
+    /// 서두 인용)를 그대로 재현한다 — 그래서 이 테스트가 그 재발 방지 자리다. 같은
+    /// keycode 로 `FlagsChanged` 를 두 번 보내면 첫 번째가 `SeekTriggerDown`(§3.2 "리매핑
+    /// 키 다운"), 두 번째가 `SeekTriggerUp`(hold 모드 "Release the remapped key to
+    /// click", §3.2)이어야 한다.
+    #[test]
+    fn seek_trigger_capslock_flags_changed_emits_down_then_up() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot::default(),
+            Millis(0),
+        );
+        assert_eq!(down.layer(), Layer::SeekSession);
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
+
+        // ⭐ 릴리즈에 ⌘ 을 얹는다 — F-04 §5 #10 이 요구하는 "리매핑 키를 떼는 그
+        // 순간의 modifier 스냅샷" 이 `SeekTriggerUp` 에 실려 나가야 한다. 그 순간을
+        // 아는 것은 이 콜백뿐이므로 여기서 뜨지 않으면 F-04 가 영영 알 수 없다.
+        let release_flags = EventFlags::CAPS_LOCK | EventFlags::COMMAND;
+        let up = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, release_flags),
+            GateSnapshot::default(),
+            Millis(50),
+        );
+        assert_eq!(up.layer(), Layer::SeekSession);
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(up.effects(), [Effect::SeekTriggerUp(release_flags)]);
+    }
+
+    /// #2 — `seek_trigger_momentary_key_emits_down_then_up`. `F13` 같은 모멘터리
+    /// F-키는 물리적으로 `KeyDown`/`KeyUp` 쌍으로 도착한다(caps lock 과 달리 modifier
+    /// 가 아니다) — `key-remapping-engine.md` §3-a 근거. `Remap key to Seek:` 팝업
+    /// 35종에 `F13` 이 포함된다(§4).
+    #[test]
+    fn seek_trigger_momentary_key_emits_down_then_up() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.seek_trigger = Some(KeyCode::F13);
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(down.layer(), Layer::SeekSession);
+        assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
+
+        // 릴리즈 시점의 modifier 스냅샷(F-04 §5 #10) — ⌥ 를 누른 채 뗀 상황.
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::ALTERNATE), GateSnapshot::default(), Millis(20));
+        assert_eq!(up.layer(), Layer::SeekSession);
+        assert_eq!(up.effects(), [Effect::SeekTriggerUp(EventFlags::ALTERNATE)]);
+    }
+
+    /// #3 — `seek_trigger_autorepeat_down_is_consumed_without_effect`(§5 #10 · §3.3
+    /// "같은 경로로 열린 세션에 hold 모드에서 동일 리매핑 키의 반복(autorepeat) 다운
+    /// 이벤트가 들어오는 경우, 이는 새 활성화 시도가 아니라 눌림 유지의 연속이므로
+    /// 무시한다"). 반복 다운은 소비만 하고 두 번째 `SeekTriggerDown` 을 내면 안 된다.
+    #[test]
+    fn seek_trigger_autorepeat_down_is_consumed_without_effect() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.seek_trigger = Some(KeyCode::F13);
+        let mut arb = Arbiter::new(&cfg);
+
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(first.effects(), [Effect::SeekTriggerDown]);
+
+        let repeat = arb.arbitrate(&cfg, &key_down_repeat(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(50));
+        assert_eq!(repeat.layer(), Layer::SeekSession);
+        assert_eq!(repeat.disposition(), Disposition::Consume);
+        assert!(repeat.effects().is_empty(), "autorepeat 다운은 SeekTriggerDown 을 다시 내면 안 된다");
+    }
+
+    /// #4 — `seek_trigger_beats_hyper_source_on_same_key`. `key-remapping-engine.md`
+    /// §3-b "동일 소스 키 중복 배정 방지" 근거 2: "Seek(화면 탐색 전용 모드 진입)은
+    /// 다른 어떤 리매핑보다 명백히 상위 의도" — caps lock 이 hyper 소스로도 등록돼
+    /// 있어도 hyper 합성 `flagsChanged` 는 나가지 않고 Seek 만 발화한다.
+    #[test]
+    fn seek_trigger_beats_hyper_source_on_same_key() {
+        let mut cfg = hyper_config(); // caps lock 을 hyper 소스로 등록
+        cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot::default(),
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.effects(), [Effect::SeekTriggerDown]);
+        assert!(out.emitted().is_empty(), "hyper 합성 flagsChanged 가 나가면 안 된다");
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "hyper FSM 은 건드리지 않는다");
+    }
+
+    /// #5 — `seek_trigger_beats_quick_press_action_on_same_key`. 같은 근거(§3-b) —
+    /// caps lock 에 quick press 액션(`ToggleCapsLock`)이 등록돼 있어도 Seek 트리거가
+    /// 이겨서 quick press FSM 자체가 전혀 진행되지 않는다.
+    #[test]
+    fn seek_trigger_beats_quick_press_action_on_same_key() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: Some(RuleAction::ToggleCapsLock),
+            double_tap: None,
+            hold_remap: None,
+        });
+        cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot::default(),
+            Millis(0),
+        );
+        assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
+
+        let up = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot::default(),
+            Millis(10),
+        );
+        assert_eq!(up.effects(), [Effect::SeekTriggerUp(EventFlags::CAPS_LOCK)]);
+        assert!(!up.effects().contains(&Effect::ToggleCapsLock), "quick press 액션이 발화하면 안 된다");
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "quick press FSM 은 건드리지 않는다");
+    }
+
+    /// #6 — `seek_trigger_resolves_d1_alias`(D-1, `architecture.md` §6.1). caps lock 이
+    /// 경로 B 로 `F18` 에 매핑돼 있으면(`caps_lock_alias = Some(F18)`) 탭에는 물리
+    /// `F18` 의 `KeyDown`/`KeyUp` 이 도착한다. `seek_trigger = Some(CAPS_LOCK)` 이면
+    /// alias 를 되돌린 뒤 판정해야 하므로, F18 의 `KeyDown` 이 `SeekTriggerDown` 을
+    /// 내야 한다.
+    #[test]
+    fn seek_trigger_resolves_d1_alias() {
+        let mut cfg = d1_cfg();
+        cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(down.layer(), Layer::SeekSession);
+        assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
+    }
+
+    /// #7 — `session_active_consumes_key_events_and_routes_them`(§8 수용 기준 "세션이
+    /// 열려 있는 동안 타이핑한 문자는 Seek 검색 바에만 나타나고… 하위 앱의 텍스트
+    /// 필드에는 어떤 문자도 도달하지 않는다").
+    #[test]
+    fn session_active_consumes_key_events_and_routes_them() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        match out.effects()[0] {
+            Effect::SeekKey(ev) => {
+                assert_eq!(ev.kind, EventKind::KeyDown);
+                assert_eq!(ev.keycode, KeyCode::ANSI_A);
+            }
+            other => panic!("SeekKey 가 아니다: {other:?}"),
+        }
+    }
+
+    /// #8 — `session_active_normalizes_flags_changed_before_routing`. F-01(소비자)이
+    /// `FlagsChanged` → down/up 환원을 다시 하지 않아도 되게 하는 계약(`Effect::SeekKey`
+    /// 문서 주석) — 세션 중 modifier 키(예: shift)를 눌렀다 떼도 `SeekKey.kind` 가 이미
+    /// `KeyDown`→`KeyUp` 으로 정규화돼 있어야 한다.
+    #[test]
+    fn session_active_normalizes_flags_changed_before_routing() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot { seek_active: true, ..Default::default() };
+
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), gates, Millis(0));
+        match down.effects()[0] {
+            Effect::SeekKey(ev) => assert_eq!(ev.kind, EventKind::KeyDown),
+            other => panic!("SeekKey 가 아니다: {other:?}"),
+        }
+
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), gates, Millis(10));
+        match up.effects()[0] {
+            Effect::SeekKey(ev) => assert_eq!(ev.kind, EventKind::KeyUp),
+            other => panic!("SeekKey 가 아니다: {other:?}"),
+        }
+    }
+
+    /// #9 — `session_active_passes_mouse_events_through`. §3.1 이 소비 대상으로 지목한
+    /// 것은 **키** 이벤트뿐이다 — 마우스까지 삼키면 세션 중 포인터가 멈추고 F-04 가
+    /// 합성할 클릭 자체를 다시 삼키게 된다.
+    #[test]
+    fn session_active_passes_mouse_events_through() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let click = InputEvent {
+            kind: EventKind::LeftMouseDown,
+            keycode: KeyCode(0),
+            flags: EventFlags::NONE,
+            autorepeat: false,
+        };
+        let out = arb.arbitrate(&cfg, &click, GateSnapshot { seek_active: true, ..Default::default() }, Millis(0));
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// #10 — ⭐ `session_active_keeps_pressed_table_in_sync` — **회귀 방지**. 예전
+    /// 코드는 `gates.seek_active` 를 `normalize_kind`/`set_pressed` 보다 **앞**에서
+    /// 검사해 즉시 리턴했다 — 세션이 열려 있는 동안 정본 눌림 테이블이 전혀 갱신되지
+    /// 않았다는 뜻이다. 이 테스트는 그 갱신이 세션 여부와 무관하게 항상 일어남을
+    /// 직접 확인한다: 세션이 열린 동안 left shift 를 `FlagsChanged` 로 눌렀다(→
+    /// `is_pressed` 가 `true`) 뗀 뒤(→ `false`), 세션을 닫고 다시 `FlagsChanged` 를
+    /// 보내면 `normalize_kind` 가 그것을 (테이블이 `false` 이므로) `KeyDown` 으로
+    /// 환원해야 한다 — `is_pressed` 가 다시 `true` 로 바뀌는 것으로 확인한다.
+    #[test]
+    fn session_active_keeps_pressed_table_in_sync() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let session_open = GateSnapshot { seek_active: true, ..Default::default() };
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), session_open, Millis(0));
+        assert!(arb.state.is_pressed(KeyCode::LEFT_SHIFT), "세션 중 down 이 테이블에 반영돼야 한다");
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), session_open, Millis(10));
+        assert!(!arb.state.is_pressed(KeyCode::LEFT_SHIFT), "세션 중 up 도 테이블에 반영돼야 한다");
+
+        // 세션을 닫는다 — 실제로는 F-01 이 `seek_session_active` 를 false 로 내린다.
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(20));
+        assert!(
+            arb.state.is_pressed(KeyCode::LEFT_SHIFT),
+            "테이블이 어긋나 있었다면(수정 전 코드) 이 이벤트가 KeyUp 으로 오판돼 false 로 남았을 것이다"
+        );
+        // 세션이 닫혀 있고 등록된 규칙이 없으므로 정상적으로 통과한다(Seek 이 삼키지 않는다).
+        assert_eq!(out.layer(), Layer::Passthrough);
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// #11 — `seek_trigger_up_is_emitted_even_while_session_active`. hold 모드 확정이
+    /// 이 계약 위에 서 있다(§3.2 "Selected(hold 모드) | 리매핑 키 업(release) … Confirming
+    /// … 'Release the remapped key to click'") — 세션이 이미 열려 있는 상태에서도
+    /// 트리거 키 자신의 릴리즈는 계층 1(`SeekKey`)이 아니라 `SeekTriggerUp` 으로
+    /// 나가야 한다.
+    #[test]
+    fn seek_trigger_up_is_emitted_even_while_session_active() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
+        let mut arb = Arbiter::new(&cfg);
+
+        // 트리거 다운 — 세션이 아직 열리지 않은 시점(F-01 이 이제 막 세션을 연다).
+        let down = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot::default(),
+            Millis(0),
+        );
+        assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
+
+        // 세션이 이제 열려 있다(F-01 이 `seek_session_active` 를 true 로 게시했다) —
+        // 그 상태에서 같은 트리거 키를 뗀다.
+        let up = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(50),
+        );
+        assert_eq!(up.layer(), Layer::SeekSession);
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(
+            up.effects(),
+            [Effect::SeekTriggerUp(EventFlags::CAPS_LOCK)],
+            "SeekKey 가 아니라 SeekTriggerUp 이어야 한다"
+        );
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
