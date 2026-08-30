@@ -12,6 +12,7 @@ pub mod flags;
 pub mod gate;
 pub mod keycode;
 pub mod keystate;
+pub mod korean;
 pub mod quickpress;
 pub mod rules;
 pub mod settings;

@@ -591,6 +591,9 @@ mod tests {
             .iter()
             .map(|c| match c.id {
                 RuleId::Preset(n) => n,
+                // 이 크레이트(`ultrakey-presets`)는 `Korean` id 를 만들지 않는다
+                // (`ultrakey-korean` 소관) — 도달할 수 없는 대비값일 뿐이다.
+                RuleId::Korean(_) => u8::MAX,
                 RuleId::Hyperkey => u8::MAX,
             })
             .collect();
@@ -630,7 +633,7 @@ mod tests {
     // `to_rules` → `EngineConfig` → `Arbiter` 까지 전체 파이프라인을 통과시킨다. 이 크레이트
     // (`ultrakey-presets`)는 `ultrakey-core` 를 이미 일반 의존성으로 갖고 있으므로(Cargo.toml)
     // 별도 dev-dependency 없이 바로 쓴다.
-    use ultrakey_core::arbitration::{Arbiter, Disposition};
+    use ultrakey_core::arbitration::{Arbiter, Disposition, GateSnapshot};
     use ultrakey_core::event::{EventKind, InputEvent};
     use ultrakey_core::settings::EngineConfig;
     use ultrakey_core::time::Millis;
@@ -658,7 +661,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::F18, flags: EventFlags::NONE, autorepeat: false },
-            false,
+            GateSnapshot::default(),
             Millis(0),
         );
 
@@ -697,7 +700,7 @@ mod tests {
                 flags: EventFlags::SHIFT,
                 autorepeat: false,
             },
-            false,
+            GateSnapshot::default(),
             Millis(0),
         );
         assert_eq!(
@@ -709,7 +712,7 @@ mod tests {
         let a_down = arb.arbitrate(
             &cfg,
             &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::ANSI_A, flags: EventFlags::NONE, autorepeat: false },
-            false,
+            GateSnapshot::default(),
             Millis(10),
         );
         assert_eq!(

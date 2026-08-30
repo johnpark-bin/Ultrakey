@@ -4242,6 +4242,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ultrakey-korean"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ultrakey-core",
+]
+
+[[package]]
 name = "ultrakey-layout"
 version = "0.1.0"
 dependencies = [

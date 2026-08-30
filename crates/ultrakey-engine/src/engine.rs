@@ -16,7 +16,7 @@ use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use ultrakey_core::arbitration::{
-    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, Outcome, SynthEvent,
+    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, GateSnapshot, Outcome, SynthEvent,
 };
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
@@ -513,7 +513,16 @@ fn on_tap_event(
         autorepeat: event.is_autorepeat(),
     };
     let seek_active = st.shared.seek_session_active.load(Ordering::Acquire);
-    let outcome = st.arbiter.arbitrate(&cfg, &input, seek_active, now);
+    // TODO(F-16 배선): 다음 작업이 SharedState 의 원자값에서 읽어 채운다
+    // (korean_app_excluded ← AppGate::is_korean_disabled, korean_ime ←
+    // AtomicKoreanImeGate::load). 지금은 seek_active 만 기존 값을 넘기고 나머지는
+    // `GateSnapshot::default()` — `korean_ime` 가 `Unknown` 이므로 fail-closed 로
+    // F-16 규칙이 아직 발화하지 않는다.
+    let gates = GateSnapshot {
+        seek_active,
+        ..Default::default()
+    };
+    let outcome = st.arbiter.arbitrate(&cfg, &input, gates, now);
 
     // quick press 타이머 재예약 힌트(architecture.md §2.3 — 25ms 폴링 금지).
     let outcome_is_pending =

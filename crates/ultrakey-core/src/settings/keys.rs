@@ -96,6 +96,22 @@ pub const PRESETS_HOME_END_ON_LINES: &str = "presets.homeEndOnLines";
 /// (이벤트 합성)만 쓴다(D-1, `docs/dev/architecture.md` §6.1 되돌릴 수단).
 pub const PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP: &str = "presets.synthesizeCapsLockRemap";
 
+// ── F-16 한국어 입력 지원(`korean-input.md` §4.2, D-K10) — `ultrakey-korean` 이 소비한다 ──
+
+/// F-16.1 `Shift + Space 로 입력 소스 변경` — 체크박스. 기본값 ☐(부재 = `false`).
+pub const KOREAN_SHIFT_SPACE_SWITCHES_INPUT_SOURCE: &str = "korean.shiftSpaceSwitchesInputSource";
+/// F-16.2 `한/영 키로 입력 소스 변경` — 체크박스. §3.2 키코드가 `(미확정)`인 동안 UI 에서
+/// dimmed 이고, `KoreanSettings::to_rules()` 는 이 값을 읽어도 규칙을 내지 않는다(D-K8).
+pub const KOREAN_HAN_ENG_SWITCHES_INPUT_SOURCE: &str = "korean.hanEngSwitchesInputSource";
+/// F-16.3 `한자 키로 한자 변환` — 체크박스. 상동(D-K8) — 규칙을 내지 않는다.
+pub const KOREAN_HANJA_KEY_CONVERTS_HANJA: &str = "korean.hanjaKeyConvertsHanja";
+/// F-16.4 `₩ 키로 백틱(\`) 입력` — 체크박스. 기본값 ☐(부재 = `false`).
+pub const KOREAN_WON_KEY_TYPES_BACKTICK: &str = "korean.wonKeyTypesBacktick";
+/// F-16 항목 5 `원격 데스크톱 클라이언트에서 한국어 키 처리 끄기` — 체크박스.
+/// ⚠️ **기본값 ☑(부재 = `true`)** — 다른 F-16 항목과 반대 방향이다(명세 §4.2 각주,
+/// D-K9). 구현·리뷰 양쪽에서 놓치기 쉬운 지점이라 여기서도 명시해 둔다.
+pub const KOREAN_DISABLE_IN_REMOTE_DESKTOP: &str = "korean.disableInRemoteDesktop";
+
 /// 전량 나열 — 테스트가 오타·중복·접두사 규칙을 검증하는 데 쓴다.
 pub fn all() -> &'static [&'static str] {
     &[
@@ -138,6 +154,11 @@ pub fn all() -> &'static [&'static str] {
         PRESETS_PASTE_WITHOUT_FORMATTING_TRIGGER,
         PRESETS_HOME_END_ON_LINES,
         PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP,
+        KOREAN_SHIFT_SPACE_SWITCHES_INPUT_SOURCE,
+        KOREAN_HAN_ENG_SWITCHES_INPUT_SOURCE,
+        KOREAN_HANJA_KEY_CONVERTS_HANJA,
+        KOREAN_WON_KEY_TYPES_BACKTICK,
+        KOREAN_DISABLE_IN_REMOTE_DESKTOP,
     ]
 }
 
@@ -155,9 +176,11 @@ mod tests {
         assert_eq!(sorted.len(), keys.len(), "중복된 키가 있다: {keys:?}");
     }
 
-    // keys::all() 의 모든 키가 접두사 규칙(hyperkey.* / ui.* / presets.* / general.*)을
-    // 지킨다. ⭐ M2 에서 `presets.*`(F-08, 이 파일)와 `general.*`(F-10, 다른 크레이트가
-    // 동시에 작업 중)를 추가로 허용하도록 넓혔다.
+    // keys::all() 의 모든 키가 접두사 규칙(hyperkey.* / ui.* / presets.* / general.* /
+    // korean.*)을 지킨다. ⭐ M2 에서 `presets.*`(F-08, 이 파일)와 `general.*`(F-10,
+    // 다른 크레이트가 동시에 작업 중)를 추가로 허용하도록 넓혔다. F-16 이 `korean.*`
+    // 를 더한다(D-K10) — 카탈로그 키는 `settings.korean.*` 이지만 **저장 키**는
+    // 명세 그대로 `korean.*` 다(D-K11, 이 파일이 다루는 것은 저장 키다).
     #[test]
     fn all_keys_follow_prefix_convention() {
         for key in all() {
@@ -165,7 +188,8 @@ mod tests {
                 key.starts_with("hyperkey.")
                     || key.starts_with("ui.")
                     || key.starts_with("presets.")
-                    || key.starts_with("general."),
+                    || key.starts_with("general.")
+                    || key.starts_with("korean."),
                 "접두사 규칙을 벗어난 키: {key}"
             );
         }

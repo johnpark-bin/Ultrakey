@@ -235,6 +235,11 @@ pub fn layer_to_code(layer: Layer) -> u8 {
         Layer::PresetCombo => 3,
         Layer::SimpleRemap => 4,
         Layer::Passthrough => 5,
+        // TODO(F-16 배선): F-16 한국어 입력 지원(`docs/spec/korean-input.md`)이
+        // `ultrakey-core::arbitration::Layer` 에 `KoreanInput` 을 추가해 이 매치가
+        // 깨졌다 — 기존 5개 코드를 재배치하지 않기 위해 새 코드 6을 뒤에 붙인다.
+        // 다음 작업(F-16 배선)이 실제 게이트를 연결한다.
+        Layer::KoreanInput => 6,
     }
 }
 
@@ -246,6 +251,7 @@ pub fn layer_from_code(code: u8) -> Option<Layer> {
         3 => Layer::PresetCombo,
         4 => Layer::SimpleRemap,
         5 => Layer::Passthrough,
+        6 => Layer::KoreanInput,
         _ => return None,
     })
 }
@@ -258,6 +264,7 @@ fn layer_name(code: u8) -> &'static str {
         Some(Layer::PresetCombo) => "PresetCombo",
         Some(Layer::SimpleRemap) => "SimpleRemap",
         Some(Layer::Passthrough) => "Passthrough",
+        Some(Layer::KoreanInput) => "KoreanInput",
         None => "Unknown",
     }
 }
@@ -506,6 +513,7 @@ mod tests {
             Layer::PresetCombo,
             Layer::SimpleRemap,
             Layer::Passthrough,
+            Layer::KoreanInput,
         ];
         for layer in all {
             let code = layer_to_code(layer);
