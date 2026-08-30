@@ -15,7 +15,9 @@ use std::time::Instant;
 use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use ultrakey_core::arbitration::{Arbiter, Disposition, Effect, Outcome, SynthEvent};
+use ultrakey_core::arbitration::{
+    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, Outcome, SynthEvent,
+};
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
 use ultrakey_core::settings::EngineConfig;
@@ -38,6 +40,7 @@ use crate::lifecycle::{
 use crate::path_b::PathBManager;
 use crate::state::SharedState;
 use crate::system_hooks::SystemHooks;
+use crate::trace::{self, TapTrace, TraceDrainHandle, TraceEmit, TraceRing};
 use crate::watchdog::Watchdog;
 
 /// 앱(호출자)에게 알리는 엔진 사건.
@@ -102,6 +105,8 @@ pub struct Engine {
     watchdog: Option<Watchdog>,
     system_hooks: Option<SystemHooks>,
     path_b: Arc<PathBManager>,
+    /// ⭐ 이슈 #19 진단 계측(`trace.rs`) — `ULTRAKEY_TRACE_TAP=1` 일 때만 `Some`.
+    trace_drain: Option<TraceDrainHandle>,
 }
 
 impl Engine {
@@ -147,6 +152,10 @@ impl Engine {
             let tap_state = Arc::new(AtomicTapState::new(TapState::NotInstalled));
             let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
                 Arc::new(ArcSwapOption::empty());
+            // ⭐ 이슈 #19 진단 계측 — 링 자체는 `trace_enabled()` 와 무관하게 항상
+            // 만든다(할당 한 번뿐이고, 비활성 상태에서는 아무도 push 하지 않아 계속
+            // 비어 있다). 드레인 스레드만 게이트로 막는다(아래).
+            let trace_ring = Arc::new(TraceRing::new());
 
             let (ready_tx, ready_rx) = bounded::<TapThreadHandshake>(1);
 
@@ -155,6 +164,7 @@ impl Engine {
             let thread_tap_state = Arc::clone(&tap_state);
             let thread_probe_slot = Arc::clone(&health_probe_slot);
             let thread_path_b = Arc::clone(&path_b);
+            let thread_trace_ring = Arc::clone(&trace_ring);
 
             let thread = thread::Builder::new()
                 .name("ultrakey-tap".to_string())
@@ -165,6 +175,7 @@ impl Engine {
                         thread_tap_state,
                         thread_probe_slot,
                         thread_path_b,
+                        thread_trace_ring,
                         ready_tx,
                     );
                 })
@@ -178,6 +189,9 @@ impl Engine {
                 handshake.commands.clone(),
             );
             let system_hooks = SystemHooks::start(Arc::clone(&shared), handshake.commands.clone());
+            // `trace::spawn_drain_thread` 는 `trace_enabled()` 가 false 면 스레드를
+            // 만들지 않고 `None` 을 돌려준다.
+            let trace_drain = trace::spawn_drain_thread(trace_ring);
 
             Ok(Engine {
                 shared,
@@ -188,6 +202,7 @@ impl Engine {
                 watchdog: Some(watchdog),
                 system_hooks: Some(system_hooks),
                 path_b,
+                trace_drain,
             })
         }
     }
@@ -245,6 +260,11 @@ impl Engine {
         if let Err(e) = self.path_b.cleanup() {
             tracing::warn!(error = %e, "경로 B 정리 실패");
         }
+        // 탭 스레드가 끝난 뒤에 정리한다 — 탭 스레드가 마지막으로 push 한 레코드까지
+        // 드레인 스레드가 종료 전 마지막 한 바퀴에서 회수하게 하기 위함이다.
+        if let Some(d) = self.trace_drain.take() {
+            d.shutdown();
+        }
     }
 }
 
@@ -275,6 +295,10 @@ struct TapThreadState {
     /// 콜백이 매번 이 시각으로부터 계산해 넘긴다 — `Instant::elapsed()` 는 힙 할당이
     /// 없어 콜백에서 써도 된다).
     start: Instant,
+    /// ⭐ 이슈 #19 진단 계측(`trace.rs`) — 무잠금 SPSC 링. 생산자는 이 스레드뿐이다.
+    trace: Arc<TraceRing>,
+    /// 계측 레코드의 단조 증가 시퀀스 번호. 이 스레드 배타 소유라 락 없이 증가시킨다.
+    trace_seq: u64,
 }
 
 fn set_tap_state(st: &mut TapThreadState, s: TapState) {
@@ -327,10 +351,31 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
 /// ⛔ 실패해도 여기서는 로깅하지 않는다(§2.2 — 콜백 임계 경로에서 동기 로깅 금지).
 /// caps lock 상태를 읽거나 쓰지 못하는 것은 하드웨어/커널 이상 같은 드문 상황에서도
 /// 반복될 수 있어, 이 자리에서 로그를 남기면 로그 폭주로 이어질 수 있다.
-fn toggle_caps_lock_via_path_c() {
-    if let Some(current) = ultrakey_platform::hid_lock::caps_lock_state() {
-        let _ = ultrakey_platform::hid_lock::set_caps_lock_state(!current);
+///
+/// ⭐ 이슈 #19 진단 계측 — 반환값은 실측 결과를 **값으로만** 넘긴다(로깅은 하지
+/// 않는다). `(result, before, after)`: `result` 는 0=시도안함(이 함수는 항상
+/// 시도하므로 실제로는 나오지 않는다) 1=성공 2=실패, `before`/`after` 는
+/// 0=off 1=on 2=읽기실패. `after` 는 쓰기 직후 상태를 한 번 더 읽어 담는다 —
+/// "쓰기가 실제로 반영됐는가"까지 계측이 확인할 수 있어야 원인을 좁힐 수 있다.
+fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
+    fn state_code(s: Option<bool>) -> u8 {
+        match s {
+            Some(false) => 0,
+            Some(true) => 1,
+            None => 2,
+        }
     }
+
+    let current = ultrakey_platform::hid_lock::caps_lock_state();
+    let before = state_code(current);
+    let result = match current {
+        Some(c) if ultrakey_platform::hid_lock::set_caps_lock_state(!c) => 1,
+        Some(_) => 2,
+        // 읽기부터 실패하면 반전할 기준값이 없어 쓰기를 시도하지 않는다 — 실패로 기록.
+        None => 2,
+    };
+    let after = state_code(ultrakey_platform::hid_lock::caps_lock_state());
+    (result, before, after)
 }
 
 /// `Outcome::effects()` 실행 — 콜백 **안**에서 부른다(`proxy` 가 있다).
@@ -345,10 +390,16 @@ fn toggle_caps_lock_via_path_c() {
 /// (사용자가 실제로 quick press 를 완료했을 때만 드물게 발생, 매 이벤트 비용이
 /// 아니다)로 둔 **의도적 예외**다. M3 가 이 자리를 실제 기능으로 채우면 그때
 /// 다시 검토한다.
-fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) {
+///
+/// ⭐ 이슈 #19 계측 배선 — `Effect::ToggleCapsLock` 을 실행했다면 그 실측 결과
+/// `(result, before, after)` 를 반환한다. 트레이스가 꺼져 있어도 이 튜플은 계산된다
+/// (경로 C 실행 자체의 일부이지 계측 전용 비용이 아니다) — 호출자가 `trace_enabled()`
+/// 일 때만 계측 레코드에 채워 넣는다.
+fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) -> Option<(u8, u8, u8)> {
+    let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
-            Effect::ToggleCapsLock => toggle_caps_lock_via_path_c(),
+            Effect::ToggleCapsLock => path_c = Some(toggle_caps_lock_via_path_c()),
             Effect::TypeChar(c) => {
                 if let Some(down) = SyntheticEvent::unicode(*c, true) {
                     down.post_to_tap(proxy);
@@ -362,14 +413,19 @@ fn apply_effects_in_tap(outcome: &Outcome, proxy: TapProxy) {
             }
         }
     }
+    path_c
 }
 
 /// `Outcome::effects()` 실행 — 콜백 **밖**(커맨드 perform·타이머)에서 부른다.
 /// 탭 콜백이 아니므로 로깅 제약이 없다.
-fn apply_effects_outside_tap(outcome: &Outcome) {
+/// 콜백 밖 경로(타이머 만료, `ForceResetState` 등)는 계측 레코드를 만들지 않는다
+/// (이슈 #19 계측은 탭 콜백 경로의 `arbitrate` 직후만 다룬다) — 그래도
+/// `apply_effects_in_tap` 과 시그니처를 맞춰 둔다. 호출자는 대부분 결과를 버린다.
+fn apply_effects_outside_tap(outcome: &Outcome) -> Option<(u8, u8, u8)> {
+    let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
-            Effect::ToggleCapsLock => toggle_caps_lock_via_path_c(),
+            Effect::ToggleCapsLock => path_c = Some(toggle_caps_lock_via_path_c()),
             Effect::TypeChar(c) => {
                 if let Some(down) = SyntheticEvent::unicode(*c, true) {
                     down.post();
@@ -383,6 +439,7 @@ fn apply_effects_outside_tap(outcome: &Outcome) {
             }
         }
     }
+    path_c
 }
 
 fn build_callback(
@@ -473,7 +530,54 @@ fn on_tap_event(
     }
 
     apply_outcome_in_tap(&outcome, proxy);
-    apply_effects_in_tap(&outcome, proxy);
+    let path_c = apply_effects_in_tap(&outcome, proxy);
+
+    // ⭐ 이슈 #19 진단 계측 — `arbitrate` 호출 직후(위)가 아니라 여기, effects 적용
+    // 결과까지 알고 난 뒤에 레코드를 만든다(경로 C 실측을 한 레코드에 함께 담기
+    // 위해서다). `trace_enabled()` 가 false 면 레코드를 만들지도 push 하지도
+    // 않는다 — 비용 0. `tracing::*` 매크로는 여기서 절대 부르지 않는다(§2.2).
+    if trace::should_trace(input.kind) {
+        let resolved = resolve_caps_lock_alias_for_trace(&cfg, input.keycode);
+        let mut rec = TapTrace {
+            seq: st.trace_seq,
+            raw_kind: trace::event_kind_to_code(input.kind),
+            raw_keycode: input.keycode.0,
+            raw_flags: input.flags.0,
+            autorepeat: input.autorepeat,
+            resolved_keycode: resolved.0,
+            alias_active: cfg.caps_lock_alias.is_some(),
+            layer: trace::layer_to_code(outcome.layer()),
+            disposition: trace::disposition_to_code(outcome.disposition()),
+            disposition_flags: trace::disposition_flags_of(outcome.disposition()),
+            ..Default::default()
+        };
+
+        // `TapTrace::emitted`/`effects` 는 진단 요약이라 4개까지만 담는다(`trace.rs`
+        // 문서 참고) — `Outcome` 자체는 최대 8개까지 낼 수 있다.
+        for (i, ev) in outcome.emitted().iter().take(4).enumerate() {
+            rec.emitted[i] = TraceEmit {
+                kind: trace::event_kind_to_code(ev.kind),
+                keycode: ev.keycode.0,
+                flags: ev.flags.0,
+            };
+        }
+        rec.emitted_len = outcome.emitted().len().min(4) as u8;
+
+        for (i, eff) in outcome.effects().iter().take(4).enumerate() {
+            rec.effects[i] = trace::effect_to_code(*eff);
+        }
+        rec.effects_len = outcome.effects().len().min(4) as u8;
+
+        if let Some((result, before, after)) = path_c {
+            rec.path_c_result = result;
+            rec.path_c_before = before;
+            rec.path_c_after = after;
+        }
+
+        st.trace_seq = st.trace_seq.wrapping_add(1);
+        st.trace.push(rec);
+    }
+
     match outcome.disposition() {
         Disposition::Pass => TapAction::Pass,
         Disposition::PassWithFlags(f) => {
@@ -723,6 +827,7 @@ fn tap_thread_main(
     tap_state_atomic: Arc<AtomicTapState>,
     health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>>,
     path_b: Arc<PathBManager>,
+    trace_ring: Arc<TraceRing>,
     ready_tx: Sender<TapThreadHandshake>,
 ) {
     let start = Instant::now();
@@ -743,6 +848,8 @@ fn tap_thread_main(
         fatal: false,
         timer: None,
         start,
+        trace: trace_ring,
+        trace_seq: 0,
     });
 
     let (cmd_tx, cmd_rx) = command::channel();
