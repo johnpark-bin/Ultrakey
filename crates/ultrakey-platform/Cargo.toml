@@ -11,6 +11,11 @@ repository.workspace = true
 ultrakey-core = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+# F-10 로그인 항목(login_item.rs) macOS 12 폴백이 쓰는 LaunchAgent plist 직렬화.
+# 순수 Rust 라 macOS 여부와 무관하게 빌드·테스트된다 — 타깃별 의존성 절이 아니라
+# 여기(공통 [dependencies])에 둔다.
+plist = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }

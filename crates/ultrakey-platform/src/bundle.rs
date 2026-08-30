@@ -52,10 +52,38 @@ mod macos_impl {
         };
         objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&ns_url)
     }
+
+    /// 같은 번들 ID 로 이미 실행 중인 **다른** 프로세스가 있는가 — 단일 인스턴스
+    /// 보장(`menu-bar-and-lifecycle.md` §2 시나리오 D, §5 항목 1, §8).
+    ///
+    /// `NSRunningApplication.runningApplicationsWithBundleIdentifier:` 로 같은
+    /// 번들 ID 를 쓰는 실행 중 프로세스만 걸러 얻는다 — `NSWorkspace.runningApplications`
+    /// 전체를 순회하며 직접 필터링하는 것보다 결과가 이미 좁혀져 있어 더 단순하다.
+    ///
+    /// ⚠️ Apple 문서는 "pid 로 프로세스를 비교하지 말고 `-isEqual:` 을 쓰라"고
+    /// 권고한다(pid 재사용 가능성). 그러나 여기서는 **지금 이 순간 살아 있는
+    /// 프로세스들** 사이의 비교이므로 재사용 경합이 실질적으로 없다.
+    ///
+    /// 번들 ID 를 얻지 못하면(`tauri dev` 같은 개발 빌드 등) 판정할 수 없으므로
+    /// `false`(중복 아님)로 본다 — 오탐으로 정상 인스턴스를 죽이는 것이 판정
+    /// 불능보다 더 나쁘다.
+    pub fn other_instance_running() -> bool {
+        let Some(bundle_id) = bundle_identifier() else {
+            return false;
+        };
+        let ns_bundle_id = objc2_foundation::NSString::from_str(&bundle_id);
+        let running = objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &ns_bundle_id,
+        );
+        let my_pid = objc2_app_kit::NSRunningApplication::currentApplication().processIdentifier();
+        running.iter().any(|app| app.processIdentifier() != my_pid)
+    }
 }
 
 #[cfg(target_os = "macos")]
-pub use macos_impl::{bundle_identifier, macos_version, open_url, preferred_languages};
+pub use macos_impl::{
+    bundle_identifier, macos_version, open_url, other_instance_running, preferred_languages,
+};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {
@@ -71,7 +99,12 @@ mod stub_impl {
     pub fn preferred_languages() -> Vec<String> {
         Vec::new()
     }
+    pub fn other_instance_running() -> bool {
+        false
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub use stub_impl::{bundle_identifier, macos_version, open_url, preferred_languages};
+pub use stub_impl::{
+    bundle_identifier, macos_version, open_url, other_instance_running, preferred_languages,
+};

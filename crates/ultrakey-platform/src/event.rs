@@ -143,6 +143,43 @@ mod macos_impl {
             Some(Self(ev))
         }
 
+        /// 유니코드 문자 하나를 얹은 keyDown/keyUp — `docs/dev/architecture.md` §6.4 P9.
+        /// `CGEventKeyboardSetUnicodeString` 로 문자열을 직접 얹으면 실제 출력이
+        /// 레이아웃과 무관하게 그 문자가 된다(keycode 자체는 임의값이어도 무시된다 —
+        /// macOS 가 관용적으로 쓰는 기법). F-08.7 symbol row·F-08.11 괄호 프리셋이
+        /// 이 함수로 down/up 한 쌍을 각각 합성해 방출한다(`ultrakey-engine::engine`
+        /// 의 `Effect::TypeChar` 처리 참고).
+        pub fn unicode(c: char, down: bool) -> Option<Self> {
+            let source = shared_event_source();
+            let ev = CGEvent::new_keyboard_event(source, 0, down)?;
+            // ⭐ flags 를 명시적으로 비운다 — `ultrakey_core::arbitration::Effect::
+            // TypeChar` 자체가 flags 를 실어 나르지 않는다(P9: 문자 출력은 레이아웃·
+            // modifier 와 무관해야 한다). `new_keyboard_event` 가 이벤트 소스의 현재
+            // HID 상태(예: 이 문자를 유발한 quick press 가 아직 완전히 끝나지 않은
+            // shift)를 flags 에 반영할 수 있으므로, 그대로 두면 유니코드 문자열이
+            // 이미 정한 글자에 의도치 않은 modifier 비트가 얹혀 나갈 수 있다.
+            CGEvent::set_flags(Some(&ev), CGEventFlags(0));
+            // `char::encode_utf16` 은 서로게이트 쌍이 필요한 문자(BMP 밖)까지
+            // 감안해 최대 2개의 UTF-16 코드 유닛을 채운다.
+            let mut units = [0u16; 2];
+            let encoded = c.encode_utf16(&mut units);
+            let len = encoded.len();
+            // SAFETY: `ev` 는 방금 만든 유효한 CGEvent 다. `units` 는 이 스코프
+            // 동안 살아 있는 스택 버퍼이고, `len` 은 그 안에서 실제로 채워진
+            // 유닛 수를 넘지 않는다. `CGEventKeyboardSetUnicodeString` 은 문서상
+            // 호출 즉시 문자열을 이벤트 내부로 복사하므로, 이 호출이 끝나면
+            // `units` 를 더 들고 있을 필요가 없다.
+            unsafe {
+                CGEvent::keyboard_set_unicode_string(
+                    Some(&ev),
+                    len as core::ffi::c_ulong,
+                    units.as_ptr(),
+                );
+            }
+            mark_synthetic(&ev);
+            Some(Self(ev))
+        }
+
         /// 탭 콜백 **안**에서 방출할 때 쓴다. `CGEventTapPostEvent` 는 우리
         /// 탭보다 뒤에 이벤트를 주입하므로, 우리 탭이 이 이벤트를 다시
         /// 가로채는 재진입 자체가 없다 — 따라서 마커가 없어도 무한 루프가
@@ -202,6 +239,9 @@ mod stub_impl {
             None
         }
         pub fn flags_changed(_keycode: KeyCode, _flags: EventFlags) -> Option<Self> {
+            None
+        }
+        pub fn unicode(_c: char, _down: bool) -> Option<Self> {
             None
         }
         pub fn post_to_tap(self, _proxy: crate::event_tap::TapProxy) {
