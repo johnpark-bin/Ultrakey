@@ -14,10 +14,11 @@
 | 크레이트 | 대응 명세 | 역할 | `unsafe` | macOS 필요 |
 | :--- | :--- | :--- | :---: | :---: |
 | `ultrakey-core` | F-07 의 **판정 부분**, F-10 게이트 상태, F-15 선행 | 정본 키 상태 테이블, quick press 상태 머신, 중재 우선순위 표, 규칙 테이블, 설정 타입, 키코드 enum | ❌ 없음 | ❌ 불필요 |
-| `ultrakey-platform` | 전 기능의 플랫폼 경계 | **모든 `unsafe` FFI 가 여기에만 있다.** CGEvent/EventTap, IOKit(경로 B·C·핫플러그), Carbon HIToolbox(TIS/UCKeyTranslate), AX, NSWorkspace, Secure Input, CFRunLoop | ✅ 전량 | ✅ |
+| `ultrakey-platform` | 전 기능의 플랫폼 경계 | **모든 `unsafe` FFI 가 여기에만 있다.** CGEvent/EventTap, IOKit(경로 B·C·핫플러그), Carbon HIToolbox(TIS/UCKeyTranslate), AX, NSWorkspace, Secure Input, CFRunLoop. ⭐ **F-02 추가(이슈 #30)**: `screen_capture`(`CGDisplayCreateImage`) · `image_preprocess`(CoreImage) · `vision_ocr`(Vision) · `ax_text`(AX 트리 순회) · `screen_recording`(권한) | ✅ 전량 | ✅ |
 | `ultrakey-engine` | F-07 의 **인프라 부분** | 전용 스레드 런루프, 탭 생명주기 FSM, 워치독, 절전·깨어남·세션 훅, 핫플러그 재적용, 경로 B/C 관리자 | 간접 | ✅ |
 | `ultrakey-layout` | F-14 (B) | 입력 소스 독립 판정 — ASCII 폴백, 정/역방향 테이블, 캐시 무효화 | 간접 | ✅ (테스트는 ❌) |
 | `ultrakey-hyperkey` | F-05 | hyper·meh·bleh 규칙 정의와 비트마스크 합성. **엔진에 규칙만 등록한다** | ❌ 없음 | ❌ 불필요 |
+| `ultrakey-seek` | **F-02** | Seek 텍스트 후보 검출의 **순수 로직** — 좌표 변환(§3.2.3), 후보 정규화, 두 소스 병합(§3.4), 질의 매칭(§3.6). macOS 의존은 `detect` 모듈 하나에 `#[cfg]` 로 가둬 두어 나머지는 어디서나 테스트된다 | ❌ 없음 | 부분 (`detect` 만) |
 | `ultrakey-permissions` | F-11 | `AXIsProcessTrusted` 폴링, 권한 상태 머신, out-of-sync 진단, 시스템 설정 딥링크 | 간접 | ✅ |
 | `ultrakey-i18n` | F-14 (A) / D4 | 문자열 카탈로그(ko + en), 로케일 결정, OS 버전별 어휘 교체 | ❌ 없음 | ❌ 불필요 |
 | `apps/ultrakey-app` | F-09·F-10 의 껍데기 | Tauri 앱. M1 에서는 권한 안내 모달 + 배선(wiring)만 | 간접 | ✅ |

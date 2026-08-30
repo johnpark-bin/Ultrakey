@@ -1944,6 +1944,119 @@ fn open_log_file() -> Option<std::fs::File> {
         .ok()
 }
 
+// ============================================================================
+// ⭐ F-02 검출 프로브 — 실기기 검증 전용 (이슈 #30)
+// ============================================================================
+//
+// `ULTRAKEY_SEEK_DETECT_DUMP=1` 로 실행하면 기동 직후 F-02 검출 파이프라인을
+// **한 번** 돌려 결과를 로그와 덤프 파일에 남긴다.
+//
+// ⭐ **왜 이런 것이 필요한가**: Screen Recording 권한은 TCC 가 **부모 프로세스**
+// 기준으로 판정한다(`platform-constraints.md` §3.2). 터미널에서 `cargo run` 한
+// 바이너리는 *터미널의* 권한으로 캡처하므로, 앱이 실제로 권한을 받았는지를
+// 그것으로는 절대 확인할 수 없다. 서명된 `.app` 을 `open` 으로 띄운 프로세스
+// 안에서 돌려야만 유효한 증거가 된다(`manual-verification.md` 항목 7).
+//
+// ⛔ **이것은 F-01(세션 활성화)이 아니다.** 단축키도 오버레이도 없다. F-02 의
+// 범위는 "후보 목록을 만드는 것" 까지이고, 이 프로브는 그 산출물을 눈으로 볼
+// 수단일 뿐이다. F-01 이 들어오면 이 프로브는 그대로 두거나 지워도 된다.
+fn run_seek_detect_probe() {
+    use ultrakey_seek::detect::{detect_candidates, DetectionParams};
+
+    let use_ax = std::env::var_os("ULTRAKEY_SEEK_DETECT_AX").is_some();
+    let langs: Vec<String> = std::env::var("ULTRAKEY_SEEK_DETECT_LANGS")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    let mut params = DetectionParams {
+        use_accessibility: use_ax,
+        ..DetectionParams::default()
+    };
+    params.recognition.languages = langs.clone();
+
+    // `ULTRAKEY_SEEK_DETECT_REQUEST=1` 이면 권한이 없을 때 시스템 프롬프트를
+    // 한 번 띄운다(F-11 §1.3 의 요청 경로). ⚠️ 프로세스당 한 번만 뜬다.
+    if std::env::var_os("ULTRAKEY_SEEK_DETECT_REQUEST").is_some()
+        && !ultrakey_platform::screen_recording::has_screen_recording_access()
+    {
+        let granted = ultrakey_platform::screen_recording::request_screen_recording_access();
+        tracing::info!(granted, "CGRequestScreenCaptureAccess 호출 — 시스템 프롬프트 경로");
+    }
+
+    tracing::info!(
+        use_accessibility = use_ax,
+        ?langs,
+        screen_recording = ?ultrakey_platform::screen_recording::status(),
+        accessibility = ultrakey_platform::accessibility::is_process_trusted(),
+        "F-02 검출 프로브 시작"
+    );
+
+    let outcome = detect_candidates(&params, |per_display| {
+        // ⭐ S-1 의 증분 전달이 실제로 동작하는지 보이는 자리 — 디스플레이별
+        // 후보가 전체 완료를 기다리지 않고 하나씩 도착한다.
+        tracing::info!(
+            display_id = per_display.display_id,
+            candidates = per_display.candidates.len(),
+            elapsed_ms = per_display.elapsed_ms,
+            "F-02 디스플레이 OCR 완료 (증분 전달)"
+        );
+    });
+
+    tracing::info!(
+        total = outcome.candidates.len(),
+        ocr = outcome.ocr_count,
+        ax = outcome.ax_count,
+        merged_away = outcome.ocr_count + outcome.ax_count - outcome.candidates.len(),
+        capture_ms = outcome.capture_ms,
+        total_ms = outcome.total_ms,
+        screen_recording = ?outcome.screen_recording,
+        ax_error = ?outcome.ax_error,
+        "F-02 검출 프로브 완료"
+    );
+
+    if outcome.ocr_blocked_by_permission() {
+        tracing::error!(
+            ocr_count = outcome.ocr_count,
+            "⚠️ Screen Recording 권한이 없다 — 소스 A 는 조용히 실패한 상태다. 캡처는 \
+             성공했지만 담긴 것은 데스크톱 배경과 메뉴 막대뿐이므로, 후보가 몇 개 \
+             나왔든 화면의 실제 내용이 아니다. 화면 기록 권한을 부여하고 앱을 \
+             재시작해야 한다(F-11 §1.3)"
+        );
+    }
+
+    // 좌표를 눈으로 대조할 수 있게 상위 40개를 로그에 남긴다.
+    for c in outcome.candidates.iter().take(40) {
+        tracing::info!(
+            text = %c.text,
+            x = c.frame.x,
+            y = c.frame.y,
+            w = c.frame.width,
+            h = c.frame.height,
+            source = ?c.source,
+            display = ?c.display_id,
+            confidence = ?c.confidence,
+            "F-02 후보"
+        );
+    }
+
+    // 전량을 파일로도 남긴다 — 좌표 검증에 쓴다.
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = std::path::PathBuf::from(home).join("Library/Logs/Ultrakey/seek-candidates.json");
+        match serde_json::to_string_pretty(&outcome.candidates) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    tracing::warn!(?path, %e, "F-02 후보 덤프 쓰기 실패");
+                } else {
+                    tracing::info!(?path, "F-02 후보 전량 덤프 완료");
+                }
+            }
+            Err(e) => tracing::warn!(%e, "F-02 후보 직렬화 실패"),
+        }
+    }
+}
+
 fn main() {
     // 1) 로그 — 기본은 `info`, `ULTRAKEY_LOG=debug` 로 켠다. stderr 는 항상 나가고,
     //    `open Ultrakey.app` 처럼 stderr 가 사라지는 실행 경로를 위해
@@ -1966,6 +2079,13 @@ fn main() {
              않고 이 프로세스를 즉시 종료한다(§5 항목 1)"
         );
         return;
+    }
+
+    // 1-c) ⭐ F-02 검출 프로브 (이슈 #30) — 실기기 검증 전용. 환경변수가 없으면
+    // 아무 일도 하지 않는다. 단일 인스턴스 판정 뒤에 두어, 이미 떠 있는 인스턴스가
+    // 있을 때 프로브만 돌고 끝나는 혼동을 만들지 않는다.
+    if std::env::var_os("ULTRAKEY_SEEK_DETECT_DUMP").is_some() {
+        run_seek_detect_probe();
     }
 
     // 2) 로케일 → 카탈로그 (D4: ko + en)

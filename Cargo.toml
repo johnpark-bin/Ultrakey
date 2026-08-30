@@ -10,6 +10,7 @@ members = [
     "crates/ultrakey-korean",
     "crates/ultrakey-permissions",
     "crates/ultrakey-i18n",
+    "crates/ultrakey-seek",
     "apps/ultrakey-app",
 ]
 
@@ -33,6 +34,7 @@ ultrakey-presets     = { path = "crates/ultrakey-presets" }
 ultrakey-korean      = { path = "crates/ultrakey-korean" }
 ultrakey-permissions = { path = "crates/ultrakey-permissions" }
 ultrakey-i18n        = { path = "crates/ultrakey-i18n" }
+ultrakey-seek        = { path = "crates/ultrakey-seek" }
 
 # 버전은 2026-08-30 crates.io 조회로 검증됨 (docs/spec/platform-constraints.md §6 과 일치)
 objc2                   = "0.6.4"
@@ -41,6 +43,10 @@ objc2-app-kit           = "0.3.2"
 objc2-core-foundation   = "0.3.2"
 objc2-core-graphics     = "0.3.2"
 objc2-io-kit            = "0.3.2"
+# F-02 (M3 Seek 텍스트 검출) — 이슈 #30 에서 커버리지 확정.
+objc2-core-image        = { version = "0.3.2", default-features = false }
+objc2-vision            = { version = "0.3.2", default-features = false }
+axuielement             = "0.9.1"
 block2                  = "0.6.2"
 arc-swap                = "1.9.2"
 crossbeam-channel       = "0.5.16"
