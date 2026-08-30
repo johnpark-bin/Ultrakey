@@ -97,6 +97,11 @@ impl Translator for PlatformTranslator {
 pub struct LayoutTable {
     source_id: String,
     used_ascii_fallback: bool,
+    /// ⭐ F-16 이 요구해 F-14 가 스냅샷에 실은 값을 그대로 나른다(§3.2.8) — 이
+    /// 크레이트는 "한국어인가" 판정을 다시 하지 않는다(`used_ascii_fallback` 과
+    /// 같은 규약). 판정은 `ultrakey-core::korean` 소관.
+    original_source_id: String,
+    original_languages: Vec<String>,
     /// 정방향: (물리 키, modifier 조합) → 문자.
     forward: HashMap<(KeyCode, ModifierCombo), String>,
     /// 역방향(§3.2.2 (i)): 목표 문자 → 그것을 내는 (물리 키, modifier 조합).
@@ -156,6 +161,8 @@ impl LayoutTable {
         LayoutTable {
             source_id: snapshot.source_id.clone(),
             used_ascii_fallback: snapshot.used_ascii_fallback,
+            original_source_id: snapshot.original_source_id.clone(),
+            original_languages: snapshot.original_languages.clone(),
             forward,
             reverse,
         }
@@ -166,6 +173,8 @@ impl LayoutTable {
         LayoutTable {
             source_id: String::new(),
             used_ascii_fallback: false,
+            original_source_id: String::new(),
+            original_languages: Vec::new(),
             forward: HashMap::new(),
             reverse: HashMap::new(),
         }
@@ -179,6 +188,18 @@ impl LayoutTable {
     /// 그대로 실어 나른다 — 이 크레이트가 그 판정을 다시 하지 않는다.
     pub fn used_ascii_fallback(&self) -> bool {
         self.used_ascii_fallback
+    }
+
+    /// ⭐ F-16 요구(§3.2.8) — ASCII 폴백 교체 **이전** 원본 입력 소스의 ID.
+    /// 스냅샷 값을 그대로 실어 나른다.
+    pub fn original_source_id(&self) -> &str {
+        &self.original_source_id
+    }
+
+    /// ⭐ F-16 요구(§3.2.8) — 위와 같은 원본 소스의 언어 태그 목록. "한국어인가"
+    /// 판정은 이 크레이트가 하지 않는다 — `ultrakey-core::korean` 소관.
+    pub fn original_languages(&self) -> &[String] {
+        &self.original_languages
     }
 
     /// 정방향: 물리 키 + 조합 → 문자.
@@ -363,6 +384,8 @@ mod tests {
             used_ascii_fallback,
             keyboard_type: 0,
             uchr_data: Vec::new(),
+            original_source_id: String::new(),
+            original_languages: Vec::new(),
         }
     }
 
@@ -504,6 +527,34 @@ mod tests {
 
         let normal_table = LayoutTable::build(&fake_snapshot("qwerty", false), &FakeQwerty);
         assert!(!normal_table.used_ascii_fallback());
+    }
+
+    // 8-b. ⭐ F-16 요구(§3.2.8) — original_source_id/original_languages 가 스냅샷에서
+    // 테이블로 그대로 전달된다. 이 크레이트는 "한국어인가" 판정을 다시 하지 않는다.
+    #[test]
+    fn original_source_fields_are_passed_through_from_snapshot() {
+        let mut snapshot = fake_snapshot("us-ascii-fallback", true);
+        snapshot.original_source_id = "com.apple.inputmethod.Korean.2SetKorean".to_string();
+        snapshot.original_languages = vec!["ko".to_string()];
+
+        let table = LayoutTable::build(&snapshot, &FakeQwerty);
+        assert_eq!(
+            table.original_source_id(),
+            "com.apple.inputmethod.Korean.2SetKorean"
+        );
+        assert_eq!(table.original_languages(), &["ko".to_string()]);
+
+        // 원본이 비어 있으면 그대로 비어 있는 채 전달된다.
+        let empty = LayoutTable::build(&fake_snapshot("qwerty", false), &FakeQwerty);
+        assert_eq!(empty.original_source_id(), "");
+        assert!(empty.original_languages().is_empty());
+    }
+
+    #[test]
+    fn empty_table_has_empty_original_source_fields() {
+        let table = LayoutTable::empty();
+        assert_eq!(table.original_source_id(), "");
+        assert!(table.original_languages().is_empty());
     }
 
     // 9. LayoutResolver — publish 후 current() 가 새 테이블을 준다. rebuild_with

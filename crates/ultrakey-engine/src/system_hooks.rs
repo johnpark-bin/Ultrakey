@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
+use ultrakey_core::korean::classify_input_source_languages;
 use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, KeyboardHotplugWatcher};
 use ultrakey_platform::text_input_source::{observe_input_source_changes, InputSourceObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
@@ -212,16 +213,16 @@ impl SystemHooks {
             handle_hotplug_event(ev, &sched_for_hotplug);
         }));
 
+        // ⭐ 기동 시 1회 — 옵저버 등록 *직후* 같은 절차를 동기적으로 실행한다. 이 함수는
+        // (이 시점 기준) 메인 스레드에서 불리고 있으므로 `TIS*` 호출 규약을 지킨다.
+        // 여기서 하지 않으면 사용자가 입력 소스를 최소 한 번 바꾸기 전까지 레이아웃
+        // 테이블이 비어 있고, F-16 게이트는 `Unknown` 인 채로 fail-closed 되어
+        // 영원히 발화하지 않는다(이 모듈이 고친 결함 — module doc 참고).
+        refresh_input_source(&shared);
+
         let shared_for_layout = Arc::clone(&shared);
         let input_observer = observe_input_source_changes(Box::new(move || {
-            let rebuilt = shared_for_layout.layout.rebuild();
-            let table = shared_for_layout.layout.current();
-            tracing::info!(
-                rebuilt,
-                used_ascii_fallback = table.used_ascii_fallback(),
-                source_id = table.source_id(),
-                "입력 소스 변경 감지 — 레이아웃 테이블 재구축"
-            );
+            refresh_input_source(&shared_for_layout);
         }));
 
         SystemHooks {
@@ -266,6 +267,36 @@ fn warn_if_not_main_thread() {
     debug_assert!(
         false,
         "SystemHooks::start 는 메인 스레드에서 호출되어야 한다(system_hooks.rs 모듈 문서)"
+    );
+}
+
+/// 레이아웃 테이블을 재구축하고 한국어 IME 게이트를 게시한다.
+///
+/// ⭐ **기동 시 1회(`SystemHooks::start`)와 입력 소스 변경 알림(옵저버 콜백)이 이
+/// 함수 하나를 공유한다** — 두 벌로 복제하면 한쪽만 고쳐지는 사고가 난다(이 저장소가
+/// 이미 겪은 계열, `docs/spec/korean-input.md` §7). 알림이 올 때만 재구축하던 기존
+/// 결함 탓에 기동 직후에는 레이아웃 테이블이 한 번도 만들어지지 않아, 사용자가 입력
+/// 소스를 바꾸기 전까지 게이트가 `Unknown` 인 채로 fail-closed 되어 F-16.4 가 영원히
+/// 발화하지 않았다.
+///
+/// ⚠️ 콜백이 아니라 메인 스레드 동기 호출이므로 `tracing` 로깅 제약(§2.2)이 적용되지
+/// 않는다 — `original_source_id`·`languages[0]`·판정 결과를 남긴다. 실기기 검증
+/// (Phase 7)이 이 로그를 읽는다.
+fn refresh_input_source(shared: &SharedState) {
+    let rebuilt = shared.layout.rebuild();
+    let table = shared.layout.current();
+    let languages = table.original_languages();
+    let state = classify_input_source_languages(languages);
+    shared.korean_ime.store(state);
+
+    tracing::info!(
+        rebuilt,
+        used_ascii_fallback = table.used_ascii_fallback(),
+        source_id = table.source_id(),
+        original_source_id = table.original_source_id(),
+        first_language = languages.first().map(String::as_str).unwrap_or(""),
+        korean_ime = ?state,
+        "입력 소스 갱신 — 레이아웃 테이블 재구축 + 한국어 IME 게이트 게시"
     );
 }
 

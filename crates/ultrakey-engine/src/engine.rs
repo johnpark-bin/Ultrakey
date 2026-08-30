@@ -16,7 +16,7 @@ use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use ultrakey_core::arbitration::{
-    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, Outcome, SynthEvent,
+    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, GateSnapshot, Outcome, SynthEvent,
 };
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
@@ -512,8 +512,13 @@ fn on_tap_event(
         flags: event.flags(),
         autorepeat: event.is_autorepeat(),
     };
-    let seek_active = st.shared.seek_session_active.load(Ordering::Acquire);
-    let outcome = st.arbiter.arbitrate(&cfg, &input, seek_active, now);
+    // ⭐ 원자값 3개 로드뿐이다 — 락·할당·로깅 없음(architecture.md §2.2).
+    let gates = GateSnapshot {
+        seek_active: st.shared.seek_session_active.load(Ordering::Acquire),
+        korean_app_excluded: st.shared.gate.is_korean_disabled(),
+        korean_ime: st.shared.korean_ime.load(),
+    };
+    let outcome = st.arbiter.arbitrate(&cfg, &input, gates, now);
 
     // quick press 타이머 재예약 힌트(architecture.md §2.3 — 25ms 폴링 금지).
     let outcome_is_pending =

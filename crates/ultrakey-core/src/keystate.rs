@@ -14,6 +14,20 @@ use crate::rules::{ModifierKind, RuleAction, RuleTable};
 /// 8개면 여유롭다 — 필요해지면 이 상수만 올리면 된다.
 const MAX_TRACKED_KEYS: usize = 8;
 
+/// ⭐ F-16 "치환 중" 래치의 최대 동시 개수(`docs/spec/korean-input.md` §3.3·§5#9, D-K6).
+/// F-16 규칙은 4종(space/lang1/lang2/grave)뿐이라 4면 절대 넘치지 않는다.
+const MAX_KOREAN_LATCH: usize = 4;
+
+/// keyDown 이 치환을 발화시켰을 때 세우는 래치 하나 — 대응하는 keyUp 이 도착하면
+/// **조건을 다시 평가하지 않고** 이 값 그대로 keyUp 을 합성한다(D-K6). 힙 할당 없이
+/// 고정 크기 배열에 담는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KoreanLatch {
+    pub trigger_key: KeyCode,
+    pub out_keycode: KeyCode,
+    pub out_flags: EventFlags,
+}
+
 /// 비트셋이 표현 가능한 keycode 범위. macOS virtual keycode 는 실측 범위(§4 키코드 목록)가
 /// 전부 이 안에 든다 — 그 이상 값은 (있을 수 없다고 보고) 조용히 무시한다.
 const BITSET_BITS: usize = 256;
@@ -43,6 +57,9 @@ pub struct KeyStateTable {
     /// quick press 상태 머신 슬롯. 항상 앞에서부터 빈틈없이(index 0..slot_count) 채운다 —
     /// `register_sources` 가 매번 전체를 다시 구성하기 때문에 이 불변식이 성립한다.
     slots: [Option<MachineSlot>; MAX_TRACKED_KEYS],
+    /// F-16 "치환 중" 래치(D-K6). 빈틈이 있을 수 있다 — `korean_rules` 는 최대 4종뿐이라
+    /// 슬롯처럼 앞에서부터 채우는 불변식을 둘 필요가 없다.
+    korean_latches: [Option<KoreanLatch>; MAX_KOREAN_LATCH],
 }
 
 impl KeyStateTable {
@@ -50,6 +67,43 @@ impl KeyStateTable {
         KeyStateTable {
             pressed: [0; 4],
             slots: [None; MAX_TRACKED_KEYS],
+            korean_latches: [None; MAX_KOREAN_LATCH],
+        }
+    }
+
+    /// `trigger_key` 에 걸린 "치환 중" 래치가 있으면 그 값.
+    pub fn korean_latch(&self, trigger_key: KeyCode) -> Option<KoreanLatch> {
+        self.korean_latches
+            .iter()
+            .flatten()
+            .find(|l| l.trigger_key == trigger_key)
+            .copied()
+    }
+
+    /// 래치를 세운다. 같은 `trigger_key` 항목이 이미 있으면 덮어쓴다(자동 반복 대비,
+    /// §5#7). 빈 슬롯이 없으면(설계상 발생할 수 없다 — `MAX_KOREAN_LATCH` 는 F-16
+    /// 규칙 4종에 딱 맞다) 조용히 무시한다.
+    pub(crate) fn set_korean_latch(&mut self, latch: KoreanLatch) {
+        if let Some(existing) = self
+            .korean_latches
+            .iter_mut()
+            .flatten()
+            .find(|l| l.trigger_key == latch.trigger_key)
+        {
+            *existing = latch;
+            return;
+        }
+        if let Some(slot) = self.korean_latches.iter_mut().find(|s| s.is_none()) {
+            *slot = Some(latch);
+        }
+    }
+
+    /// `trigger_key` 의 래치를 지운다. keyUp 을 치환해 내보낸 뒤 호출한다.
+    pub(crate) fn clear_korean_latch(&mut self, trigger_key: KeyCode) {
+        for slot in self.korean_latches.iter_mut() {
+            if slot.is_some_and(|l| l.trigger_key == trigger_key) {
+                *slot = None;
+            }
         }
     }
 
@@ -233,6 +287,9 @@ impl KeyStateTable {
         for slot in self.slots.iter_mut().flatten() {
             slot.state = QuickPressState::Idle;
         }
+        // D-K6 — 래치도 전부 지운다. 리셋 이후 도착하는 keyUp 은 더 이상 대응하는
+        // keyDown 치환이 없으므로 원본 그대로 흘려보내야 한다.
+        self.korean_latches = [None; MAX_KOREAN_LATCH];
     }
 
     /// 현재 `HoldConfirmed` 인 모든 modifier 규칙의 flags 를 OR 로 합산한 값.
@@ -447,5 +504,79 @@ mod tests {
         assert!(!t.has_quick_press(KeyCode::CAPS_LOCK));
         assert!(!t.has_double_tap(KeyCode::CAPS_LOCK));
         assert!(!t.is_kind_active(ModifierKind::Hyper));
+    }
+
+    // ── F-16 korean_latch — D-K6 ────────────────────────────────────────────────
+
+    #[test]
+    fn korean_latch_roundtrip_and_clear() {
+        let mut t = KeyStateTable::new();
+        assert_eq!(t.korean_latch(KeyCode::SPACE), None);
+
+        let latch = KoreanLatch {
+            trigger_key: KeyCode::SPACE,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags::CONTROL,
+        };
+        t.set_korean_latch(latch);
+        assert_eq!(t.korean_latch(KeyCode::SPACE), Some(latch));
+
+        t.clear_korean_latch(KeyCode::SPACE);
+        assert_eq!(t.korean_latch(KeyCode::SPACE), None);
+    }
+
+    /// 같은 trigger_key 로 다시 세우면 덮어쓴다 — 자동 반복 대비(§5#7).
+    #[test]
+    fn korean_latch_overwrites_same_trigger_key() {
+        let mut t = KeyStateTable::new();
+        t.set_korean_latch(KoreanLatch {
+            trigger_key: KeyCode::SPACE,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags::CONTROL,
+        });
+        t.set_korean_latch(KoreanLatch {
+            trigger_key: KeyCode::SPACE,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags::ALTERNATE,
+        });
+        assert_eq!(
+            t.korean_latch(KeyCode::SPACE).map(|l| l.out_flags),
+            Some(EventFlags::ALTERNATE)
+        );
+    }
+
+    /// 여러 trigger_key 의 래치가 독립적으로 공존한다(space/grave/lang1/lang2).
+    #[test]
+    fn korean_latch_tracks_multiple_trigger_keys_independently() {
+        let mut t = KeyStateTable::new();
+        t.set_korean_latch(KoreanLatch {
+            trigger_key: KeyCode::SPACE,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags::CONTROL,
+        });
+        t.set_korean_latch(KoreanLatch {
+            trigger_key: KeyCode(0x32), // grave
+            out_keycode: KeyCode(0x32),
+            out_flags: EventFlags::ALTERNATE,
+        });
+        assert!(t.korean_latch(KeyCode::SPACE).is_some());
+        assert!(t.korean_latch(KeyCode(0x32)).is_some());
+
+        t.clear_korean_latch(KeyCode::SPACE);
+        assert!(t.korean_latch(KeyCode::SPACE).is_none());
+        assert!(t.korean_latch(KeyCode(0x32)).is_some());
+    }
+
+    /// `reset_all()` 이 래치를 전부 지운다(D-K6).
+    #[test]
+    fn reset_all_clears_korean_latches() {
+        let mut t = KeyStateTable::new();
+        t.set_korean_latch(KoreanLatch {
+            trigger_key: KeyCode::SPACE,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags::CONTROL,
+        });
+        t.reset_all();
+        assert_eq!(t.korean_latch(KeyCode::SPACE), None);
     }
 }

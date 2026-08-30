@@ -3,6 +3,7 @@
 
 use crate::flags::EventFlags;
 use crate::keycode::KeyCode;
+use crate::korean::KoreanTrigger;
 
 /// hyper/meh/bleh 세 조합 중 무엇인지(`hyperkey.md` §3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,14 +23,19 @@ pub struct ModifierRule {
 
 /// 어느 프리셋(또는 기능)이 만든 규칙인지 — 로그·테스트·충돌 진단용
 /// (`docs/dev/architecture.md` §6 A-3). `Preset(1)` = F-08.1 … `Preset(16)` = F-08.16.
+/// `Korean(13)`..`Korean(16)` = F-16.1..F-16.4(`docs/spec/korean-input.md` §3.4, D-K5).
 ///
-/// ⭐ 순서는 `Preset(_)` 전부가 `Hyperkey` 보다 앞선다(derive 순서 = 선언 순서 →
-/// variant payload). `combo_rules` 는 F-08 프리셋만 만들기 때문에(Hyperkey 는 계층 2
-/// modifier 규칙만 만들고 combo_rules 를 채우지 않는다) 이 상대 순서는 실제로는 쓰이지
-/// 않지만, `RuleId` 자체의 전순서(total order)를 명확히 하기 위해 derive 로 정의해 둔다.
+/// ⭐ 순서는 선언 순서 그대로 `Preset(_) < Korean(_) < Hyperkey` 다(derive `Ord` —
+/// enum 의 판별값(discriminant) 다음 payload 로 비교). 이것이 명세 §3.4 "계층 3 안의
+/// 규칙 ID 순서로 결정론적" 의 코드 표현이다 — F-08.4(`Preset(4)`)가 F-16.1
+/// (`Korean(13)`)보다 항상 먼저 평가되어 이긴다. `combo_rules` 와 `korean_rules` 는
+/// F-08/F-16 이 각자 채우고 `Hyperkey` 는 계층 2 modifier 규칙만 만들기 때문에
+/// `Korean(_)` 대 `Hyperkey` 의 상대 순서는 실제로는 쓰이지 않지만, `RuleId` 자체의
+/// 전순서(total order)를 명확히 하기 위해 derive 로 정의해 둔다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RuleId {
     Preset(u8),
+    Korean(u8),
     Hyperkey,
 }
 
@@ -70,6 +76,28 @@ pub struct ComboRule {
     pub action: RuleAction,
 }
 
+/// F-16 한국어 입력 규칙 하나(`docs/spec/korean-input.md` §3.1, D-K5).
+///
+/// ⛔ `ComboRule` 을 재사용하지 않는다 — `HoldCondition` 은 "modifier 부재"·"한국어
+/// IME 활성"·"앱 제외" 를 표현할 수 없다. 넓히면 범용 기구가 F-16 전용 개념으로
+/// 오염된다(D-K5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KoreanRule {
+    /// `RuleId::Korean(13)`..`Korean(16)`.
+    pub id: RuleId,
+    /// 물리 트리거 키(`space`(0x31) / `lang1`/`lang2`(미확정, 1단계는 다루지 않는다) /
+    /// `grave`(0x32)).
+    pub trigger_key: KeyCode,
+    pub trigger: KoreanTrigger,
+    /// 참이면 [`crate::korean::KoreanImeState::Active`] 일 때만 발화한다(fail-closed).
+    pub requires_korean_ime: bool,
+    /// 같은 keycode 재주입 — 명세 결정: 유니코드 주입 금지(§3.1).
+    pub out_keycode: KeyCode,
+    /// 얹을 modifier 비트. ⭐ 원본 `ev.flags` 를 물려받지 않는다 — 이 값 그대로 방출한다
+    /// (D-K7, `docs/dev/architecture.md` §6.4 P5).
+    pub out_flags: EventFlags,
+}
+
 /// 소스 키 하나를 다른 키 하나로 바꾸는 1:1 리매핑(§3-b 계층 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimpleRemap {
@@ -103,6 +131,9 @@ pub struct RuleTable {
     pub simple_remaps: Vec<SimpleRemap>,
     /// F-08(M2). 추적 키(caps lock·좌우 shift 등) 자신의 이벤트로 발화하는 액션.
     pub source_actions: Vec<SourceKeyActions>,
+    /// F-16(M?). `RuleId` 오름차순으로 정렬된 상태로 주어진다고 전제한다
+    /// (`ultrakey-korean::KoreanSettings::to_rules` 가 정렬해서 반환한다).
+    pub korean_rules: Vec<KoreanRule>,
 }
 
 impl RuleTable {
@@ -130,6 +161,16 @@ mod tests {
         assert!(RuleId::Preset(1) < RuleId::Hyperkey);
         assert!(RuleId::Preset(1) < RuleId::Preset(2));
         assert!(RuleId::Preset(16) < RuleId::Hyperkey);
+    }
+
+    /// D-K5 — `Preset(_) < Korean(_) < Hyperkey`. 계층 3 안의 평가 순서(§3.4)의
+    /// 코드 표현이다: F-08.4(`Preset(4)`)가 F-16.1(`Korean(13)`)보다 먼저 평가된다.
+    #[test]
+    fn rule_id_korean_variants_sort_between_preset_and_hyperkey() {
+        assert!(RuleId::Preset(16) < RuleId::Korean(13));
+        assert!(RuleId::Korean(13) < RuleId::Korean(16));
+        assert!(RuleId::Korean(16) < RuleId::Hyperkey);
+        assert!(RuleId::Preset(4) < RuleId::Korean(13));
     }
 
     #[test]

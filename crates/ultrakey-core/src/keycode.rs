@@ -40,6 +40,10 @@ impl KeyCode {
     pub const ANSI_QUOTE: KeyCode = KeyCode(0x27);
     pub const ANSI_SLASH: KeyCode = KeyCode(0x2C);
     pub const SPACE: KeyCode = KeyCode(0x31);
+    /// `` ` ``/`₩` 물리 키(`kVK_ANSI_Grave`). F-16.4(`docs/spec/korean-input.md` §3.1)의
+    /// 트리거 키다. 근거: `Carbon/HIToolbox/Events.h` 243행 `kVK_ANSI_Grave = 0x32` —
+    /// 이 세션이 로컬 SDK 헤더에서 직접 확인했다.
+    pub const ANSI_GRAVE: KeyCode = KeyCode(0x32);
     pub const RETURN: KeyCode = KeyCode(0x24);
     pub const TAB: KeyCode = KeyCode(0x30);
     pub const ESCAPE: KeyCode = KeyCode(0x35);
@@ -395,5 +399,12 @@ mod tests {
             assert_eq!(k.modifier_flags(), None, "keycode {:#04X}", k.0);
             assert!(!k.is_modifier_key(), "keycode {:#04X}", k.0);
         }
+    }
+
+    /// F-16.4 트리거 키(`docs/spec/korean-input.md` §3.1). 근거: 위에서 로컬 SDK 헤더
+    /// (`Carbon/HIToolbox/Events.h` 243행)로 직접 확인한 `kVK_ANSI_Grave = 0x32`.
+    #[test]
+    fn ansi_grave_matches_kvk_ansi_grave() {
+        assert_eq!(KeyCode::ANSI_GRAVE, KeyCode(0x32));
     }
 }

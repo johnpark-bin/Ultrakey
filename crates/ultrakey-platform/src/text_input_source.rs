@@ -8,6 +8,8 @@
 
 /// 현재 입력 소스에서 뽑아낸, 레이아웃 독립 판정에 필요한 최소 정보.
 pub struct LayoutSnapshot {
+    /// (기존) ASCII 폴백 교체 **이후** 소스의 ID — `ultrakey-layout` 이 레이아웃
+    /// 캐시 키로 쓴다. ⛔ 의미를 바꾸지 않는다(F-16 설계 D-K1).
     pub source_id: String,
     pub is_ascii_capable: bool,
     pub used_ascii_fallback: bool,
@@ -15,6 +17,16 @@ pub struct LayoutSnapshot {
     pub keyboard_type: u32,
     /// `kTISPropertyUnicodeKeyLayoutData` 의 원시 바이트 — `uchr` 리소스.
     pub uchr_data: Vec<u8>,
+    /// ⭐ F-16 이 요구해 F-14 가 소유하는 필드(`korean-input.md` §3.3,
+    /// `localization-and-input-sources.md` §3.2.8). ASCII 폴백 교체 **이전**
+    /// 원본 입력 소스의 ID. `source_id` 와 달리 CJK IME 활성 중에도 그
+    /// IME 자신의 ID 를 담는다.
+    pub original_source_id: String,
+    /// ⭐ 위와 같은 원본 소스의 `kTISPropertyInputSourceLanguages` — BCP-47
+    /// 언어 태그를 원소 순서 그대로 옮긴 것. 조회 실패면 빈 `Vec`.
+    /// 이 필드로 "한국어인가"를 판정하는 것은 이 크레이트의 일이 아니다 —
+    /// `ultrakey-core::korean` 이 소유한다.
+    pub original_languages: Vec<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -24,8 +36,8 @@ mod macos_impl {
     use core::ffi::c_void;
     use core::ptr::NonNull;
     use objc2_core_foundation::{
-        CFDictionary, CFNotificationCenter, CFNotificationName, CFNotificationSuspensionBehavior,
-        CFBoolean, CFData, CFString,
+        CFArray, CFDictionary, CFNotificationCenter, CFNotificationName,
+        CFNotificationSuspensionBehavior, CFBoolean, CFData, CFString,
     };
     use ultrakey_core::keycode::KeyCode;
 
@@ -50,6 +62,38 @@ mod macos_impl {
                 false
             } else {
                 (*(prop as *const CFBoolean)).value()
+            }
+        };
+
+        // ⭐ F-16 요구(korean-input.md §3.3) — **여기, 폴백 교체 이전에** 원본
+        // 소스의 ID·언어를 읽어 둔다. 이 아래 `if !is_ascii_capable` 블록에서
+        // `src` 가 교체되면 원본 입력 소스(예: 한국어 IME 자신)는 더 이상 볼
+        // 수 없다 — 이 순서 자체가 F-16 판정의 전제다. `source_id`(교체 이후)
+        // 의 기존 의미는 바꾸지 않는다.
+        //
+        // SAFETY: `src` 는 위에서 확인한 유효한 포인터다. Get 규칙 — release 금지.
+        let original_source_id = unsafe {
+            let prop = ffi::TISGetInputSourceProperty(src, ffi::kTISPropertyInputSourceID);
+            if prop.is_null() {
+                String::new()
+            } else {
+                (*(prop as *const CFString)).to_string()
+            }
+        };
+        // SAFETY: `src` 는 유효하다. `kTISPropertyInputSourceLanguages` 도 Get
+        // 규칙이라 반환된 `CFArrayRef` 를 release 하면 안 된다. 배열 원소
+        // 순회(`iter()`)가 각 `CFString` 을 일시적으로 retain 했다가 `to_string()`
+        // 뒤 곧바로 drop 하므로, 배열 자체를 건드리지 않는 한 안전하다.
+        let original_languages = unsafe {
+            let prop =
+                ffi::TISGetInputSourceProperty(src, ffi::kTISPropertyInputSourceLanguages);
+            if prop.is_null() {
+                Vec::new()
+            } else {
+                (*(prop as *const CFArray<CFString>))
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
             }
         };
 
@@ -103,6 +147,8 @@ mod macos_impl {
             used_ascii_fallback,
             keyboard_type,
             uchr_data,
+            original_source_id,
+            original_languages,
         })
     }
 

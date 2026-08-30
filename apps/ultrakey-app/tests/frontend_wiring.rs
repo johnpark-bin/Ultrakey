@@ -353,22 +353,40 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
     );
 }
 
-/// 탭 4개의 창 크기 상수(main.rs `tab_window_size`)가 명세값과 일치하는지는
+/// 탭 5개의 창 크기 상수(main.rs `tab_window_size`)가 명세값과 일치하는지는
 /// `src/main.rs` 자체의 유닛 테스트(`tests::tab_window_size_matches_spec_values`)가
 /// 이미 검증한다. 여기서는 그 상수들이 `settings.html` 문서 주석에도 정확히
 /// 기록되어 있는지만 방어적으로 재확인한다(창 크기는 Rust 가 소유하고, HTML 은
 /// 그 사실만 인용한다 — 값 자체를 HTML 이 중복 정의하지 않는다).
+///
+/// ⭐ `613×484` 는 F-16 `Korean` 탭의 **실측값**이다(korean-input.md §4.1·§9 #5):
+/// 이 탭의 마크업을 실제로 렌더해 잰 `panel-korean` 내용 416px + `.panel` 상하
+/// 패딩 40px + 타이틀바 28px. 처음 잡았던 잠정치 400 은 84px 모자라 내용이 잘렸다.
 #[test]
 fn settings_html_문서가_탭_창_크기_명세값을_인용한다() {
     let html = read_settings_html();
-    for token in ["555×378", "710×517", "825×527", "613×273"] {
+    for token in ["555×378", "710×517", "825×527", "613×484", "613×273"] {
         assert!(
             html.contains(token),
             "settings.html 문서 주석에 탭 창 크기 {token} 이 보이지 않는다 — \
              preferences-ui.md §3.1 실측값(Seek 555×378 · Hyperkey 710×517 · \
-             Presets 825×527 · General 613×273 pt)과 어긋났을 수 있다."
+             Presets 825×527 · Korean 613×484(실측) · General 613×273 pt)과 \
+             어긋났을 수 있다."
         );
     }
+}
+
+/// `main.rs` 의 `tab_window_size` 가 `korean` 탭을 알고, `settings_html_문서가_탭_창_크기_
+/// 명세값을_인용한다` 와 같은 값(613×484)을 쓰는지 소스 텍스트로 확인한다. 실제 반환값
+/// 자체는 `src/main.rs` 유닛 테스트(`tests::tab_window_size_matches_spec_values`)가 검증한다
+/// — 여기서는 "그 커맨드가 korean 을 다루는가"라는 배선 자체를 재발 방지 관점에서 본다.
+#[test]
+fn main_rs_의_tab_window_size가_korean_탭_크기를_안다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("\"korean\" => Some((613, 484))"),
+        "main.rs 의 tab_window_size() 가 \"korean\" => Some((613, 484)) 을 반환하지 않는다"
+    );
 }
 
 /// ⭐ F-15 §8 회귀 방지 — **환경설정 창을 열기만 해서는 `settings.json` 이 생기면 안 된다.**
@@ -390,6 +408,111 @@ fn 최초_렌더는_탭을_저장하지_않고_리사이즈만_한다() {
         "최초 렌더의 activateTab 은 persist: false 로 불러야 한다 — 창을 열기만 해도 \
          settings.json 이 생기면 F-15 §8 이 깨진다"
     );
+}
+
+// ⭐ F-16(korean-input.md) — `Korean` 탭 재발 방지 테스트.
+
+/// `Korean` 탭 버튼·패널과 5개 `data-key` 가 전부 `settings.html` 에 존재한다
+/// (`Presets`·`General` 사이, 명세 §4.1 탭 순서). 2단계(한/영·한자) 항목도 `disabled`
+/// 상태로나마 `data-key` 를 갖는다 — 다음 작업(2단계 활성화)이 `disabled` 속성만
+/// 걷어내면 되도록 미리 배선해 둔 것이다(D-K8).
+#[test]
+fn settings_html_에_korean_탭_버튼_패널_5개_data_key가_있다() {
+    let html = read_settings_html();
+
+    assert!(
+        html.contains(r#"id="tab-korean" data-tab="korean""#),
+        "settings.html 에 Korean 탭 버튼(id=\"tab-korean\")이 없다"
+    );
+    assert!(
+        html.contains(r#"id="panel-korean""#),
+        "settings.html 에 Korean 탭 패널(id=\"panel-korean\")이 없다"
+    );
+
+    for data_key in [
+        "korean.shiftSpaceSwitchesInputSource",
+        "korean.hanEngSwitchesInputSource",
+        "korean.hanjaKeyConvertsHanja",
+        "korean.wonKeyTypesBacktick",
+        "korean.disableInRemoteDesktop",
+    ] {
+        assert!(
+            html.contains(&format!("data-key=\"{data_key}\"")),
+            "settings.html 에 data-key=\"{data_key}\" 컨트롤이 없다"
+        );
+    }
+}
+
+/// ⭐ 명세 §8 수용 기준 "F-16.2·F-16.3 은 UI 에서 dimmed" 의 자동 검증 — 한/영·한자
+/// 체크박스는 `disabled` 이고, 각각 사유를 설명하는 `.hint.why` 문단(`.why` id)을 갖는다
+/// (`General` 탭 미구현 컨트롤과 같은 표현, D-K8·`docs/spec/korean-input.md` §5#1).
+#[test]
+fn settings_html_의_한영_한자_컨트롤은_dimmed이고_사유_문구를_가진다() {
+    let html = read_settings_html();
+
+    for (checkbox_id, why_id, badge_id) in [
+        ("korean-han-eng", "korean-han-eng-why", "korean-han-eng-badge"),
+        ("korean-hanja", "korean-hanja-why", "korean-hanja-badge"),
+    ] {
+        let input_needle = format!("id=\"{checkbox_id}\"");
+        let input_pos = html
+            .find(&input_needle)
+            .unwrap_or_else(|| panic!("settings.html 에 id=\"{checkbox_id}\" 컨트롤이 없다"));
+        // 그 <input> 태그가 끝나는 지점(다음 '>') 까지만 봐서 disabled 속성을 확인한다.
+        let tag_end = html[input_pos..]
+            .find('>')
+            .map(|i| input_pos + i)
+            .unwrap_or_else(|| panic!("id=\"{checkbox_id}\" 의 <input> 태그가 닫히지 않았다"));
+        let tag = &html[input_pos..tag_end];
+        assert!(
+            tag.contains("disabled"),
+            "id=\"{checkbox_id}\" 체크박스가 disabled 가 아니다 — 2단계 항목은 dimmed 로 \
+             출하해야 한다(D-K8, §5#1)"
+        );
+
+        assert!(
+            html.contains(&format!("id=\"{why_id}\"")),
+            "id=\"{checkbox_id}\" 옆에 사유 문단(id=\"{why_id}\")이 없다"
+        );
+        assert!(
+            html.contains(&format!("id=\"{badge_id}\""),),
+            "id=\"{checkbox_id}\" 옆에 배지(id=\"{badge_id}\")가 없다"
+        );
+    }
+
+    // ⭐ 배지 문자열은 General 탭 미구현 컨트롤과 같은 키를 재사용한다 — 새 배지
+    // 문자열을 만들지 않는다(F16-strings.md).
+    assert!(
+        html.contains("\"korean-han-eng-badge\"") && html.contains("\"korean-hanja-badge\""),
+        "한/영·한자 배지가 settings.badge.unimplemented 배지 루프에 포함되지 않았다"
+    );
+}
+
+/// `settings.korean.*` 리터럴이 en·ko 양쪽 카탈로그에 전부 있다. (일반 검사
+/// `settings_html_의_settings_점_리터럴은_전부_카탈로그_키다` 는 en 만 보므로, F-16
+/// 이 한쪽 카탈로그만 갱신하는 회귀를 여기서 별도로 잡는다.)
+#[test]
+fn korean_점_리터럴이_en_ko_양쪽_카탈로그에_모두_있다() {
+    let html = read_settings_html();
+    let en_keys = flatten_catalog(&read_en_catalog());
+    let ko_keys = flatten_catalog(&read_ko_catalog());
+
+    let korean_keys: BTreeSet<_> = extract_double_quoted_literals(&html)
+        .into_iter()
+        .filter(|s| s.starts_with("settings.korean."))
+        .collect();
+
+    assert!(
+        !korean_keys.is_empty(),
+        "settings.html 에서 \"settings.korean.*\" 리터럴을 하나도 찾지 못했다 — \
+         Korean 탭 배선이 빠졌을 수 있다"
+    );
+
+    let missing_en: Vec<_> = korean_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
+    let missing_ko: Vec<_> = korean_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+
+    assert!(missing_en.is_empty(), "en.json 에 없는 settings.korean.* 키: {missing_en:?}");
+    assert!(missing_ko.is_empty(), "ko.json 에 없는 settings.korean.* 키: {missing_ko:?}");
 }
 
 // ⭐ F-10(menu-bar-and-lifecycle.md) — 메뉴바(NSStatusItem) 재발 방지 테스트.

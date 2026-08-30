@@ -149,11 +149,13 @@
   <!-- ⭐ 탭 전환 시 창 크기(pt, preferences-ui.md §3.1 실측값) — 실제 리사이즈는
        main.rs 의 tab_window_size()/settings_set_tab 이 소유한다. 여기서는
        그 값이 무엇인지만 문서화한다: Seek 555×378 · Hyperkey 710×517 ·
-       Presets 825×527 · General 613×273. -->
+       Presets 825×527 · Korean 613×484(실측: 내용 416 + 패딩 40 + 타이틀바 28) ·
+       General 613×273. -->
   <nav class="sidebar" role="tablist" aria-orientation="vertical" id="tablist">
     <button role="tab" id="tab-seek" data-tab="seek" aria-selected="false" aria-controls="panel-seek" tabindex="-1"></button>
     <button role="tab" id="tab-hyperkey" data-tab="hyperkey" aria-selected="false" aria-controls="panel-hyperkey" tabindex="-1"></button>
     <button role="tab" id="tab-presets" data-tab="presets" aria-selected="false" aria-controls="panel-presets" tabindex="-1"></button>
+    <button role="tab" id="tab-korean" data-tab="korean" aria-selected="false" aria-controls="panel-korean" tabindex="-1"></button>
     <button role="tab" id="tab-general" data-tab="general" aria-selected="false" aria-controls="panel-general" tabindex="-1"></button>
   </nav>
 
@@ -403,6 +405,70 @@
       </div>
     </section>
 
+    <!-- Korean 탭 — F-16(korean-input.md) §4.1 순서 그대로(Presets 다음, General 앞).
+         ⭐ 1단계 범위: F-16.1(Shift+Space)·F-16.4(₩→백틱)·항목 5(원격 데스크톱 제외)
+         셋만 실제로 동작한다. 한/영(F-16.2)·한자(F-16.3)는 §5#1 이 "결함이 아니라
+         정직한 상태"로 판정한 그대로 General 탭의 미구현 컨트롤과 똑같은 방식
+         (disabled + .badge + .hint.why)으로 dimmed 출하한다 — lang1/lang2 의 virtual
+         keycode 가 아직 확정되지 않았다(§3.2, D-K8). -->
+    <section id="panel-korean" class="tabpanel" role="tabpanel" aria-labelledby="tab-korean" hidden>
+      <h1 id="korean-heading"></h1>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-shift-space" data-key="korean.shiftSpaceSwitchesInputSource" />
+          <span id="korean-shift-space-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-shift-space-hint"></p>
+
+      <!-- ⭐ 2단계 — dimmed. 키코드 미확정이라 규칙이 하나도 나가지 않는다(D-K8). -->
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <input type="checkbox" id="korean-han-eng" data-key="korean.hanEngSwitchesInputSource" disabled />
+          <span id="korean-han-eng-label"></span>
+          <span class="badge" id="korean-han-eng-badge"></span>
+        </label>
+      </div>
+      <p class="hint why" id="korean-han-eng-why"></p>
+
+      <!-- ⭐ 2단계 — dimmed. 상동. -->
+      <div class="row">
+        <label class="checkbox-row disabled">
+          <input type="checkbox" id="korean-hanja" data-key="korean.hanjaKeyConvertsHanja" disabled />
+          <span id="korean-hanja-label"></span>
+          <span class="badge" id="korean-hanja-badge"></span>
+        </label>
+      </div>
+      <p class="hint why" id="korean-hanja-why"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-won-backtick" data-key="korean.wonKeyTypesBacktick" />
+          <span id="korean-won-backtick-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-won-backtick-hint"></p>
+
+      <hr />
+
+      <!-- ⭐ 항목 5 — F-16 중 유일하게 기본값이 켜짐(true)이다(§4.2 각주). -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-remote-desktop" data-key="korean.disableInRemoteDesktop" />
+          <span id="korean-remote-desktop-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-remote-desktop-hint"></p>
+
+      <hr />
+
+      <!-- §3.6 행동 기반 진단 + §7 오른쪽 command 안내. 어느 항목에도 종속되지
+           않는 탭 공통 안내라 맨 아래에 둔다. -->
+      <p class="hint" id="korean-not-working-hint"></p>
+      <p class="hint" id="korean-right-command-hint"></p>
+    </section>
+
     <!-- General 탭 — §4.4 의 7개 컨트롤 전부를 만들되, 버전 버튼만 동작한다.
          나머지 6개는 disabled + 배지 + 사유 문구로 "왜 안 되는지"를 바로 보여준다. -->
     <section id="panel-general" class="tabpanel" role="tabpanel" aria-labelledby="tab-general" hidden>
@@ -518,13 +584,14 @@ if (!tauri || !tauri.core) {
 } else {
   const { invoke } = tauri.core;
 
-  const TABS = ["seek", "hyperkey", "presets", "general"];
+  const TABS = ["seek", "hyperkey", "presets", "korean", "general"];
   let activeTab = "hyperkey";
 
   function applyStrings() {
     $("tab-seek").textContent = t("settings.tab.seek");
     $("tab-hyperkey").textContent = t("settings.tab.hyperkey");
     $("tab-presets").textContent = t("settings.tab.presets");
+    $("tab-korean").textContent = t("settings.tab.korean");
     $("tab-general").textContent = t("settings.tab.general");
 
     $("seek-title").textContent = t("settings.placeholder.title");
@@ -577,6 +644,20 @@ if (!tauri || !tauri.core) {
       $(id).setAttribute("aria-label", sourceLabel);
     }
 
+    $("korean-heading").textContent = t("settings.korean.heading");
+    $("korean-shift-space-label").textContent = t("settings.korean.shift_space");
+    $("korean-shift-space-hint").textContent = t("settings.korean.shift_space.hint");
+    $("korean-han-eng-label").textContent = t("settings.korean.han_eng");
+    $("korean-han-eng-why").textContent = t("settings.korean.han_eng.why");
+    $("korean-hanja-label").textContent = t("settings.korean.hanja");
+    $("korean-hanja-why").textContent = t("settings.korean.hanja.why");
+    $("korean-won-backtick-label").textContent = t("settings.korean.won_backtick");
+    $("korean-won-backtick-hint").textContent = t("settings.korean.won_backtick.hint");
+    $("korean-remote-desktop-label").textContent = t("settings.korean.remote_desktop");
+    $("korean-remote-desktop-hint").textContent = t("settings.korean.remote_desktop.hint");
+    $("korean-not-working-hint").textContent = t("settings.korean.not_working.hint");
+    $("korean-right-command-hint").textContent = t("settings.korean.right_command.hint");
+
     $("general-heading").textContent = t("settings.general.heading");
     $("launch-on-login-label").textContent = t("settings.general.launch_on_login");
     $("launch-on-login-why").textContent = t("settings.general.launch_on_login.why");
@@ -597,6 +678,10 @@ if (!tauri || !tauri.core) {
       "menu-bar-icon-badge",
       "remove-activation-badge",
       "purchase-badge",
+      // ⭐ F-16 2단계(한/영·한자) — General 탭 미구현 컨트롤과 같은 배지 키를
+      // 재사용한다(F16-strings.md — 새 배지 문자열을 만들지 않는다).
+      "korean-han-eng-badge",
+      "korean-hanja-badge",
     ]) {
       $(id).textContent = badgeText;
     }
@@ -820,6 +905,14 @@ if (!tauri || !tauri.core) {
     renderTrackpadExtra(state.hyperkey.trackpad);
 
     renderPresets(state);
+
+    // F-16 — 1단계 3개(실제 반영)와 2단계 2개(값은 존재하지만 disabled — D-K8).
+    $("korean-shift-space").checked = state.korean.shiftSpaceSwitchesInputSource;
+    $("korean-han-eng").checked = state.korean.hanEngSwitchesInputSource;
+    $("korean-hanja").checked = state.korean.hanjaKeyConvertsHanja;
+    $("korean-won-backtick").checked = state.korean.wonKeyTypesBacktick;
+    $("korean-remote-desktop").checked = state.korean.disableInRemoteDesktop;
+
     // F-10 — 이제 실제로 동작하는 두 항목(나머지 General 컨트롤은 F-12/F-13 범위라 여전히 비활성).
     $("launch-on-login").checked = state.general.launchOnLogin;
     $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;

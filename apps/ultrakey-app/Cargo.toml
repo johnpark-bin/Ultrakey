@@ -13,6 +13,7 @@ ultrakey-platform = { workspace = true }
 ultrakey-engine = { workspace = true }
 ultrakey-hyperkey = { workspace = true }
 ultrakey-presets = { workspace = true }
+ultrakey-korean = { workspace = true }
 ultrakey-permissions = { workspace = true }
 ultrakey-i18n = { workspace = true }
 serde = { workspace = true }

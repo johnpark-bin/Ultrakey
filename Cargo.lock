@@ -4192,6 +4192,7 @@ dependencies = [
  "ultrakey-engine",
  "ultrakey-hyperkey",
  "ultrakey-i18n",
+ "ultrakey-korean",
  "ultrakey-permissions",
  "ultrakey-platform",
  "ultrakey-presets",
@@ -4239,6 +4240,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ultrakey-korean"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ultrakey-core",
 ]
 
 [[package]]

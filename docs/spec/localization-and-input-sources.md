@@ -188,6 +188,46 @@ wasdArrow / wasdArrowColemak / wasdArrowDvorak
 
 **§3.2.1 원칙의 보강**: "입력 판정은 물리 키코드로 한다" 는 원칙은 유지하되, 이 프리셋 계열에서는 **"어떤 물리 키코드 집합을 쓸지 자체가 감지된 레이아웃에 따라 달라진다"** 는 예외를 명시해야 한다. §2 시나리오 5, §3.2.3 WASD 행, §5 엣지 케이스 4 는 이전 판이 "항상 같은 물리 키 4개 고정" 이라고 서술했던 부분이며, 이 실측으로 재검토가 필요하다는 점을 표기해 두었다.
 
+#### 3.2.8 ⭐ 신규 — 폴백 교체 이전 원본 입력 소스의 언어 노출 (F-16 요구)
+
+`korean-input.md`(F-16) §3.3·§9 항목 4 가 이 문서에 낸 요구를 여기서 반영한다.
+
+**무엇이 문제였는가.** `current_layout()`(`crates/ultrakey-platform/src/text_input_source.rs`)은 현재 입력 소스가 ASCII 불가일 때(CJK IME 가 정확히 그렇다) `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 로 소스를 **교체한 뒤** `source_id` 를 읽는다(§3.2.6). 그 결과 `LayoutSnapshot.source_id` 는 한국어 입력기가 활성이어도 **폴백 레이아웃(예: US)의 ID** 를 담는다. F-16 이 이 필드로 "한국어 입력기가 활성인가"를 판정하면 **항상 거짓**이 나온다 — 이 필드는 애초에 그런 판정을 위해 설계되지 않았다.
+
+**결정**: `LayoutSnapshot` 에 두 필드를 더해, **폴백 교체 이전** 원본 소스에서 읽은 값을 그대로 노출한다.
+
+- `original_source_id: String` — 교체 이전 원본 소스의 `kTISPropertyInputSourceID`.
+- `original_languages: Vec<String>` — 같은 원본 소스의 `kTISPropertyInputSourceLanguages`(BCP-47 언어 태그, `CFArray<CFString>` 를 원소 순서 그대로 옮긴 것). 조회 실패면 빈 `Vec`.
+
+⚠️ **`is_ascii_capable == false` 만으로는 불충분하다.** 일본어·중국어 IME 도 ASCII 불가이므로, 이 불리언 하나로는 "한국어인가"를 구분할 수 없다 — 반드시 언어 태그 자체를 봐야 한다.
+
+**판정 기준**은 `kTISPropertyInputSourceLanguages` 의 **첫 원소**다 — Karabiner-Elements 의 `input_source_if { language: "ko" }` 조건과 같은 기준이며, 이 문서(F-14)는 값을 노출만 하고 "한국어인가"의 실제 **판정 자체는 소유하지 않는다** — 그 판정은 `ultrakey-core::korean`(`classify_input_source_languages`) 소관이다. 이 크레이트 분리는 `ultrakey-layout`(F-14 소비자)이 `used_ascii_fallback` 을 그대로 나르기만 하고 판정을 다시 하지 않는 기존 규약과 같다.
+
+⛔ **읽는 순서가 F-16 판정의 전제다.** `original_source_id`/`original_languages` 는 반드시 `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` 로 소스를 교체하는 코드 **이전**에 읽어야 한다 — 그 아래에서 읽으면 이미 폴백된 소스를 보게 되어 이번 절이 고치려는 결함이 그대로 재발한다.
+
+⛔ **기존 `source_id` 의 의미는 바꾸지 않는다.** 교체 **이후** 소스의 ID 라는 의미 그대로 `ultrakey-layout` 이 레이아웃 역산 테이블의 캐시 키로 계속 쓴다.
+
+⭐ **실측(2026-08-30, 이 저장소 세션)** — 판정 기준이 실제로 성립하는지 직접 확인했다. 도구: [`../dev/tools/tis-language-probe.swift`](../dev/tools/tis-language-probe.swift). 이 도구는 `TISCreateInputSourceList` 로 **설치된** 소스를 열거해 프로퍼티를 읽기만 하므로 **시스템 설정을 전혀 바꾸지 않는다**(입력 소스를 전환할 필요조차 없다).
+
+| 입력 소스 | `isASCIICapable` | `languages[0]` | 전체 |
+| :--- | :---: | :--- | :--- |
+| `com.apple.inputmethod.Korean` 및 그 하위 5종(2-set·3-set·390 세벌식·공진청 로마자·HNC 로마자) | `false` | **`ko`** | `["ko"]` |
+| `com.apple.inputmethod.Kotoeri.*` (일본어 8종) | `false` | `ja` | `["ja"]` |
+| `com.apple.inputmethod.SCIM.ITABC` (중국어 간체) | `false` | `zh-Hans` | `["zh-Hans"]` |
+| `com.apple.keylayout.Anjal` (타밀) | `false` | `ta` | `["ta"]` |
+| `com.apple.keylayout.ABC` | `true` | `en` | **96개** |
+| `com.apple.keylayout.ABC-AZERTY` | `true` | `fr` | 95개 |
+
+이 실측이 확정하는 것 셋:
+
+1. Apple 기본 한국어 입력기 **6종 전부**가 `languages[0] == "ko"` 다 — 이 절의 판정 기준이 성립한다.
+2. ⚠️ **`is_ascii_capable == false` 만으로는 불충분하다는 것이 사실로 확인됐다** — 일본어·중국어·타밀 입력기도 전부 `false` 다.
+3. ⭐ **"첫 원소만 본다" 가 옳다.** `ABC` 레이아웃 하나가 언어 태그를 **96개** 싣고 있다 — "목록에 `ko` 가 들어 있는가" 로 판정하는 설계였다면 임계 경로 비용과 오판 위험 양쪽에서 나빴을 형태다.
+
+⚠️ **이 실측이 확정하지 못하는 것**: 위는 `TISCreateInputSourceList`(열거) 경로이고, 우리 코드가 쓰는 것은 `TISCopyCurrentKeyboardInputSource`(현재 활성) 경로다. 같은 프로퍼티지만 **경로가 다르므로**, 실행 중인 앱이 실제로 이 값을 담아 오는지는 실기기 확인이 따로 필요하다(`../dev/manual-verification.md`).
+
+상호 참조: `korean-input.md` §3.3(문제 발견), §9 항목 4(소유권 승계).
+
 ---
 
 ## 4. 설정 항목
@@ -231,6 +271,7 @@ wasdArrow / wasdArrowColemak / wasdArrowDvorak
 | `TISCopyCurrentKeyboardInputSource` | 현재 활성 입력 소스 조회 | Carbon `HIToolbox` 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) |
 | ⭐ `TISCopyCurrentASCIICapableKeyboardLayoutInputSource` | 비-ASCII 입력 방식(CJK IME 등) 활성 시 ASCII 가능 레이아웃으로 폴백해 keycode→문자 해석. §3.2.6 정정된 이해의 핵심 근거 | Carbon `HIToolbox` 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) — 이전 판에는 없던 행 |
 | `TISGetInputSourceProperty`(`kTISPropertyUnicodeKeyLayoutData`, `kTISPropertyInputSourceID`, `kTISPropertyInputSourceType`) | 레이아웃 데이터 및 입력 소스 종류(키보드 배열 vs 입력 방식/IME) 조회 | 상동. **실측: 번들 심볼** |
+| ⭐ `kTISPropertyInputSourceLanguages`(F-16 요구, §3.2.8) | 폴백 교체 **이전** 원본 입력 소스의 언어 판정 — `korean-input.md` §3.3 이 낸 요구 | `TextInputSources.h`. `CFArrayRef`(원소 `CFString`), Get 규칙 |
 | `kTISNotifySelectedKeyboardInputSourceChanged` | 입력 소스 변경 알림 | `CFNotificationCenterGetDistributedCenter()` 에 옵저버 등록 |
 | `UCKeyTranslate` | keycode+modifier → 문자 정방향 변환. §3.2.2 (i) 의 역방향 탐색 테이블을 만드는 기반 | Carbon `HIToolbox` 소속. **실측: 번들 심볼** |
 | `LMGetKbdType` | 현재 키보드 하드웨어 타입 조회 | Carbon 소속. **실측: 번들 심볼**(app-bundle-analysis.md §3.1) — 이전 판에는 없던 행 |
@@ -319,3 +360,4 @@ wasdArrow / wasdArrowColemak / wasdArrowDvorak
 9. **RTL 키캡 일러스트의 실제 그래픽 자산 미러링 여부** — (현지화·RTL 채택 시) §3.1.4/§5 의 상충하는 직관을 실제 디자인 자산 확보 후 재확인 필요.
 10. ⭐ **`ko` 번역의 품질·용어 일관성** (D4 채택으로 새로 생긴 질문) — M1 이 만든 카탈로그는 권한 온보딩·치명적 실패·메뉴바 인터페이스에 해당하는 최소 키 집합뿐이다. UI 가 커지는 M2(F-09 환경설정 창)에서 **§3.1.3 의 "물리 키 이름을 번역한다" 정책**이 실제로 어떤 한국어 표기를 쓸지(예: `Caps Lock` → "Caps Lock" 유지인가 "고정" 인가)는 미확정이다. macOS 한국어 시스템 설정의 실제 표기를 확인해 맞추는 것이 §3.1.3 의 채택 근거("사용자가 이미 자국어 macOS 환경에서 보는 이름과 일치")와 정합적이다.
 11. ⭐ **RTL 로케일을 언제 추가할 것인가** — D4 는 `en`+`ko` 만 확정했고 둘 다 LTR 이라 §3.1.4 미러링 규칙에 현재 적용 대상이 없다. 규칙은 명세에 남아 있으나 **검증된 적이 없다** — RTL 로케일을 실제로 추가하는 시점에 §5 항목 1·2·13(연결선 방향, 키캡 일러스트 미러링, bidi 숫자 혼합)을 처음부터 재검토해야 한다.
+12. **서드파티 한국어 입력기에서도 `kTISPropertyInputSourceLanguages` 첫 원소가 `"ko"` 인가** (F-16 요구, §3.2.8) — ⭐ **Apple 기본 입력기에 대해서는 해소됐다**(§3.2.8 실측 표: 한국어 6종 전부 `["ko"]`). 남은 것은 구름 입력기 등 **서드파티** 한국어 입력기이며, 이 기기에 설치돼 있지 않아 확인하지 못했다. `korean-input.md` §9 항목 3 과 동일 질문 — 해당 입력기를 설치한 뒤 `docs/dev/tools/tis-language-probe.swift` 를 다시 돌리면 된다.

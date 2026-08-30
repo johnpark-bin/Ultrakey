@@ -191,6 +191,10 @@ extern "C" {
     pub(crate) static kTISPropertyInputSourceID: Option<&'static CFString>;
     pub(crate) static kTISPropertyInputSourceIsASCIICapable: Option<&'static CFString>;
     pub(crate) static kTISPropertyUnicodeKeyLayoutData: Option<&'static CFString>;
+    /// 근거: `TextInputSources.h` — 값은 `CFArrayRef`(원소 `CFString`, BCP-47 언어 태그).
+    /// F-16(korean-input.md §3.3)이 "폴백 교체 이전 원본 소스가 한국어 입력기인가"를
+    /// 판정하기 위해 새로 요구한 프로퍼티다(F-14 갱신 사항).
+    pub(crate) static kTISPropertyInputSourceLanguages: Option<&'static CFString>;
     /// 근거: `TextInputSources.h` — Distributed Notification 이름.
     pub(crate) static kTISNotifySelectedKeyboardInputSourceChanged: Option<&'static CFString>;
 }
