@@ -2,17 +2,31 @@
 //!
 //! ⭐ M1 에서 이 크레이트는 배선(wiring)만 했다. M2 1차(F-09, 이슈 #13)부터
 //! 환경설정 창이 실재한다 — Seek·Presets 탭은 아직 자리만, Hyperkey·General 탭은
-//! 실제로 동작한다. 메뉴바(F-10)는 여전히 M2 2차 이후다.
+//! 실제로 동작한다. M2 2차(F-10, 이 갱신)부터 메뉴바(`NSStatusItem`)가 실재하고,
+//! Dock 아이콘 재클릭·창 닫기로 대신하던 임시 진입점들이 메뉴 클릭으로 옮겨간다.
 //!
 //! 배선 순서(`docs/dev/architecture.md` §2.1 의 스레드 배치 그대로):
 //!
 //! 1. 로그 초기화 — `ULTRAKEY_LOG` 환경변수. 수동 검증 절차가 이 로그에 기댄다
 //!    (`docs/dev/manual-verification.md` §0)
+//! 1-b. ⭐ 단일 인스턴스 보장(F-10, `menu-bar-and-lifecycle.md` §2 시나리오 D·§5
+//!    항목 1) — 같은 번들 ID 로 이미 떠 있는 인스턴스가 있으면 Tauri 자체를
+//!    띄우지 않고 즉시 종료한다. 두 번째 `CGEventTap` 이 설치되면 키 입력이 두
+//!    번 처리되기 때문이다.
 //! 2. 로케일 결정 → 문자열 카탈로그(D4: ko + en)
 //! 3. ⭐ Accessory 앱으로 전환 — Dock 아이콘·⌘Tab 미노출(`menu-bar-and-lifecycle.md`
 //!    §3, 원본 `LSUIElement = true` 실측에 대응)
-//! 4. ⭐ 설정 저장소 로드(F-15) — "부재 = 기본값" 규약으로 `HyperkeySettings` 조립
-//! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작 + (M2 1차 임시) 설정 창 표시
+//! 4. ⭐ 설정 저장소 로드(F-15) — "부재 = 기본값" 규약으로 `HyperkeySettings` 조립.
+//!    같은 자리에서 `general.disabledApps` 를 읽어 `AppGateController` 를 복원한다.
+//! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작. 메뉴바가 생긴 뒤로는
+//!    이 전이가 설정 창을 자동으로 띄우지 않는다 — `Settings…` 메뉴 클릭이 그
+//!    자리를 대신한다.
+//! 5-b. ⭐ 메뉴바(`NSStatusItem`) 구성 — 정상 메뉴/`unauthorizedMenu` 두 벌을
+//!    미리 만들어 두고, 권한 상태 전이 때마다 트레이의 메뉴만 갈아 끼운다(§3.1).
+//!    최전면 앱 추적은 이 앱 계층이 `ultrakey_platform::workspace` 를 **독립적으로**
+//!    한 번 더 구독해서 한다 — 엔진 내부의 `SystemHooks` 도 같은 알림을 구독하지만
+//!    관측 로그만 남긴다(`ultrakey-engine::system_hooks` 문서 주석: 게이트 갱신은
+//!    `AppGateController` 를 쥔 앱 계층의 몫이다).
 //! 6. 엔진 사건 처리 — ⛔ 치명적 탭 생성 실패는 재시도가 아니라 **종료**다
 //!    (`key-remapping-engine.md` §3-a, §5#16)
 
@@ -24,19 +38,58 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use tauri::{LogicalSize, Manager, State};
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::TrayIcon;
+use tauri::{LogicalSize, Manager, State, Wry};
 
-use ultrakey_core::gate::{AppGateController, AtomicAppGate};
-use ultrakey_core::keycode::SourceKey;
+use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
+use ultrakey_core::keycode::{KeyCode, SourceKey};
 use ultrakey_core::settings::{keys, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::{Engine, EngineEvent};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::Catalog;
+use ultrakey_presets::{
+    ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
+    QuickPressCapsAction, RemapCapsTarget,
+};
 use ultrakey_permissions::{
     dev_build_warning, onboarding_copy, open_accessibility_settings, out_of_sync_copy,
     PermissionMonitor, PermissionState,
 };
 use ultrakey_platform::bundle;
+use ultrakey_platform::login_item;
+use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
+
+/// ⭐ F-10 메뉴 항목 id — 그대로 i18n 카탈로그 키이기도 하다(고유하고, 라벨을
+/// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
+mod menu_ids {
+    pub const IGNORE_APP: &str = "menu.ignore_app";
+    pub const SETTINGS: &str = "menu.settings";
+    pub const ABOUT: &str = "menu.about";
+    pub const ADVANCED: &str = "menu.advanced";
+    pub const SYNTHESIZE_CAPS_REMAP: &str = "menu.advanced.synthesize_caps_remap";
+    pub const RELAUNCH: &str = "menu.advanced.relaunch";
+    pub const QUIT: &str = "menu.quit";
+    pub const AUTHORIZE: &str = "menu.unauthorized.authorize";
+}
+
+/// F-10 이 소유하는 저장 키. `ultrakey_core::settings::keys` 에 넣지 않는 이유:
+/// 그 모듈은 `crates/ultrakey-core` 소속이고 이번 위임은 그 크레이트를 건드리지
+/// 않는다(동시 작업 중인 다른 위임의 경로다) — `SettingsStore::get`/`set` 은
+/// 임의의 문자열 키를 받으므로(`keys::all()` 화이트리스트는 `settings_set`
+/// 커맨드 하나만의 검증 규칙이지 저장 계층 자체의 제약이 아니다) 여기서 지역
+/// 상수로 선언해도 저장 형식은 동일하다.
+mod settings_keys {
+    /// F-10 §3.4 — 앱별 비활성화 목록(블랙리스트, `Vec<String>` 번들 ID).
+    pub const GENERAL_DISABLED_APPS: &str = "general.disabledApps";
+    /// F-10 §3.5 — `General` 탭 `Launch on login` 체크박스의 마지막 사용자 의도.
+    /// ⚠️ 실제 로그인 항목 등록 상태의 정본은 OS(`SMAppService`/plist 존재)이고,
+    /// 이 키는 UI 가 재부팅 없이도 마지막으로 사용자가 고른 값을 보여주기 위한
+    /// 거울(mirror)일 뿐이다.
+    pub const GENERAL_LAUNCH_ON_LOGIN: &str = "general.launchOnLogin";
+    /// F-10 §3 `Hide menu bar icon` 체크박스.
+    pub const GENERAL_HIDE_MENU_BAR_ICON: &str = "general.hideMenuBarIcon";
+}
 
 /// 프런트엔드(권한 모달)가 조회하는 문구 묶음.
 ///
@@ -200,8 +253,343 @@ fn warning_view(warning: SettingsWarning) -> WarningView {
     }
 }
 
+// ============================================================================
+// F-08 Presets 탭 — `ultrakey_presets` 의 타입을 settings.html 이 기대하는 계약
+// (camelCase JSON, variant 이름 = value, 서술형 항목만 labelKey)으로 옮긴다.
+// ============================================================================
+
+/// enum 값 하나를 그 값의 직렬화 variant 이름(저장 형식과 같은 문자열)으로 되돌린다.
+/// `source_key_view` 가 이미 쓰던 관례를 팝업 enum 6종에도 그대로 적용한다 — 손으로
+/// 다시 나열하면 serde derive 와 어긋날 여지가 생긴다.
+fn serde_variant_name<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|j| j.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PresetOptionView {
+    value: String,
+    label: String,
+    label_key: Option<String>,
+}
+
+fn preset_option_view<T: Copy + serde::Serialize>(
+    v: T,
+    label: &str,
+    label_key: Option<&str>,
+) -> PresetOptionView {
+    PresetOptionView {
+        value: serde_variant_name(&v),
+        label: label.to_string(),
+        label_key: label_key.map(str::to_string),
+    }
+}
+
+/// ⭐ 이 함수들만 `labelKey` 를 채운다 — 위임 지시서가 "정확히 이 키들만" 이라고
+/// 못박은 목록 그대로다. 그 밖의 항목(키캡 각인·`Seek`·`H J K L`·`( )` 류)은 전부
+/// `None` — 카탈로그를 거치지 않고 값 그대로 UI 에 보인다.
+fn remap_caps_target_label_key(v: RemapCapsTarget) -> Option<&'static str> {
+    matches!(v, RemapCapsTarget::Nothing).then_some("settings.presets.option.nothing")
+}
+
+fn home_row_scheme_label_key(v: HomeRowScheme) -> Option<&'static str> {
+    match v {
+        HomeRowScheme::SymbolRow => Some("settings.presets.option.home_row.symbol"),
+        HomeRowScheme::FunctionRow => Some("settings.presets.option.home_row.function"),
+    }
+}
+
+fn paste_trigger_label_key(v: PasteTrigger) -> Option<&'static str> {
+    match v {
+        PasteTrigger::RightCommand => Some("settings.presets.option.paste.right_cmd"),
+        PasteTrigger::LeftCommand => Some("settings.presets.option.paste.left_cmd"),
+        PasteTrigger::EitherCommand => Some("settings.presets.option.paste.either_cmd"),
+        PasteTrigger::HyperKey => Some("settings.presets.option.paste.hyper"),
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PresetOptionsView {
+    caps_remap_targets: Vec<PresetOptionView>,
+    caps_quick_actions: Vec<PresetOptionView>,
+    arrow_key_sets: Vec<PresetOptionView>,
+    home_row_schemes: Vec<PresetOptionView>,
+    bracket_pairs: Vec<PresetOptionView>,
+    paste_triggers: Vec<PresetOptionView>,
+}
+
+/// 팝업 6종 전량(50/48/2/2/4/4) — 값은 매번 다시 계산해도 비용이 무시할 만한
+/// 정적 목록이라 캐시하지 않는다.
+fn preset_options_view() -> PresetOptionsView {
+    PresetOptionsView {
+        caps_remap_targets: RemapCapsTarget::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), remap_caps_target_label_key(v)))
+            .collect(),
+        caps_quick_actions: QuickPressCapsAction::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), None))
+            .collect(),
+        arrow_key_sets: ArrowKeySet::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), None))
+            .collect(),
+        home_row_schemes: HomeRowScheme::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), home_row_scheme_label_key(v)))
+            .collect(),
+        bracket_pairs: BracketPair::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), None))
+            .collect(),
+        paste_triggers: PasteTrigger::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), paste_trigger_label_key(v)))
+            .collect(),
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CapsLockRemapView {
+    enabled: bool,
+    target: String,
+}
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CapsQuickPressView {
+    enabled: bool,
+    action: String,
+}
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CapsHjklArrowsView {
+    enabled: bool,
+    key_set: String,
+}
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CapsHomeRowView {
+    enabled: bool,
+    scheme: String,
+}
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ShiftQuickPressBracketsView {
+    enabled: bool,
+    pair: String,
+}
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PasteWithoutFormattingView {
+    enabled: bool,
+    trigger: String,
+}
+
+/// `PresetSettings` 를 그대로 내보내지 않는 이유는 `HyperkeyView` 와 같다 —
+/// 저장 계층은 snake_case 필드 이름을 쓰고(`ultrakey-presets` 는 이번 위임이
+/// 건드리지 않는 크레이트다), 프런트엔드는 camelCase 를 기대한다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PresetsView {
+    caps_lock_remap: CapsLockRemapView,
+    caps_quick_press: CapsQuickPressView,
+    quick_press_duration_ms: u64,
+    caps_space_enter: bool,
+    caps_wasd_arrows: bool,
+    caps_hjkl_arrows: CapsHjklArrowsView,
+    caps_home_row: CapsHomeRowView,
+    double_tap_shift_to_caps: bool,
+    left_right_shift_to_caps: bool,
+    shift_caps_to_caps: bool,
+    shift_quick_press_brackets: ShiftQuickPressBracketsView,
+    hyper_delete_to_forward: bool,
+    delete_to_forward: bool,
+    shift_delete_to_forward: bool,
+    paste_without_formatting: PasteWithoutFormattingView,
+    home_end_on_lines: bool,
+}
+
+fn presets_view(p: &PresetSettings) -> PresetsView {
+    PresetsView {
+        caps_lock_remap: CapsLockRemapView {
+            enabled: p.caps_lock_remap.enabled,
+            target: serde_variant_name(&p.caps_lock_remap.target),
+        },
+        caps_quick_press: CapsQuickPressView {
+            enabled: p.caps_quick_press.enabled,
+            action: serde_variant_name(&p.caps_quick_press.action),
+        },
+        quick_press_duration_ms: p.quick_press_duration_ms,
+        caps_space_enter: p.caps_space_enter,
+        caps_wasd_arrows: p.caps_wasd_arrows,
+        caps_hjkl_arrows: CapsHjklArrowsView {
+            enabled: p.caps_hjkl_arrows.enabled,
+            key_set: serde_variant_name(&p.caps_hjkl_arrows.key_set),
+        },
+        caps_home_row: CapsHomeRowView {
+            enabled: p.caps_home_row.enabled,
+            scheme: serde_variant_name(&p.caps_home_row.scheme),
+        },
+        double_tap_shift_to_caps: p.double_tap_shift_to_caps,
+        left_right_shift_to_caps: p.left_right_shift_to_caps,
+        shift_caps_to_caps: p.shift_caps_to_caps,
+        shift_quick_press_brackets: ShiftQuickPressBracketsView {
+            enabled: p.shift_quick_press_brackets.enabled,
+            pair: serde_variant_name(&p.shift_quick_press_brackets.pair),
+        },
+        hyper_delete_to_forward: p.hyper_delete_to_forward,
+        delete_to_forward: p.delete_to_forward,
+        shift_delete_to_forward: p.shift_delete_to_forward,
+        paste_without_formatting: PasteWithoutFormattingView {
+            enabled: p.paste_without_formatting.enabled,
+            trigger: serde_variant_name(&p.paste_without_formatting.trigger),
+        },
+        home_end_on_lines: p.home_end_on_lines,
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GeneralView {
+    launch_on_login: bool,
+    hide_menu_bar_icon: bool,
+}
+
+fn general_view(store: &SettingsStore) -> GeneralView {
+    GeneralView {
+        launch_on_login: store
+            .get(settings_keys::GENERAL_LAUNCH_ON_LOGIN)
+            .unwrap_or(false),
+        hide_menu_bar_icon: store
+            .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
+            .unwrap_or(false),
+    }
+}
+
+/// `settings_set`/`settings_resolve_conflict` 가 돌려주는 충돌 대화상자 페이로드
+/// (architecture.md §6.5). `kind` 문자열은 `settings.presets.conflict.title.<kind>`
+/// i18n 키와 맞물리므로 `ConflictKind` 의 정확한 camelCase 표기여야 한다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PendingConflictView {
+    kind: &'static str,
+    key: String,
+    value: serde_json::Value,
+    disable_label_keys: Vec<String>,
+}
+
+fn conflict_kind_str(kind: ConflictKind) -> &'static str {
+    match kind {
+        ConflictKind::CapsLockAlreadyRemapped => "capsLockAlreadyRemapped",
+        ConflictKind::CapsLockArrows => "capsLockArrows",
+        ConflictKind::CapsLockHomeRow => "capsLockHomeRow",
+    }
+}
+
+/// 끄게 될 설정의 저장 키 → UI 라벨 카탈로그 키. `ultrakey_presets::conflicts` 가
+/// 만드는 `to_disable` 목록은 이 네 개 상수만으로 구성된다(`conflicts.rs`
+/// `DISABLE_*` 상수 참고) — 그 밖의 값은 있을 수 없는 경로다.
+///
+/// ⚠️ HJKL 항목은 완전한 문장형 카탈로그 키가 없다 — `settings.presets.caps_hjkl`
+/// 은 prefix/suffix 두 조각(그 사이에 팝업이 낀다)으로만 존재한다(`resources/i18n/
+/// en.json` 확인). 다른 항목과 달리 prefix 조각만 인용한다 — 완전한 새 키를
+/// 만들 수는 없으므로(⛔ `resources/i18n/**` 는 이 위임의 편집 범위 밖) 이미
+/// 있는 키 중 가장 가까운 것을 쓴다.
+fn disable_label_key_for_setting(store_key: &str) -> &'static str {
+    match store_key {
+        k if k == keys::PRESETS_CAPS_LOCK_REMAP_ENABLED => "settings.presets.caps_remap",
+        k if k == keys::PRESETS_CAPS_WASD_ARROWS => "settings.presets.caps_wasd",
+        k if k == keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED => "settings.presets.caps_hjkl.prefix",
+        k if k == keys::PRESETS_CAPS_HOME_ROW_ENABLED => "settings.presets.caps_home_row",
+        other => {
+            // 방어적 — conflicts.rs 가 이 네 개 밖의 키를 내놓는 일은 없어야 한다.
+            tracing::error!(key = other, "충돌 해소 목록에 알 수 없는 설정 키가 있다");
+            "settings.presets.heading"
+        }
+    }
+}
+
+fn pending_conflict_view(conflict: Conflict, key: &str, value: &serde_json::Value) -> PendingConflictView {
+    PendingConflictView {
+        kind: conflict_kind_str(conflict.kind),
+        key: key.to_string(),
+        value: value.clone(),
+        disable_label_keys: conflict
+            .to_disable
+            .iter()
+            .map(|k| disable_label_key_for_setting(k).to_string())
+            .collect(),
+    }
+}
+
+/// hyper/meh/bleh 중 **활성화된** 슬롯의 소스가 caps lock 인가(architecture.md §6
+/// "caps_is_modifier_source" 정의 그대로).
+fn caps_is_modifier_source(h: &HyperkeySettings) -> bool {
+    (h.hyper.enabled && h.hyper.source == SourceKey::CapsLock)
+        || (h.meh.enabled && h.meh.source == SourceKey::CapsLock)
+        || (h.bleh.enabled && h.bleh.source == SourceKey::CapsLock)
+}
+
+/// D-1 — 이 설정 조합에서 경로 B 가 실제로 설치해야 할 alias(`docs/dev/
+/// architecture.md` §6.1). `PresetSettings::needs_caps_lock_alias` 가 "필요한가"를
+/// 판정하고, `synthesize_caps_lock_remap`(Advanced 토글)이 그것을 무시하고 경로 A 만
+/// 쓰게 만들 수 있다.
+fn compute_caps_lock_alias(presets: &PresetSettings, caps_is_source: bool) -> Option<KeyCode> {
+    if presets.needs_caps_lock_alias(caps_is_source) && !presets.synthesize_caps_lock_remap {
+        Some(KeyCode::F18)
+    } else {
+        None
+    }
+}
+
+/// hyperkey.validate() 의 경고에 F-08/D-1 전용 경고 2종을 더한다(위임 지시서 §5):
+/// - `RemapCapsTarget` 의 F21~F24(keycode 미확정)를 고르면 `unknownKey`.
+/// - D-1 alias(F18)와 hyper/meh/bleh 소스가 우연히 겹치면 `duplicate`(기존 hyperkey
+///   중복 경고 키를 재사용 — 새 i18n 키를 만들지 않는다).
+fn build_preset_warnings(
+    hyperkey: &HyperkeySettings,
+    presets: &PresetSettings,
+    caps_lock_alias: Option<KeyCode>,
+) -> Vec<WarningView> {
+    let mut warnings = Vec::new();
+
+    if presets.caps_lock_remap.enabled
+        && matches!(
+            presets.caps_lock_remap.target,
+            RemapCapsTarget::F21 | RemapCapsTarget::F22 | RemapCapsTarget::F23 | RemapCapsTarget::F24
+        )
+    {
+        warnings.push(WarningView {
+            kind: "unknownKey",
+            key: presets.caps_lock_remap.target.label().to_string(),
+        });
+    }
+
+    if caps_lock_alias == Some(KeyCode::F18) {
+        let slots = [
+            (hyperkey.hyper.enabled, hyperkey.hyper.source),
+            (hyperkey.meh.enabled, hyperkey.meh.source),
+            (hyperkey.bleh.enabled, hyperkey.bleh.source),
+        ];
+        if slots.into_iter().any(|(enabled, source)| enabled && source == SourceKey::F18) {
+            tracing::warn!(
+                "D-1 caps lock alias(F18)가 hyper/meh/bleh 소스로 고른 F18 과 충돌한다"
+            );
+            warnings.push(WarningView { kind: "duplicate", key: SourceKey::F18.label().to_string() });
+        }
+    }
+
+    warnings
+}
+
 /// 환경설정 창이 화면을 다시 그리는 데 필요한 전부. `settings_bootstrap`·
-/// `settings_set` 이 공통으로 돌려준다.
+/// `settings_set`·`settings_set_tab`·`settings_resolve_conflict` 이 공통으로
+/// 돌려준다.
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SettingsState {
@@ -214,16 +602,33 @@ struct SettingsState {
     /// 직전 `settings_set` 호출에서 저장이 실패했다면 그 사유(§3.7: 엔진 반영은
     /// 이미 끝났고, 이건 UI 가 `settings.save_failed` 로 알리기만 하면 되는 정보다).
     save_error: Option<String>,
+    presets: PresetsView,
+    preset_options: PresetOptionsView,
+    /// D-1 — 지금 경로 B 로 caps lock 이 F18 로 리매핑돼 있는가(`settings.presets.
+    /// caps_alias.note` 힌트를 UI 가 이 값으로 보인다).
+    caps_lock_alias_active: bool,
+    general: GeneralView,
+    /// 값을 아직 적용하지 않은 충돌(architecture.md §6.5) — `Some` 이면 그 앞의
+    /// `settings_set` 호출은 아무것도 저장·반영하지 않았다.
+    pending_conflict: Option<PendingConflictView>,
 }
 
 fn build_settings_state(
     hyperkey: &HyperkeySettings,
+    presets: &PresetSettings,
     store: &SettingsStore,
     save_error: Option<String>,
+    pending_conflict: Option<PendingConflictView>,
 ) -> SettingsState {
     let last_tab = store
         .get::<String>(keys::UI_LAST_TAB)
         .unwrap_or_else(|| "hyperkey".to_string());
+    let caps_is_source = caps_is_modifier_source(hyperkey);
+    let caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
+
+    let mut warnings: Vec<WarningView> = hyperkey.validate().into_iter().map(warning_view).collect();
+    warnings.extend(build_preset_warnings(hyperkey, presets, caps_lock_alias));
+
     SettingsState {
         hyperkey: hyperkey_view(hyperkey),
         hyper_preview: hyper_preview(hyperkey),
@@ -233,9 +638,14 @@ fn build_settings_state(
             .copied()
             .map(trackpad_area_view)
             .collect(),
-        warnings: hyperkey.validate().into_iter().map(warning_view).collect(),
+        warnings,
         last_tab,
         save_error,
+        presets: presets_view(presets),
+        preset_options: preset_options_view(),
+        caps_lock_alias_active: caps_lock_alias.is_some(),
+        general: general_view(store),
+        pending_conflict,
     }
 }
 
@@ -312,10 +722,21 @@ fn tab_window_size(tab: &str) -> Option<(u32, u32)> {
     }
 }
 
-fn build_engine_config(hyperkey: &HyperkeySettings) -> EngineConfig {
+/// hyperkey + presets 두 설정 묶음을 합쳐 `EngineConfig` 하나로 조립하는 단일
+/// 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이 함수를 거친다.
+fn build_engine_config(hyperkey: &HyperkeySettings, presets: &PresetSettings) -> EngineConfig {
     let mut config = EngineConfig::default();
     config.rules.modifier_rules = hyperkey.to_modifier_rules();
     config.mouse_apply = hyperkey.mouse_apply;
+    config.timings.quick_press_duration_ms = presets.quick_press_duration_ms;
+
+    let caps_is_source = caps_is_modifier_source(hyperkey);
+    let preset_rules = presets.to_rules(caps_is_source);
+    config.rules.combo_rules = preset_rules.combos;
+    config.rules.simple_remaps = preset_rules.simple_remaps;
+    config.rules.source_actions = preset_rules.source_actions;
+    config.caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source);
+
     config
 }
 
@@ -373,12 +794,104 @@ fn validate_and_apply(
     apply_setting(hyperkey, key, value)
 }
 
+/// `apply_setting` 의 F-08(presets.*) 짝 — 16종 설정 + Advanced 토글 1개.
+/// `presets.quickPressDurationMs` 는 `PresetSettings::from_store` 와 같은 유효
+/// 범위(250~2000ms)로 클램프한다(F-08 §4).
+fn apply_preset_setting(
+    presets: &mut PresetSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        k if k == keys::PRESETS_CAPS_LOCK_REMAP_ENABLED => {
+            presets.caps_lock_remap.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_LOCK_REMAP_TARGET => {
+            presets.caps_lock_remap.target = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_QUICK_PRESS_ENABLED => {
+            presets.caps_quick_press.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_QUICK_PRESS_ACTION => {
+            presets.caps_quick_press.action = parse(value, key)?
+        }
+        k if k == keys::PRESETS_QUICK_PRESS_DURATION_MS => {
+            let raw: u64 = parse(value, key)?;
+            presets.quick_press_duration_ms = raw.clamp(250, 2000);
+        }
+        k if k == keys::PRESETS_CAPS_SPACE_ENTER => presets.caps_space_enter = parse(value, key)?,
+        k if k == keys::PRESETS_CAPS_WASD_ARROWS => presets.caps_wasd_arrows = parse(value, key)?,
+        k if k == keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED => {
+            presets.caps_hjkl_arrows.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_HJKL_ARROWS_KEY_SET => {
+            presets.caps_hjkl_arrows.key_set = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_HOME_ROW_ENABLED => {
+            presets.caps_home_row.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_CAPS_HOME_ROW_SCHEME => {
+            presets.caps_home_row.scheme = parse(value, key)?
+        }
+        k if k == keys::PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS => {
+            presets.double_tap_shift_to_caps = parse(value, key)?
+        }
+        k if k == keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS => {
+            presets.left_right_shift_to_caps = parse(value, key)?
+        }
+        k if k == keys::PRESETS_SHIFT_CAPS_TO_CAPS => presets.shift_caps_to_caps = parse(value, key)?,
+        k if k == keys::PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED => {
+            presets.shift_quick_press_brackets.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_SHIFT_QUICK_PRESS_BRACKETS_PAIR => {
+            presets.shift_quick_press_brackets.pair = parse(value, key)?
+        }
+        k if k == keys::PRESETS_HYPER_DELETE_TO_FORWARD => {
+            presets.hyper_delete_to_forward = parse(value, key)?
+        }
+        k if k == keys::PRESETS_DELETE_TO_FORWARD => presets.delete_to_forward = parse(value, key)?,
+        k if k == keys::PRESETS_SHIFT_DELETE_TO_FORWARD => {
+            presets.shift_delete_to_forward = parse(value, key)?
+        }
+        k if k == keys::PRESETS_PASTE_WITHOUT_FORMATTING_ENABLED => {
+            presets.paste_without_formatting.enabled = parse(value, key)?
+        }
+        k if k == keys::PRESETS_PASTE_WITHOUT_FORMATTING_TRIGGER => {
+            presets.paste_without_formatting.trigger = parse(value, key)?
+        }
+        k if k == keys::PRESETS_HOME_END_ON_LINES => presets.home_end_on_lines = parse(value, key)?,
+        k if k == keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP => {
+            presets.synthesize_caps_lock_remap = parse(value, key)?
+        }
+        _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
+    }
+    Ok(())
+}
+
+fn validate_and_apply_preset(
+    presets: &mut PresetSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("알 수 없는 설정 키: {key}"));
+    }
+    apply_preset_setting(presets, key, value)
+}
+
 struct AppState {
     catalog: Catalog,
     /// 엔진은 권한이 생긴 뒤에야 시작된다 — 그전에는 `None`.
     engine: Mutex<Option<Engine>>,
     gate: Arc<AtomicAppGate>,
-    #[allow(dead_code)] // M3(F-10)의 메뉴바 `Ignore <앱>` 이 이것을 쓴다.
     gate_controller: Arc<AppGateController>,
     monitor: Mutex<Option<PermissionMonitor>>,
     /// F-15 저장 계층(`ultrakey_core::settings::SettingsStore`). 부팅 초기값은
@@ -389,8 +902,26 @@ struct AppState {
     /// 메모리 정본. 탭 스레드/엔진 커맨드마다 store 를 다시 역직렬화하지 않도록
     /// 캐시해 둔다 — `settings_set` 이 이 값과 store 를 함께 갱신한다.
     hyperkey: Mutex<HyperkeySettings>,
+    /// F-08 Presets 탭의 메모리 정본. `hyperkey` 와 같은 캐시 규약을 쓴다.
+    presets: Mutex<PresetSettings>,
     /// 부트스트랩이 프런트엔드에 한 번만 알려줄 로드 경고(손상 복구/미래 스키마).
     load_notice: Mutex<Option<Notice>>,
+    // ── F-10 메뉴바 상주(M2 2차) ──────────────────────────────────────────
+    /// `NSStatusItem` 핸들. 드롭하면 아이콘이 사라지므로 앱 생애주기 내내 들고
+    /// 있어야 한다. `setup_tray()` 가 채운다.
+    tray: Mutex<Option<TrayIcon<Wry>>>,
+    /// `Ignore <앱>` 항목 — 최전면 앱이 바뀔 때마다 라벨·체크 상태를 갱신해야 해서
+    /// 따로 손잡이를 쥔다(`Menu` 는 항목별 개별 갱신 API 가 없다).
+    ignore_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    /// 권한이 있을 때 보여주는 정상 메뉴 — 권한 전이 때마다 새로 만들지 않고
+    /// 트레이의 메뉴만 이것/`unauthorized_menu` 로 갈아 끼운다.
+    normal_menu: Mutex<Option<Menu<Wry>>>,
+    /// `AXIsProcessTrusted() == false` 일 때 보여주는 2항목 메뉴(§3.1).
+    unauthorized_menu: Mutex<Option<Menu<Wry>>>,
+    /// 앱 계층 전용 `NSWorkspace` 구독(모듈 문서 5-b 참고). 드롭되면 구독이
+    /// 해지되므로 앱 생애주기 내내 들고 있어야 한다 — 값 자체는 읽지 않는다.
+    #[allow(dead_code)]
+    system_event_observer: Mutex<Option<SystemEventObserver>>,
 }
 
 #[tauri::command]
@@ -444,9 +975,12 @@ fn open_settings() -> bool {
     open_accessibility_settings()
 }
 
+/// ⭐ F-10 §2 시나리오 F — 정상 종료. 메뉴바 `Quit Ultrakey`(`on_menu_quit`)와
+/// 이 커맨드(설정 창의 `Quit` 버튼)가 같은 절차(`shutdown_and_exit`)를 공유한다 —
+/// 진입점이 둘이어도 순서(합성 modifier 해소 → 엔진 종료 → 프로세스 종료)는 하나다.
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
-    app.exit(0);
+fn quit_app(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) {
+    shutdown_and_exit(&app, &state);
 }
 
 /// 환경설정 창 부트스트랩 — 카탈로그 전체 + 현재 설정 상태 + 앱 메타를 한 번에
@@ -455,8 +989,9 @@ fn quit_app(app: tauri::AppHandle) {
 fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) -> SettingsBootstrap {
     let catalog = &state.catalog;
     let hyperkey = state.hyperkey.lock().unwrap().clone();
+    let presets = *state.presets.lock().unwrap();
     let store = state.store.lock().unwrap();
-    let settings_state = build_settings_state(&hyperkey, &store, None);
+    let settings_state = build_settings_state(&hyperkey, &presets, &store, None, None);
     let meta = build_app_meta(&app, &store);
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
@@ -472,17 +1007,47 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     }
 }
 
+/// 현재 저장된 값 그대로 `SettingsState` 를 다시 조립한다 — `general.*` 커맨드처럼
+/// hyperkey/presets 를 건드리지 않는 변경 뒤에 새 상태를 돌려줄 때 쓴다.
+fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String> {
+    let hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets = *state.presets.lock().map_err(|e| e.to_string())?;
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(&hyperkey, &presets, &store, None, None))
+}
+
+/// hyperkey.* 변경 뒤 `Engine::reconfigure` + (필요하면) `force_reset_state` 를
+/// 함께 호출한다. presets.* 경로(`settings_set_preset`)와 이 함수를 공유해 엔진
+/// 반영 로직이 두 곳에 흩어지지 않게 한다.
+fn reconfigure_engine(
+    state: &Arc<AppState>,
+    hyperkey: &HyperkeySettings,
+    presets: &PresetSettings,
+    force_reset: bool,
+) -> Result<(), String> {
+    let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
+    if let Some(engine) = engine_guard.as_ref() {
+        engine.reconfigure(build_engine_config(hyperkey, presets));
+        if force_reset {
+            engine.force_reset_state();
+        }
+    }
+    // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
+    // 갱신된 `state.hyperkey`/`state.presets` 로 조립되므로 이 변경이 유실되지 않는다.
+    Ok(())
+}
+
 /// 컨트롤 하나가 바뀔 때마다 호출된다(§3.7 "적용 버튼 없음" — 즉시 반영).
 ///
-/// ⭐ 순서를 반드시 지킨다:
-/// 1. `key` 가 `keys::all()` 에 있는지 검증.
-/// 2. 메모리 `HyperkeySettings` 갱신.
-/// 3. **엔진 반영** — 저장 성공 여부와 무관하게 먼저 한다(D-B: 로그아웃 시 graceful
-///    shutdown 이 실행되지 않는다는 M1 실측 근거 — 종료 시점에 뭔가를 flush 하는
-///    설계는 애초에 그 시점이 오지 않을 수 있다).
-/// 4. **저장** — 실패해도 3번은 이미 끝났다. 실패는 반환값(`saveError`)에 실어
-///    UI 가 `settings.save_failed` 로 알리게 한다.
-/// 5. 새 `SettingsState` 반환.
+/// `key` 접두사로 세 경로로 갈린다:
+/// - `general.launchOnLogin`/`general.hideMenuBarIcon` — F-10 이 이미 만든
+///   로직(`set_launch_on_login_internal`/`set_hide_menu_bar_icon_internal`)을
+///   그대로 재사용한다. hyperkey/presets 도, 엔진도 건드리지 않는다.
+/// - `presets.*` — [`settings_set_preset`](충돌 감지 → 적용 → 엔진 반영 → 저장).
+/// - 그 밖(`hyperkey.*`) — 순서를 반드시 지킨다: 1) `key` 검증 2) 메모리 갱신
+///   3) **엔진 반영**(저장 성공 여부와 무관하게 먼저 한다 — D-B: 로그아웃 시
+///   graceful shutdown 이 실행되지 않는다는 M1 실측 근거) 4) **저장**(실패해도
+///   3번은 이미 끝났다 — `saveError` 로 UI 에 알린다) 5) 새 `SettingsState` 반환.
 #[tauri::command]
 fn settings_set(
     state: State<'_, Arc<AppState>>,
@@ -490,26 +1055,41 @@ fn settings_set(
     key: String,
     value: serde_json::Value,
 ) -> Result<SettingsState, String> {
+    if key == settings_keys::GENERAL_LAUNCH_ON_LOGIN {
+        let on = value
+            .as_bool()
+            .ok_or_else(|| format!("{key} 는 bool 값이어야 한다"))?;
+        set_launch_on_login_internal(&state, on)?;
+        return current_settings_state(&state);
+    }
+    if key == settings_keys::GENERAL_HIDE_MENU_BAR_ICON {
+        let on = value
+            .as_bool()
+            .ok_or_else(|| format!("{key} 는 bool 값이어야 한다"))?;
+        set_hide_menu_bar_icon_internal(&state, on)?;
+        return current_settings_state(&state);
+    }
+
+    if key.starts_with("presets.") {
+        return settings_set_preset(&state, &key, &value);
+    }
+
     // 1) + 2)
     let hyperkey_snapshot = {
         let mut hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?;
         validate_and_apply(&mut hyperkey, &key, &value)?;
         hyperkey.clone()
     };
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
 
     // 3) 엔진 반영.
-    {
-        let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
-        if let Some(engine) = engine_guard.as_ref() {
-            engine.reconfigure(build_engine_config(&hyperkey_snapshot));
-            if key_affects_modifier_rules(&key) {
-                // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
-                engine.force_reset_state();
-            }
-        }
-        // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
-        // 갱신된 `state.hyperkey` 로 조립되므로 이 변경이 유실되지 않는다.
-    }
+    // D-D: 규칙이 바뀌는 변경은 stuck modifier 를 막기 위해 상태도 리셋한다.
+    reconfigure_engine(
+        &state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        key_affects_modifier_rules(&key),
+    )?;
 
     // 4) 저장.
     let save_error = {
@@ -525,7 +1105,106 @@ fn settings_set(
 
     // 5) 새 SettingsState.
     let store = state.store.lock().map_err(|e| e.to_string())?;
-    Ok(build_settings_state(&hyperkey_snapshot, &store, save_error))
+    Ok(build_settings_state(&hyperkey_snapshot, &presets_snapshot, &store, save_error, None))
+}
+
+/// `settings_set` 의 `presets.*` 경로 — [`settings_resolve_conflict`] 도 이 함수를
+/// 재사용한다(충돌 상대를 `value=false` 로 먼저 적용해 끄는 재귀 호출).
+///
+/// 1. `ultrakey_presets::detect_conflict` 로 충돌을 **적용 전에** 확인한다. 충돌이면
+///    아무것도 저장·반영하지 않고 `pendingConflict` 를 채워 돌려준다.
+/// 2. 메모리 `PresetSettings` 갱신.
+/// 3. 엔진 반영(D-1 재계산 포함 — `build_engine_config`/`Engine::reconfigure` 가
+///    caps lock alias 를 다시 계산한다) + `force_reset_state`(프리셋 규칙 변경도
+///    hyper/meh/bleh 규칙 변경과 같은 이유로 stuck modifier 위험이 있다 — 추적
+///    키 집합 자체가 바뀌기 때문이다, D-D 를 presets.* 로 확장).
+/// 4. 저장(컨트롤 단위 즉시 write-through, F-15 §3.1.1).
+/// 5. 새 `SettingsState` 반환.
+fn settings_set_preset(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let caps_is_source = caps_is_modifier_source(&hyperkey_snapshot);
+
+    // 1) 충돌 감지 — 적용하기 전에.
+    if let Some(new_value) = value.as_bool() {
+        let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
+        if let Some(conflict) =
+            ultrakey_presets::detect_conflict(&presets_before, caps_is_source, key, new_value)
+        {
+            let pending = pending_conflict_view(conflict, key, value);
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            return Ok(build_settings_state(
+                &hyperkey_snapshot,
+                &presets_before,
+                &store,
+                None,
+                Some(pending),
+            ));
+        }
+    }
+
+    // 2)
+    let presets_snapshot = {
+        let mut presets = state.presets.lock().map_err(|e| e.to_string())?;
+        validate_and_apply_preset(&mut presets, key, value)?;
+        *presets
+    };
+
+    // 3) 엔진 반영 — presets.* 변경은 항상 규칙 테이블을 바꾼다(단순 슬라이더도
+    // `quick_press_duration_ms` 를 통해 FSM 타이밍에 영향을 준다) — 언제나
+    // force_reset 한다.
+    reconfigure_engine(state, &hyperkey_snapshot, &presets_snapshot, true)?;
+
+    // 4) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "설정 저장 실패");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 5)
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(&hyperkey_snapshot, &presets_snapshot, &store, save_error, None))
+}
+
+/// 충돌 대화상자의 `계속` 버튼 — `settings_set_preset` 이 돌려준 `pendingConflict`
+/// 를 사용자가 승인했을 때 호출된다(architecture.md §6.5). 충돌 상대를 **먼저**
+/// 끄고(각각 write-through) 그다음 원래 값을 적용한다 — 두 단계 모두
+/// `settings_set_preset` 을 그대로 재사용한다: 상대를 끄고 나면 그 다음 호출의
+/// `detect_conflict` 는 이미 해소된 상태를 보므로 자연히 `None` 이 되어 실제
+/// 적용으로 이어진다.
+#[tauri::command]
+fn settings_resolve_conflict(
+    state: State<'_, Arc<AppState>>,
+    key: String,
+    value: serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let caps_is_source = caps_is_modifier_source(&hyperkey_snapshot);
+    let new_value = value
+        .as_bool()
+        .ok_or_else(|| format!("{key} 충돌 해소는 bool 값만 지원한다"))?;
+
+    let to_disable: Vec<String> = {
+        let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
+        ultrakey_presets::detect_conflict(&presets_before, caps_is_source, &key, new_value)
+            .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    };
+
+    for disable_key in &to_disable {
+        settings_set_preset(&state, disable_key, &serde_json::Value::Bool(false))?;
+    }
+
+    settings_set_preset(&state, &key, &value)
 }
 
 /// 탭 전환 — 창 리사이즈(§3.1·§3.3, D-E) + (`persist` 일 때만) `ui.lastTab` 저장.
@@ -651,6 +1330,19 @@ fn main() {
         "=== Ultrakey 기동 ==="
     );
 
+    // 1-b) ⭐ 단일 인스턴스 보장(`menu-bar-and-lifecycle.md` §2 시나리오 D, §5
+    // 항목 1, §8) — Tauri 를 아예 띄우기 전에 판정한다. 그래야 두 번째 프로세스가
+    // 트레이 아이콘·엔진·`CGEventTap` 을 단 한 순간도 만들지 않는다. 종료는
+    // 정리할 자원이 아무것도 없는 시점이라 `Engine::shutdown()` 같은 절차 없이
+    // 바로 반환해도 안전하다.
+    if bundle::other_instance_running() {
+        tracing::warn!(
+            "같은 번들 ID 로 이미 실행 중인 인스턴스가 있다 — 새 CGEventTap 을 설치하지 \
+             않고 이 프로세스를 즉시 종료한다(§5 항목 1)"
+        );
+        return;
+    }
+
     // 2) 로케일 → 카탈로그 (D4: ko + en)
     let catalog = Catalog::resolve(&bundle::preferred_languages());
     tracing::info!(locale = catalog.locale().code(), "문자열 카탈로그 로드됨");
@@ -672,7 +1364,13 @@ fn main() {
         // setup() 이 실제 app_data_dir() 경로로 교체하기 전까지의 자리표시자.
         store: Mutex::new(SettingsStore::in_memory()),
         hyperkey: Mutex::new(HyperkeySettings::default()),
+        presets: Mutex::new(PresetSettings::default()),
         load_notice: Mutex::new(None),
+        tray: Mutex::new(None),
+        ignore_item: Mutex::new(None),
+        normal_menu: Mutex::new(None),
+        unauthorized_menu: Mutex::new(None),
+        system_event_observer: Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -685,6 +1383,9 @@ fn main() {
             settings_bootstrap,
             settings_set,
             settings_set_tab,
+            settings_resolve_conflict,
+            general_set_launch_on_login,
+            general_set_hide_menu_bar_icon,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
@@ -715,11 +1416,29 @@ fn main() {
                 tracing::warn!(?warning, "Hyperkey 설정 경고(부팅 시점)");
             }
             *state.hyperkey.lock().unwrap() = hyperkey_settings;
+            // ⭐ F-08 Presets — hyperkey 와 같은 "부재 = 기본값" 조립 규약.
+            *state.presets.lock().unwrap() = PresetSettings::from_store(&settings_store);
             *state.load_notice.lock().unwrap() = notice_from_outcome(&load_outcome);
+            // ⭐ F-10 §3.4 — 앱별 비활성화 목록을 여기서 복원한다. `settings_store` 를
+            // `state.store` 로 옮기기 *전에* 이 지역 변수에서 직접 읽는다(둘 다 아직
+            // 같은 값이지만, 옮긴 뒤에 다시 락을 잡는 왕복을 피한다).
+            let disabled_apps: Vec<String> = settings_store
+                .get(settings_keys::GENERAL_DISABLED_APPS)
+                .unwrap_or_default();
+            state.gate_controller.set_disabled_apps(disabled_apps);
             *state.store.lock().unwrap() = settings_store;
 
             let handle = app.handle().clone();
             let state_for_monitor = state.clone();
+
+            // 5-b) ⭐ F-10 메뉴바(`NSStatusItem`) — 정상/`unauthorizedMenu` 두 벌을
+            // 만들어 둔다. 권한 상태를 아직 모르니 안전한 기본값(`unauthorizedMenu`)
+            // 으로 시작하고, 아래 최초 `on_permission_transition` 호출이 곧바로
+            // 실제 상태에 맞는 메뉴로 갈아 끼운다.
+            if let Err(e) = setup_tray(app.handle(), &state) {
+                tracing::error!(error = %e, "메뉴바(NSStatusItem) 초기화 실패");
+            }
+            setup_front_app_tracking(app.handle(), &state);
 
             // 5) F-11 권한 감시. 전이가 오면 엔진을 켜거나 모달을 띄운다.
             let timings = EngineConfig::default().timings;
@@ -745,25 +1464,29 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Tauri 앱을 초기화하지 못했다")
-        .run(|app_handle, event| match event {
+        .run(|_app_handle, event| match event {
             tauri::RunEvent::ExitRequested { code, api, .. } => {
-                // ⭐ M2 1차 임시 조치 — 메뉴바(F-10)가 아직 없어 `quit_app` 커맨드가
-                // 유일한 명시적 종료 경로다(§5 항목 7: "창을 닫아도 앱은 종료되지
-                // 않는다"). `code` 가 `None` 이면 사용자가 마지막 창을 닫아 발생한
-                // 암묵적 종료 요청이고, `Some` 이면 `quit_app` 이 부른
-                // `AppHandle::exit()` 다(`tauri::App::exit` 문서 참고) — 전자만 막는다.
+                // §5 항목 7: "창을 닫아도 앱은 종료되지 않는다" — 메뉴바 상주 앱은
+                // 명시적 `Quit`(메뉴 또는 설정 창 버튼, 둘 다 `shutdown_and_exit`)
+                // 으로만 끝난다. `code` 가 `None` 이면 사용자가 마지막 창을 닫아
+                // 발생한 암묵적 종료 요청이고, `Some` 이면 `shutdown_and_exit` 이
+                // 부른 `AppHandle::exit()` 다(`tauri::App::exit` 문서 참고) — 전자만
+                // 막는다. 후자 시점에는 엔진 정리(합성 modifier 해소·탭 해제)가
+                // `shutdown_and_exit` 안에서 `app.exit()` 보다 **먼저** 이미 끝나
+                // 있다 — 여기서 더 할 일이 없다.
                 if code.is_none() {
                     tracing::info!("창 닫힘으로 인한 종료 요청 — 계속 실행한다");
                     api.prevent_exit();
                 } else {
-                    tracing::info!("종료 요청(quit_app) — 엔진을 정리한다");
+                    tracing::info!("종료 요청 — 엔진 정리는 이미 끝났다");
                 }
             }
             tauri::RunEvent::Reopen { .. } => {
-                // ⭐ M2 1차 임시 조치 — 메뉴바(F-10)가 없어 Dock 아이콘 재클릭이
-                // 설정 창을 다시 여는 유일한 경로다. F-10 이 `Settings…` 메뉴
-                // 항목을 넣으면 그 경로로 옮기고 여기서는 걷어낸다.
-                show_settings_window(app_handle);
+                // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 창을 여는 정식 경로다
+                // (M2 1차 임시 조치였던 자동 오픈은 걷어낸다 — 원래 계획대로).
+                // Accessory 앱은 Dock 아이콘이 없어 이 이벤트가 사실상 발생하지
+                // 않지만(§1), 발생하더라도 로그만 남긴다.
+                tracing::debug!("Reopen 이벤트 수신 — Accessory 앱이라 창을 자동으로 열지 않는다");
             }
             _ => {}
         });
@@ -776,11 +1499,14 @@ fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to
         PermissionState::Granted => {
             hide_modal(handle);
             start_engine_if_needed(handle, state);
-            // ⭐ M2 1차 임시 조치 — `show_settings_window` 문서 주석 참고.
-            show_settings_window(handle);
+            // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 생겼으니 권한이 생겼다고 창을
+            // 자동으로 띄우지 않는다(과거 M2 1차 임시 조치를 걷어낸다 — 원래
+            // 계획대로다). 대신 트레이 메뉴를 정상 메뉴로 되돌린다(§3.1).
+            apply_tray_menu_for_permission(handle, state, true);
         }
         PermissionState::Denied | PermissionState::OutOfSync | PermissionState::Unknown => {
             show_modal(handle);
+            apply_tray_menu_for_permission(handle, state, false);
         }
     }
 }
@@ -797,11 +1523,13 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         return;
     }
 
-    // ⭐ M2 1차: store 에서 조립된 실제 사용자 설정을 쓴다 — M1 이 여기 두었던
+    // ⭐ M2: store 에서 조립된 실제 사용자 설정을 쓴다 — M1 이 여기 두었던
     // `HyperkeySettings::default()` 하드코딩은 이제 걷어낸다(환경설정 UI 가
-    // 생겼으므로 더 이상 유효하지 않은 전제였다).
+    // 생겼으므로 더 이상 유효하지 않은 전제였다). M2 2차부터 presets 도 함께
+    // 조립한다 — D-1 caps lock alias 가 이미 필요한 상태로 기동할 수 있다.
     let hyperkey = state.hyperkey.lock().unwrap().clone();
-    let config = build_engine_config(&hyperkey);
+    let presets = *state.presets.lock().unwrap();
+    let config = build_engine_config(&hyperkey, &presets);
 
     let handle_for_events = handle.clone();
     match Engine::start(
@@ -933,6 +1661,417 @@ fn resize_settings_window(handle: &tauri::AppHandle, size: (u32, u32)) {
     });
 }
 
+// ============================================================================
+// F-10 메뉴바 상주(`NSStatusItem`) — M2 2차, `menu-bar-and-lifecycle.md`.
+// ============================================================================
+
+/// `Ignore <앱>` 항목의 라벨 — 최전면 앱을 모르면(`front_app.is_some() == false`,
+/// 예: 기동 직후 아직 첫 `FrontAppChanged` 를 못 받았을 때) 이름 없이 안내만 한다
+/// (`menu.ignore_app.none`). Tauri 의존이 없는 순수 함수라 단위 테스트로 직접 부른다.
+fn ignore_menu_text(catalog: &Catalog, front_app: Option<&AppIdentity>) -> String {
+    match front_app {
+        Some(app) => catalog.format(menu_ids::IGNORE_APP, &[app.name.as_str()]),
+        None => catalog.get("menu.ignore_app.none").to_string(),
+    }
+}
+
+/// 정상 메뉴(§3.3, `docs/dev/architecture.md` §6.7 이 확정한 구성) 조립.
+/// `Purchase`(F-12)·`Check for Updates…`(F-13)는 범위 밖이라 넣지 않는다.
+fn build_normal_menu(
+    handle: &tauri::AppHandle,
+    catalog: &Catalog,
+    front_app: Option<&AppIdentity>,
+    front_app_disabled: bool,
+    synth_caps_checked: bool,
+) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
+    let ignore_item = CheckMenuItem::with_id(
+        handle,
+        menu_ids::IGNORE_APP,
+        ignore_menu_text(catalog, front_app),
+        front_app.is_some(),
+        front_app_disabled,
+        None::<&str>,
+    )?;
+    let sep_top = PredefinedMenuItem::separator(handle)?;
+
+    let settings_item = MenuItem::with_id(
+        handle,
+        menu_ids::SETTINGS,
+        catalog.get(menu_ids::SETTINGS),
+        true,
+        None::<&str>,
+    )?;
+    // ⭐ 결정(위임 지시서): 별도 About 창을 새로 만들지 않는다 — 설정 창 General
+    // 탭에 이미 About 정보 행(번들 ID·로그 경로·설정 파일 경로, `settings.general.
+    // about.*`, 이슈 #13)이 있다. 이 메뉴 항목은 설정 창을 여는 것으로 구현한다.
+    // ⚠️ 알려진 한계: `ui/settings.html` 이 이 위임과 동시에 다른 세션이 편집
+    // 중이라, "General 탭으로 자동 전환 + About 섹션 자동 펼침"까지는 여기서
+    // 배선하지 않았다 — 사용자가 창이 열리면 General 탭과 버전 버튼을 직접
+    // 눌러야 한다. 후속 과제로 남긴다(최종 보고 참고).
+    let about_item = MenuItem::with_id(
+        handle,
+        menu_ids::ABOUT,
+        catalog.get(menu_ids::ABOUT),
+        true,
+        None::<&str>,
+    )?;
+
+    let synth_caps_item = CheckMenuItem::with_id(
+        handle,
+        menu_ids::SYNTHESIZE_CAPS_REMAP,
+        catalog.get(menu_ids::SYNTHESIZE_CAPS_REMAP),
+        true,
+        synth_caps_checked,
+        None::<&str>,
+    )?;
+    // `.app` 번들 밖(`tauri dev`)에서는 `open -n -b <bundle-id>` 로 재실행할 대상
+    // 자체가 없다 — 항목을 비활성화한다(위임 지시서).
+    let relaunch_enabled = bundle::is_running_from_app_bundle();
+    let relaunch_item = MenuItem::with_id(
+        handle,
+        menu_ids::RELAUNCH,
+        catalog.get(menu_ids::RELAUNCH),
+        relaunch_enabled,
+        None::<&str>,
+    )?;
+    let advanced_menu = Submenu::with_id_and_items(
+        handle,
+        menu_ids::ADVANCED,
+        catalog.get(menu_ids::ADVANCED),
+        true,
+        &[&synth_caps_item, &relaunch_item],
+    )?;
+
+    let sep_bottom = PredefinedMenuItem::separator(handle)?;
+    let quit_item = MenuItem::with_id(
+        handle,
+        menu_ids::QUIT,
+        catalog.get(menu_ids::QUIT),
+        true,
+        None::<&str>,
+    )?;
+
+    let menu = Menu::with_items(
+        handle,
+        &[
+            &ignore_item,
+            &sep_top,
+            &settings_item,
+            &about_item,
+            &advanced_menu,
+            &sep_bottom,
+            &quit_item,
+        ],
+    )?;
+
+    Ok((menu, ignore_item))
+}
+
+/// `unauthorizedMenu`(§3.1) — 권한이 없을 때 메뉴 전체를 이 2항목으로 교체한다.
+fn build_unauthorized_menu(handle: &tauri::AppHandle, catalog: &Catalog) -> tauri::Result<Menu<Wry>> {
+    // 상태 안내는 클릭해도 아무 일도 일어나지 않는 비활성 항목이다.
+    let status_item = MenuItem::new(handle, catalog.get("menu.unauthorized.title"), false, None::<&str>)?;
+    let authorize_item = MenuItem::with_id(
+        handle,
+        menu_ids::AUTHORIZE,
+        catalog.get(menu_ids::AUTHORIZE),
+        true,
+        None::<&str>,
+    )?;
+    Menu::with_items(handle, &[&status_item, &authorize_item])
+}
+
+/// `presets.synthesizeCapsLockRemap` 의 현재 값 — 기본값은 꺼짐(§7 판정: 원본
+/// 디버깅용 스위치를 추정으로 켤 이유가 없다).
+fn synthesize_caps_lock_remap_enabled(store: &SettingsStore) -> bool {
+    store
+        .get(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
+        .unwrap_or(false)
+}
+
+/// 트레이(`NSStatusItem`)를 만들고 `AppState` 에 손잡이를 채운다. `setup()` 안에서
+/// 한 번만 불린다.
+fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result<()> {
+    let catalog = &state.catalog;
+
+    // ⭐ 전용 트레이 아이콘 에셋을 새로 만들지 않는다(위임 지시) — 기존 32×32 앱
+    // 아이콘을 템플릿 이미지로 재사용한다. **한계**: 템플릿 모드(`icon_as_template`)
+    // 는 macOS 가 아이콘의 알파 채널만 남기고 단색(현재 시스템 외관에 맞는 흑/백)
+    // 실루엣으로 다시 칠한다 — 원본 PNG 의 색·디테일은 메뉴바에서 보이지 않는다.
+    // 전용 모노크롬 트레이 아이콘 제작(`StatusTemplate`/`HyperStatusTemplate` 류,
+    // §3.3 관찰)은 후속 과제로 남긴다 — `Assets.car` 는 저작권 경계상 확보하지
+    // 못했다(`menu-bar-and-lifecycle.md` §9 항목 2).
+    let icon_bytes = include_bytes!("../icons/32x32.png");
+    // `Image::from_bytes` 는 `image-png` 기능이 있어야 존재하고(앱 Cargo.toml 에
+    // 이미 켬), 실패하면 `tauri::Error::Image` 로 `?` 가 그대로 전파한다.
+    let icon = tauri::image::Image::from_bytes(icon_bytes)?;
+
+    let store = state.store.lock().unwrap();
+    let synth_caps_checked = synthesize_caps_lock_remap_enabled(&store);
+    let hide_menu_bar_icon: bool = store
+        .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
+        .unwrap_or(false);
+    drop(store);
+
+    let (normal_menu, ignore_item) =
+        build_normal_menu(handle, catalog, None, false, synth_caps_checked)?;
+    let unauthorized_menu = build_unauthorized_menu(handle, catalog)?;
+
+    let state_for_events = state.clone();
+    let tray = tauri::tray::TrayIconBuilder::new()
+        .icon(icon)
+        .icon_as_template(true)
+        .menu(&unauthorized_menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(move |app, event| {
+            handle_menu_event(app, &state_for_events, event);
+        })
+        .build(handle)?;
+
+    // §5 항목 2·§4 "Hide menu bar icon" — 마지막으로 저장된 값을 기동 시 반영한다.
+    if hide_menu_bar_icon {
+        if let Err(e) = tray.set_visible(false) {
+            tracing::warn!(error = %e, "트레이 아이콘 숨김 반영 실패");
+        }
+    }
+
+    *state.tray.lock().unwrap() = Some(tray);
+    *state.ignore_item.lock().unwrap() = Some(ignore_item);
+    *state.normal_menu.lock().unwrap() = Some(normal_menu);
+    *state.unauthorized_menu.lock().unwrap() = Some(unauthorized_menu);
+
+    Ok(())
+}
+
+/// 권한 상태 전이에 맞춰 트레이의 메뉴를 정상/`unauthorizedMenu` 로 갈아 끼운다.
+///
+/// ⭐ **메인 스레드로 비동기 디스패치한다** — 호출자(`on_permission_transition`)는
+/// `PermissionMonitor` 의 배경 폴링 스레드에서도 불릴 수 있다(`show_modal`/
+/// `hide_modal` 과 같은 이유, `on_main_thread` 문서 참고). `TrayIcon::set_menu` 는
+/// Tauri 내부에서 메인 스레드로 동기 디스패치하고 응답을 기다리는데, 배경
+/// 스레드에서 그걸 직접 부르면 그 스레드가 블록된다 — 탭 스레드만큼 치명적이진
+/// 않지만 같은 규칙("백그라운드 스레드에서 메인 스레드를 동기적으로 기다리지
+/// 마라")을 일관되게 지킨다.
+fn apply_tray_menu_for_permission(handle: &tauri::AppHandle, state: &Arc<AppState>, granted: bool) {
+    let state_for_closure = state.clone();
+    let dispatched = handle.run_on_main_thread(move || {
+        let Some(tray) = state_for_closure.tray.lock().unwrap().clone() else {
+            return;
+        };
+        let menu = if granted {
+            state_for_closure.normal_menu.lock().unwrap().clone()
+        } else {
+            state_for_closure.unauthorized_menu.lock().unwrap().clone()
+        };
+        if let Some(menu) = menu {
+            if let Err(e) = tray.set_menu(Some(menu)) {
+                tracing::warn!(error = %e, "트레이 메뉴 교체 실패");
+            }
+        }
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "트레이 메뉴 교체를 메인 스레드로 디스패치하지 못했다");
+    }
+}
+
+/// 트레이 메뉴 클릭 처리. `TrayIconBuilder::on_menu_event` 콜백은 항상 메인
+/// 스레드에서 불린다(AppKit 이 메뉴 클릭을 메인 런루프에서 전달한다) — 메뉴/트레이
+/// 조작을 여기서 직접(비동기 디스패치 없이) 해도 안전하다.
+fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuEvent) {
+    // `MenuId` 는 `pub struct MenuId(pub String)` 다(muda) — `.0.as_str()` 로 직접
+    // 꺼내 쓰면 `AsRef` 구현 다중화로 인한 타입 추론 모호성 여지가 없다.
+    match event.id().0.as_str() {
+        menu_ids::IGNORE_APP => on_menu_ignore_app(state),
+        menu_ids::SETTINGS | menu_ids::ABOUT => show_settings_window(app),
+        menu_ids::SYNTHESIZE_CAPS_REMAP => on_menu_toggle_synthesize_caps_lock_remap(state),
+        menu_ids::RELAUNCH => on_menu_relaunch(app, state),
+        menu_ids::QUIT => on_menu_quit(app, state),
+        menu_ids::AUTHORIZE => show_modal(app),
+        other => tracing::debug!(id = other, "알 수 없는 메뉴 이벤트 id"),
+    }
+}
+
+/// `Ignore <앱>` 클릭 — `AppGateController::toggle_front_app()` 을 호출하고, 결과
+/// 목록을 `general.disabledApps` 로 즉시 원자적 write-through 한다(F-15 §3.1.1 —
+/// 종료 시점 flush 에 기대지 않는다).
+fn on_menu_ignore_app(state: &Arc<AppState>) {
+    let now_disabled = state.gate_controller.toggle_front_app();
+    tracing::info!(now_disabled, "Ignore <앱> 토글됨");
+    persist_disabled_apps(state);
+    refresh_ignore_menu_item(state);
+}
+
+fn persist_disabled_apps(state: &Arc<AppState>) {
+    let bundle_ids = state.gate_controller.disabled_apps();
+    let mut store = state.store.lock().unwrap();
+    if let Err(e) = store.set(settings_keys::GENERAL_DISABLED_APPS, &bundle_ids) {
+        tracing::error!(error = %e, "general.disabledApps 저장 실패");
+    }
+}
+
+/// `Ignore <앱>` 항목의 라벨·체크 상태를 최전면 앱/게이트의 현재 값으로 되맞춘다.
+fn refresh_ignore_menu_item(state: &Arc<AppState>) {
+    let front_app = state.gate_controller.front_app();
+    let disabled = state.gate.is_remapping_disabled();
+
+    let item_guard = state.ignore_item.lock().unwrap();
+    let Some(item) = item_guard.as_ref() else {
+        return;
+    };
+    let _ = item.set_text(ignore_menu_text(&state.catalog, front_app.as_ref()));
+    let _ = item.set_enabled(front_app.is_some());
+    let _ = item.set_checked(disabled);
+}
+
+/// `Synthesize Caps Lock Remap` 클릭 — `presets.synthesizeCapsLockRemap` 를
+/// 토글한다. ⚠️ 이 값을 실제로 읽어 경로 B 설치 여부를 바꾸는 쪽은 F-08(프리셋)
+/// 소관이다 — 이 메뉴 항목은 `SettingsStore` 에 값을 쓰고 읽는 것까지만 한다
+/// (위임 지시서). muda 는 클릭 시 항목의 체크 상태를 먼저 스스로 뒤집은 뒤에
+/// 이벤트를 보내므로(objc2 macOS 백엔드 관찰), 여기서 다시 `set_checked` 를
+/// 부를 필요가 없다 — 저장 값만 그 새 상태와 맞춰 주면 된다.
+fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
+    let mut store = state.store.lock().unwrap();
+    let next = !synthesize_caps_lock_remap_enabled(&store);
+    if let Err(e) = store.set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &next) {
+        tracing::error!(error = %e, "presets.synthesizeCapsLockRemap 저장 실패");
+    }
+    tracing::info!(value = next, "Synthesize Caps Lock Remap 토글됨");
+}
+
+/// `Relaunch` 클릭 — 현재 실행 파일을 `open -n -b <bundle-id>` 로 새로 띄우고
+/// 자신은 정상 종료 절차(`shutdown_and_exit`)를 밟는다. `.app` 번들 밖에서
+/// 실행 중이면 메뉴 항목 자체가 비활성이라(`build_normal_menu`) 여기 도달하지
+/// 않는 것이 정상이지만, 방어적으로 한 번 더 확인한다.
+fn on_menu_relaunch(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    if !bundle::is_running_from_app_bundle() {
+        tracing::warn!(".app 번들 밖에서 실행 중이라 Relaunch 를 건너뛴다");
+        return;
+    }
+    let Some(bundle_id) = bundle::bundle_identifier() else {
+        tracing::warn!("번들 ID 를 얻지 못해 Relaunch 를 건너뛴다");
+        return;
+    };
+    tracing::info!(bundle_id, "Relaunch 요청 — open -n -b 로 새 인스턴스를 띄운다");
+    match std::process::Command::new("open").args(["-n", "-b", &bundle_id]).spawn() {
+        Ok(_) => shutdown_and_exit(app, state),
+        Err(e) => tracing::error!(error = %e, "Relaunch 를 위한 open 실행 실패 — 기존 인스턴스를 유지한다"),
+    }
+}
+
+/// `Quit Ultrakey` 클릭.
+fn on_menu_quit(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    tracing::info!("Quit Ultrakey 선택 — 정상 종료 절차를 시작한다");
+    shutdown_and_exit(app, state);
+}
+
+/// F-10 §2 시나리오 F — 정상 종료 절차. (1) 합성 modifier 해소 (2) 엔진 종료
+/// (3) 프로세스 종료. `quit_app` 커맨드와 메뉴의 `Quit Ultrakey` 가 이 함수를
+/// 공유한다.
+fn shutdown_and_exit(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    if let Ok(mut guard) = state.engine.lock() {
+        if let Some(engine) = guard.take() {
+            // `force_reset_state()`/`shutdown()` 은 둘 다 같은 탭 스레드가 순서대로
+            // 처리하는 커맨드 큐에 넣는다(`command.rs`: "큐에 들어간 순서 그대로
+            // 처리된다") — force_reset 을 shutdown 보다 먼저 보내면 modifier 해소가
+            // 종료보다 먼저 끝난다는 것이 구조적으로 보장된다(`settings_set` 이 이미
+            // 같은 순서 보장에 기대는 전례가 있다).
+            engine.force_reset_state();
+            engine.shutdown();
+        }
+    }
+    app.exit(0);
+}
+
+/// F-10 §3.4 — 앱 계층 전용 `NSWorkspace` 구독. `AppState::system_event_observer`
+/// 에 손잡이를 보관해 앱 생애주기 내내 살려 둔다(드롭되면 구독이 해지된다).
+fn setup_front_app_tracking(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let handle_for_events = handle.clone();
+    let state_for_events = state.clone();
+    let observer = observe_system_events(Box::new(move |ev| {
+        if let SystemEvent::FrontAppChanged(ident) = ev {
+            on_front_app_changed(&handle_for_events, &state_for_events, ident);
+        }
+    }));
+    *state.system_event_observer.lock().unwrap() = Some(observer);
+}
+
+/// `NSWorkspaceDidActivateApplicationNotification` 수신 — 게이트를 갱신하고
+/// `Ignore <앱>` 라벨을 되맞춘다.
+///
+/// ⚠️ 이 콜백은 알림이 도착하는 스레드(관례상 메인 스레드, `ultrakey_platform::
+/// workspace` 모듈 문서)에서 불린다 — 메뉴 항목 갱신을 직접(비동기 디스패치 없이)
+/// 해도 안전하다. 판정(`bundle_id ∈ disabledApps`) 자체는 `AppGateController::
+/// set_front_app` 이 즉시 `AtomicBool` 에 게시한다(`docs/dev/architecture.md`
+/// §2.3) — 콜백 임계 경로(탭 스레드)는 이 함수와 전혀 만나지 않는다.
+fn on_front_app_changed(_handle: &tauri::AppHandle, state: &Arc<AppState>, ident: Option<AppIdentity>) {
+    state.gate_controller.set_front_app(ident);
+    refresh_ignore_menu_item(state);
+}
+
+// ============================================================================
+// F-10 §3.5 — General 탭 백엔드(Launch on login / Hide menu bar icon).
+//
+// `ui/settings.html` 은 두 체크박스를 `data-key="general.launchOnLogin"`/
+// `"general.hideMenuBarIcon"` 로 이미 배선해 두었다 — 값은 범용 `commit(key,
+// value)` 경로를 거쳐 `settings_set` 커맨드로 들어온다(전용 커맨드를 직접 부르지
+// 않는다). 그래서 실제 로직은 여기 `*_internal` 두 함수에 두고, `settings_set` 과
+// 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을 복제하지 않는다.
+// ============================================================================
+
+/// `Launch on login` 체크박스 — `login_item::set_enabled` 로 OS 에 등록/해제하고,
+/// 결과와 무관하게 사용자의 마지막 의도를 `general.launchOnLogin` 에 기록한다.
+///
+/// ⚠️ `login_item::set_enabled` 는 상한 있는 재시도(§5 항목 3, 최대 5회·0.2초
+/// 간격 — 최악 약 0.8초)로 **동기 블로킹**한다. Tauri 커맨드 핸들러는 메인
+/// 스레드가 아닌 별도 스레드에서 실행되므로(Tauri 의 IPC 커맨드 디스패치 자체가
+/// 그렇게 되어 있다) 여기서 블로킹해도 UI 는 멎지 않는다 — 다만 이 함수를 메인
+/// 스레드에서 직접 부르는 새 경로가 생기면 반드시 스레드를 분리해야 한다
+/// (`login_item` 모듈 문서 참고).
+fn set_launch_on_login_internal(state: &Arc<AppState>, on: bool) -> Result<(), String> {
+    let result = login_item::set_enabled(on);
+
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        if let Err(e) = store.set(settings_keys::GENERAL_LAUNCH_ON_LOGIN, &on) {
+            tracing::error!(error = %e, "general.launchOnLogin 저장 실패");
+        }
+    }
+
+    result.map_err(|e| {
+        tracing::error!(error = %e, on, "로그인 항목 등록/해제 실패");
+        state.catalog.get("menu.launch_on_login.failed").to_string()
+    })
+}
+
+/// F-10 이 이미 등록해 둔 전용 커맨드 — 실제 OS 상태(`login_item::is_enabled()`)를
+/// 돌려준다. `settings_set` 은 이 반환값 대신 저장된 마지막 의도를 거울처럼
+/// 보여주는 `SettingsState.general.launchOnLogin` 을 쓴다(둘의 용도가 다르다).
+#[tauri::command]
+fn general_set_launch_on_login(state: State<'_, Arc<AppState>>, on: bool) -> Result<bool, String> {
+    set_launch_on_login_internal(&state, on)?;
+    Ok(login_item::is_enabled())
+}
+
+/// `Hide menu bar icon` 체크박스 — 저장 후 트레이 가시성을 즉시 반영한다.
+fn set_hide_menu_bar_icon_internal(state: &Arc<AppState>, on: bool) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .set(settings_keys::GENERAL_HIDE_MENU_BAR_ICON, &on)
+            .map_err(|e| e.to_string())?;
+    }
+    let tray_guard = state.tray.lock().map_err(|e| e.to_string())?;
+    if let Some(tray) = tray_guard.as_ref() {
+        tray.set_visible(!on).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn general_set_hide_menu_bar_icon(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
+    set_hide_menu_bar_icon_internal(&state, on)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1033,18 +2172,183 @@ mod tests {
         hyperkey.hyper.enabled = true;
         hyperkey.mouse_apply.drag = true;
 
-        let config = build_engine_config(&hyperkey);
+        let config = build_engine_config(&hyperkey, &PresetSettings::default());
         assert_eq!(config.rules.modifier_rules.len(), 1);
         assert!(config.mouse_apply.drag);
         assert!(config.mouse_apply.click); // 기본값 유지
+    }
+
+    // build_engine_config() — presets.* 도 규칙 테이블·quick_press_duration_ms 로
+    // 옮겨진다.
+    #[test]
+    fn build_engine_config_reflects_preset_settings() {
+        let hyperkey = HyperkeySettings::default();
+        let presets = PresetSettings { caps_space_enter: true, quick_press_duration_ms: 500, ..PresetSettings::default() };
+
+        let config = build_engine_config(&hyperkey, &presets);
+        assert_eq!(config.rules.combo_rules.len(), 1);
+        assert_eq!(config.timings.quick_press_duration_ms, 500);
+    }
+
+    // build_engine_config() — D-1: caps lock 프리셋이 하나라도 켜지면 F18 alias 가
+    // 채워진다. synthesize_caps_lock_remap 이 켜지면 alias 를 다시 끈다.
+    #[test]
+    fn build_engine_config_computes_d1_caps_lock_alias() {
+        let hyperkey = HyperkeySettings::default();
+
+        let none_needed = build_engine_config(&hyperkey, &PresetSettings::default());
+        assert_eq!(none_needed.caps_lock_alias, None);
+
+        let needs_alias = PresetSettings { caps_space_enter: true, ..PresetSettings::default() };
+        let with_alias = build_engine_config(&hyperkey, &needs_alias);
+        assert_eq!(with_alias.caps_lock_alias, Some(KeyCode::F18));
+
+        let synthesize_on = PresetSettings {
+            caps_space_enter: true,
+            synthesize_caps_lock_remap: true,
+            ..PresetSettings::default()
+        };
+        let with_synthesize = build_engine_config(&hyperkey, &synthesize_on);
+        assert_eq!(with_synthesize.caps_lock_alias, None);
+    }
+
+    // caps_is_modifier_source() — hyper/meh/bleh 중 활성화된 슬롯만 본다.
+    #[test]
+    fn caps_is_modifier_source_only_counts_enabled_slots() {
+        let mut hyperkey = HyperkeySettings::default();
+        assert!(!caps_is_modifier_source(&hyperkey));
+
+        hyperkey.hyper.source = SourceKey::CapsLock;
+        assert!(!caps_is_modifier_source(&hyperkey), "꺼진 슬롯은 세지 않는다");
+
+        hyperkey.hyper.enabled = true;
+        assert!(caps_is_modifier_source(&hyperkey));
+    }
+
+    // compute_caps_lock_alias() — needs_caps_lock_alias × synthesize 조합.
+    #[test]
+    fn compute_caps_lock_alias_matrix() {
+        assert_eq!(compute_caps_lock_alias(&PresetSettings::default(), false), None);
+        assert_eq!(compute_caps_lock_alias(&PresetSettings::default(), true), Some(KeyCode::F18));
+
+        let synthesize = PresetSettings { synthesize_caps_lock_remap: true, ..PresetSettings::default() };
+        assert_eq!(compute_caps_lock_alias(&synthesize, true), None);
+    }
+
+    // preset_options_view() — 팝업 6종 개수(50/48/2/2/4/4)와 labelKey 배정.
+    #[test]
+    fn preset_options_view_has_expected_counts_and_label_keys() {
+        let opts = preset_options_view();
+        assert_eq!(opts.caps_remap_targets.len(), 50);
+        assert_eq!(opts.caps_quick_actions.len(), 48);
+        assert_eq!(opts.arrow_key_sets.len(), 2);
+        assert_eq!(opts.home_row_schemes.len(), 2);
+        assert_eq!(opts.bracket_pairs.len(), 4);
+        assert_eq!(opts.paste_triggers.len(), 4);
+
+        let nothing = opts
+            .caps_remap_targets
+            .iter()
+            .find(|o| o.value == "Nothing")
+            .unwrap();
+        assert_eq!(nothing.label_key.as_deref(), Some("settings.presets.option.nothing"));
+
+        let seek = opts.caps_quick_actions.iter().find(|o| o.value == "Seek").unwrap();
+        assert_eq!(seek.label, "Seek");
+        assert_eq!(seek.label_key, None, "Seek 는 고유명사라 labelKey 가 없다");
+
+        let esc = opts.caps_remap_targets.iter().find(|o| o.value == "Esc").unwrap();
+        assert_eq!(esc.label, "esc");
+        assert_eq!(esc.label_key, None, "키캡 각인은 labelKey 가 없다");
+
+        let symbol = opts
+            .home_row_schemes
+            .iter()
+            .find(|o| o.value == "SymbolRow")
+            .unwrap();
+        assert_eq!(symbol.label_key.as_deref(), Some("settings.presets.option.home_row.symbol"));
+
+        let hyper_trigger = opts.paste_triggers.iter().find(|o| o.value == "HyperKey").unwrap();
+        assert_eq!(hyper_trigger.label_key.as_deref(), Some("settings.presets.option.paste.hyper"));
+    }
+
+    // presets_view() — variant 이름이 저장 형식(serde 기본값)과 일치한다.
+    #[test]
+    fn presets_view_uses_serialized_variant_names() {
+        let presets = PresetSettings {
+            caps_lock_remap: ultrakey_presets::settings::CapsLockRemapSettings {
+                enabled: false,
+                target: RemapCapsTarget::Esc,
+            },
+            ..PresetSettings::default()
+        };
+        let view = presets_view(&presets);
+        assert_eq!(view.caps_lock_remap.target, "Esc");
+        assert_eq!(view.caps_home_row.scheme, "SymbolRow");
+        assert_eq!(view.quick_press_duration_ms, 1000);
+    }
+
+    // 충돌 응답 JSON 모양 — kind/disableLabelKeys.
+    #[test]
+    fn pending_conflict_view_shape() {
+        let conflict = Conflict {
+            kind: ConflictKind::CapsLockArrows,
+            to_disable: &[keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED],
+        };
+        let view = pending_conflict_view(conflict, keys::PRESETS_CAPS_WASD_ARROWS, &serde_json::json!(true));
+        assert_eq!(view.kind, "capsLockArrows");
+        assert_eq!(view.key, keys::PRESETS_CAPS_WASD_ARROWS);
+        assert_eq!(view.value, serde_json::json!(true));
+        assert_eq!(view.disable_label_keys, vec!["settings.presets.caps_hjkl.prefix".to_string()]);
+    }
+
+    // apply_preset_setting()/validate_and_apply_preset() — 알려진 키를 갱신하고,
+    // 모르는 키는 거부한다.
+    #[test]
+    fn validate_and_apply_preset_updates_known_key() {
+        let mut presets = PresetSettings::default();
+        validate_and_apply_preset(
+            &mut presets,
+            keys::PRESETS_CAPS_SPACE_ENTER,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(presets.caps_space_enter);
+    }
+
+    #[test]
+    fn validate_and_apply_preset_clamps_quick_press_duration() {
+        let mut presets = PresetSettings::default();
+        validate_and_apply_preset(
+            &mut presets,
+            keys::PRESETS_QUICK_PRESS_DURATION_MS,
+            &serde_json::json!(50u64),
+        )
+        .unwrap();
+        assert_eq!(presets.quick_press_duration_ms, 250);
+    }
+
+    #[test]
+    fn validate_and_apply_preset_rejects_unknown_key() {
+        let mut presets = PresetSettings::default();
+        let err = validate_and_apply_preset(&mut presets, "presets.doesNotExist", &serde_json::json!(true))
+            .unwrap_err();
+        assert!(err.contains("알 수 없는"));
     }
 
     // SettingsState 직렬화가 camelCase 인지 — 프런트엔드가 기대하는 필드 이름 계약.
     #[test]
     fn settings_state_serializes_camel_case() {
         let hyperkey = HyperkeySettings::default();
+        let presets = PresetSettings::default();
         let store = SettingsStore::in_memory();
-        let state = build_settings_state(&hyperkey, &store, Some("디스크 가득 참".to_string()));
+        let state = build_settings_state(
+            &hyperkey,
+            &presets,
+            &store,
+            Some("디스크 가득 참".to_string()),
+            None,
+        );
 
         let json = serde_json::to_value(&state).unwrap();
         let obj = json.as_object().unwrap();
@@ -1053,6 +2357,12 @@ mod tests {
         assert!(obj.contains_key("trackpadAreas"));
         assert!(obj.contains_key("lastTab"));
         assert!(obj.contains_key("saveError"));
+        assert!(obj.contains_key("presets"));
+        assert!(obj.contains_key("presetOptions"));
+        assert!(obj.contains_key("capsLockAliasActive"));
+        assert!(obj.contains_key("general"));
+        assert!(obj.contains_key("pendingConflict"));
+        assert_eq!(obj["pendingConflict"], serde_json::Value::Null);
 
         let hyperkey_json = obj["hyperkey"].as_object().unwrap();
         assert!(hyperkey_json.contains_key("includeShiftInHyper"));
@@ -1061,6 +2371,18 @@ mod tests {
         assert!(trackpad_json.contains_key("changeMenuBarIcon"));
         assert!(trackpad_json.contains_key("haptic"));
         assert!(!trackpad_json.contains_key("hapticFeedback"));
+
+        let presets_json = obj["presets"].as_object().unwrap();
+        assert!(presets_json.contains_key("capsLockRemap"));
+        assert!(presets_json.contains_key("quickPressDurationMs"));
+        assert!(!presets_json.contains_key("synthesizeCapsLockRemap"));
+
+        let preset_options_json = obj["presetOptions"].as_object().unwrap();
+        assert!(preset_options_json.contains_key("capsRemapTargets"));
+
+        let general_json = obj["general"].as_object().unwrap();
+        assert!(general_json.contains_key("launchOnLogin"));
+        assert!(general_json.contains_key("hideMenuBarIcon"));
 
         assert_eq!(obj["lastTab"], "hyperkey"); // 빈 스토어의 기본값
         assert_eq!(obj["saveError"], "디스크 가득 참");
@@ -1105,9 +2427,101 @@ mod tests {
         hyperkey.meh.enabled = true; // 기본 source 가 둘 다 CapsLock → 중복.
         let store = SettingsStore::in_memory();
 
-        let state = build_settings_state(&hyperkey, &store, None);
+        let state = build_settings_state(&hyperkey, &PresetSettings::default(), &store, None, None);
         assert_eq!(state.warnings.len(), 1);
         assert_eq!(state.warnings[0].kind, "duplicate");
         assert_eq!(state.warnings[0].key, "caps lock");
+    }
+
+    // build_preset_warnings() — F21~F24 를 Remap caps lock to: 대상으로 고르면
+    // unknownKey 경고가 나온다(keycode 미확정).
+    #[test]
+    fn build_preset_warnings_flags_unknown_keycode_target() {
+        let hyperkey = HyperkeySettings::default();
+        let presets = PresetSettings {
+            caps_lock_remap: ultrakey_presets::settings::CapsLockRemapSettings {
+                enabled: true,
+                target: RemapCapsTarget::F21,
+            },
+            ..PresetSettings::default()
+        };
+        let warnings = build_preset_warnings(&hyperkey, &presets, None);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "unknownKey");
+        assert_eq!(warnings[0].key, "F21");
+    }
+
+    // build_preset_warnings() — D-1 alias(F18)와 hyper 소스 F18 이 겹치면 duplicate
+    // 경고(settings.hyperkey.warning.duplicate 재사용, §5).
+    #[test]
+    fn build_preset_warnings_flags_d1_alias_conflict_with_f18_source() {
+        let mut hyperkey = HyperkeySettings::default();
+        hyperkey.hyper.enabled = true;
+        hyperkey.hyper.source = SourceKey::F18;
+
+        let warnings = build_preset_warnings(&hyperkey, &PresetSettings::default(), Some(KeyCode::F18));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, "duplicate");
+        assert_eq!(warnings[0].key, "F18");
+    }
+
+    #[test]
+    fn build_preset_warnings_is_empty_when_nothing_conflicts() {
+        let hyperkey = HyperkeySettings::default();
+        assert!(build_preset_warnings(&hyperkey, &PresetSettings::default(), None).is_empty());
+    }
+
+    // ── F-10 메뉴바(M2 2차) — 순수 로직만 뽑아 단위 테스트한다 ──────────────
+
+    // ignore_menu_text() — 최전면 앱을 알면 이름을 넣고, 모르면 안내 문구로 대체한다.
+    #[test]
+    fn ignore_menu_text_uses_front_app_name_when_known() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        let app = AppIdentity {
+            bundle_id: "com.example.Ghostty".to_string(),
+            name: "Ghostty".to_string(),
+        };
+        assert_eq!(ignore_menu_text(&catalog, Some(&app)), "Ignore Ghostty");
+    }
+
+    #[test]
+    fn ignore_menu_text_falls_back_when_front_app_unknown() {
+        let catalog = Catalog::for_locale(ultrakey_i18n::Locale::En);
+        assert_eq!(ignore_menu_text(&catalog, None), catalog.get("menu.ignore_app.none"));
+    }
+
+    // synthesize_caps_lock_remap_enabled() — 부재 = 기본값(꺼짐), 저장된 값이 있으면 그대로.
+    #[test]
+    fn synthesize_caps_lock_remap_enabled_defaults_to_false() {
+        let store = SettingsStore::in_memory();
+        assert!(!synthesize_caps_lock_remap_enabled(&store));
+    }
+
+    #[test]
+    fn synthesize_caps_lock_remap_enabled_reflects_stored_value() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &true)
+            .unwrap();
+        assert!(synthesize_caps_lock_remap_enabled(&store));
+    }
+
+    // menu_ids 상수들이 서로 다르다 — 오타로 두 메뉴 항목이 같은 id 를 갖는 회귀를 막는다.
+    #[test]
+    fn menu_ids_are_all_distinct() {
+        let ids = [
+            menu_ids::IGNORE_APP,
+            menu_ids::SETTINGS,
+            menu_ids::ABOUT,
+            menu_ids::ADVANCED,
+            menu_ids::SYNTHESIZE_CAPS_REMAP,
+            menu_ids::RELAUNCH,
+            menu_ids::QUIT,
+            menu_ids::AUTHORIZE,
+        ];
+        let mut sorted = ids.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "중복된 메뉴 항목 id 가 있다: {ids:?}");
     }
 }
