@@ -12,10 +12,14 @@
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
+use ultrakey_core::perdevice::DeviceId;
 use ultrakey_platform::runloop::CommandSignaller;
 
 /// 탭 스레드가 처리하는 명령 하나.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ⚠️ `ReapplyHidMapping` 이 `Option<DeviceId>` 를 실으므로 더 이상 `Copy` 가 아니다
+/// (`DeviceId` 는 문자열을 감싼다) — 값을 옮겨(move) 보낸다.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineCommand {
     /// 절전/잠금/Secure Input — stuck modifier 방지(§5 #9). `Arbiter::force_reset` 을
     /// 호출하고, 만들어진 off-flagsChanged 합성 이벤트를 방출한다.
@@ -26,8 +30,10 @@ pub enum EngineCommand {
     RecreateTap,
     /// 설정 교체 후 `Arbiter::reconfigure` 호출 — quick press 슬롯 재구성.
     Reconfigure,
-    /// 경로 B 재적용(핫플러그 감지 후 지연 뒤).
-    ReapplyHidMapping,
+    /// 경로 B(F-17) 재적용 — `Some(device)` 면 그 디바이스 하나만
+    /// (`PathBManager::apply_device`, 핫플러그 `Attached`), `None` 이면 붙어 있는
+    /// 디바이스 전체를 재조정한다(`PathBManager::apply_all`, CONTRACT.md 부록 B.5).
+    ReapplyHidMapping(Option<DeviceId>),
     /// 탭 스레드 런루프를 정지하고 종료한다.
     Shutdown,
 }

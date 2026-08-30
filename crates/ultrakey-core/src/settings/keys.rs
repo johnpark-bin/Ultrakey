@@ -112,6 +112,34 @@ pub const KOREAN_WON_KEY_TYPES_BACKTICK: &str = "korean.wonKeyTypesBacktick";
 /// D-K9). 구현·리뷰 양쪽에서 놓치기 쉬운 지점이라 여기서도 명시해 둔다.
 pub const KOREAN_DISABLE_IN_REMOTE_DESKTOP: &str = "korean.disableInRemoteDesktop";
 
+// ── F-17 키보드별 설정(`per-device-settings.md` §3.3~3.4, D-17-2) —
+// `ultrakey_core::perdevice` 가 소비한다 ──
+//
+// ⚠️ 이 기능의 저장 키는 다른 절과 달리 **디바이스마다 동적으로 갈라지는
+// 세그먼트**(`perDevice.<vid>:<pid>.*`)를 갖는다 — 그래서 고정 상수 하나로 못 두고
+// 조립 함수를 둔다(`all()`/중복·접두사 테스트가 다루는 "고정 키 목록"에는 포함하지
+// 않는다 — 무한히 많은 키가 나올 수 있기 때문이다). `perDevice._managed` 원장 키만
+// 디바이스에 무관하게 고정이라 상수로 둔다.
+
+/// 공통(`For all devices`) 계층의 디바이스 세그먼트 이름 — `perDevice.all.*`(§3.3).
+pub const PER_DEVICE_COMMON_SCOPE: &str = "all";
+
+/// D-17-2 원장 — `{ "<vid>:<pid>": [{src,dst}, …] }`. "직전에 우리가 실제로 쓴
+/// 배열"을 디바이스별로 추적해, 정리(cleanup) 시점에 남의 매핑을 지우지 않는다
+/// (`per-device-settings.md` §3.6 규칙 6, CONTRACT.md D-17-2).
+pub const PER_DEVICE_MANAGED: &str = "perDevice._managed";
+
+/// `perDevice.<scope>.keyRemap.rows` 조립(§3.3·§3.4). `scope` 는
+/// [`PER_DEVICE_COMMON_SCOPE`] 또는 `DeviceId::as_str()`(`ultrakey_core::perdevice`).
+pub fn per_device_key_remap_rows(scope: &str) -> String {
+    format!("perDevice.{scope}.keyRemap.rows")
+}
+
+/// `perDevice.<scope>.functionKeys.f1`~`f12` 조립(§3.3·§3.5).
+pub fn per_device_function_key(scope: &str, f: crate::perdevice::FKey) -> String {
+    format!("perDevice.{scope}.functionKeys.{}", f.key_segment())
+}
+
 /// 전량 나열 — 테스트가 오타·중복·접두사 규칙을 검증하는 데 쓴다.
 pub fn all() -> &'static [&'static str] {
     &[
@@ -159,6 +187,7 @@ pub fn all() -> &'static [&'static str] {
         KOREAN_HANJA_KEY_CONVERTS_HANJA,
         KOREAN_WON_KEY_TYPES_BACKTICK,
         KOREAN_DISABLE_IN_REMOTE_DESKTOP,
+        PER_DEVICE_MANAGED,
     ]
 }
 
@@ -177,10 +206,12 @@ mod tests {
     }
 
     // keys::all() 의 모든 키가 접두사 규칙(hyperkey.* / ui.* / presets.* / general.* /
-    // korean.*)을 지킨다. ⭐ M2 에서 `presets.*`(F-08, 이 파일)와 `general.*`(F-10,
-    // 다른 크레이트가 동시에 작업 중)를 추가로 허용하도록 넓혔다. F-16 이 `korean.*`
-    // 를 더한다(D-K10) — 카탈로그 키는 `settings.korean.*` 이지만 **저장 키**는
-    // 명세 그대로 `korean.*` 다(D-K11, 이 파일이 다루는 것은 저장 키다).
+    // korean.* / perDevice.*)을 지킨다. ⭐ M2 에서 `presets.*`(F-08, 이 파일)와
+    // `general.*`(F-10, 다른 크레이트가 동시에 작업 중)를 추가로 허용하도록 넓혔다.
+    // F-16 이 `korean.*` 를 더한다(D-K10) — 카탈로그 키는 `settings.korean.*` 이지만
+    // **저장 키**는 명세 그대로 `korean.*` 다(D-K11, 이 파일이 다루는 것은 저장 키다).
+    // F-17 이 `perDevice.*` 를 더한다(§3.3) — 동적 세그먼트(`perDevice.<vid>:<pid>.*`)
+    // 는 `all()` 에 나열되지 않지만(위 주석 참고), 접두사 규칙 자체는 여기서도 지킨다.
     #[test]
     fn all_keys_follow_prefix_convention() {
         for key in all() {
@@ -189,9 +220,36 @@ mod tests {
                     || key.starts_with("ui.")
                     || key.starts_with("presets.")
                     || key.starts_with("general.")
-                    || key.starts_with("korean."),
+                    || key.starts_with("korean.")
+                    || key.starts_with("perDevice."),
                 "접두사 규칙을 벗어난 키: {key}"
             );
         }
+    }
+
+    // ── F-17 조립 함수 — `per-device-settings.md` §3.3 저장 키 모양 그대로 ──────────
+
+    #[test]
+    fn per_device_key_remap_rows_assembles_expected_key() {
+        assert_eq!(
+            per_device_key_remap_rows(PER_DEVICE_COMMON_SCOPE),
+            "perDevice.all.keyRemap.rows"
+        );
+        assert_eq!(
+            per_device_key_remap_rows("5ac:24f"),
+            "perDevice.5ac:24f.keyRemap.rows"
+        );
+    }
+
+    #[test]
+    fn per_device_function_key_assembles_expected_key() {
+        assert_eq!(
+            per_device_function_key(PER_DEVICE_COMMON_SCOPE, crate::perdevice::FKey::F1),
+            "perDevice.all.functionKeys.f1"
+        );
+        assert_eq!(
+            per_device_function_key("5ac:24f", crate::perdevice::FKey::F12),
+            "perDevice.5ac:24f.functionKeys.f12"
+        );
     }
 }

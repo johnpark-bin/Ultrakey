@@ -259,7 +259,7 @@ macOS 는 `Use F1, F2, etc. keys as standard function keys` **토글 하나**만
 
 UI 는 Karabiner 처럼 **현재 macOS 토글 상태를 표시하고 시스템 설정으로 가는 버튼을 둔다.** 우리가 그 값을 바꾸지는 않는다(사용자의 시스템 설정을 대신 조작하지 않는다) — `Keyboards` 탭 상단의 고정 컨트롤 하나(§3.1.5)가 이 표시줄이다.
 
-**읽는 방법 `(미확정)`**: 이 토글은 전역 도메인의 `com.apple.keyboard.fnState` 불리언으로 추정된다(`(추정)` — 관용적으로 알려진 키 이름이며 스파이크가 직접 검증하지 않았다). `CFPreferencesCopyAppValue`(`kCFPreferencesAnyApplication` 도메인) 로 읽을 수 있을 것으로 보이나 확인되지 않았다. 시스템 설정으로 연결하는 버튼은 `open x-apple.systempreferences:com.apple.preference.keyboard` 류의 URL 스킴을 쓰는 것이 관례이나 이 역시 검증되지 않았다(`(추정)`) — §9.
+**읽는 방법 — ⭐ 실측으로 확정(2026-08-30, 이슈 #28)**: 이 토글은 전역 도메인(`NSGlobalDomain`)의 `com.apple.keyboard.fnState` 불리언이 **맞다**. 검증 명령과 출력: `defaults read -g com.apple.keyboard.fnState` → `1`(토글 켜짐). 구현은 `CFPreferencesCopyAppValue(CFSTR("com.apple.keyboard.fnState"), kCFPreferencesAnyApplication)` 로 읽는다 — 키가 아예 없으면 꺼짐(macOS 기본), 호출 자체가 실패하면 UI 에 "알 수 없음" 으로 표시한다. 시스템 설정으로 연결하는 버튼은 `open x-apple.systempreferences:com.apple.preference.keyboard` 류의 URL 스킴을 쓰는 것이 관례이나 이 역시 검증되지 않았다(`(추정)`) — §9.
 
 ### 3.6 ⭐ 자원 공존 — 경로 B 합성과 D-1 재설계
 
@@ -450,8 +450,8 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | 5 | 기능 2 의 11종(volume_increment 제외) 시스템 기능이 표에 제시한 후보 Consumer Page usage 로 실제 동작하는가 | `(미확정)` — 후보값은 검증되지 않은 참고값(§3.5) | 스파이크 S-8 과 동일한 통제 실험(대조군 포함, 매핑을 주기적으로 재설치해 S-6 을 이기고, 설치 직후·키 입력 직후 되읽기로 생존 확인) 을 나머지 11종 각각에 반복 |
 | 6 | `mission_control`/`spotlight`/`dictation`/`do_not_disturb` 4종이 표준 Consumer Page 로 표현 가능한지, 아니면 Apple 벤더 정의 usage page 가 필요한지 | `(미확정)` | USB HID Usage Tables 표준 문서 대조 + 실제 usage 값 후보를 걸고 키 입력으로 확인(질문 5 와 같은 절차) |
 | 7 | `hidutil list` 의 `Built-In` 컬럼이 어느 IOKit 프로퍼티(들)에서 유도되는가 | `(미확정)` | `ioreg -l` 로 동일 디바이스의 전체 프로퍼티를 덤프해 후보 키(`BuiltIn`, `kIOHIDBuiltInKey` 등) 대조 |
-| 8 | `com.apple.keyboard.fnState` 가 실제 저장 키 이름·도메인이 맞는가 | `(미확정)` — 관용적으로 알려진 이름을 인용했을 뿐 검증하지 않았다 | 시스템 설정에서 토글을 켜고 끄며 `defaults read -g com.apple.keyboard.fnState` 출력 변화 관찰 |
-| 9 | 다른 HID 계층 리매퍼(Karabiner 등)의 가상 디바이스를 `Keyboards` 탭 목록에 보일지 | `(미확정)` — 제품 결정 사항이기도 하다 | Karabiner 를 설치한 환경에서 `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 를 실행해 가상 HID 디바이스가 실제로 나열되는지, 제품명으로 실제 키보드와 구분 가능한지 확인 |
+| 8 | `com.apple.keyboard.fnState` 가 실제 저장 키 이름·도메인이 맞는가 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — `defaults read -g com.apple.keyboard.fnState` → `1`. `NSGlobalDomain`(`kCFPreferencesAnyApplication`)의 `com.apple.keyboard.fnState` 로 확정 | (해소됨) 재확인이 필요하면 시스템 설정에서 토글을 켜고 끄며 같은 명령의 출력 변화를 관찰 |
+| 9 | 다른 HID 계층 리매퍼(Karabiner 등)의 가상 디바이스를 `Keyboards` 탭 목록에 보일지 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — ⭐ **애초에 목록에 오지 않으므로 제품 결정이 필요 없다.** Karabiner-Elements 가 **실행 중인 상태**(`Karabiner-Core-Service` · `Karabiner-VirtualHIDDevice-Daemon` · DriverKit `dext` 셋 다 살아 있음)에서 `hidutil list` 전체 253행 중 `karabiner`/`pqrs`/`virtual` 에 걸리는 행이 **0건**이었다 | (해소됨) 다른 리매퍼(예: 가상 HID 를 실제로 노출하는 도구)가 등장하면 같은 절차로 재확인 |
 | 10 | 35종 소스 키 어휘로 못 덮는 실사용 요구가 있는가(문자 키·숫자 키 재배정 등) | `(미확정)` | 사용자 요청/이슈 수집. 스파이크·조사 범위 밖 |
 | 11 | 디바이스가 많을 때(예: 5대 이상 상시 연결) 팝업 기반 디바이스 선택이 실사용에 불편한가 | `(미확정)` — §3.1.2 가 재검토 가능 결정으로 남겼다 | 다수 디바이스 보유 사용자 대상 사용성 테스트, 또는 좌측 목록 UI 로 재설계 시 F-09 리사이즈 규약과의 충돌 재평가 |
 

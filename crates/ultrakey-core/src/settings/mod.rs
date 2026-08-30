@@ -93,6 +93,17 @@ pub struct EngineConfig {
     /// `KeyCode::CAPS_LOCK` 으로 되돌려 판정한다. caps lock 에 의존하는 규칙이 하나도
     /// 없으면 `None` — 물리 caps lock 이 그대로(`FlagsChanged` 로만) 도착한다.
     pub caps_lock_alias: Option<KeyCode>,
+    /// F-17(`docs/spec/per-device-settings.md`) — `perDevice.` 로 시작하는 설정 키의
+    /// **원본 스냅샷**. 엔진은 이 값을 직접 해석하지 않고, 필요할 때
+    /// `ultrakey_core::perdevice::PerDeviceSettings::new(&cfg.per_device_values)` 로
+    /// 감싸 읽는다(§3.3 2계층 폴백 해석은 그 타입이 담당한다).
+    ///
+    /// ⚠️ 이 맵은 `ArcSwap<EngineConfig>`(`SharedState::config`)에 담기므로 **소유
+    /// 값**이어야 한다(빌림 불가) — 그래서 `&BTreeMap` 이 아니라 `BTreeMap` 그 자체다.
+    /// 앱이 설정 저장소에서 `perDevice.` 접두사 키를 추려 채운다(`perDevice._managed`
+    /// 원장 키는 **제외** — 그건 설정이 아니라 `ultrakey-engine::path_b` 의 소유권
+    /// 원장이다). `Default` 는 빈 맵이다.
+    pub per_device_values: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[cfg(test)]

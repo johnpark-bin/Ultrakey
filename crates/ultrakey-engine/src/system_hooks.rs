@@ -19,7 +19,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
 use ultrakey_core::korean::classify_input_source_languages;
-use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, KeyboardHotplugWatcher};
+use ultrakey_core::perdevice::DeviceId;
+use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, HotplugEventKind, KeyboardHotplugWatcher};
 use ultrakey_platform::text_input_source::{observe_input_source_changes, InputSourceObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 
@@ -28,14 +29,18 @@ use crate::lifecycle::should_skip_restart;
 use crate::state::SharedState;
 
 /// 지연 스케줄러에 예약하는 작업 종류.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// ⚠️ `ReapplyHidMapping` 이 `Option<DeviceId>` 를 실으므로 더 이상 `Copy` 가 아니다.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DelayedJob {
     /// 절전 복귀·세션 활성화·화면 잠금 해제 → 지연 뒤 `RecoverTap`. ⭐ 재시작
     /// 디바운스가 적용된다(§3-a).
     Recover,
-    /// 키보드 핫플러그 → 지연 뒤 `ReapplyHidMapping`. 경로 B 는 경로 A 와 다른 자원이라
-    /// 디바운스를 공유하지 않는다.
-    ReapplyHidMapping,
+    /// 키보드 핫플러그(연결) → 지연 뒤 `ReapplyHidMapping(device)`. 경로 B 는 경로 A 와
+    /// 다른 자원이라 디바운스를 공유하지 않는다. `Some(device)` 면 그 디바이스 하나만,
+    /// `None` 이면(디바이스 속성을 읽지 못한 경우, `HotplugEvent::device` 문서 참고)
+    /// 전체 재조정으로 대응한다.
+    ReapplyHidMapping(Option<DeviceId>),
 }
 
 enum SchedulerMsg {
@@ -180,8 +185,8 @@ fn fire_job(
             *last_recover_fired_ms = Some(now_ms);
             commands.send(EngineCommand::RecoverTap);
         }
-        DelayedJob::ReapplyHidMapping => {
-            commands.send(EngineCommand::ReapplyHidMapping);
+        DelayedJob::ReapplyHidMapping(device) => {
+            commands.send(EngineCommand::ReapplyHidMapping(device));
         }
     }
 }
@@ -357,21 +362,35 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
     }
 }
 
+/// ⭐ CONTRACT.md 부록 B.5 — `Attached` 만 재적용을 예약한다. `Detached` 는 쓸 대상이
+/// 사라졌으므로(뽑힌 디바이스에는 `--matching` 이 애초에 아무 서비스도 찾지 못한다)
+/// **쓰지 않는다** — 로그만 남긴다. 원장은 그대로 둔다(§3.6 규칙 6 — 다음에 그
+/// 디바이스가 다시 붙을 때 정리한다).
 fn handle_hotplug_event(ev: HotplugEvent, sched: &DelaySchedulerHandle) {
-    let delay = sched
-        .shared()
-        .config
-        .load()
-        .timings
-        .keyboard_connect_delay_ms;
-    let label = match ev {
-        HotplugEvent::Attached => "연결",
-        HotplugEvent::Detached => "해제",
-    };
-    tracing::info!(
-        delay_ms = delay,
-        "외장 키보드 {} 감지 — 지연 후 경로 B 재적용을 예약한다",
-        label
-    );
-    sched.schedule(delay, DelayedJob::ReapplyHidMapping);
+    match ev.kind {
+        HotplugEventKind::Attached => {
+            let delay = sched
+                .shared()
+                .config
+                .load()
+                .timings
+                .keyboard_connect_delay_ms;
+            let device = ev
+                .device
+                .as_ref()
+                .map(|info| DeviceId::new(info.vendor_id, info.product_id));
+            tracing::info!(
+                delay_ms = delay,
+                device = device.as_ref().map(DeviceId::as_str).unwrap_or("<알 수 없음>"),
+                "외장 키보드 연결 감지 — 지연 후 경로 B(F-17) 재적용을 예약한다"
+            );
+            sched.schedule(delay, DelayedJob::ReapplyHidMapping(device));
+        }
+        HotplugEventKind::Detached => {
+            tracing::info!(
+                "외장 키보드 해제 감지 — 쓸 대상이 사라졌으므로 경로 B 재적용을 예약하지 \
+                 않는다(원장은 그대로 둔다, §3.6 규칙 6)"
+            );
+        }
+    }
 }
