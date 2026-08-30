@@ -17,18 +17,22 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 
 ## 2. ⭐ 모델 라우팅 규약
 
-역할을 셋으로 나누고, 하네스마다 대응 모델을 고정한다.
+모델을 **상·중·하 세 등급**으로 나누고, 하네스마다 대응 모델을 고정한다.
+운용의 핵심은 **속도 우선**이다 — 대량·반복 작업은 빠른 중급 모델이 돌리고, 상급 모델은 그 결과의 **평가자**로만 쓴다.
 
-| 역할 | 하는 일 | Claude Code | Codex | opencode |
+| 등급 | 역할 | Claude Code | Codex | opencode |
 | :--- | :--- | :--- | :--- | :--- |
-| **분석·설계·계획** | 요구 분석, 아키텍처 결정, 명세 확정, 작업 분해, 트레이드오프 판단 | **Fable 또는 Opus** — 호출 터미널의 모델을 그대로 상속(`model` 을 고정하지 않는다) | `gpt-5.6-sol` | `deepseek-v4-pro-0813` |
-| **구현** | 명세를 코드로. 테스트 작성. 리팩터링 | `sonnet` | `gpt-5.6-terra` | `deepseek-v4-flash-0731` |
-| **탐색** | 코드·파일 검색, 사실 확인, 문서 조사 | `haiku` | `gpt-5.6-luna` | `deepseek-v4-flash-0731` |
+| **상** | **평가자(Evaluator)** — 요구 분석·아키텍처 결정·트레이드오프 판단(갈림길은 직접) + **중급 모델 산출물 리뷰**(부족한 지점·추가로 고민할 지점 검토) | Fable 5 > Opus 5 | Sol | Deepseek Pro 0813 |
+| **중** | **구현** — 명세를 코드로, 테스트 작성, 반복 수정. **가장 많이 돌린다** | Sonnet 5 | Terra | Deepseek Flash 0731 (Effort High) |
+| **하** | **탐색** — 코드·파일 검색, 사실 확인, 단순 자료조사 | Haiku | Luna | Deepseek Flash 0731 (Effort Low) |
 
-**원칙**
+**운용 원칙**
 
-- 분석·설계·계획은 **호출한 세션이 직접** 한다. 서브에이전트에 넘기지 않는다. 계획 역할 에이전트는 모델을 고정하지 말고 호출 세션을 상속하게 둔다.
-- 탐색은 **반드시 위임**한다. 넓게 훑는 검색을 메인 세션이 직접 하면 컨텍스트가 결과 덤프로 오염된다.
+- 대량·반복 작업은 **중급 모델**이 한다. 상급 모델을 반복 루프에 넣지 않는다.
+- 상급 모델은 **평가자(Evaluator)** 로만 동작한다 — 중급 결과를 리뷰하고, 부족하거나 추가로 고민할 지점을 검토한다.
+- 단순 탐색·검색·자료조사는 **하급 모델**로 내려 보낸다. 넓게 훑는 검색을 메인 세션이 직접 하면 컨텍스트가 결과 덤프로 오염된다.
+- ⭐ 이렇게 쓰는 목적은 **비용이 아니라 속도**다. 빠른 중급 모델이 반복해서 결과물을 뽑아내고, 상급 모델의 사용량은 최소로 제한한다.
+- 분석·설계·계획의 갈림길 판단은 **호출한 세션(상급)이 직접** 한다. 서브에이전트에 넘기지 않는다. 상급 에이전트는 모델을 고정하지 말고 호출 세션을 상속하게 둔다.
 - 구현은 기능 단위로 위임한다. `docs/spec/` 의 파일 1개가 위임 1건의 단위다.
 - 독립적인 서브에이전트는 **한 메시지에서 병렬로** 띄운다.
 
@@ -38,9 +42,10 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 | :--- | :--- | :--- |
 | Claude Code | `.claude/agents/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model:` 키) |
 | Codex | `.codex/config.toml` + `.codex/agents/ultrakey-{plan,implement,explore}.toml` | TOML |
-| opencode | `.opencode/agent/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model: provider/id`) |
+| opencode | `.opencode/agent/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model: provider/id` · `options.reasoningEffort`) |
 
 모델 식별자의 근거와 확인 방법은 각 설정 파일의 주석에 적어 두었다.
+표의 약칭은 이러하다 — `Sol`/`Terra`/`Luna` 는 Codex 모델 ID `gpt-5.6-{sol,terra,luna}`, opencode 의 `Effort High/Low` 는 `options.reasoningEffort`(`high`/`low`), Claude Code 의 `Sonnet 5`/`Haiku` 는 `sonnet`/`haiku` 에일리어스다.
 
 ## 3. 작업 규약
 

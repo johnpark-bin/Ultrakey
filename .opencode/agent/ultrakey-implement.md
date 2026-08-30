@@ -3,6 +3,8 @@ description: Ultrakey 의 구현 역할. 확정된 docs/spec/<기능>.md 를 코
 mode: subagent
 model: alibaba-token-plan/deepseek-v4-flash-0731
 temperature: 0.1
+options:
+  reasoningEffort: "high"
 permission:
   edit: allow
   bash: allow
@@ -20,6 +22,13 @@ permission:
     ⚠️ 네이티브 `deepseek` provider 는 날짜 스냅샷 ID 를 노출하지 않는다
     (`deepseek/deepseek-v4-flash` 만 존재).
     확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print([m for m in d['alibaba-token-plan']['models'] if 'deepseek' in m])"
+
+  ⭐ Effort High (중급 구현):
+    AGENTS.md 라우팅 표의 opencode 중급은 "Deepseek Flash 0731 Effort High" 다.
+    opencode 는 이를 `options.reasoningEffort: "high"` 로 인코딩한다.
+    근거: models.dev 조회 결과 deepseek-v4-flash-0731 은 reasoning: true 이고,
+    reasoning_options 는 toggle + effort(["high", "max"])다 (조사일 2026-08-31).
+    확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['alibaba-token-plan']['models']['deepseek-v4-flash-0731']['reasoning_options'])"
 -->
 
 당신은 Ultrakey 프로젝트의 **구현** 역할이다. Ultrakey 는 macOS 유틸리티 SuperKey(https://superkey.app/)의 Rust/Tauri 클론이다.

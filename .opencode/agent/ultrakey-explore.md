@@ -3,6 +3,8 @@ description: Ultrakey 의 탐색 역할. 코드·파일 검색, 사실 확인, �
 mode: subagent
 model: alibaba-token-plan/deepseek-v4-flash-0731
 temperature: 0.1
+options:
+  reasoningEffort: "low"
 permission:
   edit: deny
   bash: allow
@@ -14,6 +16,14 @@ permission:
     AGENTS.md 의 라우팅 표에서 opencode 의 탐색 역할은 "Deepseek Flash 0731" 이며,
     구현 역할과 같은 모델을 공유한다 (사용자가 지정한 라우팅 표 그대로).
     ID 검증 근거는 `.opencode/agent/ultrakey-implement.md` 의 주석과 동일하다.
+
+  ⭐ Effort Low (하급 탐색):
+    AGENTS.md 라우팅 표의 opencode 하급은 "Deepseek Flash 0731 Effort Low" 다.
+    같은 flash 모델을 `options.reasoningEffort: "low"` 로 인코딩해 구현(high)과 구분한다.
+    ⚠️ models.dev 의 deepseek-v4-flash-0731 reasoning_options 는 effort 값이
+    ["high", "max"] 뿐이다 — "low" 는 opencode 의 일반 reasoningEffort 열거값으로,
+    이 모델에서는 추론(reasoning)을 줄이는 방향이다. 런타임에서 거부되면
+    reasoning toggle(off) 로 되돌린다. 확인 방법은 implement 쪽 주석과 동일하다.
 -->
 
 당신은 Ultrakey 프로젝트의 **탐색** 역할이다. Ultrakey 는 macOS 유틸리티 SuperKey(https://superkey.app/)의 Rust/Tauri 클론이다.
