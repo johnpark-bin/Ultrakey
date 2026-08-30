@@ -47,6 +47,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 > ⚠️ **`cargo tauri dev` 로는 권한 기능을 테스트하지 않는다.** `.app` 번들이 아니라 바이너리를 직접 실행하므로 TCC 가 **부모 프로세스(터미널)의 권한**으로 판정한다. 자세한 이유와 M0 서명 절차는 [`docs/dev/code-signing.md`](docs/dev/code-signing.md) 에 있다 — **첫 빌드 전에 그 절차를 먼저 마쳐야 한다.**
 
+## 릴리즈
+
+`v*` 태그를 푸시하면 GitHub Actions(`.github/workflows/release.yml`)가 유니버설 DMG 를 빌드해 **드래프트 릴리즈**를 만든다.
+서명·공증 시크릿이 없으면 미서명 빌드로 통과한다(경고만, 실패하지 않는다).
+릴리즈 노트는 직전 릴리즈 태그~현재 태그의 커밋 로그에서 자동 추출하고, 게시 전에 사람이 본문을 다듬는다.
+시크릿 목록과 설정 절차는 [`docs/dev/code-signing.md`](docs/dev/code-signing.md) §8.
+
 ## 크레이트 구성
 
 | 크레이트 | 대응 | 비고 |
