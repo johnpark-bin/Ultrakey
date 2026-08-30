@@ -921,6 +921,16 @@ Ultrakey 의 탭은 그것을 물리 입력과 구분하지 않는다 — 즉 **
 | **탭별 창 리사이즈** | Presets 825×527 · Hyperkey 710×517 · General 613×273 — `preferences-ui.md` §3.1 실측값과 일치 |
 | **종속 표현 ② 숨김** | 경로 B 매핑이 설치된 동안에만 "Caps Lock is remapped in the kernel right now…" 안내 행이 DOM 에 나타났다(매핑이 없을 때 찍은 스크린샷에는 없다) |
 
+### 증거 스크린샷
+
+| 파일 | 무엇 |
+| :--- | :--- |
+| [`screenshots/issue-15-presets-tab.png`](screenshots/issue-15-presets-tab.png) | Presets 탭 16종 4그룹. ② 숨김 안내(커널 매핑)와 ③ 문장 중간·끝 삽입 팝업이 함께 보인다 |
+| [`screenshots/issue-15-conflict-caps-remapped.png`](screenshots/issue-15-conflict-caps-remapped.png) | 충돌 #1 — 배타 대상이 `Hyper key source` 로 **올바르게** 표시된다(수정 후) |
+| [`screenshots/issue-15-conflict-caps-arrows.png`](screenshots/issue-15-conflict-caps-arrows.png) | 충돌 #2 — WASD ↔ HJKL |
+| [`screenshots/issue-15-conflict-home-row.png`](screenshots/issue-15-conflict-home-row.png) | 충돌 #3 — home row ↔ 방향키 |
+| [`screenshots/issue-15-general-launch-on-login.png`](screenshots/issue-15-general-launch-on-login.png) | General 탭 613×273. `Start Ultrakey at login` 이 활성이고, 아직 범위 밖인 자동 업데이트만 비활성이다 |
+
 ### ⬜ 수행하지 못한 것 — 통과했다고 적지 않는다
 
 | 항목 | 왜 |
