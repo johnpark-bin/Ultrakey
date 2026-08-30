@@ -24,12 +24,16 @@
 //! 위임 완료 보고에 남긴다).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
 
 use ultrakey_core::arbitration::{Disposition, Effect, Layer};
 use ultrakey_core::event::{EventKind, InputEvent};
+use ultrakey_core::flags::EventFlags;
+use ultrakey_core::rules::RuleId;
 
 /// 링 버퍼 용량. 2의 거듭제곱이어야 한다([`ultrakey_platform::trace_ring::SpscRing`]
 /// 이 인덱스 계산에 비트마스크를 쓴다).
@@ -62,6 +66,13 @@ pub struct TapTrace {
     pub resolved_keycode: u16,
     pub alias_active: bool,
     pub layer: u8,
+    /// ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §3.4) — 발화한 규칙의 숫자
+    /// 인코딩. 0=없음(규칙 없이 통과) 1=`RuleId::Preset` 2=`RuleId::Korean`
+    /// 3=`RuleId::Hyperkey`. `rule_index` 는 `Preset`/`Korean` 의 페이로드
+    /// (`Hyperkey` 는 페이로드가 없어 0 그대로). 콜백은 이 숫자만 다룬다 — 문자열
+    /// 변환(`"preset:5"` 등)은 드레인 스레드([`rule_identifier`])가 한다.
+    pub rule_kind: u8,
+    pub rule_index: u8,
     pub disposition: u8,
     pub disposition_flags: u64,
     pub emitted: [TraceEmit; 4],
@@ -147,10 +158,33 @@ pub fn trace_enabled() -> bool {
     trace_scope() != TraceScope::Off
 }
 
+/// ⭐ F-18 Event Viewer 런타임 게이트(`docs/spec/event-viewer.md` §2.1) — 뷰어 창을
+/// 여닫을 때만 갱신된다. `AtomicBool` 하나뿐인 이유는 그 문서 §2.1 이 기각한
+/// `ArcSwap<Option<Sink>>` 대안 문서를 그대로 따른다 — 콜백이 뷰어가 꺼져 있을 때
+/// 내는 비용을 `Relaxed` 로드 하나로 못박기 위함이다.
+static VIEWER_ON: AtomicBool = AtomicBool::new(false);
+
+/// 뷰어 창의 열림/닫힘과 1:1 로 호출된다(앱 계층). 콜백 스레드가 아니라 메인
+/// (Tauri) 스레드에서 불리므로 순서 제약이 없다 — `Relaxed` 로 충분하다(§2.1: "뷰어를
+/// 켜고 끄는 것은 사람이 창을 여닫는 빈도").
+pub fn set_viewer_enabled(on: bool) {
+    VIEWER_ON.store(on, Ordering::Relaxed);
+}
+
+/// 콜백 임계 경로에서 불린다 — `Relaxed` 로드 한 번뿐이다.
+pub fn viewer_enabled() -> bool {
+    VIEWER_ON.load(Ordering::Relaxed)
+}
+
 /// 이 이벤트를 기록할 것인가. 콜백 임계 경로에서 불린다 — 캐시된 값 비교뿐이다.
+///
+/// ⭐ F-18 — `TraceScope::Off` 에서도 뷰어가 켜져 있으면(그리고 키 이벤트에 한해)
+/// 기록한다. 뷰어가 꺼져 있고 환경변수도 꺼져 있을 때만 정말로 `false` 다 — 그때
+/// 콜백이 추가로 하는 일은 `viewer_enabled()` 의 `AtomicBool::load(Relaxed)` 한 번뿐
+/// (`event-viewer.md` §2.1).
 pub fn should_trace(kind: EventKind) -> bool {
     match trace_scope() {
-        TraceScope::Off => false,
+        TraceScope::Off => viewer_enabled() && kind.is_key(),
         TraceScope::KeysOnly => kind.is_key(),
         TraceScope::All => true,
     }
@@ -269,6 +303,30 @@ fn layer_name(code: u8) -> &'static str {
     }
 }
 
+/// ⭐ F-18 — `Outcome::rule()` 을 콜백이 다룰 수 있는 숫자 한 쌍으로 옮긴다. 콜백은
+/// 이 변환만 쓴다(할당 없음) — 사람이 읽을 식별자([`rule_identifier`])는 드레인
+/// 스레드가 만든다.
+pub fn rule_to_code(rule: Option<RuleId>) -> (u8, u8) {
+    match rule {
+        None => (0, 0),
+        Some(RuleId::Preset(n)) => (1, n),
+        Some(RuleId::Korean(n)) => (2, n),
+        Some(RuleId::Hyperkey) => (3, 0),
+    }
+}
+
+/// 사람이 읽을 **안정적인** 규칙 식별자(`docs/spec/event-viewer.md` §3.4) — 사람이
+/// 읽을 이름(예: 프리셋 라벨)은 앱 계층이 이 식별자를 보고 붙인다. 드레인 스레드
+/// 전용(할당해도 되는 경로).
+fn rule_identifier(kind: u8, index: u8) -> Option<String> {
+    match kind {
+        1 => Some(format!("preset:{index}")),
+        2 => Some(format!("korean:{index}")),
+        3 => Some("hyperkey".to_string()),
+        _ => None,
+    }
+}
+
 /// `Disposition::PassWithFlags` 는 `EventFlags` 를 함께 들고 있어 u8 하나로는
 /// 왕복이 안 된다 — `TapTrace` 가 `disposition_flags` 를 별도 필드로 갖는 이유다.
 /// 그래서 이 변환의 "왕복"은 **판별자(어느 variant인가)** 기준이다: flags 는
@@ -355,9 +413,9 @@ fn effect_name(code: u8) -> &'static str {
 
 fn path_c_result_name(code: u8) -> &'static str {
     match code {
-        0 => "시도안함",
-        1 => "성공",
-        2 => "실패",
+        0 => "not-attempted",
+        1 => "ok",
+        2 => "failed",
         _ => "Unknown",
     }
 }
@@ -366,8 +424,156 @@ fn caps_lock_state_name(code: u8) -> &'static str {
     match code {
         0 => "off",
         1 => "on",
-        2 => "읽기실패",
+        2 => "read-failed",
         _ => "Unknown",
+    }
+}
+
+// ============================================================================
+// F-18 Event Viewer — 디코드된 레코드와 싱크(`docs/spec/event-viewer.md` §3.5).
+// 여기서부터는 전부 드레인 스레드 전용이다 — 콜백은 이 타입들을 만들지 않는다.
+// ============================================================================
+
+/// 방출된 이벤트 하나(뷰어 표시용, 디코드됨). `TraceEmit` 의 사람이 읽을 버전.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerEmit {
+    pub kind: String,
+    pub keycode: u16,
+    pub flags: u64,
+    pub modifiers: Vec<String>,
+}
+
+/// 이벤트 뷰어 창이 한 줄로 그리는 자료(§3.3). 드레인 스레드가 [`TapTrace`] 하나당
+/// 하나 만든다 — 이 파일에서 **처음** 할당이 일어나는 지점이다(탭 스레드가 아니므로
+/// 허용된다, §3.5 1단계).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewerRecord {
+    pub seq: u64,
+    /// 드레인 스레드가 찍는 유닉스 밀리초(§3.3 "드레인 시각").
+    pub at_ms: u64,
+    pub kind: String,
+    pub keycode: u16,
+    pub flags: u64,
+    pub modifiers: Vec<String>,
+    pub autorepeat: bool,
+    pub resolved_keycode: u16,
+    pub alias_active: bool,
+    pub layer: String,
+    /// ⭐ 안정적인 규칙 식별자(`"preset:5"`·`"korean:13"`·`"hyperkey"`) — 사람이 읽을
+    /// 이름은 앱 계층이 이 식별자를 보고 붙인다(§3.4).
+    pub rule: Option<String>,
+    pub disposition: String,
+    pub disposition_flags: u64,
+    pub emitted: Vec<ViewerEmit>,
+    pub effects: Vec<String>,
+    /// 예: `"ToggleCapsLock ok off->on"`. 경로 C 를 시도하지 않았으면 `None`.
+    pub path_c: Option<String>,
+}
+
+/// `flags` 비트마스크에서 켜진 modifier 이름들(§3.3 표 — `⇧⌃⌥⌘` + caps lock/fn).
+/// 드레인 스레드 전용(할당한다).
+fn modifiers_from_flags(flags: u64) -> Vec<String> {
+    let f = EventFlags(flags);
+    let mut mods = Vec::new();
+    if f.contains(EventFlags::SHIFT) {
+        mods.push("shift".to_string());
+    }
+    if f.contains(EventFlags::CONTROL) {
+        mods.push("control".to_string());
+    }
+    if f.contains(EventFlags::ALTERNATE) {
+        mods.push("option".to_string());
+    }
+    if f.contains(EventFlags::COMMAND) {
+        mods.push("command".to_string());
+    }
+    if f.contains(EventFlags::CAPS_LOCK) {
+        mods.push("capsLock".to_string());
+    }
+    if f.contains(EventFlags::SECONDARY_FN) {
+        mods.push("fn".to_string());
+    }
+    mods
+}
+
+/// 경로 C 실측을 사람이 읽을 한 줄로(§3.3 "효과" 열 예시 `"ToggleCapsLock (off→on)"`
+/// 을 뷰어 자료용으로 압축한 형태). 시도하지 않았으면(`path_c_result == 0`) `None`.
+fn viewer_path_c(t: &TapTrace) -> Option<String> {
+    if t.path_c_result == 0 {
+        return None;
+    }
+    Some(format!(
+        "ToggleCapsLock {} {}->{}",
+        path_c_result_name(t.path_c_result),
+        caps_lock_state_name(t.path_c_before),
+        caps_lock_state_name(t.path_c_after),
+    ))
+}
+
+/// [`TapTrace`](POD) 하나를 [`ViewerRecord`](디코드됨)로 바꾼다. 드레인 스레드
+/// 전용 — 탭 스레드는 이 함수를 절대 부르지 않는다.
+fn decode_viewer_record(t: &TapTrace, at_ms: u64) -> ViewerRecord {
+    let emitted = t.emitted[..t.emitted_len as usize]
+        .iter()
+        .map(|e| ViewerEmit {
+            kind: event_kind_name(e.kind).to_string(),
+            keycode: e.keycode,
+            flags: e.flags,
+            modifiers: modifiers_from_flags(e.flags),
+        })
+        .collect();
+    let effects = t.effects[..t.effects_len as usize]
+        .iter()
+        .map(|e| effect_name(*e).to_string())
+        .collect();
+
+    ViewerRecord {
+        seq: t.seq,
+        at_ms,
+        kind: event_kind_name(t.raw_kind).to_string(),
+        keycode: t.raw_keycode,
+        flags: t.raw_flags,
+        modifiers: modifiers_from_flags(t.raw_flags),
+        autorepeat: t.autorepeat,
+        resolved_keycode: t.resolved_keycode,
+        alias_active: t.alias_active,
+        layer: layer_name(t.layer).to_string(),
+        rule: rule_identifier(t.rule_kind, t.rule_index),
+        disposition: disposition_name(t.disposition).to_string(),
+        disposition_flags: t.disposition_flags,
+        emitted,
+        effects,
+        path_c: viewer_path_c(t),
+    }
+}
+
+/// 뷰어 창이 등록하는 싱크. 드레인 스레드가 디코드한 [`ViewerRecord`] 를 받아
+/// 자신의 `Mutex<VecDeque<ViewerRecord>>`(상한 500, §3.5)에 넣는다.
+pub type ViewerSink = Arc<dyn Fn(ViewerRecord) + Send + Sync>;
+
+/// ⛔ **드레인 스레드만 읽는다 — 콜백은 절대 읽지 않는다**(§2.1 기각한 대안 항목
+/// 참고). `RwLock` 이 콜백 임계 경로에 등장하지 않는 것이 이 파일 전체 설계의
+/// 핵심이다.
+static VIEWER_SINK: OnceLock<RwLock<Option<ViewerSink>>> = OnceLock::new();
+
+fn viewer_sink_lock() -> &'static RwLock<Option<ViewerSink>> {
+    VIEWER_SINK.get_or_init(|| RwLock::new(None))
+}
+
+/// 뷰어 창의 열림(`Some`)/닫힘(`None`)과 1:1 로 호출된다(앱 계층, 메인 스레드).
+pub fn set_viewer_sink(sink: Option<ViewerSink>) {
+    if let Ok(mut guard) = viewer_sink_lock().write() {
+        *guard = sink;
+    }
+}
+
+fn call_viewer_sink(record: ViewerRecord) {
+    if let Ok(guard) = viewer_sink_lock().read() {
+        if let Some(sink) = guard.as_ref() {
+            sink(record);
+        }
     }
 }
 
@@ -392,14 +598,20 @@ impl TraceDrainHandle {
     }
 }
 
-/// 전용 스레드를 띄워 200ms 마다 링을 비우고 `tracing::info!` 로 한 줄씩 남긴다.
-/// 탭 스레드가 아니므로 로깅 제약이 없다. [`trace_enabled`] 가 `false` 면 스레드를
-/// 만들지 않는다.
+/// 전용 스레드를 띄워 200ms 마다 링을 비운다. 탭 스레드가 아니므로 로깅·할당
+/// 제약이 없다.
+///
+/// ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §2.2) — **항상** 스레드를
+/// 띄운다. 예전에는 [`trace_enabled`]가 `false`(환경변수 꺼짐)면 스레드 자체를
+/// 만들지 않았지만, 뷰어는 **실행 중에** 켜지므로 그 시점에 드레인 스레드가 이미
+/// 있어야 한다. 링이 비어 있으면 200ms 마다 즉시 다시 잠든다 — 초당 5회의 빈
+/// 깨어남이고 그 비용은 측정 가능한 수준이 아니다(§2.2 가 기각한 대안: 뷰어를
+/// 켤 때 스레드를 만들고 끌 때 join — 수명주기 관리가 늘어나는 데 비해 얻는
+/// 것이 작다).
+///
+/// `None` 은 이제 "계측이 꺼져 있다"가 아니라 스레드 생성 자체가 실패한
+/// (`thread::Builder::spawn` 이 OS 자원 부족 등으로 `Err` 를 낸) 드문 경우만 뜻한다.
 pub fn spawn_drain_thread(ring: Arc<TraceRing>) -> Option<TraceDrainHandle> {
-    if !trace_enabled() {
-        return None;
-    }
-
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
 
@@ -419,9 +631,21 @@ pub fn spawn_drain_thread(ring: Arc<TraceRing>) -> Option<TraceDrainHandle> {
     Some(TraceDrainHandle { stop, join })
 }
 
+/// ⭐ F-18 — 환경변수 계측(`log_trace`)과 뷰어 싱크(`ViewerRecord`)는 서로 독립이다
+/// (`event-viewer.md` §3.2 — "둘 중 하나라도 켜져 있으면 계측이 돈다"). 둘 다 꺼져
+/// 있으면 레코드를 디코드하지 않고 링을 비우기만 한다.
 fn drain_once(ring: &TraceRing, last_dropped: &mut u64) {
+    let log_on = trace_enabled();
+    let has_sink = viewer_sink_lock().read().is_ok_and(|guard| guard.is_some());
+
     while let Some(t) = ring.pop() {
-        log_trace(&t);
+        if log_on {
+            log_trace(&t);
+        }
+        if has_sink {
+            let record = decode_viewer_record(&t, now_unix_ms());
+            call_viewer_sink(record);
+        }
     }
 
     let dropped = ring.dropped_count();
@@ -429,10 +653,17 @@ fn drain_once(ring: &TraceRing, last_dropped: &mut u64) {
         tracing::warn!(
             dropped = dropped - *last_dropped,
             total_dropped = dropped,
-            "탭 계측 링 버퍼가 가득 차 레코드가 드롭됐다"
+            "tap trace ring buffer full; dropping records"
         );
         *last_dropped = dropped;
     }
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// `emitted` 를 `[FlagsChanged 0x3B 0x40000]` 형태로 최대 4개까지 찍는다. 드레인
@@ -481,12 +712,12 @@ fn log_trace(t: &TapTrace) {
         emitted = %format_emitted(t),
         effects = %format_effects(t),
         path_c = %format_args!(
-            "{}(전:{} 후:{})",
+            "{} before={} after={}",
             path_c_result_name(t.path_c_result),
             caps_lock_state_name(t.path_c_before),
             caps_lock_state_name(t.path_c_after)
         ),
-        "탭 계측"
+        "tap trace"
     );
 }
 
@@ -652,5 +883,123 @@ mod tests {
         let first = trace_enabled();
         let second = trace_enabled();
         assert_eq!(first, second);
+    }
+
+    // ── F-18 Event Viewer 런타임 게이트(§2.1, §3.6) ───────────────────────────
+    //
+    // ⚠️ 아래 세 테스트는 `trace_scope()` 가 `Off` 라는 전제 위에 있다. `trace_scope()`
+    // 도 `trace_enabled()` 와 같은 `OnceLock` 을 쓰므로, 이 테스트 바이너리 안에서
+    // `ULTRAKEY_TRACE_TAP` 을 실제로 설정해 실행하지 않는 한 항상 `Off` 로 고정된다
+    // (`trace_enabled_is_stable_across_calls` 문서와 같은 전제). 그 전제가 깨지는
+    // 실행 환경(환경변수를 설정하고 테스트를 돌리는 경우)에서는 조용히 건너뛴다 —
+    // 이 게이트 자체의 로직이 아니라 테스트 격리 문제이기 때문이다.
+
+    /// 수용 기준(§8) — 뷰어 off + 환경변수 off 에서 `should_trace()` 가 **모든**
+    /// `EventKind` 에 대해 거짓이다. 이것이 "콜백이 추가로 하는 일은 `AtomicBool`
+    /// 로드 한 번뿐" 이라는 §2.1 주장의 직접 증거다.
+    #[test]
+    fn viewer_off_and_env_off_means_no_trace() {
+        if trace_scope() != TraceScope::Off {
+            return;
+        }
+        set_viewer_enabled(false);
+
+        let all = [
+            EventKind::KeyDown,
+            EventKind::KeyUp,
+            EventKind::FlagsChanged,
+            EventKind::LeftMouseDown,
+            EventKind::LeftMouseUp,
+            EventKind::RightMouseDown,
+            EventKind::RightMouseUp,
+            EventKind::OtherMouseDown,
+            EventKind::OtherMouseUp,
+            EventKind::LeftMouseDragged,
+            EventKind::RightMouseDragged,
+            EventKind::OtherMouseDragged,
+            EventKind::MouseMoved,
+            EventKind::ScrollWheel,
+            EventKind::TapDisabledByTimeout,
+            EventKind::TapDisabledByUserInput,
+        ];
+        for kind in all {
+            assert!(!should_trace(kind), "kind={kind:?}");
+        }
+    }
+
+    /// §3.6 — 뷰어가 켜지면 키 이벤트만 기록한다(`KeysOnly` 와 같은 판정). 마우스는
+    /// 여전히 거짓이어야 한다 — 마우스 이벤트가 파묻는 문제(모듈 문서)를 뷰어도
+    /// 피해야 한다.
+    #[test]
+    fn viewer_on_traces_key_events_only() {
+        if trace_scope() != TraceScope::Off {
+            return;
+        }
+        set_viewer_enabled(true);
+
+        assert!(should_trace(EventKind::KeyDown));
+        assert!(should_trace(EventKind::KeyUp));
+        assert!(should_trace(EventKind::FlagsChanged));
+        assert!(!should_trace(EventKind::MouseMoved));
+        assert!(!should_trace(EventKind::LeftMouseDown));
+        assert!(!should_trace(EventKind::ScrollWheel));
+
+        set_viewer_enabled(false); // 다른 테스트에 영향을 주지 않게 원복한다.
+    }
+
+    #[test]
+    fn set_viewer_enabled_round_trips() {
+        set_viewer_enabled(true);
+        assert!(viewer_enabled());
+        set_viewer_enabled(false);
+        assert!(!viewer_enabled());
+    }
+
+    // ── F-18 Event Viewer — ViewerRecord 디코드 ───────────────────────────────
+
+    /// §3.4 — `TapTrace::rule_kind`/`rule_index` 가 `rule_identifier` 를 거쳐
+    /// `"preset:5"`/`"korean:13"`/`"hyperkey"` 로 디코드된다. 규칙 없음(0)은 `None`.
+    #[test]
+    fn viewer_record_decodes_rule_identifier() {
+        assert_eq!(rule_identifier(0, 0), None);
+        assert_eq!(rule_identifier(1, 5), Some("preset:5".to_string()));
+        assert_eq!(rule_identifier(2, 13), Some("korean:13".to_string()));
+        assert_eq!(rule_identifier(3, 0), Some("hyperkey".to_string()));
+
+        let mut t = sample(1);
+        t.rule_kind = 1;
+        t.rule_index = 5;
+        let record = decode_viewer_record(&t, 0);
+        assert_eq!(record.rule, Some("preset:5".to_string()));
+
+        let passthrough = sample(2);
+        let record = decode_viewer_record(&passthrough, 0);
+        assert_eq!(record.rule, None);
+    }
+
+    /// §3.5 — `ViewerRecord` 는 뷰어 프런트엔드(웹뷰)가 소비할 JSON 이라 필드 이름이
+    /// camelCase 여야 한다(`#[serde(rename_all = "camelCase")]`).
+    #[test]
+    fn viewer_record_serializes_to_camel_case_json() {
+        let mut t = sample(42);
+        t.rule_kind = 1;
+        t.rule_index = 5;
+        t.raw_flags = EventFlags::SHIFT.0;
+        let record = decode_viewer_record(&t, 1_000);
+
+        let json = serde_json::to_value(&record).expect("ViewerRecord 직렬화는 실패하지 않는다");
+        let obj = json.as_object().expect("객체여야 한다");
+
+        assert!(obj.contains_key("atMs"), "at_ms 가 camelCase 로 나오지 않았다: {obj:?}");
+        assert!(obj.contains_key("resolvedKeycode"));
+        assert!(obj.contains_key("aliasActive"));
+        assert!(obj.contains_key("dispositionFlags"));
+        assert!(obj.contains_key("pathC"));
+        assert!(!obj.contains_key("raw_kind"), "snake_case 필드가 남아 있다: {obj:?}");
+        assert_eq!(obj.get("rule").and_then(|v| v.as_str()), Some("preset:5"));
+        assert_eq!(
+            obj.get("modifiers").and_then(|v| v.as_array()).map(|a| a.len()),
+            Some(1)
+        );
     }
 }

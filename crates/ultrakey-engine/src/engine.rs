@@ -103,14 +103,14 @@ pub enum EngineEvent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    #[error("탭 스레드를 시작할 수 없다: {0}")]
+    #[error("could not start the tap thread: {0}")]
     ThreadSpawn(std::io::Error),
-    #[error("탭 스레드 초기화 핸드셰이크에 실패했다")]
+    #[error("tap thread initialization handshake failed")]
     HandshakeFailed,
     /// macOS 가 아닌 타깃에서는 이 엔진을 시작할 수 없다 — 경로 A(`CGEventTap`)가
     /// macOS 전용이기 때문이다. 이 크레이트 자체는 non-macOS 에서도 컴파일된다.
     #[cfg(not(target_os = "macos"))]
-    #[error("이 플랫폼(macOS 아님)에서는 이벤트 탭 엔진을 시작할 수 없다")]
+    #[error("cannot start the event tap engine on this platform (not macOS)")]
     UnsupportedPlatform,
 }
 
@@ -180,7 +180,7 @@ impl Engine {
                 Some(Box::new(HidutilGlobalMigration));
             let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
             if let Err(e) = path_b.reconcile_on_start(&config, &attached) {
-                tracing::warn!(error = %e, "경로 B 시작 시 재조정 확인에 실패했다");
+                tracing::warn!(error = %e, "Path B reconciliation check failed at startup");
             }
 
             let shared = SharedState::new(config, gate);
@@ -258,7 +258,7 @@ impl Engine {
     pub fn reconfigure(&self, config: EngineConfig) {
         let attached = ultrakey_platform::hid_device::list_attached_keyboards();
         if let Err(e) = self.path_b.apply_all(&config, &attached) {
-            tracing::warn!(error = %e, "경로 B(F-17 디바이스별 배열) 재적용 실패");
+            tracing::warn!(error = %e, "Path B (F-17 per-device array) reapply failed");
         }
         self.shared.config.store(Arc::new(config));
         self.commands.send(EngineCommand::Reconfigure);
@@ -297,7 +297,7 @@ impl Engine {
         // 있는 디바이스는 건드리지 않고 원장에 남긴다).
         let attached = ultrakey_platform::hid_device::list_attached_keyboards();
         if let Err(e) = self.path_b.cleanup(&attached) {
-            tracing::warn!(error = %e, "경로 B 정리 실패");
+            tracing::warn!(error = %e, "Path B cleanup failed");
         }
         // 탭 스레드가 끝난 뒤에 정리한다 — 탭 스레드가 마지막으로 push 한 레코드까지
         // 드레인 스레드가 종료 전 마지막 한 바퀴에서 회수하게 하기 위함이다.
@@ -344,7 +344,7 @@ fn set_tap_state(st: &mut TapThreadState, s: TapState) {
     if st.tap_state_snapshot != s {
         st.tap_state_snapshot = s;
         st.tap_state_atomic.store(s);
-        tracing::info!(?s, "탭 상태 전이");
+        tracing::info!(?s, "tap state transition");
         (st.on_event)(EngineEvent::TapStateChanged(s));
     }
 }
@@ -634,6 +634,9 @@ fn on_tap_event(
     // 않는다 — 비용 0. `tracing::*` 매크로는 여기서 절대 부르지 않는다(§2.2).
     if trace::should_trace(input.kind) {
         let resolved = resolve_caps_lock_alias_for_trace(&cfg, input.keycode);
+        // ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §3.4) — 숫자 매핑뿐이다.
+        // 문자열 변환(`"preset:5"` 등)은 드레인 스레드가 한다.
+        let (rule_kind, rule_index) = trace::rule_to_code(outcome.rule());
         let mut rec = TapTrace {
             seq: st.trace_seq,
             raw_kind: trace::event_kind_to_code(input.kind),
@@ -643,6 +646,8 @@ fn on_tap_event(
             resolved_keycode: resolved.0,
             alias_active: cfg.caps_lock_alias.is_some(),
             layer: trace::layer_to_code(outcome.layer()),
+            rule_kind,
+            rule_index,
             disposition: trace::disposition_to_code(outcome.disposition()),
             disposition_flags: trace::disposition_flags_of(outcome.disposition()),
             ..Default::default()
@@ -717,8 +722,8 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Command
     // 이어받게 한다(§3-a: 권한이 없어 실패하는 것은 정상 경로다).
     if !ultrakey_platform::accessibility::is_process_trusted() {
         tracing::warn!(
-            "Accessibility 권한이 없는 상태에서 탭 재활성화 요청이 왔다 — 재활성화하지 않고 \
-             탭을 놓는다(재활성화 폭주 방지)"
+            "tap re-enable requested without Accessibility permission; dropping the tap \
+             instead of re-enabling it (prevents a re-enable storm)"
         );
         handle_recreate_tap(cell, commands);
         return;
@@ -744,12 +749,12 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Command
 
     match outcome {
         Some((ReenableOutcome::Recovered, attempt, _max)) => {
-            tracing::info!(attempt, "탭 재활성화 성공");
+            tracing::info!(attempt, "tap re-enabled");
             let mut st = cell.borrow_mut();
             set_tap_state(&mut st, tap_state_after_reenable(true));
         }
         Some((ReenableOutcome::StillFailing, attempt, max)) => {
-            tracing::warn!(attempt, max, "탭 재활성화 실패 — 다음 시도를 기다린다");
+            tracing::warn!(attempt, max, "tap re-enable failed; waiting for the next attempt");
             let mut st = cell.borrow_mut();
             set_tap_state(&mut st, tap_state_after_reenable(false));
         }
@@ -757,12 +762,12 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Command
             tracing::warn!(
                 attempt,
                 max,
-                "탭 재활성화가 상한만큼 반복 실패해 재생성으로 에스컬레이션한다"
+                "tap re-enable failed the maximum number of times; escalating to recreate"
             );
             handle_recreate_tap(cell, commands);
         }
         None => {
-            tracing::debug!("탭이 아직 만들어지지 않았다 — 재생성을 직접 시도한다");
+            tracing::debug!("tap has not been created yet; attempting to recreate it directly");
             handle_recreate_tap(cell, commands);
         }
     }
@@ -804,14 +809,14 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
             };
             match st.counters.record_recreate_result(alive, max_attempts) {
                 RecreateOutcome::Recovered => {
-                    tracing::info!(attempt = attempt_number, "탭 재생성 성공");
+                    tracing::info!(attempt = attempt_number, "tap recreated");
                     set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
                 }
                 RecreateOutcome::StillFailing => {
                     tracing::warn!(
                         attempt = attempt_number,
                         max = max_attempts,
-                        "탭을 재생성했지만 여전히 비활성 상태다 — 다음 시도를 기다린다"
+                        "tap was recreated but is still disabled; waiting for the next attempt"
                     );
                     set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
                 }
@@ -819,7 +824,7 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
                     tracing::error!(
                         attempt = attempt_number,
                         max = max_attempts,
-                        "탭 재생성이 상한만큼 반복 실패했다 — 프로세스 재실행이 필요하다(§5#17)"
+                        "tap recreate failed the maximum number of times; the process needs to be relaunched (§5#17)"
                     );
                     // ⭐ 프로세스 재실행이 필요하다는 신호일 뿐, 이 탭 자체는 살아있는
                     // 그대로(`attempt_result` 기준) 상태를 게시한다 — §3-a 표는 이
@@ -831,7 +836,7 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
         }
         Err(TapCreateError::NotTrusted) => {
             let mut st = cell.borrow_mut();
-            tracing::warn!("Accessibility 권한이 확인되지 않아 탭을 만들 수 없다 — F-11 온보딩을 기다린다(재시도 루프를 돌지 않는다)");
+            tracing::warn!("cannot create the tap because Accessibility is not granted; waiting for F-11 onboarding (not retrying)");
             set_tap_state(
                 &mut st,
                 tap_state_after_create_attempt(CreateAttemptResult::NotTrusted),
@@ -840,7 +845,7 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
         }
         Err(TapCreateError::CreateFailed) => {
             let mut st = cell.borrow_mut();
-            tracing::error!("권한이 확인된 상태에서도 CGEventTapCreate 가 실패했다 — 치명적, 재시도하지 않는다(§3-a, §5#16)");
+            tracing::error!("CGEventTapCreate failed even though Accessibility is granted; fatal, not retrying (§3-a, §5#16)");
             st.fatal = true;
             set_tap_state(
                 &mut st,
@@ -873,7 +878,7 @@ fn drain_commands(
                 apply_outcome_outside_tap(&outcome);
                 apply_effects_outside_tap(&outcome, &table, &on_event);
                 tracing::info!(
-                    "절전/잠금/Secure Input 대응 — 상태를 강제로 리셋했다(stuck modifier 방지)"
+                    "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );
             }
             EngineCommand::RecoverTap => handle_recover_tap(cell, commands),
@@ -882,7 +887,7 @@ fn drain_commands(
                 let mut st = cell.borrow_mut();
                 let cfg = st.shared.config.load_full();
                 st.arbiter.reconfigure(&cfg);
-                tracing::info!("설정 변경을 반영해 Arbiter 를 재구성했다");
+                tracing::info!("reconfigured the Arbiter to reflect the settings change");
             }
             EngineCommand::ReapplyHidMapping(device) => {
                 // ⭐ F-17 — `Some(device)` 면 핫플러그로 방금 연결된 그 디바이스 하나만
@@ -904,8 +909,8 @@ fn drain_commands(
                     }
                 };
                 match result {
-                    Ok(()) => tracing::info!(?device, "경로 B(F-17) 재적용을 완료했다"),
-                    Err(e) => tracing::warn!(error = %e, ?device, "경로 B(F-17) 재적용에 실패했다"),
+                    Ok(()) => tracing::info!(?device, "Path B (F-17) reapply completed"),
+                    Err(e) => tracing::warn!(error = %e, ?device, "Path B (F-17) reapply failed"),
                 }
             }
             EngineCommand::Shutdown => {
@@ -918,7 +923,7 @@ fn drain_commands(
     }
 
     if should_stop {
-        tracing::info!("종료 명령을 받아 탭 스레드 런루프를 정지한다");
+        tracing::info!("shutdown command received; stopping the tap thread run loop");
         run_loop.stop();
     }
 }
@@ -1016,5 +1021,5 @@ fn tap_thread_main(
     // `RepeatingTimer` 각자의 `Drop` 이 구현한다. 여기서는 명시적으로 탭을 먼저
     // 놓아 준다.
     cell.borrow_mut().tap = None;
-    tracing::info!("탭 스레드가 종료됐다");
+    tracing::info!("tap thread exited");
 }

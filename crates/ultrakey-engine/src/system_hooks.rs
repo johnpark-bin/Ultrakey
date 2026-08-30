@@ -155,7 +155,7 @@ fn scheduler_loop(rx: Receiver<SchedulerMsg>, shared: Arc<SharedState>, commands
             }
         }
     }
-    tracing::debug!("지연 스케줄러 스레드 종료");
+    tracing::debug!("delay scheduler thread exiting");
 }
 
 fn fire_job(
@@ -178,7 +178,7 @@ fn fire_job(
                 tracing::info!(
                     elapsed_ms,
                     debounce_ms,
-                    "직전 복구로부터 얼마 지나지 않아 재확인을 디바운스로 건너뛴다"
+                    "skipping recheck via debounce; too soon after the previous recovery"
                 );
                 return;
             }
@@ -263,11 +263,11 @@ fn warn_if_not_main_thread() {
     }
     let thread = std::thread::current();
     tracing::warn!(
-        thread = thread.name().unwrap_or("<이름 없음>"),
+        thread = thread.name().unwrap_or("<unnamed>"),
         thread_id = ?thread.id(),
-        "⚠️ SystemHooks::start 가 메인 스레드가 아닌 곳에서 호출됐다 — \
-         이 모듈 문서(architecture.md §2.1)가 요구하는 전제를 앱 계층이 어겼다. \
-         런루프에 직접 소스를 거는 훅이 추가되면 조용히 동작하지 않게 된다"
+        "SystemHooks::start was called off the main thread; the app layer violated the \
+         precondition this module documents (architecture.md §2.1). Hooks that attach \
+         sources directly to the run loop will silently stop working"
     );
     debug_assert!(
         false,
@@ -301,7 +301,7 @@ fn refresh_input_source(shared: &SharedState) {
         original_source_id = table.original_source_id(),
         first_language = languages.first().map(String::as_str).unwrap_or(""),
         korean_ime = ?state,
-        "입력 소스 갱신 — 레이아웃 테이블 재구축 + 한국어 IME 게이트 게시"
+        "input source refreshed; layout table rebuilt and Korean IME gate published"
     );
 }
 
@@ -309,15 +309,15 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
     match ev {
         // ⭐ 즉시 ForceResetState — stuck modifier 방지(§5#9). 탭 자체는 유지한다.
         SystemEvent::WillSleep => {
-            tracing::info!("절전 진입 알림 수신 — 즉시 상태를 강제 리셋한다");
+            tracing::info!("sleep notification received; forcing immediate state reset");
             sched.commands().send(EngineCommand::ForceResetState);
         }
         SystemEvent::ScreenLocked => {
-            tracing::info!("화면 잠금 알림 수신 — 즉시 상태를 강제 리셋한다");
+            tracing::info!("screen lock notification received; forcing immediate state reset");
             sched.commands().send(EngineCommand::ForceResetState);
         }
         SystemEvent::SessionDidResignActive => {
-            tracing::info!("세션 비활성화 알림 수신 — 즉시 상태를 강제 리셋한다");
+            tracing::info!("session deactivation notification received; forcing immediate state reset");
             sched.commands().send(EngineCommand::ForceResetState);
         }
         // ⭐ 즉시 재확인하지 않는다 — 지연 뒤 RecoverTap(§3-a).
@@ -325,7 +325,7 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             let delay = sched.shared().config.load().timings.wake_delay_ms;
             tracing::info!(
                 delay_ms = delay,
-                "절전 복귀 알림 수신 — 지연 후 탭 재확인을 예약한다"
+                "wake notification received; scheduling a delayed tap recheck"
             );
             sched.schedule(delay, DelayedJob::Recover);
         }
@@ -333,7 +333,7 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             let delay = sched.shared().config.load().timings.session_delay_ms;
             tracing::info!(
                 delay_ms = delay,
-                "화면 잠금 해제 알림 수신 — 지연 후 탭 재확인을 예약한다"
+                "screen unlock notification received; scheduling a delayed tap recheck"
             );
             sched.schedule(delay, DelayedJob::Recover);
         }
@@ -341,7 +341,7 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             let delay = sched.shared().config.load().timings.session_delay_ms;
             tracing::info!(
                 delay_ms = delay,
-                "세션 활성화 알림 수신 — 지연 후 탭 재확인을 예약한다"
+                "session activation notification received; scheduling a delayed tap recheck"
             );
             sched.schedule(delay, DelayedJob::Recover);
         }
@@ -356,7 +356,7 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             let bundle_id = ident.map(|a| a.bundle_id).unwrap_or_default();
             tracing::debug!(
                 bundle_id,
-                "최전면 앱 변경 감지(관측만 — 게이트 갱신은 F-10 소관)"
+                "front app change detected (observation only; gate update is F-10's job)"
             );
         }
     }
@@ -381,15 +381,15 @@ fn handle_hotplug_event(ev: HotplugEvent, sched: &DelaySchedulerHandle) {
                 .map(|info| DeviceId::new(info.vendor_id, info.product_id));
             tracing::info!(
                 delay_ms = delay,
-                device = device.as_ref().map(DeviceId::as_str).unwrap_or("<알 수 없음>"),
-                "외장 키보드 연결 감지 — 지연 후 경로 B(F-17) 재적용을 예약한다"
+                device = device.as_ref().map(DeviceId::as_str).unwrap_or("<unknown>"),
+                "external keyboard attach detected; scheduling a delayed Path B (F-17) reapply"
             );
             sched.schedule(delay, DelayedJob::ReapplyHidMapping(device));
         }
         HotplugEventKind::Detached => {
             tracing::info!(
-                "외장 키보드 해제 감지 — 쓸 대상이 사라졌으므로 경로 B 재적용을 예약하지 \
-                 않는다(원장은 그대로 둔다, §3.6 규칙 6)"
+                "external keyboard detach detected; not scheduling a Path B reapply since \
+                 there is nothing left to write to (the ledger is left as-is, §3.6 rule 6)"
             );
         }
     }

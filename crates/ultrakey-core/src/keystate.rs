@@ -8,7 +8,7 @@
 use crate::flags::EventFlags;
 use crate::keycode::KeyCode;
 use crate::quickpress::QuickPressState;
-use crate::rules::{ModifierKind, RuleAction, RuleTable};
+use crate::rules::{ModifierKind, RuleAction, RuleId, RuleTable};
 
 /// 동시에 추적 가능한 quick press 소스 키의 최대 개수. M1 은 hyper/meh/bleh 최대 3개뿐이라
 /// 8개면 여유롭다 — 필요해지면 이 상수만 올리면 된다.
@@ -26,6 +26,10 @@ pub struct KoreanLatch {
     pub trigger_key: KeyCode,
     pub out_keycode: KeyCode,
     pub out_flags: EventFlags,
+    /// ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §3.4) — 이 래치를 세운 규칙.
+    /// keyUp 이 도착했을 때 `Outcome::rule()` 이 keyDown 때와 같은 값을 돌려주도록
+    /// 래치에 실어 둔다(조건을 다시 평가하지 않는 D-K6 규약과 같은 이유).
+    pub id: RuleId,
 }
 
 /// 비트셋이 표현 가능한 keycode 범위. macOS virtual keycode 는 실측 범위(§4 키코드 목록)가
@@ -517,6 +521,7 @@ mod tests {
             trigger_key: KeyCode::SPACE,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags::CONTROL,
+            id: RuleId::Korean(13),
         };
         t.set_korean_latch(latch);
         assert_eq!(t.korean_latch(KeyCode::SPACE), Some(latch));
@@ -533,11 +538,13 @@ mod tests {
             trigger_key: KeyCode::SPACE,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags::CONTROL,
+            id: RuleId::Korean(13),
         });
         t.set_korean_latch(KoreanLatch {
             trigger_key: KeyCode::SPACE,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags::ALTERNATE,
+            id: RuleId::Korean(13),
         });
         assert_eq!(
             t.korean_latch(KeyCode::SPACE).map(|l| l.out_flags),
@@ -553,11 +560,13 @@ mod tests {
             trigger_key: KeyCode::SPACE,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags::CONTROL,
+            id: RuleId::Korean(13),
         });
         t.set_korean_latch(KoreanLatch {
             trigger_key: KeyCode(0x32), // grave
             out_keycode: KeyCode(0x32),
             out_flags: EventFlags::ALTERNATE,
+            id: RuleId::Korean(13),
         });
         assert!(t.korean_latch(KeyCode::SPACE).is_some());
         assert!(t.korean_latch(KeyCode(0x32)).is_some());
@@ -575,6 +584,7 @@ mod tests {
             trigger_key: KeyCode::SPACE,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags::CONTROL,
+            id: RuleId::Korean(13),
         });
         t.reset_all();
         assert_eq!(t.korean_latch(KeyCode::SPACE), None);

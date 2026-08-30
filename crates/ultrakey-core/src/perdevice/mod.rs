@@ -315,7 +315,7 @@ impl<'a> PerDeviceSettings<'a> {
                     tracing::warn!(
                         key,
                         error = %err,
-                        "perDevice 설정 값 타입이 예상과 다름 — 이 계층은 없는 것으로 취급"
+                        "perDevice setting value type didn't match what was expected; treating this layer as absent"
                     );
                     Tri::Inherit
                 }
@@ -385,7 +385,7 @@ impl<'a> PerDeviceSettings<'a> {
         if resolved.is_none() {
             tracing::warn!(
                 value = %stored,
-                "perDevice 기능 2 저장값을 목적지 카탈로그에서 찾을 수 없다 — 매핑 없음으로 취급"
+                "perDevice function 2 stored value not found in the destination catalog; treating as no mapping"
             );
         }
         resolved
@@ -492,20 +492,20 @@ const ALLOWED_PAGES: [u64; 4] = [0x07, 0x0C, 0xFF, 0xFF01];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
     /// 규칙 2 — `IOHIDSystem`(`0x5ac:0x0`)에 대한 쓰기를 막는 하드 가드.
-    #[error("product_id 가 0 이다 — IOHIDSystem(전역 의사 디바이스)에 대한 쓰기는 금지된다")]
+    #[error("product_id is 0; writes to IOHIDSystem (the global pseudo-device) are forbidden")]
     ZeroProductId,
     /// 규칙 3 — 닫힌 어휘 밖의 usage page.
-    #[error("알 수 없는 usage page: 값={value:#x}, page={page:#x}")]
+    #[error("unknown usage page: value={value:#x}, page={page:#x}")]
     UnknownPage { value: u64, page: u64 },
     /// 규칙 3 — usage 가 16비트 범위를 벗어남.
-    #[error("usage 값이 범위를 벗어났다: 값={value:#x}, usage={usage:#x}(> 0xFFFF)")]
+    #[error("usage value out of range: value={value:#x}, usage={usage:#x} (> 0xFFFF)")]
     UsageOutOfRange { value: u64, usage: u64 },
     /// 규칙 4 — 배열 안에 같은 `src` 중복(규칙 5 중재가 대부분 막아 주지만,
     /// 마지막 방어선으로 다시 확인한다).
-    #[error("배열 안에 같은 src(={0:#x})가 중복됐다")]
+    #[error("duplicate src (={0:#x}) within the array")]
     DuplicateSrc(u64),
     /// 규칙 5 — 배열 길이 상한 초과.
-    #[error("배열 길이가 상한을 넘었다: {len} > {max}")]
+    #[error("array length exceeds the cap: {len} > {max}")]
     TooManyMappings { len: usize, max: usize },
 }
 
@@ -563,7 +563,7 @@ pub fn read_managed_ledger(value: &Value) -> ManagedLedger {
         let Some(device) = DeviceId::parse(key) else {
             tracing::warn!(
                 key,
-                "perDevice._managed 의 디바이스 키를 해석할 수 없다 — 건너뜀"
+                "could not parse a perDevice._managed device key; skipping"
             );
             continue;
         };
@@ -575,7 +575,7 @@ pub fn read_managed_ledger(value: &Value) -> ManagedLedger {
                 tracing::warn!(
                     key,
                     error = %err,
-                    "perDevice._managed 의 배열 형식이 예상과 다르다 — 건너뜀"
+                    "perDevice._managed array shape didn't match what was expected; skipping"
                 );
             }
         }

@@ -53,8 +53,8 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StoreError::Io(e) => write!(f, "설정 파일 입출력 오류: {e}"),
-            StoreError::Serialize(e) => write!(f, "설정 값 직렬화 오류: {e}"),
+            StoreError::Io(e) => write!(f, "settings file I/O error: {e}"),
+            StoreError::Serialize(e) => write!(f, "settings value serialization error: {e}"),
         }
     }
 }
@@ -223,7 +223,7 @@ impl SettingsStore {
                 tracing::warn!(
                     key,
                     error = %err,
-                    "설정 값 타입이 예상과 다름 — 이 값만 기본값으로 대체"
+                    "setting value type didn't match what was expected; falling back to default for this value only"
                 );
                 None
             }
@@ -237,6 +237,66 @@ impl SettingsStore {
         let json = serde_json::to_value(value)?;
         self.values.insert(key.to_string(), json);
         self.persist()
+    }
+
+    /// 키 하나를 지운다. "부재 = 기본값" 규약에서 **부재로 되돌리는** 유일한 정식
+    /// 경로다(F-15 §3.4 결정 4 의 import 가 이것을 쓴다).
+    ///
+    /// ⚠️ 일반 설정 변경은 여전히 [`set`](Self::set) 이다 — §3.1 의 "되돌려도 키를
+    /// 지우지 않는다"(삭제 없는 write-through)는 그대로다. 이 함수는 사용자가
+    /// **명시적으로 "따름/기본값으로 되돌린다"고 말한 경우**(디바이스별 설정의
+    /// `--- (공통 설정을 따름)`, 언어의 `System`, import 의 교체)에만 쓴다.
+    pub fn remove(&mut self, key: &str) -> Result<(), StoreError> {
+        if self.values.remove(key).is_none() {
+            // 없는 키를 지우는 것은 목표 상태에 이미 도달한 것 — 파일을 건드리지
+            // 않는다. 그래야 "설정을 건드리지 않으면 파일이 생기지 않는다"(§8
+            // 수용 기준 1·2)가 unset 경로에서도 깨지지 않는다.
+            return Ok(());
+        }
+        self.persist()
+    }
+
+    /// 저장된 희소 맵 전체를 읽는다 — ⭐ **export 가 담는 것이 정확히 이것이다**
+    /// (F-15 §3.4 결정 1: "건드린 키만"). 전체 유효값을 펼치지 않는 이유가 여기
+    /// 있다 — 펼치면 import 한 기기에서 "부재 = 기본값" 규약이 영구히 깨진다.
+    pub fn values(&self) -> &BTreeMap<String, serde_json::Value> {
+        &self.values
+    }
+
+    /// ⭐ 희소 맵 전체를 **교체**한다(F-15 §3.4 결정 4: import 는 병합이 아니라 교체).
+    ///
+    /// 파일에 없던 키는 사라져 기본값으로 돌아간다 — 그것이 export 한 기기의
+    /// 상태와 같아지는 유일한 방법이다. 병합이면 "끈 설정이 되살아나지 않는" 조용한
+    /// 실패가 생긴다.
+    ///
+    /// 쓰기는 [`set`](Self::set) 과 같은 원자적 절차를 탄다.
+    pub fn replace_all(
+        &mut self,
+        values: BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), StoreError> {
+        self.values = values;
+        self.persist()
+    }
+
+    /// 현재 파일을 같은 디렉터리에 `<파일명>.<suffix>` 로 복사한다. ⭐ import 가
+    /// 교체 **직전에** 부른다 — 교체는 되돌리기 어려운 조작이고 백업 한 번의 비용은
+    /// 거의 없다(F-15 §3.4 결정 4).
+    ///
+    /// 저장 파일이 아직 없으면(= 사용자가 아무것도 건드리지 않았다) 백업할 것도
+    /// 없으므로 `Ok(None)` 이다.
+    pub fn backup_to(&self, suffix: &str) -> Result<Option<PathBuf>, StoreError> {
+        let Some(path) = &self.path else {
+            return Ok(None);
+        };
+        if !path.exists() {
+            return Ok(None);
+        }
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".");
+        backup.push(suffix);
+        let backup = PathBuf::from(backup);
+        std::fs::copy(path, &backup)?;
+        Ok(Some(backup))
     }
 
     /// 원자적 쓰기: 임시 파일 → `sync_all` → `rename`. `in_memory()` 스토어(`path ==
@@ -328,6 +388,46 @@ fn tmp_path_for(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `remove` 는 "부재 = 기본값"으로 되돌리는 정식 경로다(F-15 §3.4).
+    #[test]
+    fn remove_deletes_the_key_and_persists() {
+        let dir = std::env::temp_dir().join(format!("ultrakey-store-remove-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let (mut store, _) = SettingsStore::load(&path);
+        store.set("a.b", &true).unwrap();
+        store.set("c.d", &1u32).unwrap();
+        store.remove("a.b").unwrap();
+
+        assert!(!store.contains("a.b"));
+        assert!(store.contains("c.d"));
+
+        // 디스크에도 반영됐는가 — 다시 읽어서 확인한다.
+        let (reloaded, _) = SettingsStore::load(&path);
+        assert!(!reloaded.contains("a.b"));
+        assert!(reloaded.contains("c.d"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 없는 키를 지우는 것은 목표 상태에 이미 도달한 것 — 파일을 만들지 않는다.
+    /// 그래야 §8 수용 기준 1·2("건드리지 않으면 파일이 생기지 않는다")가 깨지지 않는다.
+    #[test]
+    fn removing_an_absent_key_does_not_create_the_file() {
+        let dir = std::env::temp_dir().join(format!("ultrakey-store-noremove-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let (mut store, _) = SettingsStore::load(&path);
+        store.remove("never.set").unwrap();
+        assert!(!path.exists(), "파일이 생기면 안 된다");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// 병렬 테스트 실행에서도 서로 다른 임시 디렉터리를 쓰게 하는 카운터.

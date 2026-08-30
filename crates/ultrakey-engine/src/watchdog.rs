@@ -68,10 +68,10 @@ fn watchdog_loop(
 
         if let Some(p) = probe.load_full() {
             if !p.is_enabled() {
-                tracing::warn!("워치독: 탭이 비활성 상태로 감지됨 — 재활성화를 요청한다");
+                tracing::warn!("watchdog: tap detected disabled; requesting re-enable");
                 commands.send(EngineCommand::RecoverTap);
             }
         }
     }
-    tracing::debug!("워치독 스레드 종료");
+    tracing::debug!("watchdog thread exiting");
 }

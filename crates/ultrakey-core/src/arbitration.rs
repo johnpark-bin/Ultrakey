@@ -16,7 +16,7 @@ use crate::keycode::KeyCode;
 use crate::keystate::{KeyStateTable, KoreanLatch};
 use crate::korean::{KoreanImeState, KoreanTrigger};
 use crate::quickpress::{QuickPressConfig, QuickPressEvent, QuickPressState};
-use crate::rules::{ComboRule, HoldCondition, ModifierKind, RuleAction};
+use crate::rules::{ComboRule, HoldCondition, ModifierKind, RuleAction, RuleId};
 use crate::settings::EngineConfig;
 use crate::time::Millis;
 
@@ -121,6 +121,11 @@ pub struct Outcome {
     effect_len: usize,
     disposition: Disposition,
     layer: Layer,
+    /// ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §3.4) — `layer` 하나로는
+    /// `Layer::PresetCombo` 안의 16종 프리셋을 구분할 수 없다. 규칙이 실제로 발화한
+    /// 지점에서만 채운다 — 규칙 없이 통과하는 경로(`Layer::Passthrough` 등)는 `None`.
+    /// `RuleId` 는 2바이트 POD 라 `Outcome` 의 `Copy`+무할당 성질을 깨지 않는다.
+    rule: Option<RuleId>,
 }
 
 impl Outcome {
@@ -138,6 +143,7 @@ impl Outcome {
             effect_len: 0,
             disposition,
             layer,
+            rule: None,
         }
     }
 
@@ -179,6 +185,11 @@ impl Outcome {
 
     pub fn layer(&self) -> Layer {
         self.layer
+    }
+
+    /// 어느 규칙이 이 결과를 발화시켰는가(§3.4). 규칙 없이 통과한 이벤트는 `None`.
+    pub fn rule(&self) -> Option<RuleId> {
+        self.rule
     }
 }
 
@@ -795,6 +806,7 @@ impl Arbiter {
     fn fire_combo(&mut self, _cfg: &EngineConfig, rule: &ComboRule, ev: &InputEvent, out: &mut Outcome) {
         out.layer = Layer::PresetCombo;
         out.disposition = Disposition::Consume;
+        out.rule = Some(rule.id);
 
         match rule.action {
             RuleAction::Key { keycode, flags: action_flags } => {
@@ -849,6 +861,7 @@ impl Arbiter {
                 };
                 out.layer = Layer::KoreanInput;
                 out.disposition = Disposition::Consume;
+                out.rule = Some(latch.id);
                 out.push(SynthEvent {
                     kind: EventKind::KeyUp,
                     keycode: latch.out_keycode,
@@ -883,6 +896,7 @@ impl Arbiter {
 
                 out.layer = Layer::KoreanInput;
                 out.disposition = Disposition::Consume;
+                out.rule = Some(rule.id);
                 out.push(SynthEvent {
                     kind: EventKind::KeyDown,
                     keycode: rule.out_keycode,
@@ -893,6 +907,7 @@ impl Arbiter {
                     trigger_key: rule.trigger_key,
                     out_keycode: rule.out_keycode,
                     out_flags: rule.out_flags,
+                    id: rule.id,
                 });
                 true
             }
@@ -929,6 +944,7 @@ impl Arbiter {
         };
         out.layer = Layer::SimpleRemap;
         out.disposition = Disposition::Consume;
+        out.rule = Some(remap.id);
         out.push(SynthEvent {
             kind: ev.kind,
             keycode: remap.to,
@@ -1911,6 +1927,40 @@ mod tests {
             assert_eq!(out.emitted()[0].keycode, KeyCode::FORWARD_DELETE);
             assert_eq!(out.emitted()[1].kind, EventKind::KeyUp);
         }
+    }
+
+    /// ⭐ F-18 Event Viewer(`docs/spec/event-viewer.md` §3.4) — 프리셋 조합이 발화하면
+    /// `Outcome::rule()` 이 그 프리셋의 `RuleId` 를 돌려준다. `Layer::PresetCombo` 하나로는
+    /// 프리셋 16종을 구분할 수 없다는 것이 이 필드를 더한 이유이므로, "어느 프리셋인지"가
+    /// 실제로 드러나는지를 직접 확인한다.
+    #[test]
+    fn outcome_rule_reports_firing_preset_id() {
+        let mut cfg = hyper_config();
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(12),
+            hold: HoldCondition::HyperActive,
+            trigger: KeyCode::DELETE,
+            action: RuleAction::Key { keycode: KeyCode::FORWARD_DELETE, flags: EventFlags::NONE },
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::DELETE, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+
+        assert_eq!(out.rule(), Some(RuleId::Preset(12)));
+    }
+
+    /// 규칙 없이 통과하는 이벤트는 `rule()` 이 `None` 이다 — "적용된 규칙 없음"을
+    /// 뷰어가 `(없음 — 통과)` 로 보여줄 수 있으려면 이 구분이 있어야 한다.
+    #[test]
+    fn outcome_rule_is_none_on_plain_passthrough() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+
+        assert_eq!(out.layer(), Layer::Passthrough);
+        assert_eq!(out.rule(), None);
     }
 
     /// P5 — 조합 출력에는 hyper 합성 flags 가 얹히지 않는다: `Caps lock + W = ▲` 는
