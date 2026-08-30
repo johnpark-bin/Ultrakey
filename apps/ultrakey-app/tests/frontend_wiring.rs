@@ -475,3 +475,101 @@ fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 아이콘(이슈 #16) — 정본 SVG 와 그것을 쓰는 세 자리가 어긋나지 않게 잡는다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn read_source_svg() -> String {
+    // 정본은 워크스페이스 루트의 assets/app-icon/ultrakey.svg 하나뿐이다.
+    let path = manifest_dir().join("../../assets/app-icon/ultrakey.svg");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("assets/app-icon/ultrakey.svg 을 읽지 못했다({path:?}): {e}"))
+}
+
+/// `<path ... d="..." ...>` 의 `d` 값만 등장 순서대로 뽑는다.
+fn path_data(svg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = svg;
+    while let Some(i) = rest.find("d=\"") {
+        rest = &rest[i + 3..];
+        let Some(j) = rest.find('"') else { break };
+        out.push(rest[..j].to_string());
+        rest = &rest[j + 1..];
+    }
+    out
+}
+
+/// ⭐ 이슈 #16 은 **원본 SVG 의 도형을 바꾸는 것을 금지한다.** `ui/index.html`
+/// 의 온보딩 아이콘은 정본을 인라인으로 복사해 넣은 것이라, 한쪽만 손대면
+/// 조용히 갈라진다 — 컴파일러도 다른 테스트도 그걸 잡지 못한다.
+#[test]
+fn index_html_의_아이콘_path는_정본_svg_와_같다() {
+    let source = path_data(&read_source_svg());
+    assert_eq!(
+        source.len(),
+        3,
+        "정본 assets/app-icon/ultrakey.svg 의 path 개수가 3 이 아니다 — \
+         scripts/generate-icons.sh 도 3 개를 전제한다."
+    );
+
+    let html = read_index_html();
+    let svg_start = html
+        .find("<svg class=\"app-icon\"")
+        .expect("ui/index.html 에 class=\"app-icon\" 인 인라인 SVG 가 없다 (이슈 #16)");
+    let svg_end = html[svg_start..]
+        .find("</svg>")
+        .expect("ui/index.html 의 app-icon SVG 에 </svg> 종료 태그가 없다")
+        + svg_start;
+    let inline = path_data(&html[svg_start..svg_end]);
+
+    assert_eq!(
+        inline, source,
+        "ui/index.html 의 온보딩 아이콘 path 가 정본 assets/app-icon/ultrakey.svg 와 \
+         다르다. 한쪽만 고치면 앱 번들·메뉴바 아이콘과 온보딩 아이콘의 모양이 \
+         갈라진다 — 정본을 고친 뒤 그 `d` 를 index.html 에 그대로 옮겨라."
+    );
+}
+
+/// 메뉴바는 **template 이미지**를 써야 다크/라이트가 자동 대응된다(이슈 #16).
+/// 앱 번들 아이콘(불투명 타일)을 되돌려 쓰면 메뉴바에서 사각 실루엣으로
+/// 뭉개지므로, `setup_tray` 가 전용 자산을 가리키는지 정적으로 검사한다.
+#[test]
+fn setup_tray_는_전용_메뉴바_template_자산을_쓴다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("include_bytes!(\"../icons/menubar-template.png\")"),
+        "setup_tray 가 icons/menubar-template.png 를 포함하지 않는다. 메뉴바 \
+         아이콘은 배경 없는 template 이미지여야 macOS 가 라이트/다크에 맞춰 \
+         다시 칠한다 — 앱 번들 아이콘(불투명 타일)을 쓰면 사각 실루엣이 된다."
+    );
+
+    let asset = manifest_dir().join("icons/menubar-template.png");
+    assert!(
+        asset.is_file(),
+        "icons/menubar-template.png 이 없다({asset:?}). \
+         ./scripts/generate-icons.sh 로 다시 만든다."
+    );
+}
+
+/// `tauri.conf.json` 의 `bundle.icon` 이 실제로 존재하는 파일만 가리키는지 —
+/// 아이콘을 갈아 끼우면서 파일명을 바꾸면 번들에 옛 아이콘이 남거나 빌드가
+/// 깨진다.
+#[test]
+fn bundle_icon_목록의_파일이_전부_존재한다() {
+    let conf = read_tauri_conf();
+    let icons = conf["bundle"]["icon"]
+        .as_array()
+        .expect("tauri.conf.json 의 bundle.icon 이 배열이 아니다");
+    assert!(!icons.is_empty(), "tauri.conf.json 의 bundle.icon 이 비어 있다");
+
+    for entry in icons {
+        let rel = entry.as_str().expect("bundle.icon 항목이 문자열이 아니다");
+        let path = manifest_dir().join(rel);
+        assert!(
+            path.is_file(),
+            "tauri.conf.json 의 bundle.icon 이 가리키는 {rel} 가 없다({path:?}). \
+             ./scripts/generate-icons.sh 로 다시 만든다."
+        );
+    }
+}

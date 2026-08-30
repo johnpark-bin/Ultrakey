@@ -965,6 +965,80 @@ Ultrakey 의 탭은 그것을 물리 입력과 구분하지 않는다 — 즉 **
 
 ---
 
+## 항목 8 — 앱 아이콘 (이슈 #16)
+
+아이콘 교체는 자동 테스트로 "보인다"를 증명할 수 없다. `frontend_wiring.rs` 가 지키는 것은
+**정합**(정본 SVG ↔ 온보딩 인라인 사본, `setup_tray` 가 template 자산을 쓰는지,
+`bundle.icon` 이 실재 파일을 가리키는지)까지이고, 실제로 화면에 그려진 모양은 눈으로 봐야 한다.
+설계 근거와 재생성 절차는 [`icons.md`](icons.md).
+
+| # | 절차 | 기대 |
+| :--- | :--- | :--- |
+| 1 | `./scripts/generate-icons.sh` → `./scripts/build-signed.sh` → `open …/Ultrakey.app` | 번들 `Contents/Resources/icon.icns` 가 `apps/ultrakey-app/icons/icon.icns` 와 같은 해시다 |
+| 2 | Finder 에서 `Ultrakey.app` 을 아이콘 뷰로 본다 · `Get Info` 를 연다 | 새 아이콘이 보인다. 옛 아이콘이 보이면 캐시 문제다 → [`icons.md`](icons.md) §4 |
+| 3 | 메뉴바 아이콘을 본다 | 배경 없는 선화 실루엣이다. **둥근 사각형 덩어리로 보이면 template 이 아니라 앱 타일을 쓰고 있는 것이다** |
+| 4 | 권한 미부여 상태로 온보딩 모달을 띄운다 | 제목 위에 아이콘이 있고, 라이트에서 검은 선화 / 다크에서 흰 선화다 |
+
+### 📌 실측 결과 (2026-08-30, 이슈 #16 / `feat/app-icon`)
+
+#### ⚠️ 관찰 방법과 그 한계 — 먼저 읽어라
+
+- **Dock 아이콘은 이 앱에 존재하지 않는다.** `set_activation_policy(ActivationPolicy::Accessory)`
+  로 상주 에이전트 앱이기 때문이다(F-10 §3). 그래서 번들 아이콘 증거는 **Finder 아이콘 뷰와
+  `Get Info`** 로 남겼다 — 같은 `.icns` 를 같은 Launch Services 경로로 그리는 자리다.
+- ⭐ **온보딩 모달은 Accessibility 권한이 없어야 뜬다.** 이 기기에는 이미 권한이 부여돼 있어
+  그대로는 뜨지 않는다. **`tccutil reset` 으로 권한을 회수하지 않았다** — 재부여 실패 시 개발
+  환경이 망가지는 위험 대비 얻는 것이 작다(§7-c 와 같은 판단). 대신 **서명된 `.app` 을
+  스크래치패드에 복사해 번들 ID 만 `app.ultrakey.IconShot` 으로 바꿔 재서명**하고 그것을 띄웠다.
+  권한이 없는 신원이라 온보딩 경로가 그대로 실행된다. **저장소의 번들 ID 와 실제 앱의 TCC
+  기록은 건드리지 않았다**(확인: 원본 `Info.plist` 의 `CFBundleIdentifier` 는 그대로
+  `app.ultrakey.Ultrakey`). 촬영 후 사본은 종료·삭제했다.
+- ⚠️ **이 기기의 두 디스플레이는 모두 1x(비Retina)** 다(3840×1600 · 2560×1440, `UI Looks like`
+  가 해상도와 같다). 즉 메뉴바 아이콘은 36px 자산을 18pt 로 **축소**해 그린 결과를 본 것이다.
+  Retina 에서의 1:1(36px) 렌더는 **확인하지 못했다.**
+- ⚠️ **메뉴바의 라이트/다크 대비는 확인하지 못했다.** 이 기기의 배경화면이 어두워 시스템 외관을
+  라이트로 두어도 메뉴바가 어둡게 합성된다 — 두 외관 모두에서 **흰 실루엣**만 관찰됐다.
+  검은 실루엣(밝은 메뉴바) 경우는 관찰되지 않았다.
+
+#### ✅ 통과한 것
+
+| # | 결과 |
+| :--- | :--- |
+| 1 | ✅ 빌드·서명 통과. 번들 ID `app.ultrakey.Ultrakey` 유지, universal(x86_64+arm64). 번들 안 `Contents/Resources/icon.icns` 와 저장소의 `icons/icon.icns` 가 **같은 SHA-1**(`684dcce3…`) — 번들에 실제로 새 아이콘이 들어갔다 |
+| 2 | ✅ Finder 아이콘 뷰와 `Get Info` 모두 새 아이콘. **캐시 조작을 전혀 하지 않고** 바로 갱신됐다(`lsregister`·`killall` 미실행) |
+| 3 | ✅ 메뉴바에 배경 없는 선화 실루엣. 이전(앱 타일 재사용) 의 사각 덩어리가 아니다 |
+| 4 | ✅ 온보딩 모달 제목 위에 아이콘. **라이트에서 검은 선화, 다크에서 흰 선화**로 `currentColor` 가 외관을 따라간다 |
+
+#### 증거 스크린샷
+
+| 파일 | 무엇 |
+| :--- | :--- |
+| [`screenshots/issue-16-app-icon-getinfo.png`](screenshots/issue-16-app-icon-getinfo.png) | `Get Info` — 제목줄의 16pt 아이콘과 Preview 의 대형 아이콘(#2) |
+| [`screenshots/issue-16-app-icon-finder.png`](screenshots/issue-16-app-icon-finder.png) | Finder 아이콘 뷰의 `Ultrakey.app`(#2) |
+| [`screenshots/issue-16-menubar-icon.png`](screenshots/issue-16-menubar-icon.png) | 메뉴바 — 원본 배율과 6배 확대(#3) |
+| [`screenshots/issue-16-onboarding-light-dark.png`](screenshots/issue-16-onboarding-light-dark.png) | 온보딩 모달 라이트/다크 나란히(#4) |
+| [`screenshots/issue-16-icon-sizes.png`](screenshots/issue-16-icon-sizes.png) | 저장소에 커밋된 512·256·128·64·32px 자산을 **원본 배율로** 나란히 — 크기별 선 굵기 조정의 결과 |
+
+#### ⬜ 수행하지 못한 것 — 통과했다고 적지 않는다
+
+| 항목 | 이유 |
+| :--- | :--- |
+| **Retina(2x) 메뉴바 렌더** | 이 기기의 디스플레이가 둘 다 1x 다. 36px 자산이 18pt 에 1:1 로 떨어지는 것은 계산으로만 맞췄다 |
+| **밝은 메뉴바에서의 검은 실루엣** | 배경화면이 어두워 두 외관 모두 메뉴바가 어둡게 합성됐다 |
+| **아이콘 캐시 강제 갱신 경로** | 캐시 문제가 **발생하지 않아서** `lsregister -f`·`killall Finder` 를 실행할 일이 없었다. [`icons.md`](icons.md) §4 의 절차는 **미검증**이다 |
+| **Dock 아이콘** | 이 앱에는 존재하지 않는다(위 참조) |
+| **`.icns` 안의 16pt 표현** | `Get Info` 제목줄과 Finder 목록에서 작게 보이는 것까지는 확인했으나, 각 표현(`icon_16x16` 등)을 하나씩 뜯어 본 것은 아니다 |
+
+#### 검증 후 되돌린 것
+
+- 시스템 외관을 다크로 **잠시** 바꿨다가 **라이트로 복구**했다(복구 확인: `dark mode = false`).
+- 온보딩 촬영용 사본(`IconShot.app`, 번들 ID `app.ultrakey.IconShot`)을 **종료·삭제**했다.
+  이 사본은 권한을 요구하지 않으므로 TCC 목록에 항목을 남기지 않는다.
+- 촬영을 위해 잠시 종료했던 **기존 인스턴스(메인 체크아웃 빌드)가 다시 떠 있는 것을 확인**했다.
+- ⛔ **키체인·TCC·Launch Services 데이터베이스는 건드리지 않았다.**
+
+---
+
 ## 결과 기록
 
 각 항목을 수행한 뒤 **통과 여부와 관찰한 것**을 이슈 #5 또는 후속 이슈에 남긴다.
