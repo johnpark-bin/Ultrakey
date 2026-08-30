@@ -4260,6 +4260,7 @@ dependencies = [
 name = "ultrakey-app"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "crossbeam-channel",
  "global-hotkey",
  "serde",

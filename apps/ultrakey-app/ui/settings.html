@@ -747,6 +747,19 @@
     <section id="panel-general" class="tabpanel" role="tabpanel" aria-labelledby="tab-general" hidden>
       <h1 id="general-heading"></h1>
 
+      <!-- ⭐ 언어 선택(D6, 이슈 #39, `localization-and-input-sources.md` §3.1.2-a).
+           "System" 만 카탈로그에서 번역하고, 나머지 선택지는 각 언어의 자기
+           이름(endonym)을 백엔드가 보내는 `bootstrap.languages` 로 그린다 —
+           지금 UI 를 읽을 수 없는 사람도 자기 언어를 찾을 수 있어야 하는 유일한
+           컨트롤이라 프런트에 하드코딩하지 않는다. -->
+      <div class="row">
+        <label>
+          <span id="general-language-label"></span>
+          <select id="general-language"></select>
+        </label>
+      </div>
+      <p class="hint" id="general-language-hint"></p>
+
       <div class="row">
         <label class="checkbox-row">
           <input type="checkbox" id="launch-on-login" data-key="general.launchOnLogin" />
@@ -757,6 +770,9 @@
         <button id="version-btn"></button>
       </div>
       <p class="hint why" id="launch-on-login-why"></p>
+      <!-- ⭐ B-4(이슈 #39, §3.5-a) — `launchOnLoginStatus` 가 `requires-approval`
+           일 때만 보이는 안내 행(다른 탭의 renderHiddenNote 와 같은 "② 숨김" 패턴). -->
+      <div id="launch-on-login-requires-approval"></div>
 
       <div id="about" hidden>
         <p><span id="about-bundle-id-label"></span>: <span id="about-bundle-id"></span></p>
@@ -955,6 +971,8 @@ if (!tauri || !tauri.core) {
     $("keyboards-functionkeys-heading").textContent = t("preferences.keyboards.group.functionKeys.title");
 
     $("general-heading").textContent = t("settings.general.heading");
+    $("general-language-label").textContent = t("settings.general.language");
+    $("general-language-hint").textContent = t("settings.general.language.hint");
     $("launch-on-login-label").textContent = t("settings.general.launch_on_login");
     $("launch-on-login-why").textContent = t("settings.general.launch_on_login.why");
     $("auto-update-label").textContent = t("settings.general.auto_update");
@@ -1019,6 +1037,29 @@ if (!tauri || !tauri.core) {
 
   function setSelectValue(id, value) {
     $(id).value = value;
+  }
+
+  // ⭐ General 탭 언어 선택 팝업(D6, 이슈 #39, §3.1.2-a). `System` 만 카탈로그
+  // 문구(`settings.general.language.system`)로 번역한다 — 나머지 선택지는
+  // 백엔드가 보낸 `endonym`(그 언어 자신의 이름)을 **그대로** 쓰고 절대
+  // 번역하지 않는다. 지금 UI 를 못 읽는 사람도 이 목록에서는 자기 언어를 찾을
+  // 수 있어야 하기 때문이다 — 목록을 프런트에 하드코딩하지 않는 것도 같은
+  // 이유(로케일이 늘 때 여기와 백엔드 두 곳을 고쳐야 하는 drift 를 막는다).
+  function populateLanguageSelect(languages) {
+    const select = $("general-language");
+    select.innerHTML = "";
+
+    const systemOpt = document.createElement("option");
+    systemOpt.value = "system";
+    systemOpt.textContent = t("settings.general.language.system");
+    select.append(systemOpt);
+
+    for (const lang of languages) {
+      const opt = document.createElement("option");
+      opt.value = lang.code;
+      opt.textContent = lang.endonym;
+      select.append(opt);
+    }
   }
 
   // ⭐ 팝업 항목 라벨 규약 — 키캡 각인(`esc`·`left control`·`F1`·`( )`)은 물리 키보드에
@@ -1896,6 +1937,15 @@ if (!tauri || !tauri.core) {
     // F-10 — 이제 실제로 동작하는 두 항목(나머지 General 컨트롤은 F-12/F-13 범위라 여전히 비활성).
     $("launch-on-login").checked = state.general.launchOnLogin;
     $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;
+    // ⭐ B-4(이슈 #39, §3.5-a) — `requires-approval` 일 때만 안내 행을 보인다.
+    renderHiddenNote(
+      "launch-on-login-requires-approval",
+      state.general.launchOnLoginStatus === "requires-approval",
+      "settings.general.launch_on_login.requires_approval",
+      "hint", "why",
+    );
+    // ⭐ D6(이슈 #39, §3.1.2-a) — `null` = "시스템 설정 따름"(키 부재).
+    setSelectValue("general-language", state.general.language || "system");
     renderWarnings(state.warnings);
 
     if (state.pendingConflict) {
@@ -2031,25 +2081,53 @@ if (!tauri || !tauri.core) {
     about.hidden = !about.hidden;
   });
 
+  // ⭐ A-3(D6, 이슈 #39, §3.1.2-a) — `settings_bootstrap` 을 (다시) 불러 화면
+  // 전체를 그리는 단일 경로. `boot()` 의 최초 렌더와, 언어를 바꾼 뒤의 재렌더가
+  // 이 함수 하나를 공유한다 — 문자열을 부분 갱신하는 별도 코드를 만들면 라벨을
+  // 빠뜨리기 쉽다는 것이 이 통합의 근거다. `preferredTab` 을 생략하면 서버가
+  // 기억하는 `lastTab` 을 쓴다(최초 부팅 때의 동작).
+  async function loadAndRenderBootstrap(preferredTab) {
+    const bootstrap = await invoke("settings_bootstrap");
+    STRINGS = bootstrap.strings;
+    applyStrings();
+    populateSourceSelects(bootstrap.state.sourceKeys);
+    populateTrackpadAreaSelect(bootstrap.state.trackpadAreas);
+    populatePresetSelects(bootstrap.state.presetOptions);
+    populateLanguageSelect(bootstrap.languages);
+    renderState(bootstrap.state);
+    renderGeneral(bootstrap.meta);
+    if (bootstrap.notice) {
+      showNotice(tf(bootstrap.notice.messageKey, [bootstrap.notice.arg]));
+    }
+    // 탭 화이트리스트 검증만 하고 저장하지 않는다(위 activateTab 주석 참고) —
+    // 언어를 바꾸는 것만으로 ui.lastTab 이 갱신되면 안 된다.
+    activateTab(preferredTab !== undefined ? preferredTab : (bootstrap.state.lastTab || "hyperkey"), { persist: false });
+    return bootstrap;
+  }
+
   async function boot() {
     try {
-      const bootstrap = await invoke("settings_bootstrap");
-      STRINGS = bootstrap.strings;
-      applyStrings();
-      populateSourceSelects(bootstrap.state.sourceKeys);
-      populateTrackpadAreaSelect(bootstrap.state.trackpadAreas);
-      populatePresetSelects(bootstrap.state.presetOptions);
-      renderState(bootstrap.state);
-      renderGeneral(bootstrap.meta);
-      if (bootstrap.notice) {
-        showNotice(tf(bootstrap.notice.messageKey, [bootstrap.notice.arg]));
-      }
-      // 최초 렌더 — 탭 화이트리스트 검증만 하고 저장하지 않는다(위 activateTab 주석 참고).
-      activateTab(bootstrap.state.lastTab || "hyperkey", { persist: false });
+      await loadAndRenderBootstrap();
     } catch (err) {
       showFatal("Failed to render: " + String(err));
     }
   }
+
+  // ⭐ D6 — `general.language` 는 범용 `commit()` 위임 경로를 쓰지 않는다(그래서
+  // 이 `<select>` 에는 `data-key` 를 붙이지 않았다): "System" 은 값이 아니라
+  // 키 **삭제**(`null`)로 보내야 하고, 응답으로 문자열 카탈로그 전체가 바뀌므로
+  // `settings_set` 의 반환값이 아니라 `settings_bootstrap` 을 다시 불러야 한다
+  // (§3.1.2-a "적용 시점" — 재시작을 요구하지 않는다).
+  $("general-language").addEventListener("change", async (ev) => {
+    const raw = ev.target.value;
+    const value = raw === "system" ? null : raw;
+    try {
+      await invoke("settings_set", { key: "general.language", value });
+      await loadAndRenderBootstrap(activeTab);
+    } catch (err) {
+      showFatal("Failed to change language: " + String(err));
+    }
+  });
 
   boot();
 }
