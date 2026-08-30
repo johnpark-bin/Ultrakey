@@ -20,11 +20,11 @@ pub struct KoreanSettings {
     /// F-16.1 `Shift + Space 로 입력 소스 변경`. 기본 ☐.
     #[serde(default)]
     pub shift_space_switches_input_source: bool,
-    /// F-16.2 `한/영 키로 입력 소스 변경`. 기본 ☐. ⚠️ §3.2 의 키코드가 `(미확정)`인
-    /// 동안 [`KoreanSettings::to_rules`] 는 이 값을 읽어도 규칙을 내지 않는다(D-K8).
+    /// F-16.2 `한/영 키로 입력 소스 변경`. 기본 ☐. §3.2 의 키코드가 근거 3중으로
+    /// 해소되어(`KeyCode::JIS_KANA`, 2단계) [`KoreanSettings::to_rules`] 가 규칙을 낸다.
     #[serde(default)]
     pub han_eng_switches_input_source: bool,
-    /// F-16.3 `한자 키로 한자 변환`. 기본 ☐. 상동(D-K8) — 규칙을 내지 않는다.
+    /// F-16.3 `한자 키로 한자 변환`. 기본 ☐. 상동 — 규칙을 낸다(`KeyCode::JIS_EISU`).
     #[serde(default)]
     pub hanja_key_converts_hanja: bool,
     /// F-16.4 `₩ 키로 백틱(\`) 입력`. 기본 ☐.
@@ -80,13 +80,9 @@ impl KoreanSettings {
 
     /// 켜진 F-16 규칙을 `RuleId` 오름차순으로 정렬해 반환한다.
     ///
-    /// ⭐ **1단계 범위**: F-16.1(`Korean(13)`)·F-16.4(`Korean(16)`) 두 규칙만 낸다.
-    /// `han_eng_switches_input_source`/`hanja_key_converts_hanja` 가 `true` 여도
-    /// **규칙을 하나도 내지 않는다** — `lang1`/`lang2` 의 virtual keycode 가
-    /// `docs/spec/korean-input.md` §3.2 기준 `(미확정)`이기 때문이다(D-K8). 명세 §8
-    /// 수용 기준: "설정 파일에 켜져 있어도 발화하지 않는다."
-    //
-    // 2단계(F-16.2 한/영 · F-16.3 한자)가 이 아래에 얹힌다.
+    /// ⭐ **2단계**: F-16.2(`Korean(14)` 한/영)·F-16.3(`Korean(15)` 한자)가 여기 얹혔다
+    /// (D-K14) — §3.2 의 키코드가 근거 3중으로 해소되어(`docs/spec/korean-input.md`
+    /// §3.2) 더 이상 착수를 막지 않는다.
     pub fn to_rules(&self) -> Vec<KoreanRule> {
         let mut rules = Vec::new();
 
@@ -99,6 +95,37 @@ impl KoreanSettings {
                 out_keycode: KeyCode::SPACE,
                 // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1) — D-K7 표.
                 out_flags: EventFlags(0x0004_0001),
+            });
+        }
+
+        // F-16.2 한/영 — D-K14. ⭐ `requires_korean_ime = false`. 한/영은 *입력
+        // 소스를 바꾸는* 키다. IME 활성을 요구하면 한국어→영문 전환만 되고, 영문
+        // 상태에서는 게이트가 거짓이라 발화하지 않아 한국어로 되돌아올 수 없는
+        // **편도 키**가 된다(명세 §3.1). 조건은 modifier 부재 + 앱 제외뿐이다.
+        if self.han_eng_switches_input_source {
+            rules.push(KoreanRule {
+                id: RuleId::Korean(14),
+                trigger_key: KeyCode::JIS_KANA,
+                trigger: KoreanTrigger::NoModifier,
+                requires_korean_ime: false,
+                out_keycode: KeyCode::SPACE,
+                // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1) — F-16.1 과 동일 출력.
+                out_flags: EventFlags(0x0004_0001),
+            });
+        }
+
+        // F-16.3 한자 — D-K14. ⭐ 출력이 `return` 이라 오발 시 폼 제출·의도치 않은
+        // 줄바꿈 같은 되돌리기 어려운 부작용이 난다(명세 §3.1) — 그래서 modifier
+        // 부재와 한국어 IME 활성 조건을 **둘 다** 요구한다(`requires_korean_ime = true`).
+        if self.hanja_key_converts_hanja {
+            rules.push(KoreanRule {
+                id: RuleId::Korean(15),
+                trigger_key: KeyCode::JIS_EISU,
+                trigger: KoreanTrigger::NoModifier,
+                requires_korean_ime: true,
+                out_keycode: KeyCode::RETURN,
+                // ALTERNATE(0x80000) | NX_DEVICERALTKEYMASK(0x40) — D-K14 표.
+                out_flags: EventFlags(0x0008_0040),
             });
         }
 
@@ -200,38 +227,56 @@ mod tests {
         assert!(rules[0].requires_korean_ime);
     }
 
-    /// 두 규칙이 동시에 켜지면 `RuleId` 오름차순(`Korean(13)` 다음 `Korean(16)`)으로
-    /// 정렬돼 반환된다.
+    /// 네 규칙이 동시에 켜지면 `RuleId` 오름차순(`Korean(13)` → `Korean(14)` →
+    /// `Korean(15)` → `Korean(16)`)으로 정렬돼 반환된다.
     #[test]
     fn to_rules_sorts_by_rule_id_ascending() {
         let s = KoreanSettings {
             won_key_types_backtick: true,
             shift_space_switches_input_source: true,
+            han_eng_switches_input_source: true,
+            hanja_key_converts_hanja: true,
             ..KoreanSettings::default()
         };
         let rules = s.to_rules();
-        assert_eq!(rules.len(), 2);
+        assert_eq!(rules.len(), 4);
         assert_eq!(rules[0].id, RuleId::Korean(13));
-        assert_eq!(rules[1].id, RuleId::Korean(16));
+        assert_eq!(rules[1].id, RuleId::Korean(14));
+        assert_eq!(rules[2].id, RuleId::Korean(15));
+        assert_eq!(rules[3].id, RuleId::Korean(16));
     }
 
-    /// ⭐ 명세 §8 수용 기준 — 2단계 설정을 켜도 규칙을 내지 않는다(D-K8).
+    /// ⭐ 2단계(D-K14) — §3.2 의 키코드가 해소되어(`docs/spec/korean-input.md` §3.2)
+    /// 이제는 켜면 규칙을 낸다. 1단계 때 이 자리에 있던 "규칙을 내지 않는다" 테스트는
+    /// 뜻이 뒤집혔다 — 착수를 막던 전제(D-K8)가 근거 3중으로 해소됐기 때문이다.
     #[test]
-    fn to_rules_emits_nothing_for_stage_two_settings_even_when_enabled() {
+    fn to_rules_emits_stage_two_rules_when_enabled() {
         let s = KoreanSettings {
             han_eng_switches_input_source: true,
             hanja_key_converts_hanja: true,
             ..KoreanSettings::default()
         };
-        assert!(
-            s.to_rules().is_empty(),
-            "2단계(한/영·한자) 설정은 켜져 있어도 규칙을 내면 안 된다"
-        );
+        let rules = s.to_rules();
+        assert_eq!(rules.len(), 2, "2단계(한/영·한자) 두 규칙이 나와야 한다: {rules:?}");
+
+        assert_eq!(rules[0].id, RuleId::Korean(14));
+        assert_eq!(rules[0].trigger_key, KeyCode::JIS_KANA);
+        assert_eq!(rules[0].trigger, KoreanTrigger::NoModifier);
+        // ⭐ 한/영은 입력 소스를 바꾸는 키라 IME 조건을 걸면 편도 키가 된다(D-K14).
+        assert!(!rules[0].requires_korean_ime);
+        assert_eq!(rules[0].out_keycode, KeyCode::SPACE);
+
+        assert_eq!(rules[1].id, RuleId::Korean(15));
+        assert_eq!(rules[1].trigger_key, KeyCode::JIS_EISU);
+        assert_eq!(rules[1].trigger, KoreanTrigger::NoModifier);
+        // ⭐ 한자는 출력이 return 이라 되돌리기 어렵다 — IME 조건을 반드시 건다(D-K14).
+        assert!(rules[1].requires_korean_ime);
+        assert_eq!(rules[1].out_keycode, KeyCode::RETURN);
     }
 
-    /// 4개 F-16 항목이 전부 켜져도 2단계 두 항목은 여전히 규칙에 반영되지 않는다.
+    /// 4개 F-16 항목이 전부 켜지면 네 규칙 전부가 나온다(F-16.1~F-16.4).
     #[test]
-    fn to_rules_ignores_stage_two_settings_alongside_stage_one_rules() {
+    fn to_rules_emits_all_four_rules_when_everything_is_enabled() {
         let s = KoreanSettings {
             shift_space_switches_input_source: true,
             han_eng_switches_input_source: true,
@@ -240,6 +285,6 @@ mod tests {
             disable_in_remote_desktop: true,
         };
         let rules = s.to_rules();
-        assert_eq!(rules.len(), 2, "1단계 두 규칙만 나와야 한다: {rules:?}");
+        assert_eq!(rules.len(), 4, "F-16.1~F-16.4 네 규칙 전부가 나와야 한다: {rules:?}");
     }
 }

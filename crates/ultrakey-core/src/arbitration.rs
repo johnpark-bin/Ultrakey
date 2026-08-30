@@ -2244,9 +2244,38 @@ mod tests {
         }
     }
 
+    /// F-16.2(`Korean(14)`) 한/영 — `docs/spec/korean-input.md` §3.2·D-K14 표 그대로.
+    fn korean_rule_han_eng() -> KoreanRule {
+        KoreanRule {
+            id: RuleId::Korean(14),
+            trigger_key: KeyCode::JIS_KANA,
+            trigger: KoreanTrigger::NoModifier,
+            requires_korean_ime: false,
+            out_keycode: KeyCode::SPACE,
+            out_flags: EventFlags(0x0004_0001), // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)
+        }
+    }
+
+    /// F-16.3(`Korean(15)`) 한자 — `docs/spec/korean-input.md` §3.2·D-K14 표 그대로.
+    fn korean_rule_hanja() -> KoreanRule {
+        KoreanRule {
+            id: RuleId::Korean(15),
+            trigger_key: KeyCode::JIS_EISU,
+            trigger: KoreanTrigger::NoModifier,
+            requires_korean_ime: true,
+            out_keycode: KeyCode::RETURN,
+            out_flags: EventFlags(0x0008_0040), // ALTERNATE(0x80000) | NX_DEVICERALTKEYMASK(0x40)
+        }
+    }
+
     fn korean_config() -> EngineConfig {
         let mut cfg = EngineConfig::default();
-        cfg.rules.korean_rules = vec![korean_rule_shift_space(), korean_rule_won_grave()];
+        cfg.rules.korean_rules = vec![
+            korean_rule_shift_space(),
+            korean_rule_han_eng(),
+            korean_rule_hanja(),
+            korean_rule_won_grave(),
+        ];
         cfg
     }
 
@@ -2625,5 +2654,251 @@ mod tests {
         assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
         assert_eq!(out.emitted()[0].keycode, KeyCode::ANSI_GRAVE);
         assert_eq!(out.emitted()[0].flags, EventFlags(0x0008_0020));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // F-16 2단계 — 한/영(F-16.2)·한자(F-16.3) — `docs/spec/korean-input.md` §3.2·D-K14
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// 시나리오 1 — F-16.2: modifier 없는 `0x68`(`JIS_KANA`) keyDown → `space` + control 로 치환.
+    #[test]
+    fn f16_2_no_modifier_han_eng_is_substituted_with_space_control() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted().len(), 1);
+        assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(out.emitted()[0].flags, EventFlags(0x0004_0001));
+    }
+
+    /// 시나리오 2 — ⭐ F-16.2: 한국어 IME 가 `Inactive` 여도 발화한다.
+    ///
+    /// **왜 이것이 옳은가.** 한/영 키는 *입력 소스를 바꾸는* 키다 — 한국어 상태에서
+    /// 영문으로 넘어갈 때도, 영문 상태에서 한국어로 되돌아올 때도 똑같이 눌린다.
+    /// `requires_korean_ime` 조건을 걸면 "한국어일 때만 발화" 가 되어, 영문 상태에서는
+    /// 게이트가 거짓이라 발화하지 않는다 — **한국어→영문 전환만 가능하고 되돌아올 수
+    /// 없는 편도 키**가 된다. 이것이 D-K14 가 F-16.2 를 `requires_korean_ime = false`
+    /// 로 정한 이유이자, 이 프로젝트에서 뒤집히기 가장 쉬운 지점이다(명세 §3.1).
+    #[test]
+    fn f16_2_fires_even_when_korean_ime_is_inactive_to_avoid_a_one_way_key() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            korean_ime: KoreanImeState::Inactive,
+            ..Default::default()
+        };
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), gates, Millis(0));
+
+        assert_eq!(
+            out.layer(),
+            Layer::KoreanInput,
+            "IME 가 Inactive 여도 한/영은 발화해야 한다 — 그렇지 않으면 영문→한국어 전환이 막힌다"
+        );
+        assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(out.emitted()[0].flags, EventFlags(0x0004_0001));
+    }
+
+    /// 시나리오 3 — F-16.2: 한국어 IME 가 `Unknown`(판정 불가) 이어도 발화한다 —
+    /// `requires_korean_ime = false` 라 애초에 IME 조건을 보지 않는다.
+    #[test]
+    fn f16_2_fires_even_when_korean_ime_is_unknown() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot::default();
+        assert_eq!(gates.korean_ime, KoreanImeState::Unknown);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), gates, Millis(0));
+
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
+    }
+
+    /// 시나리오 4 — F-16.3: IME `Active` + modifier 없는 `0x66`(`JIS_EISU`) → `return`
+    /// + right option 으로 치환.
+    #[test]
+    fn f16_3_ime_active_no_modifier_hanja_is_substituted_with_return_right_option() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            korean_ime: KoreanImeState::Active,
+            ..Default::default()
+        };
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
+
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted().len(), 1);
+        assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::RETURN);
+        assert_eq!(out.emitted()[0].flags, EventFlags(0x0008_0040));
+    }
+
+    /// 시나리오 5 — ⭐ F-16.3: IME `Inactive` → 발화하지 않는다. 출력이 `return` 이라
+    /// 오발하면 폼 제출 같은 되돌리기 어려운 부작용이 나므로 조건을 엄격히 요구한다.
+    #[test]
+    fn f16_3_ime_inactive_does_not_intervene() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            korean_ime: KoreanImeState::Inactive,
+            ..Default::default()
+        };
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
+
+        assert_ne!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// 시나리오 6 — ⭐ F-16.3: IME `Unknown`(판정 불가) → 발화하지 않는다(fail-closed,
+    /// 명세 §3.3). `return` 을 내는 규칙이라 판정 불가 상태에서 발화하는 쪽보다
+    /// 발화하지 않는 쪽이 안전하다.
+    #[test]
+    fn f16_3_ime_unknown_fails_closed() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot::default();
+        assert_eq!(gates.korean_ime, KoreanImeState::Unknown);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
+
+        assert_ne!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// 시나리오 7 — 두 규칙 모두: modifier 가 하나라도 눌려 있으면 개입하지 않는다
+    /// (`⌘`·`⇧` 각각으로 확인).
+    #[test]
+    fn f16_2_and_f16_3_do_not_intervene_when_a_modifier_is_held() {
+        let cfg = korean_config();
+        let gates = GateSnapshot {
+            korean_ime: KoreanImeState::Active,
+            ..Default::default()
+        };
+
+        let cases: &[(KeyCode, u64)] = &[
+            (KeyCode::LEFT_COMMAND, 0x0010_0008), // COMMAND | NX_DEVICELCMDKEYMASK
+            (KeyCode::LEFT_SHIFT, 0x0002_0002),   // SHIFT | NX_DEVICELSHIFTKEYMASK
+        ];
+
+        for (modifier, press_flags) in cases {
+            for (trigger_key, expect_msg) in
+                [(KeyCode::JIS_KANA, "한/영"), (KeyCode::JIS_EISU, "한자")]
+            {
+                let mut arb = Arbiter::new(&cfg);
+                arb.arbitrate(&cfg, &press_modifier(*modifier, *press_flags), gates, Millis(0));
+                let out = arb.arbitrate(&cfg, &key_down(trigger_key, EventFlags(*press_flags)), gates, Millis(10));
+
+                assert_ne!(
+                    out.layer(),
+                    Layer::KoreanInput,
+                    "{expect_msg} 규칙이 modifier {:#04X} 와 함께 눌렀는데 개입했다",
+                    modifier.0
+                );
+                assert_eq!(out.disposition(), Disposition::Pass);
+            }
+        }
+    }
+
+    /// 시나리오 8 — ⭐⭐ F-16.2·F-16.3: 트리거가 `FlagsChanged` 로 도착해도 같은
+    /// 결과가 나온다(D-K13).
+    ///
+    /// **근거**: Chromium `keyboard_code_conversion_mac.mm` 이 남긴 단서 —
+    /// "macOS Eisu/Kana key events have a space symbol as `event.characters`, but
+    /// the symbol is not generated for users and the event is just used for
+    /// enabling/disabling an IME." 즉 이 두 키는 **문자를 내지 않는 IME 토글 전용
+    /// 이벤트**이고, `CGEventTap` 에 `KeyDown` 으로 도착하는지 `FlagsChanged` 로
+    /// 도착하는지는 실기기 없이 확인되지 않았다(§3.2). 이 프로젝트는 정확히 이
+    /// "이벤트 모양을 가정한" 지점에서 세 번 데였다 — M1 이 `FlagsChanged` 를 흘려
+    /// hyper 가 발동하지 않았고, PR #23 은 modifier 출력을 `KeyDown`(flags 0)으로
+    /// 합성했다. 그래서 구현은 도착 종류를 가정하지 않고 `normalize_kind()` 로 환원한
+    /// `kind` 만 본다(D-K13) — 이 테스트가 그 불변식을 검증한다.
+    #[test]
+    fn f16_2_and_f16_3_fire_the_same_way_when_trigger_arrives_as_flags_changed() {
+        let cfg = korean_config();
+
+        // 한/영 — FlagsChanged 로 도착.
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(out.emitted()[0].flags, EventFlags(0x0004_0001));
+
+        // 한자 — FlagsChanged 로 도착. IME Active 필요.
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            korean_ime: KoreanImeState::Active,
+            ..Default::default()
+        };
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(out.emitted()[0].keycode, KeyCode::RETURN);
+        assert_eq!(out.emitted()[0].flags, EventFlags(0x0008_0040));
+    }
+
+    /// 시나리오 9 — 앱 제외 게이트가 켜지면 두 규칙 다 통과된다.
+    #[test]
+    fn f16_2_and_f16_3_pass_through_when_app_excluded() {
+        let cfg = korean_config();
+        let excluded_gates = GateSnapshot {
+            korean_app_excluded: true,
+            korean_ime: KoreanImeState::Active,
+            ..Default::default()
+        };
+
+        let mut arb = Arbiter::new(&cfg);
+        let han_eng_out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), excluded_gates, Millis(0));
+        assert_ne!(han_eng_out.layer(), Layer::KoreanInput);
+        assert_eq!(han_eng_out.disposition(), Disposition::Pass);
+
+        let hanja_out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), excluded_gates, Millis(10));
+        assert_ne!(hanja_out.layer(), Layer::KoreanInput);
+        assert_eq!(hanja_out.disposition(), Disposition::Pass);
+    }
+
+    /// 시나리오 10 — keyUp 래치(D-K6)가 두 규칙에도 적용된다: 치환된 keyDown 뒤의
+    /// keyUp 도 같은 keycode/flags 로 치환된다.
+    #[test]
+    fn f16_2_and_f16_3_key_up_replays_the_latched_substitution() {
+        let cfg = korean_config();
+
+        // 한/영.
+        let mut arb = Arbiter::new(&cfg);
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+        assert_eq!(up.layer(), Layer::KoreanInput);
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001));
+
+        // 한자 — IME Active 로 keyDown, keyUp 시점엔 Inactive 로 바뀌어도(D-K6:
+        // "조건을 다시 평가하지 않는다") 여전히 같은 치환이 나가야 한다.
+        let mut arb = Arbiter::new(&cfg);
+        let active_gates = GateSnapshot {
+            korean_ime: KoreanImeState::Active,
+            ..Default::default()
+        };
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), active_gates, Millis(0));
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0008_0040));
+
+        let inactive_gates = GateSnapshot {
+            korean_ime: KoreanImeState::Inactive,
+            ..Default::default()
+        };
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_EISU, EventFlags::NONE), inactive_gates, Millis(20));
+        assert_eq!(up.layer(), Layer::KoreanInput);
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].keycode, KeyCode::RETURN);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0008_0040));
     }
 }

@@ -443,16 +443,21 @@ fn settings_html_에_korean_탭_버튼_패널_5개_data_key가_있다() {
     }
 }
 
-/// ⭐ 명세 §8 수용 기준 "F-16.2·F-16.3 은 UI 에서 dimmed" 의 자동 검증 — 한/영·한자
-/// 체크박스는 `disabled` 이고, 각각 사유를 설명하는 `.hint.why` 문단(`.why` id)을 갖는다
-/// (`General` 탭 미구현 컨트롤과 같은 표현, D-K8·`docs/spec/korean-input.md` §5#1).
+/// ⭐ 이 테스트는 뜻이 뒤집혔다. 1단계 때는 §3.2 의 키코드가 `(미확정)`이라 한/영·
+/// 한자 컨트롤이 `disabled` + 배지 + `.hint.why` 사유 문구로 dimmed 출하됐다(D-K8).
+/// 2단계에서 그 전제 — `lang1`/`lang2` 의 virtual keycode — 가 근거 3중(W3C
+/// `uievents-key` #55·로컬 SDK 헤더 실측·Chromium 구현, `docs/spec/korean-input.md`
+/// §3.2)으로 해소됐다. 그래서 이제는 정반대를 검증한다: 두 컨트롤이 `disabled` 가
+/// **아니고**, 배지가 **없으며**, 조작 가능한 사실을 담은 부제(`.hint`)를 갖는다.
+/// ⛔ "실기기 미검증" 배지는 UI 에 두지 않는다(D-K16) — 그것은 개발자용 증거 등급
+/// 메타 정보이지 사용자가 조작할 수 있는 사실이 아니다.
 #[test]
-fn settings_html_의_한영_한자_컨트롤은_dimmed이고_사유_문구를_가진다() {
+fn settings_html_의_한영_한자_컨트롤은_활성이고_hint_문구를_가진다() {
     let html = read_settings_html();
 
-    for (checkbox_id, why_id, badge_id) in [
-        ("korean-han-eng", "korean-han-eng-why", "korean-han-eng-badge"),
-        ("korean-hanja", "korean-hanja-why", "korean-hanja-badge"),
+    for (checkbox_id, hint_id, badge_id) in [
+        ("korean-han-eng", "korean-han-eng-hint", "korean-han-eng-badge"),
+        ("korean-hanja", "korean-hanja-hint", "korean-hanja-badge"),
     ] {
         let input_needle = format!("id=\"{checkbox_id}\"");
         let input_pos = html
@@ -465,27 +470,36 @@ fn settings_html_의_한영_한자_컨트롤은_dimmed이고_사유_문구를_�
             .unwrap_or_else(|| panic!("id=\"{checkbox_id}\" 의 <input> 태그가 닫히지 않았다"));
         let tag = &html[input_pos..tag_end];
         assert!(
-            tag.contains("disabled"),
-            "id=\"{checkbox_id}\" 체크박스가 disabled 가 아니다 — 2단계 항목은 dimmed 로 \
-             출하해야 한다(D-K8, §5#1)"
+            !tag.contains("disabled"),
+            "id=\"{checkbox_id}\" 체크박스가 여전히 disabled 다 — 2단계는 활성 컨트롤로 \
+             출하해야 한다(D-K14, §3.2 해소)"
         );
 
         assert!(
-            html.contains(&format!("id=\"{why_id}\"")),
-            "id=\"{checkbox_id}\" 옆에 사유 문단(id=\"{why_id}\")이 없다"
+            html.contains(&format!("id=\"{hint_id}\"")),
+            "id=\"{checkbox_id}\" 옆에 부제 문단(id=\"{hint_id}\")이 없다"
         );
         assert!(
-            html.contains(&format!("id=\"{badge_id}\""),),
-            "id=\"{checkbox_id}\" 옆에 배지(id=\"{badge_id}\")가 없다"
+            !html.contains(&format!("id=\"{badge_id}\"")),
+            "id=\"{checkbox_id}\" 옆에 배지(id=\"{badge_id}\")가 여전히 남아 있다 — \
+             활성 컨트롤에는 배지를 두지 않는다"
         );
     }
 
-    // ⭐ 배지 문자열은 General 탭 미구현 컨트롤과 같은 키를 재사용한다 — 새 배지
-    // 문자열을 만들지 않는다(F16-strings.md).
-    assert!(
-        html.contains("\"korean-han-eng-badge\"") && html.contains("\"korean-hanja-badge\""),
-        "한/영·한자 배지가 settings.badge.unimplemented 배지 루프에 포함되지 않았다"
-    );
+    // ⛔ D-K16 — 옛 `.why` 카탈로그 키(개발자용 증거 등급 문구)가 새 `.hint` 로
+    // 대체되어 더 이상 존재하지 않는다. 두 카탈로그 모두에서 확인한다.
+    let en = read_en_catalog();
+    let ko = read_ko_catalog();
+    for old_key in ["settings.korean.han_eng.why", "settings.korean.hanja.why"] {
+        assert!(
+            en.get(old_key).is_none(),
+            "en.json 에 옛 사유 문구 키 {old_key} 가 남아 있다 — .hint 로 교체돼야 한다(D-K16)"
+        );
+        assert!(
+            ko.get(old_key).is_none(),
+            "ko.json 에 옛 사유 문구 키 {old_key} 가 남아 있다 — .hint 로 교체돼야 한다(D-K16)"
+        );
+    }
 }
 
 /// `settings.korean.*` 리터럴이 en·ko 양쪽 카탈로그에 전부 있다. (일반 검사

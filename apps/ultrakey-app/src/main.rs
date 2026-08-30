@@ -9,6 +9,7 @@
 //!
 //! 1. 로그 초기화 — `ULTRAKEY_LOG` 환경변수. 수동 검증 절차가 이 로그에 기댄다
 //!    (`docs/dev/manual-verification.md` §0)
+//!
 //! 1-b. ⭐ 단일 인스턴스 보장(F-10, `menu-bar-and-lifecycle.md` §2 시나리오 D·§5
 //!    항목 1) — 같은 번들 ID 로 이미 떠 있는 인스턴스가 있으면 Tauri 자체를
 //!    띄우지 않고 즉시 종료한다. 두 번째 `CGEventTap` 이 설치되면 키 입력이 두
@@ -21,6 +22,7 @@
 //! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작. 메뉴바가 생긴 뒤로는
 //!    이 전이가 설정 창을 자동으로 띄우지 않는다 — `Settings…` 메뉴 클릭이 그
 //!    자리를 대신한다.
+//!
 //! 5-b. ⭐ 메뉴바(`NSStatusItem`) 구성 — 정상 메뉴/`unauthorizedMenu` 두 벌을
 //!    미리 만들어 두고, 권한 상태 전이 때마다 트레이의 메뉴만 갈아 끼운다(§3.1).
 //!    최전면 앱 추적은 이 앱 계층이 `ultrakey_platform::workspace` 를 **독립적으로**
@@ -461,9 +463,9 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
 }
 
 /// `Korean` 탭 5개 항목 — F-16(`docs/spec/korean-input.md` §4.2). `presets_view` 와
-/// 같은 형식. ⭐ `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 값 자체는
-/// 그대로 실어 보낸다 — UI 가 `disabled` 로 dimmed 하는 것뿐이지 저장은 정상 동작한다
-/// (D-K8, 2단계 활성화는 다음 작업의 범위).
+/// 같은 형식. `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 2단계에서
+/// 활성화됐다(D-K14) — §3.2 의 키코드가 근거 3중으로 해소되어 UI 도 규칙 평가도
+/// 정상 동작한다.
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KoreanView {
