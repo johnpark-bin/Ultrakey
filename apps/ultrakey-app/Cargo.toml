@@ -11,6 +11,9 @@ repository.workspace = true
 ultrakey-core = { workspace = true }
 ultrakey-platform = { workspace = true }
 ultrakey-engine = { workspace = true }
+# ⭐ F-01 세션 중 키 → 검색어 문자 해석(`apps/ultrakey-app/src/seek.rs`
+# `resolve_typed_char`) — 엔진이 부팅 시 채워 두는 `LayoutTable::char_for` 를 쓴다.
+ultrakey-layout = { workspace = true }
 ultrakey-hyperkey = { workspace = true }
 ultrakey-presets = { workspace = true }
 ultrakey-korean = { workspace = true }
@@ -18,10 +21,14 @@ ultrakey-permissions = { workspace = true }
 ultrakey-i18n = { workspace = true }
 ultrakey-seek = { workspace = true }
 ultrakey-overlay = { workspace = true }
+ultrakey-seek-session = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# ⭐ F-01 Seek 워커의 신호 채널(`apps/ultrakey-app/src/seek.rs`) — `ultrakey-engine`
+# 이 이미 이 버전을 쓴다(탭 스레드 커맨드 채널). 같은 버전을 그대로 쓴다.
+crossbeam-channel = { workspace = true }
 # F-10 메뉴바(NSStatusItem) — Tauri v2 내장 트레이를 쓴다(`tray-icon` 크레이트를
 # 별도로 추가하지 않는다, 위임 지시). `image-png` 는 트레이 아이콘을 32x32.png 에서
 # `tauri::image::Image::from_bytes` 로 런타임 디코딩하는 데 필요하다(둘 다 워크스페이스
@@ -32,6 +39,9 @@ tracing-subscriber = { workspace = true }
 # 직접 배포다(`code-signing.md`, `platform-constraints.md` §3) — 잃는 것이 없다.
 tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = { workspace = true }
+# ⭐ F-01 활성화 경로 1 — `Toggle Seek with shortcut:`. 명세 §6·§7 이 지목했고,
+# `rdev` 는 명시적으로 기각됐다(3년간 릴리스 없음 · 이벤트 소비 제어 제한).
+global-hotkey = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }

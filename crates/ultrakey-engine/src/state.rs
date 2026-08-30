@@ -21,8 +21,11 @@ use ultrakey_layout::LayoutResolver;
 ///   이벤트 읽는다 → `ArcSwap`(대기 없는 읽기, 원자적 포인터 교체 쓰기).
 /// - `gate` — F-10 앱별 비활성화 게이트. 판정은 메인이 미리 계산해 `AtomicBool` 로
 ///   게시한다(§3-f 계층 0). 콜백은 이 부울만 읽는다.
-/// - `seek_session_active` — F-01 Seek 세션 활성 여부(§3-b 계층 1). M1 에서는 이 값을
-///   갱신하는 곳이 없어 항상 `false` 다 — M3(F-01)가 이 자리를 채운다.
+/// - `seek_session_active` — F-01 Seek 세션 활성 여부(§3-b 계층 1). ⭐ 이 크레이트는
+///   이 값을 켜지 않는다 — F-01 세션 상태 머신을 소유한 앱(`apps/ultrakey-app`,
+///   `ultrakey-seek-session`)이 세션을 열고 닫을 때마다 `Engine::shared().
+///   seek_session_active` 를 직접 `store` 한다. 이 엔진은 콜백 임계 경로에서 이
+///   원자값을 O(1) 로드만 한다(§3-b 계층 1 "전역 플래그 1개로 확인").
 /// - `layout` — F-14(B) 레이아웃 테이블. 콜백이 임계 경로에서 읽어야 할 때를 대비해
 ///   `LayoutResolver` 자체가 이미 무잠금 `ArcSwap` 을 내부에 두고 있다(`ultrakey-layout`).
 /// - `korean_ime` — F-16 한국어 입력기 활성 판정(`docs/spec/korean-input.md` §3.3).

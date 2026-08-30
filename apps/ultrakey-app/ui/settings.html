@@ -240,10 +240,49 @@
   <main class="panel">
     <div id="notice" hidden></div>
 
-    <!-- Seek 탭 — 자리만. 이번 범위(F-01~F-04)는 M3. -->
+    <!-- Seek 탭 — F-01(seek-activation-and-session.md) §4 설정 표 순서 그대로.
+         ⭐ state.seek 가 아직 없을 수 있다(다른 세션이 Rust 쪽을 아직 안 끝냈을
+         때) — renderKeyboardsTab 의 state.perDevice 방어와 같은 패턴으로
+         renderSeek() 이 조용히 아무 일도 하지 않는다.
+         ⭐ 활성화 경로 3개(전역 단축키·리매핑 키·Presets 탭 quick press caps
+         lock)가 전부 미설정이면 #seek-not-configured 로 알린다(§1 마지막
+         문단 — 출고 기본값 그대로면 Seek 를 단 한 번도 발동할 수 없다).
+         ⭐ §4 실측 — `Only show while the remapped key is held` 은
+         `Remap key to Seek:` 가 `-` 인 동안 dimmed 다. Hyperkey 탭의
+         체크박스→팝업 dimmed 방향과 반대로, 여기서는 팝업이 체크박스를
+         좌우한다(값은 지우지 않고 보존). -->
     <section id="panel-seek" class="tabpanel" role="tabpanel" aria-labelledby="tab-seek" hidden>
-      <h1 id="seek-title"></h1>
-      <p id="seek-body"></p>
+      <h1 id="seek-heading"></h1>
+
+      <p class="hint" id="seek-not-configured" hidden></p>
+
+      <div class="row">
+        <span id="seek-shortcut-label"></span>
+        <button type="button" id="seek-shortcut-record" aria-pressed="false"></button>
+        <button type="button" id="seek-shortcut-clear" hidden></button>
+      </div>
+
+      <div class="row">
+        <span id="seek-remap-label"></span>
+        <select id="seek-remap-key" data-key="seek.remapKey"></select>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="seek-execute-on-close" data-key="seek.executeOnClose" />
+          <span id="seek-execute-on-close-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="seek-execute-on-close-hint"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="seek-semicolon-cycle" data-key="seek.semicolonCycle" />
+          <span id="seek-semicolon-cycle-label"></span>
+        </label>
+      </div>
+
+      <p class="hint" id="seek-quick-press-hint"></p>
     </section>
 
     <!-- Hyperkey 탭 — hyperkey.md §4 의 배치 순서 그대로. -->
@@ -831,8 +870,15 @@ if (!tauri || !tauri.core) {
     $("tab-keyboards-label").textContent = t("settings.tab.keyboards");
     $("tab-general-label").textContent = t("settings.tab.general");
 
-    $("seek-title").textContent = t("settings.placeholder.title");
-    $("seek-body").textContent = t("settings.placeholder.seek.body");
+    $("seek-heading").textContent = t("settings.seek.heading");
+    $("seek-not-configured").textContent = t("settings.seek.not_configured");
+    $("seek-shortcut-label").textContent = t("settings.seek.toggle_shortcut");
+    $("seek-shortcut-clear").textContent = t("settings.seek.clear_shortcut");
+    $("seek-remap-label").textContent = t("settings.seek.remap_key");
+    $("seek-execute-on-close-label").textContent = t("settings.seek.execute_on_close");
+    $("seek-execute-on-close-hint").textContent = t("settings.seek.execute_on_close.hint");
+    $("seek-semicolon-cycle-label").textContent = t("settings.seek.semicolon_cycle");
+    $("seek-quick-press-hint").textContent = t("settings.seek.quick_press.hint");
     $("presets-heading").textContent = t("settings.presets.heading");
     $("presets-group-caps").textContent = t("settings.presets.group.caps_lock");
     $("presets-group-shift").textContent = t("settings.presets.group.shift");
@@ -1687,7 +1733,128 @@ if (!tauri || !tauri.core) {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Seek 탭(F-01, seek-activation-and-session.md §4) — 활성화 트리거 3종의
+  // 배선. `state.seek` 가 아직 없을 수 있다(다른 세션이 아직 Rust 쪽을 안
+  // 끝냈을 때) — renderKeyboardsTab 의 state.perDevice 방어와 같은 패턴으로
+  // renderSeek() 이 조용히 아무 일도 하지 않는다.
+  let currentSeekState = null; // 마지막으로 받은 state.seek(Escape 취소 시 복원용)
+  let seekRecording = false;
+  let seekRecordingHandler = null;
+
+  // ⭐ modifier 비트마스크 — `EventFlags` 관례(crates/ultrakey-core/src/flags.rs)를
+  // 그대로 옮긴다. 여기서 새 값을 정의하지 않고 그 파일의 상수와 일치시켜야
+  // 하며, `seek_modifier_비트값이_ultrakey_core_flags와_일치한다` 테스트가
+  // flags.rs 를 직접 읽어 이 값을 대조한다 — 테스트 안에 기대값을 다시 적지
+  // 않는 것이 이 저장소의 M2-2 사고 재발 방지 원칙이다.
+  const SEEK_SHORTCUT_MOD_SHIFT = 0x20000; // EventFlags::SHIFT
+  const SEEK_SHORTCUT_MOD_CONTROL = 0x40000; // EventFlags::CONTROL
+  const SEEK_SHORTCUT_MOD_OPTION = 0x80000; // EventFlags::ALTERNATE (option/alt)
+  const SEEK_SHORTCUT_MOD_COMMAND = 0x100000; // EventFlags::COMMAND (command/meta)
+
+  // modifier 만 눌린 상태(예: `ShiftLeft`)는 조합의 일부일 뿐 그 자체가
+  // 단축키가 아니다 — 이런 keydown 은 무시하고 계속 기다린다.
+  function isSeekModifierOnlyCode(code) {
+    return (
+      code.startsWith("Shift") ||
+      code.startsWith("Control") ||
+      code.startsWith("Alt") ||
+      code.startsWith("Meta")
+    );
+  }
+
+  // 레코더 버튼·지우기 버튼의 표시만 갱신한다(체크박스·팝업은 renderSeek()
+  // 소관). 녹음 중에는 renderSeek() 이 이 호출을 건너뛴다 — 그래야 modifiers
+  // 저장과 code 저장 사이에 오는 재렌더가 "녹음 중" 라벨을 지우지 않는다.
+  function renderSeekShortcutButtons(seek) {
+    const recordBtn = $("seek-shortcut-record");
+    recordBtn.textContent = seek.toggleShortcut
+      ? seek.toggleShortcut.display
+      : t("settings.seek.record_shortcut");
+    recordBtn.setAttribute("aria-pressed", "false");
+    $("seek-shortcut-clear").hidden = !seek.toggleShortcut;
+  }
+
+  function stopSeekRecording() {
+    if (seekRecordingHandler) {
+      window.removeEventListener("keydown", seekRecordingHandler, true);
+      seekRecordingHandler = null;
+    }
+    seekRecording = false;
+  }
+
+  // ⭐ 캡처 단계에서 잡고 stopPropagation 한다 — 녹음 중에는 `#tablist` 의
+  // 탭 전환 keydown 핸들러가 같은 키 입력을 먹지 않게 한다.
+  function startSeekRecording() {
+    if (seekRecording) return;
+    seekRecording = true;
+    const btn = $("seek-shortcut-record");
+    btn.textContent = t("settings.seek.recording");
+    btn.setAttribute("aria-pressed", "true");
+
+    seekRecordingHandler = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (isSeekModifierOnlyCode(ev.code)) return;
+      if (ev.code === "Escape") {
+        // 녹음 취소 — 저장하지 않고 원래 상태로 되돌린다.
+        stopSeekRecording();
+        if (currentSeekState) renderSeekShortcutButtons(currentSeekState);
+        return;
+      }
+      let modifiers = 0;
+      if (ev.shiftKey) modifiers |= SEEK_SHORTCUT_MOD_SHIFT;
+      if (ev.ctrlKey) modifiers |= SEEK_SHORTCUT_MOD_CONTROL;
+      if (ev.altKey) modifiers |= SEEK_SHORTCUT_MOD_OPTION;
+      if (ev.metaKey) modifiers |= SEEK_SHORTCUT_MOD_COMMAND;
+      const code = ev.code;
+      stopSeekRecording();
+      // ⭐ modifiers 먼저, code 나중 — code 가 나중이어야 Rust 쪽이 완성된
+      // 조합으로 등록한다(§4).
+      (async () => {
+        await commit("seek.toggleShortcut.modifiers", modifiers);
+        await commit("seek.toggleShortcut.code", code);
+      })();
+    };
+    window.addEventListener("keydown", seekRecordingHandler, true);
+  }
+
+  $("seek-shortcut-record").addEventListener("click", () => {
+    startSeekRecording();
+  });
+
+  $("seek-shortcut-clear").addEventListener("click", async () => {
+    await commit("seek.toggleShortcut.code", "");
+    await commit("seek.toggleShortcut.modifiers", 0);
+  });
+
+  function renderSeek(state) {
+    const seek = state.seek;
+    if (!seek) return; // 방어 — renderKeyboardsTab 의 state.perDevice 방어와 같은 패턴.
+    currentSeekState = seek;
+
+    fillSelect("seek-remap-key", seek.remapKeyOptions);
+    setSelectValue("seek-remap-key", seek.remapKey);
+
+    // ⭐ §4 실측 — 팝업이 체크박스를 좌우한다(Hyperkey 탭의 체크박스→팝업
+    // dimmed 방향과 반대). 값은 지우지 않고 보존한다.
+    $("seek-execute-on-close").checked = seek.executeOnClose;
+    $("seek-execute-on-close").disabled = seek.remapKey === "-";
+
+    $("seek-semicolon-cycle").checked = seek.semicolonCycles;
+
+    if (!seekRecording) {
+      renderSeekShortcutButtons(seek);
+    }
+
+    // ⭐ 온보딩 함의(§1) — 세 활성화 경로가 전부 미설정이면 발동 방법이
+    // 전혀 없다는 것을 알린다.
+    $("seek-not-configured").hidden = seek.anyActivationConfigured;
+  }
+
   function renderState(state) {
+    renderSeek(state);
+
     $("hyper-enabled").checked = state.hyperkey.hyper.enabled;
     setSelectValue("hyper-source", state.hyperkey.hyper.source);
     // ① dimmed — 체크박스가 꺼지면 팝업만 흐려지고 조작 불가. 값은 지우지 않는다.

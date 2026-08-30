@@ -64,6 +64,15 @@ use crate::watchdog::Watchdog;
 /// ⚠️ 실측 회귀: 앱이 `NotTrusted` 를 받아 탭 스레드에서 Tauri 창을 동기 조작하자
 /// **머신 전체 입력이 멈췄다**(이슈 #10 후속). `apps/ultrakey-app` 의
 /// `on_main_thread` 헬퍼가 이 계약을 지키는 방식이다.
+///
+/// ⭐ F-01 배선 — `SeekOpenRequested`/`SeekTriggerDown`/`SeekTriggerUp`/`SeekKey` 는
+/// 위 문단의 "블록하지 마라" 계약이 특히 무겁게 적용되는 자리다. `SeekOpenRequested`
+/// 는 quick press 가 완료됐을 때만(드물게) 오지만, `SeekKey` 는 **세션이 열려 있는
+/// 동안 사용자가 타이핑하는 매 키마다** 온다 — `Effect::OpenSeek` 이 기존에 누리던
+/// "드물게 발생하니 의도적 예외"(콜백 안 동기 로깅 허용) 논거가 `SeekKey` 에는
+/// 성립하지 않는다. 소비자는 이 이벤트들을 채널에 밀어 넣기만 하고 즉시 반환해야
+/// 한다 — 상태 머신 판정·오버레이 갱신·OCR 트리거 같은 실제 작업은 그 채널을 읽는
+/// 다른 스레드(F-01 세션 상태 머신)가 한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineEvent {
     TapStateChanged(TapState),
@@ -76,6 +85,20 @@ pub enum EngineEvent {
     /// 복구(재활성화·재생성)가 반복 실패했다 — 앱이 프로세스 재실행을 고려해야 한다
     /// (§5#17). 트리거 조건은 `Timings::tap_recreate_max_attempts`.
     NeedsRelaunch,
+    /// ⭐ F-01 활성화 경로 3 — quick press caps lock(`Presets` 탭
+    /// `Quick press caps lock to execute: Seek`). `Effect::OpenSeek` 이 올라온 것이다.
+    SeekOpenRequested,
+    /// ⭐ F-01 활성화 경로 2 — `Remap key to Seek:` 키가 눌렸다.
+    SeekTriggerDown,
+    /// ⭐ F-01 — 같은 키가 떼졌다. hold 모드의 확정 신호다.
+    ///
+    /// ⭐ 실린 `EventFlags` 는 **키를 뗀 그 순간의 modifier 스냅샷**이다 —
+    /// F-04 §5 #10 이 요구하는 값이며, F-01 이 `ConfirmedMatch::modifiers` 로
+    /// 그대로 옮긴다.
+    SeekTriggerUp(ultrakey_core::flags::EventFlags),
+    /// ⭐ F-01 계층 1 — 세션이 열려 있는 동안 Seek 으로 라우팅되는 키.
+    /// `kind` 는 이미 정규화(FlagsChanged → down/up)돼 있다.
+    SeekKey(ultrakey_core::event::InputEvent),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -425,15 +448,16 @@ fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Op
 ///
 /// `Effect::TypeChar` 는 [`type_char_events`]([`plan_text_output`] 을 거친다)로
 /// down+up 한 쌍을 합성해 `post_to_tap` 으로 낸다(architecture.md §6.4 P9,
-/// `localization-and-input-sources.md` §3.2.2). `Effect::OpenSeek` 은 M3(F-01)
-/// 범위 — 위임 지시서가 명시적으로 요구한 대로 `tracing::info!` 로만 남기고
-/// 아무것도 하지 않는다.
+/// `localization-and-input-sources.md` §3.2.2). `Effect::OpenSeek`/`SeekTriggerDown`/
+/// `SeekTriggerUp`/`SeekKey` 는 F-01(Seek 활성화·세션)로 그대로 넘긴다 —
+/// `on_event` 를 호출하기만 하고 그 결과를 기다리지 않는다.
 ///
-/// ⚠️ 이 `tracing::info!` 자체는 §2.2 의 "콜백 안 동기 로깅 금지"의 글자 그대로는
-/// 어긋난다 — 하지만 `toggle_caps_lock_via_path_c` 에 이미 적용한 것과 같은 근거
-/// (사용자가 실제로 quick press 를 완료했을 때만 드물게 발생, 매 이벤트 비용이
-/// 아니다)로 둔 **의도적 예외**다. M3 가 이 자리를 실제 기능으로 채우면 그때
-/// 다시 검토한다.
+/// ⛔ **`tracing::*` 매크로를 이 경로에 새로 넣지 않는다**(`docs/dev/architecture.md`
+/// §2.2 가 탭 콜백 안 동기 로깅을 금지한다). `Effect::OpenSeek` 이 예전에 여기서 쓰던
+/// `tracing::info!` 자리는 이제 `on_event(EngineEvent::SeekOpenRequested)` 로
+/// 바뀌었다 — `toggle_caps_lock_via_path_c` 가 "사용자가 실제로 제스처를 완료했을
+/// 때만 드물게 발생"을 근거로 로깅 예외를 뒀던 것과 달리, `Effect::SeekKey` 는 세션이
+/// 열린 동안 **키를 칠 때마다** 발생해 그 논거가 성립하지 않는다.
 ///
 /// ⭐ 이슈 #19 계측 배선 — `Effect::ToggleCapsLock` 을 실행했다면 그 실측 결과
 /// `(result, before, after)` 를 반환한다. 트레이스가 꺼져 있어도 이 튜플은 계산된다
@@ -443,7 +467,12 @@ fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Op
 /// `table` 은 호출자가 콜백 진입 시 `cfg` 를 읽는 바로 그 자리에서 함께 한 번만
 /// `st.shared.layout.current()` 로 읽어 넘긴다 — `ArcSwap` 로드라 락·힙 할당이
 /// 없다(`docs/dev/architecture.md` §2.2).
-fn apply_effects_in_tap(outcome: &Outcome, table: &LayoutTable, proxy: TapProxy) -> Option<(u8, u8, u8)> {
+fn apply_effects_in_tap(
+    outcome: &Outcome,
+    table: &LayoutTable,
+    proxy: TapProxy,
+    on_event: &Arc<dyn Fn(EngineEvent) + Send + Sync>,
+) -> Option<(u8, u8, u8)> {
     let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
@@ -457,20 +486,27 @@ fn apply_effects_in_tap(outcome: &Outcome, table: &LayoutTable, proxy: TapProxy)
                     up.post_to_tap(proxy);
                 }
             }
-            Effect::OpenSeek => {
-                tracing::info!("Seek 열기 요청 수신 — M3(F-01) 범위, 아직 구현되지 않음");
-            }
+            Effect::OpenSeek => on_event(EngineEvent::SeekOpenRequested),
+            Effect::SeekTriggerDown => on_event(EngineEvent::SeekTriggerDown),
+            Effect::SeekTriggerUp(flags) => on_event(EngineEvent::SeekTriggerUp(*flags)),
+            Effect::SeekKey(ev) => on_event(EngineEvent::SeekKey(*ev)),
         }
     }
     path_c
 }
 
 /// `Outcome::effects()` 실행 — 콜백 **밖**(커맨드 perform·타이머)에서 부른다.
-/// 탭 콜백이 아니므로 로깅 제약이 없다.
+/// 탭 콜백이 아니므로 로깅 제약이 없다(그래도 `Effect::OpenSeek` 등은
+/// `apply_effects_in_tap` 과 동일하게 `on_event` 로만 넘긴다 — 두 경로가 다른 모양을
+/// 갖지 않게 하기 위함이다).
 /// 콜백 밖 경로(타이머 만료, `ForceResetState` 등)는 계측 레코드를 만들지 않는다
 /// (이슈 #19 계측은 탭 콜백 경로의 `arbitrate` 직후만 다룬다) — 그래도
 /// `apply_effects_in_tap` 과 시그니처를 맞춰 둔다. 호출자는 대부분 결과를 버린다.
-fn apply_effects_outside_tap(outcome: &Outcome, table: &LayoutTable) -> Option<(u8, u8, u8)> {
+fn apply_effects_outside_tap(
+    outcome: &Outcome,
+    table: &LayoutTable,
+    on_event: &Arc<dyn Fn(EngineEvent) + Send + Sync>,
+) -> Option<(u8, u8, u8)> {
     let mut path_c = None;
     for effect in outcome.effects() {
         match effect {
@@ -484,9 +520,10 @@ fn apply_effects_outside_tap(outcome: &Outcome, table: &LayoutTable) -> Option<(
                     up.post();
                 }
             }
-            Effect::OpenSeek => {
-                tracing::info!("Seek 열기 요청 수신 — M3(F-01) 범위, 아직 구현되지 않음");
-            }
+            Effect::OpenSeek => on_event(EngineEvent::SeekOpenRequested),
+            Effect::SeekTriggerDown => on_event(EngineEvent::SeekTriggerDown),
+            Effect::SeekTriggerUp(flags) => on_event(EngineEvent::SeekTriggerUp(*flags)),
+            Effect::SeekKey(ev) => on_event(EngineEvent::SeekKey(*ev)),
         }
     }
     path_c
@@ -546,7 +583,7 @@ fn on_tap_event(
     if st.shared.gate.is_remapping_disabled() {
         let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
-        apply_effects_in_tap(&reset, &table, proxy);
+        apply_effects_in_tap(&reset, &table, proxy, &st.on_event);
         return TapAction::Pass;
     }
 
@@ -554,7 +591,7 @@ fn on_tap_event(
     if st.secure_input.is_enabled() {
         let reset = st.arbiter.force_reset(&cfg);
         apply_outcome_in_tap(&reset, proxy);
-        apply_effects_in_tap(&reset, &table, proxy);
+        apply_effects_in_tap(&reset, &table, proxy, &st.on_event);
         return TapAction::Pass;
     }
 
@@ -589,7 +626,7 @@ fn on_tap_event(
     }
 
     apply_outcome_in_tap(&outcome, proxy);
-    let path_c = apply_effects_in_tap(&outcome, &table, proxy);
+    let path_c = apply_effects_in_tap(&outcome, &table, proxy, &st.on_event);
 
     // ⭐ 이슈 #19 진단 계측 — `arbitrate` 호출 직후(위)가 아니라 여기, effects 적용
     // 결과까지 알고 난 뒤에 레코드를 만든다(경로 C 실측을 한 레코드에 함께 담기
@@ -649,15 +686,15 @@ fn on_tap_event(
 
 /// quick press 타이머 만료 처리 — 탭 콜백이 아니므로 로깅 제약이 없다.
 fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
-    let (outcome, table) = {
+    let (outcome, table, on_event) = {
         let mut st = cell.borrow_mut();
         let cfg = st.shared.config.load_full();
         let table = st.shared.layout.current();
         let now = Millis(st.start.elapsed().as_millis() as u64);
-        (st.arbiter.on_tick(&cfg, now), table)
+        (st.arbiter.on_tick(&cfg, now), table, Arc::clone(&st.on_event))
     };
     apply_outcome_outside_tap(&outcome);
-    apply_effects_outside_tap(&outcome, &table);
+    apply_effects_outside_tap(&outcome, &table, &on_event);
 }
 
 /// `EngineCommand::RecoverTap` — §3-a `Disabled` 전이의 재활성화 시도.
@@ -827,14 +864,14 @@ fn drain_commands(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             EngineCommand::ForceResetState => {
-                let (outcome, table) = {
+                let (outcome, table, on_event) = {
                     let mut st = cell.borrow_mut();
                     let cfg = st.shared.config.load_full();
                     let table = st.shared.layout.current();
-                    (st.arbiter.force_reset(&cfg), table)
+                    (st.arbiter.force_reset(&cfg), table, Arc::clone(&st.on_event))
                 };
                 apply_outcome_outside_tap(&outcome);
-                apply_effects_outside_tap(&outcome, &table);
+                apply_effects_outside_tap(&outcome, &table, &on_event);
                 tracing::info!(
                     "절전/잠금/Secure Input 대응 — 상태를 강제로 리셋했다(stuck modifier 방지)"
                 );

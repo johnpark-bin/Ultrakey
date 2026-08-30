@@ -1256,3 +1256,172 @@ fn settings_html_의_preferences_keyboards_점_리터럴이_en_ko_양쪽_카탈�
 // 잠정값"이라는 전제가 더는 성립하지 않는다. 걷어냈다. `Keyboards` 665px 는 이제
 // `SETTINGS_WINDOW_DEFAULT` 의 실측 목록(2026-08-30) 중 하나로 다른 5개 탭과
 // 동등하게 실측되어 있다 — main.rs 의 그 상수 doc 주석 참고.
+
+// ⭐ F-01(seek-activation-and-session.md) — `Seek` 탭 재발 방지 테스트.
+// Korean 탭 재발 방지 테스트(위)와 같은 검증 방식을 재사용한다.
+
+fn read_flags_rs() -> String {
+    // crates/ 는 이 워크트리에서 다른 세션이 동시에 작업 중이라 손대지 않는다
+    // — 여기서는 읽기만 한다. 경로는 워크스페이스 루트 기준.
+    let path = manifest_dir().join("../../crates/ultrakey-core/src/flags.rs");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("crates/ultrakey-core/src/flags.rs 를 읽지 못했다({path:?}): {e}"))
+}
+
+/// `needle` 바로 뒤에 나오는 첫 `0x…` 16진수 리터럴 값을 읽는다. JS 상수 선언
+/// (`const NAME = 0x…;`)과 Rust 상수 선언(`pub const NAME: EventFlags =
+/// EventFlags(0x…)`) 양쪽에 같은 방식으로 쓴다.
+fn extract_hex_const_value(text: &str, needle: &str) -> u64 {
+    let pos = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` 를 찾지 못했다"));
+    let after = &text[pos + needle.len()..];
+    let hex_start = after
+        .find("0x")
+        .unwrap_or_else(|| panic!("`{needle}` 뒤에서 0x 리터럴을 찾지 못했다"));
+    let hex_digits = &after[hex_start + 2..];
+    let end = hex_digits
+        .find(|c: char| !c.is_ascii_hexdigit())
+        .unwrap_or(hex_digits.len());
+    u64::from_str_radix(&hex_digits[..end], 16)
+        .unwrap_or_else(|e| panic!("`{needle}` 뒤의 16진수 파싱 실패: {e}"))
+}
+
+/// `Seek` 탭 버튼·패널과 3개 `data-key` 가 전부 `settings.html` 에 존재한다.
+#[test]
+fn settings_html_에_seek_탭_버튼_패널_3개_data_key가_있다() {
+    let html = read_settings_html();
+
+    assert!(
+        html.contains(r#"id="tab-seek" data-tab="seek""#),
+        "settings.html 에 Seek 탭 버튼(id=\"tab-seek\")이 없다"
+    );
+    assert!(
+        html.contains(r#"id="panel-seek""#),
+        "settings.html 에 Seek 탭 패널(id=\"panel-seek\")이 없다"
+    );
+
+    for data_key in ["seek.remapKey", "seek.executeOnClose", "seek.semicolonCycle"] {
+        assert!(
+            html.contains(&format!("data-key=\"{data_key}\"")),
+            "settings.html 에 data-key=\"{data_key}\" 컨트롤이 없다"
+        );
+    }
+}
+
+/// 단축키 레코더 버튼(녹음 시작)과 지우기 버튼이 둘 다 존재한다.
+#[test]
+fn settings_html_에_seek_단축키_레코더_버튼_2종이_있다() {
+    let html = read_settings_html();
+
+    assert!(
+        html.contains(r#"id="seek-shortcut-record""#),
+        "settings.html 에 단축키 레코더 버튼(id=\"seek-shortcut-record\")이 없다"
+    );
+    assert!(
+        html.contains(r#"id="seek-shortcut-clear""#),
+        "settings.html 에 단축키 지우기 버튼(id=\"seek-shortcut-clear\")이 없다"
+    );
+}
+
+/// `settings.seek.*` 리터럴이 en·ko 양쪽 카탈로그에 전부 있다. (일반 검사는
+/// en 만 보므로, Korean 탭과 같은 이유로 여기서 별도로 잡는다.)
+#[test]
+fn seek_점_리터럴이_en_ko_양쪽_카탈로그에_모두_있다() {
+    let html = read_settings_html();
+    let en_keys = flatten_catalog(&read_en_catalog());
+    let ko_keys = flatten_catalog(&read_ko_catalog());
+
+    let seek_keys: BTreeSet<_> = extract_double_quoted_literals(&html)
+        .into_iter()
+        .filter(|s| s.starts_with("settings.seek."))
+        .collect();
+
+    assert!(
+        !seek_keys.is_empty(),
+        "settings.html 에서 \"settings.seek.*\" 리터럴을 하나도 찾지 못했다 — \
+         Seek 탭 배선이 빠졌을 수 있다"
+    );
+
+    let missing_en: Vec<_> = seek_keys
+        .iter()
+        .filter(|k| !en_keys.contains(k.as_str()))
+        .collect();
+    let missing_ko: Vec<_> = seek_keys
+        .iter()
+        .filter(|k| !ko_keys.contains(k.as_str()))
+        .collect();
+
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 settings.seek.* 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 settings.seek.* 키: {missing_ko:?}"
+    );
+}
+
+/// `Seek` 탭이 자리표시자에서 실제 탭으로 바뀌었다 — 예전 자리표시자 문구
+/// (`settings.placeholder.seek.body`)가 더 이상 HTML 에 없고, 카탈로그
+/// 양쪽에서도 지워졌다.
+#[test]
+fn settings_html_에서_seek_placeholder가_사라졌다() {
+    let html = read_settings_html();
+    assert!(
+        !html.contains("settings.placeholder.seek.body"),
+        "settings.html 에 옛 Seek 자리표시자 리터럴(settings.placeholder.seek.body)이 \
+         여전히 남아 있다 — Seek 탭이 실제 탭으로 바뀌었으면 이 리터럴은 없어야 한다"
+    );
+
+    let en = read_en_catalog();
+    let ko = read_ko_catalog();
+    for old_key in ["settings.placeholder.title", "settings.placeholder.seek.body"] {
+        assert!(
+            en.get(old_key).is_none(),
+            "en.json 에 옛 Seek 자리표시자 키 {old_key} 가 남아 있다"
+        );
+        assert!(
+            ko.get(old_key).is_none(),
+            "ko.json 에 옛 Seek 자리표시자 키 {old_key} 가 남아 있다"
+        );
+    }
+}
+
+/// ⭐ M2-2 사고 재발 방지 — 기대값을 테스트 안에 다시 적지 않고, `flags.rs` 를
+/// 직접 읽어 JS 상수와 대조한다. `settings.html` 의 단축키 레코더가 쓰는
+/// modifier 비트마스크 4개가 `crates/ultrakey-core/src/flags.rs` 의
+/// `EventFlags` 상수와 정확히 일치해야 한다(option 은 JS 쪽 이름이 OPTION,
+/// Rust 쪽 이름이 ALTERNATE 로 다를 뿐 같은 비트를 가리켜야 한다).
+#[test]
+fn seek_modifier_비트값이_ultrakey_core_flags와_일치한다() {
+    let html = read_settings_html();
+    let flags_rs = read_flags_rs();
+
+    let js_shift = extract_hex_const_value(&html, "SEEK_SHORTCUT_MOD_SHIFT =");
+    let js_control = extract_hex_const_value(&html, "SEEK_SHORTCUT_MOD_CONTROL =");
+    let js_option = extract_hex_const_value(&html, "SEEK_SHORTCUT_MOD_OPTION =");
+    let js_command = extract_hex_const_value(&html, "SEEK_SHORTCUT_MOD_COMMAND =");
+
+    let rs_shift = extract_hex_const_value(&flags_rs, "pub const SHIFT: EventFlags = EventFlags(");
+    let rs_control = extract_hex_const_value(&flags_rs, "pub const CONTROL: EventFlags = EventFlags(");
+    let rs_option = extract_hex_const_value(&flags_rs, "pub const ALTERNATE: EventFlags = EventFlags(");
+    let rs_command = extract_hex_const_value(&flags_rs, "pub const COMMAND: EventFlags = EventFlags(");
+
+    assert_eq!(
+        js_shift, rs_shift,
+        "settings.html 의 SEEK_SHORTCUT_MOD_SHIFT 가 flags.rs 의 EventFlags::SHIFT 와 다르다"
+    );
+    assert_eq!(
+        js_control, rs_control,
+        "settings.html 의 SEEK_SHORTCUT_MOD_CONTROL 이 flags.rs 의 EventFlags::CONTROL 과 다르다"
+    );
+    assert_eq!(
+        js_option, rs_option,
+        "settings.html 의 SEEK_SHORTCUT_MOD_OPTION 이 flags.rs 의 EventFlags::ALTERNATE 와 다르다"
+    );
+    assert_eq!(
+        js_command, rs_command,
+        "settings.html 의 SEEK_SHORTCUT_MOD_COMMAND 가 flags.rs 의 EventFlags::COMMAND 와 다르다"
+    );
+}

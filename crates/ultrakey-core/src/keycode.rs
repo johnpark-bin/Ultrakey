@@ -39,6 +39,62 @@ impl KeyCode {
     pub const ANSI_SEMICOLON: KeyCode = KeyCode(0x29);
     pub const ANSI_QUOTE: KeyCode = KeyCode(0x27);
     pub const ANSI_SLASH: KeyCode = KeyCode(0x2C);
+
+    // ── F-01 — `KeyCode::from_web_code` 가 필요로 하는 나머지 문자·숫자·기호 키 ──
+    //
+    // ⭐ 값은 전부 이 세션이 로컬 SDK 헤더에서 직접 읽었다(위임 지시서가 요구한
+    // 그대로): `grep -n "kVK_" /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk/
+    // System/Library/Frameworks/Carbon.framework/Versions/A/Frameworks/HIToolbox.framework/
+    // Versions/A/Headers/Events.h`. 각 상수 주석에 그 헤더의 `kVK_*` 이름을 남긴다.
+    pub const ANSI_B: KeyCode = KeyCode(0x0B);
+    pub const ANSI_C: KeyCode = KeyCode(0x08);
+    pub const ANSI_E: KeyCode = KeyCode(0x0E);
+    pub const ANSI_M: KeyCode = KeyCode(0x2E);
+    pub const ANSI_N: KeyCode = KeyCode(0x2D);
+    pub const ANSI_O: KeyCode = KeyCode(0x1F);
+    pub const ANSI_P: KeyCode = KeyCode(0x23);
+    pub const ANSI_Q: KeyCode = KeyCode(0x0C);
+    pub const ANSI_R: KeyCode = KeyCode(0x0F);
+    pub const ANSI_T: KeyCode = KeyCode(0x11);
+    pub const ANSI_U: KeyCode = KeyCode(0x20);
+    pub const ANSI_X: KeyCode = KeyCode(0x07);
+    pub const ANSI_Y: KeyCode = KeyCode(0x10);
+    pub const ANSI_Z: KeyCode = KeyCode(0x06);
+    /// `kVK_ANSI_0`.
+    pub const ANSI_0: KeyCode = KeyCode(0x1D);
+    /// `kVK_ANSI_1`.
+    pub const ANSI_1: KeyCode = KeyCode(0x12);
+    /// `kVK_ANSI_2`.
+    pub const ANSI_2: KeyCode = KeyCode(0x13);
+    /// `kVK_ANSI_3`.
+    pub const ANSI_3: KeyCode = KeyCode(0x14);
+    /// `kVK_ANSI_4`.
+    pub const ANSI_4: KeyCode = KeyCode(0x15);
+    /// `kVK_ANSI_5`.
+    pub const ANSI_5: KeyCode = KeyCode(0x17);
+    /// `kVK_ANSI_6`.
+    pub const ANSI_6: KeyCode = KeyCode(0x16);
+    /// `kVK_ANSI_7`.
+    pub const ANSI_7: KeyCode = KeyCode(0x1A);
+    /// `kVK_ANSI_8`.
+    pub const ANSI_8: KeyCode = KeyCode(0x1C);
+    /// `kVK_ANSI_9`.
+    pub const ANSI_9: KeyCode = KeyCode(0x19);
+    /// `kVK_ANSI_Minus`.
+    pub const ANSI_MINUS: KeyCode = KeyCode(0x1B);
+    /// `kVK_ANSI_Equal`.
+    pub const ANSI_EQUAL: KeyCode = KeyCode(0x18);
+    /// `kVK_ANSI_LeftBracket`.
+    pub const ANSI_LEFT_BRACKET: KeyCode = KeyCode(0x21);
+    /// `kVK_ANSI_RightBracket`.
+    pub const ANSI_RIGHT_BRACKET: KeyCode = KeyCode(0x1E);
+    /// `kVK_ANSI_Backslash`.
+    pub const ANSI_BACKSLASH: KeyCode = KeyCode(0x2A);
+    /// `kVK_ANSI_Comma`.
+    pub const ANSI_COMMA: KeyCode = KeyCode(0x2B);
+    /// `kVK_ANSI_Period`.
+    pub const ANSI_PERIOD: KeyCode = KeyCode(0x2F);
+
     pub const SPACE: KeyCode = KeyCode(0x31);
     /// `` ` ``/`₩` 물리 키(`kVK_ANSI_Grave`). F-16.4(`docs/spec/korean-input.md` §3.1)의
     /// 트리거 키다. 근거: `Carbon/HIToolbox/Events.h` 243행 `kVK_ANSI_Grave = 0x32` —
@@ -168,6 +224,112 @@ impl KeyCode {
     pub fn is_modifier_key(self) -> bool {
         self == KeyCode::CAPS_LOCK || self.modifier_flags().is_some()
     }
+}
+
+/// 웹 `KeyboardEvent.code`(ANSI 기준 물리 키 위치 문자열) → macOS 물리 키코드.
+///
+/// F-01(`seek-activation-and-session.md`)의 전역 단축키 레코더가 설정 창(브라우저
+/// 웹뷰) 안에서 누른 키를 물리 키코드로 옮기는 유일한 지점이다 — 이 저장소는 키코드의
+/// 진실을 이 파일 하나에 두는 관례를 지킨다(모듈 문서 참고). JS 쪽에는 이 표를
+/// 두지 않는다.
+///
+/// ⭐ 값은 전부 로컬 SDK 헤더에서 직접 읽었다(`korean-input.md` §3.2 가 이미 쓴 방법과
+/// 동일): `grep -n "kVK_" …/HIToolbox.framework/Versions/A/Headers/Events.h`. 그 헤더에
+/// 없는 키(F21~F24 등)는 이 표에 넣지 않는다 — 이 파일 상단 규칙(값을 지어내지
+/// 않는다) 그대로다. 덮는 범위는 위임 지시서가 명시한 것: 문자 `KeyA`~`KeyZ`, 숫자
+/// `Digit0`~`Digit9`, `Space`·`Enter`·`Tab`·`Escape`·`Backspace`·`Delete`, 화살표 4종,
+/// `Minus`·`Equal`·`BracketLeft`·`BracketRight`·`Backslash`·`Semicolon`·`Quote`·`Comma`·
+/// `Period`·`Slash`·`Backquote`, `F1`~`F20`, `Home`·`End`·`PageUp`·`PageDown`.
+///
+/// ⚠️ `Backspace`(웹)는 macOS 물리 "delete"(뒤로 지움) 키를 가리키므로
+/// [`KeyCode::DELETE`](0x33)로, 웹 `Delete`(포워드 삭제)는 [`KeyCode::FORWARD_DELETE`]
+/// (0x75)로 옮긴다 — [`KeyCode::DELETE`] 문서 주석이 이미 밝힌 구분 그대로다.
+#[must_use]
+pub fn from_web_code(code: &str) -> Option<KeyCode> {
+    Some(match code {
+        "KeyA" => KeyCode::ANSI_A,
+        "KeyB" => KeyCode::ANSI_B,
+        "KeyC" => KeyCode::ANSI_C,
+        "KeyD" => KeyCode::ANSI_D,
+        "KeyE" => KeyCode::ANSI_E,
+        "KeyF" => KeyCode::ANSI_F,
+        "KeyG" => KeyCode::ANSI_G,
+        "KeyH" => KeyCode::ANSI_H,
+        "KeyI" => KeyCode::ANSI_I,
+        "KeyJ" => KeyCode::ANSI_J,
+        "KeyK" => KeyCode::ANSI_K,
+        "KeyL" => KeyCode::ANSI_L,
+        "KeyM" => KeyCode::ANSI_M,
+        "KeyN" => KeyCode::ANSI_N,
+        "KeyO" => KeyCode::ANSI_O,
+        "KeyP" => KeyCode::ANSI_P,
+        "KeyQ" => KeyCode::ANSI_Q,
+        "KeyR" => KeyCode::ANSI_R,
+        "KeyS" => KeyCode::ANSI_S,
+        "KeyT" => KeyCode::ANSI_T,
+        "KeyU" => KeyCode::ANSI_U,
+        "KeyV" => KeyCode::ANSI_V,
+        "KeyW" => KeyCode::ANSI_W,
+        "KeyX" => KeyCode::ANSI_X,
+        "KeyY" => KeyCode::ANSI_Y,
+        "KeyZ" => KeyCode::ANSI_Z,
+        "Digit0" => KeyCode::ANSI_0,
+        "Digit1" => KeyCode::ANSI_1,
+        "Digit2" => KeyCode::ANSI_2,
+        "Digit3" => KeyCode::ANSI_3,
+        "Digit4" => KeyCode::ANSI_4,
+        "Digit5" => KeyCode::ANSI_5,
+        "Digit6" => KeyCode::ANSI_6,
+        "Digit7" => KeyCode::ANSI_7,
+        "Digit8" => KeyCode::ANSI_8,
+        "Digit9" => KeyCode::ANSI_9,
+        "Space" => KeyCode::SPACE,
+        "Enter" => KeyCode::RETURN,
+        "Tab" => KeyCode::TAB,
+        "Escape" => KeyCode::ESCAPE,
+        "Backspace" => KeyCode::DELETE,
+        "Delete" => KeyCode::FORWARD_DELETE,
+        "ArrowUp" => KeyCode::UP_ARROW,
+        "ArrowDown" => KeyCode::DOWN_ARROW,
+        "ArrowLeft" => KeyCode::LEFT_ARROW,
+        "ArrowRight" => KeyCode::RIGHT_ARROW,
+        "Minus" => KeyCode::ANSI_MINUS,
+        "Equal" => KeyCode::ANSI_EQUAL,
+        "BracketLeft" => KeyCode::ANSI_LEFT_BRACKET,
+        "BracketRight" => KeyCode::ANSI_RIGHT_BRACKET,
+        "Backslash" => KeyCode::ANSI_BACKSLASH,
+        "Semicolon" => KeyCode::ANSI_SEMICOLON,
+        "Quote" => KeyCode::ANSI_QUOTE,
+        "Comma" => KeyCode::ANSI_COMMA,
+        "Period" => KeyCode::ANSI_PERIOD,
+        "Slash" => KeyCode::ANSI_SLASH,
+        "Backquote" => KeyCode::ANSI_GRAVE,
+        "F1" => KeyCode::F1,
+        "F2" => KeyCode::F2,
+        "F3" => KeyCode::F3,
+        "F4" => KeyCode::F4,
+        "F5" => KeyCode::F5,
+        "F6" => KeyCode::F6,
+        "F7" => KeyCode::F7,
+        "F8" => KeyCode::F8,
+        "F9" => KeyCode::F9,
+        "F10" => KeyCode::F10,
+        "F11" => KeyCode::F11,
+        "F12" => KeyCode::F12,
+        "F13" => KeyCode::F13,
+        "F14" => KeyCode::F14,
+        "F15" => KeyCode::F15,
+        "F16" => KeyCode::F16,
+        "F17" => KeyCode::F17,
+        "F18" => KeyCode::F18,
+        "F19" => KeyCode::F19,
+        "F20" => KeyCode::F20,
+        "Home" => KeyCode::HOME,
+        "End" => KeyCode::END,
+        "PageUp" => KeyCode::PAGE_UP,
+        "PageDown" => KeyCode::PAGE_DOWN,
+        _ => return None,
+    })
 }
 
 /// hyper/meh/bleh·Seek 소스 키 팝업에 실제로 나열되는 35종(`hyperkey.md` §4, 표시 순서 그대로).
@@ -449,7 +611,11 @@ mod tests {
             (SourceKey::F15, 0x70000006A),
         ];
         for (k, want) in expect {
-            assert_eq!(k.hid_usage(), Some(*want), "{k:?} 의 hid_usage() 가 실측값과 다르다");
+            assert_eq!(
+                k.hid_usage(),
+                Some(*want),
+                "{k:?} 의 hid_usage() 가 실측값과 다르다"
+            );
         }
     }
 
@@ -553,5 +719,144 @@ mod tests {
     fn jis_kana_and_jis_eisu_match_carbon_header_values() {
         assert_eq!(KeyCode::JIS_KANA, KeyCode(0x68), "한/영 = kVK_JIS_Kana");
         assert_eq!(KeyCode::JIS_EISU, KeyCode(0x66), "한자 = kVK_JIS_Eisu");
+    }
+
+    // ── F-01 `from_web_code` — 헤더에서 읽은 값 몇 개를 직접 단언 ──────────────
+
+    #[test]
+    fn from_web_code_matches_header_values_for_a_sample() {
+        assert_eq!(from_web_code("Space"), Some(KeyCode(0x31)), "kVK_Space");
+        assert_eq!(from_web_code("Enter"), Some(KeyCode(0x24)), "kVK_Return");
+        assert_eq!(from_web_code("Escape"), Some(KeyCode(0x35)), "kVK_Escape");
+        assert_eq!(from_web_code("KeyA"), Some(KeyCode(0x00)), "kVK_ANSI_A");
+        assert_eq!(from_web_code("KeyZ"), Some(KeyCode(0x06)), "kVK_ANSI_Z");
+        assert_eq!(from_web_code("Digit0"), Some(KeyCode(0x1D)), "kVK_ANSI_0");
+        assert_eq!(from_web_code("Digit1"), Some(KeyCode(0x12)), "kVK_ANSI_1");
+        assert_eq!(from_web_code("F13"), Some(KeyCode(0x69)), "kVK_F13");
+        assert_eq!(
+            from_web_code("Semicolon"),
+            Some(KeyCode(0x29)),
+            "kVK_ANSI_Semicolon"
+        );
+        assert_eq!(
+            from_web_code("Backquote"),
+            Some(KeyCode(0x32)),
+            "kVK_ANSI_Grave"
+        );
+    }
+
+    /// `Backspace`(웹)는 macOS 물리 delete 키(0x33), `Delete`(웹)는 forward-delete
+    /// (0x75) — 반대로 섞으면 안 된다.
+    #[test]
+    fn from_web_code_distinguishes_backspace_and_forward_delete() {
+        assert_eq!(from_web_code("Backspace"), Some(KeyCode(0x33)));
+        assert_eq!(from_web_code("Delete"), Some(KeyCode(0x75)));
+    }
+
+    /// 표에 없는 코드(F21~F24 등, 헤더에 `kVK_*` 상수가 없다)는 `None`.
+    #[test]
+    fn from_web_code_returns_none_for_unknown_codes() {
+        assert_eq!(from_web_code("F21"), None);
+        assert_eq!(from_web_code("NumpadEnter"), None);
+        assert_eq!(from_web_code(""), None);
+        assert_eq!(from_web_code("MetaLeft"), None);
+    }
+
+    /// 표 안에 중복 keycode 가 없다 — 서로 다른 웹 코드가 같은 물리 키로
+    /// 뭉개지면 전역 단축키 레코더가 서로 다른 두 키를 구분하지 못한다.
+    #[test]
+    fn from_web_code_table_has_no_duplicate_keycodes() {
+        const CODES: &[&str] = &[
+            "KeyA",
+            "KeyB",
+            "KeyC",
+            "KeyD",
+            "KeyE",
+            "KeyF",
+            "KeyG",
+            "KeyH",
+            "KeyI",
+            "KeyJ",
+            "KeyK",
+            "KeyL",
+            "KeyM",
+            "KeyN",
+            "KeyO",
+            "KeyP",
+            "KeyQ",
+            "KeyR",
+            "KeyS",
+            "KeyT",
+            "KeyU",
+            "KeyV",
+            "KeyW",
+            "KeyX",
+            "KeyY",
+            "KeyZ",
+            "Digit0",
+            "Digit1",
+            "Digit2",
+            "Digit3",
+            "Digit4",
+            "Digit5",
+            "Digit6",
+            "Digit7",
+            "Digit8",
+            "Digit9",
+            "Space",
+            "Enter",
+            "Tab",
+            "Escape",
+            "Backspace",
+            "Delete",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Minus",
+            "Equal",
+            "BracketLeft",
+            "BracketRight",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "Comma",
+            "Period",
+            "Slash",
+            "Backquote",
+            "F1",
+            "F2",
+            "F3",
+            "F4",
+            "F5",
+            "F6",
+            "F7",
+            "F8",
+            "F9",
+            "F10",
+            "F11",
+            "F12",
+            "F13",
+            "F14",
+            "F15",
+            "F16",
+            "F17",
+            "F18",
+            "F19",
+            "F20",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+        ];
+        let mut seen: Vec<KeyCode> = CODES.iter().map(|c| from_web_code(c).unwrap()).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            before,
+            "from_web_code 표에 중복 keycode 가 있다"
+        );
     }
 }
