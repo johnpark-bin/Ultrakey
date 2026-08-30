@@ -538,6 +538,28 @@ python3 -c "import json,os;d=json.load(open(os.path.expanduser('~/.config/karabi
 
 ⬜ **2-b(meh · bleh)와 2-c(마우스 이벤트)는 이번에 수행하지 않았다.** 같은 코드 경로(`handle_modifier_source_event`)를 타므로 회귀 테스트로는 덮여 있으나, 실기기 확인은 남아 있다.
 
+### ⛔ caps lock 을 소스로 쓸 때의 알려진 한계 (2026-08-30 실측)
+
+⭐ **caps lock 은 래칭 키라, 지금 구현(경로 A)에서는 hyper 가 홀드가 아니라 토글로 동작한다.**
+
+실측 절차 — hyper 소스를 caps lock 으로 두고, 소스 키를 **톡 눌렀다 떼기**를 3회 반복하며 사이사이 `a` 를 눌렀다.
+
+| 순서 | 관찰 |
+| :--- | :--- |
+| 1번째 누름 → `a` | `a` 가 `⌃⌥⌘` 를 달고 나갔다 (hyper **켜짐**) |
+| 2번째 누름 → `a` | `a` 에 modifier 가 **없다** (hyper **꺼짐**) |
+| 3번째 누름 → `a` | 다시 `⌃⌥⌘` 를 달고 나갔다 (hyper **켜짐**) |
+
+증거: [`screenshots/issue-13-capslock-latching.png`](screenshots/issue-13-capslock-latching.png)
+
+**원인**: caps lock 은 누를 때만 `flagsChanged` 를 보내고 뗄 때는 보내지 않는다. 그래서 `key-remapping-engine.md` §5 #18 의 down/up 환원이 "1번째 = 누름, 2번째 = 뗌"으로 해석한다. ⛔ **경로 A 만으로는 고칠 수 없다** — 오지 않는 이벤트를 만들어낼 방법이 없다.
+
+**해법(예정)**: 경로 B 로 caps lock 을 사용되지 않는 모멘터리 키(`F18` 등)에 커널 매핑하고 hyper 규칙을 그 키에 건다. 경로 B 규칙 배정은 **F-08(M2 2차)** 소관이라 그때 함께 구현한다 — `key-remapping-engine.md` §5 #20.
+
+**그때까지의 우회**: caps lock 이 아닌 **모멘터리 소스 키**를 쓰면 정상 동작한다 — `right command` · `right option` · `right control` · `F13` 등. 이 문서의 항목 2·3 실측도 모멘터리 키(`left control`)로 통과시킨 것이다.
+
+⭐ 함께 고친 것: 합성 이벤트에 caps lock 의 **잠금 비트(`alphaShift`)가 따라붙어** 다른 앱이 caps lock 켜짐으로 인식하던 문제는 해소했다(§5 #21). 수정 후 프로브의 `⇪` 열이 전 행 `F` 다. ⚠️ 이때 하드웨어 잠금은 애초에 걸리지 않았다(`ioreg` 의 `HIDCapsLockState` = `No`) — 이벤트 flags 층위만의 문제였다.
+
 ### 2-b. meh · bleh
 
 `Hyperkey` 탭에서 meh·bleh 체크박스를 켜고 **서로 다른 소스 키**를 고른다(같은 키를 고르면 hyper 가 이긴다 — UI 가 경고를 띄운다).

@@ -187,11 +187,17 @@ impl Arbiter {
         let active = self.state.active_synth_flags();
         if !active.is_empty() {
             if ev.kind.is_key() {
-                return Outcome::pass_with_flags(Layer::HyperModifier, ev.flags | active);
+                return Outcome::pass_with_flags(
+                    Layer::HyperModifier,
+                    Self::strip_caps_lock_bit(cfg, ev.flags | active),
+                );
             }
             if ev.kind.is_click() || ev.kind.is_drag() || ev.kind.is_move() || ev.kind.is_scroll() {
                 return if self.mouse_should_apply(cfg, ev.kind) {
-                    Outcome::pass_with_flags(Layer::HyperModifier, ev.flags | active)
+                    Outcome::pass_with_flags(
+                        Layer::HyperModifier,
+                        Self::strip_caps_lock_bit(cfg, ev.flags | active),
+                    )
                 } else {
                     Outcome::pass(Layer::HyperModifier)
                 };
@@ -200,6 +206,46 @@ impl Arbiter {
 
         // 계층 5: 통과.
         Outcome::pass(Layer::Passthrough)
+    }
+
+    /// ⭐ caps lock 이 modifier 소스로 배정돼 있으면 잠금 비트(`alphaShift`)를 지운다
+    /// (2026-08-30, M2 1차 / 이슈 #13 — 실측으로 발견한 결함).
+    ///
+    /// **문제**: caps lock 을 hyper 소스로 쓰면 hyper 자체는 정상 동작하지만, 다른 앱이
+    /// **caps lock 이 켜진 것으로 인식**한다. 실측(브라우저 프로브): 합성된 이벤트의
+    /// `getModifierState("CapsLock")` 이 계속 `true` 였고, 그래서 글자가 대문자로 나갔다.
+    ///
+    /// **원인은 우리 쪽이다.** 합성·통과 이벤트를 만들 때 `ev.flags` 를 그대로 물려주는데,
+    /// 원본 caps lock 이벤트에는 이미 `alphaShift` 비트가 실려 온다. 그 비트가 우리가
+    /// 내보내는 모든 이벤트에 그대로 따라붙는다.
+    ///
+    /// **결정**: caps lock 이 hyper/meh/bleh 소스로 **등록되어 있는 동안**, 이 엔진이
+    /// 만지는 이벤트에서 `alphaShift` 를 지운다. 근거 — 그 키를 modifier 소스로 배정한
+    /// 순간부터 사용자에게 caps lock 은 **더 이상 잠금 키가 아니다.** 잠금을 토글할 수단이
+    /// 없으므로 잠금 비트가 남아 있는 것은 사용자가 되돌릴 수 없는 상태이고, 그것은
+    /// `hyperkey.md` §8 이 요구하는 "caps lock 의 실제 잠금이 켜지지 않는다"와도 어긋난다.
+    ///
+    /// ⚠️ **범위를 좁게 잡았다** — 이 엔진이 **이미 손대는 이벤트**(합성 `flagsChanged`,
+    /// 조합이 활성인 동안 flags 를 얹어 통과시키는 이벤트)에만 적용한다. 아무것도 하지
+    /// 않고 통과시키는 이벤트까지 건드리려면 매 이벤트에 `CGEventSetFlags` 를 부르게 되어
+    /// 임계 경로 비용이 늘고(`architecture.md` §2.2), 얻는 것은 "이미 잠겨 있던 상태"의
+    /// 표시뿐이다. 그 경우는 경로 C(`hid_lock::set_caps_lock_state`)가 다룰 몫이다.
+    ///
+    /// 기각한 대안 — **경로 C 로 잠금을 끄는 것만으로 해결한다**: 이번 실측에서
+    /// `ioreg` 의 `HIDCapsLockState` 는 계속 `No` 였다. 즉 **하드웨어 잠금은 애초에
+    /// 걸리지 않았고** 이벤트 flags 에만 비트가 실려 있었다 — 경로 C 로는 이 경우를
+    /// 고칠 수 없다. 두 층위가 다르다는 것을 실측이 보여준 셈이라 여기 남긴다.
+    fn strip_caps_lock_bit(cfg: &EngineConfig, flags: EventFlags) -> EventFlags {
+        let caps_is_source = cfg
+            .rules
+            .modifier_rules
+            .iter()
+            .any(|r| r.source == KeyCode::CAPS_LOCK);
+        if caps_is_source {
+            flags & !EventFlags::CAPS_LOCK
+        } else {
+            flags
+        }
     }
 
     /// ⭐ `FlagsChanged` 를 `KeyDown`/`KeyUp` 으로 환원한다 (2026-08-30, M2 1차 / 이슈 #13).
@@ -267,7 +313,8 @@ impl Arbiter {
                 if matches!(event, Some(QuickPressEvent::HoldStart)) {
                     // ⭐ 여러 조합이 동시에 활성이면 OR 로 합산한다(keystate.rs 문서 참고).
                     // active_synth_flags() 는 방금 반영한 next 상태를 포함해 계산된다.
-                    let flags = ev.flags | self.state.active_synth_flags();
+                    let flags =
+                        Self::strip_caps_lock_bit(cfg, ev.flags | self.state.active_synth_flags());
                     out.push(SynthEvent {
                         kind: EventKind::FlagsChanged,
                         keycode: rule.source,
@@ -288,7 +335,8 @@ impl Arbiter {
                     // 유지한다(공유 비트가 있는 hyper/meh/bleh 조합 중 하나만 놓아도 나머지가
                     // 살아 있어야 하므로).
                     let remaining = self.state.active_synth_flags();
-                    let flags = (ev.flags & !rule.flags) | remaining;
+                    let flags =
+                        Self::strip_caps_lock_bit(cfg, (ev.flags & !rule.flags) | remaining);
                     out.push(SynthEvent {
                         kind: EventKind::FlagsChanged,
                         keycode: rule.source,
@@ -413,6 +461,15 @@ mod tests {
             keycode,
             flags,
             autorepeat: false,
+        }
+    }
+
+    /// `Disposition::PassWithFlags` 에서 flags 를 꺼낸다 — 통과 이벤트에 무엇이 얹혔는지
+    /// 보는 테스트가 여러 개라 헬퍼로 뽑는다.
+    fn passed_flags(out: &Outcome) -> EventFlags {
+        match out.disposition() {
+            Disposition::PassWithFlags(f) => f,
+            other => panic!("flags 가 얹힌 통과가 아니다: {other:?}"),
         }
     }
 
@@ -858,5 +915,92 @@ mod tests {
         };
         let drag_out = arb.arbitrate(&cfg, &drag_ev, false, Millis(11));
         assert_eq!(drag_out.disposition(), Disposition::Pass);
+    }
+    /// ⭐ 회귀 — caps lock 을 hyper 소스로 쓰면 합성 이벤트에 **잠금 비트가 남으면 안 된다.**
+    /// 실측(브라우저 프로브)에서 `getModifierState("CapsLock")` 이 계속 참이라 글자가
+    /// 대문자로 나갔다. 원인은 `ev.flags` 를 그대로 물려준 것이었다.
+    #[test]
+    fn caps_lock_source_strips_alpha_shift_from_synthesized_event() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        // 원본 caps lock 이벤트에는 잠금 비트가 실려 온다 — 그것이 실측된 형태다.
+        let ev = flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK);
+        let out = arb.arbitrate(&cfg, &ev, false, Millis(0));
+
+        assert_eq!(out.disposition(), Disposition::Consume);
+        let synth = out.emitted();
+        assert_eq!(synth.len(), 1, "합성 flagsChanged 하나가 나와야 한다");
+        assert!(
+            (synth[0].flags & EventFlags::CAPS_LOCK) == EventFlags::NONE,
+            "합성 이벤트에 alphaShift 가 남아 있다: {:?}",
+            synth[0].flags
+        );
+        assert_eq!(
+            synth[0].flags & EventFlags::HYPER_WITH_SHIFT,
+            EventFlags::HYPER_WITH_SHIFT,
+            "hyper 4비트는 그대로 실려야 한다"
+        );
+    }
+
+    /// ⭐ 회귀 — hyper 가 활성인 동안 **통과시키는 다른 키**에도 잠금 비트가 따라붙으면
+    /// 안 된다. 실측에서 후속 `KeyA` 가 계속 caps lock 켜짐으로 인식됐다.
+    #[test]
+    fn caps_lock_source_strips_alpha_shift_from_passed_through_keys() {
+        let cfg = hyper_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
+            false,
+            Millis(0),
+        );
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode(0x00), EventFlags::CAPS_LOCK),
+            false,
+            Millis(10),
+        );
+        let flags = passed_flags(&out);
+        assert!(
+            (flags & EventFlags::CAPS_LOCK) == EventFlags::NONE,
+            "통과 이벤트에 alphaShift 가 남아 있다: {flags:?}"
+        );
+        assert_eq!(flags & EventFlags::HYPER_WITH_SHIFT, EventFlags::HYPER_WITH_SHIFT);
+    }
+
+    /// ⭐ 과잉 적용 방지 — caps lock 이 **소스가 아니면** 잠금 비트를 건드리지 않는다.
+    /// 사용자가 정상적으로 caps lock 을 켜 둔 상태를 우리가 지워서는 안 된다.
+    #[test]
+    fn alpha_shift_is_preserved_when_caps_lock_is_not_a_source() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::RIGHT_COMMAND,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::RIGHT_COMMAND, EventFlags::CAPS_LOCK),
+            false,
+            Millis(0),
+        );
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode(0x00), EventFlags::CAPS_LOCK),
+            false,
+            Millis(10),
+        );
+        let flags = passed_flags(&out);
+        assert_eq!(
+            flags & EventFlags::CAPS_LOCK,
+            EventFlags::CAPS_LOCK,
+            "사용자가 켜 둔 caps lock 을 지워서는 안 된다"
+        );
     }
 }
