@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>Ultrakey Seek Highlight</title>
+<style>
+  /* ⭐ 이 창은 `transparent: true` 로 만들어진다(Rust 쪽 설정). 그리지 않은
+     영역은 하위 화면이 그대로 보여야 하므로 body 배경은 반드시 transparent —
+     index.html 의 `background: Canvas` 관행을 여기서는 따르지 않는다. */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+  }
+  #hl-canvas {
+    position: absolute;
+    inset: 0;
+    /* 클릭 통과는 네이티브(`set_ignore_cursor_events`)가 담당하지만,
+       혹시 그 설정이 아직 안 걸린 과도기 프레임에도 캔버스 자체가
+       마우스 이벤트를 가로채지 않도록 보험을 걸어 둔다. */
+    pointer-events: none;
+  }
+  /* 실패 진단 배지 — 평상시(정상 동작 시)에는 절대 그리지 않는다.
+     이 창은 화면 전체를 덮으므로, 성공 경로에서도 뭔가를 항상 그려 두면
+     사용자가 보는 화면에 상시 아티팩트가 남는다. __TAURI__ 부재나 리스너
+     등록 실패 같은 "떴는데 죽은" 상태만 여기로 눈에 띄게 드러낸다. */
+  #diag {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    z-index: 9;
+    font: 12px -apple-system, system-ui, sans-serif;
+    color: #fff;
+    background: rgba(0, 0, 0, .75);
+    padding: 3px 7px;
+    border-radius: 4px;
+    pointer-events: none;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="hl-canvas"></canvas>
+<div id="diag" hidden></div>
+<script>
+// F-03 Seek 오버레이 — 하이라이트 창(디스플레이 union frame 을 덮는 단일 창,
+// docs/spec/seek-overlay-ui.md §3.3 안 B). 좌표는 Rust 가 이미 이 창의
+// 로컬 좌표로 변환해 보낸다 — 여기서는 좌표 변환을 하지 않는다.
+//
+// ⭐ 렌더러는 반드시 Canvas 2D 다. `docs/dev/*` 실기기 실측(M4 Pro, 듀얼
+// 디스플레이)에서 DOM(절대배치 div)은 후보 500개부터 총 예산(100ms)을
+// 넘겼고(86.8ms) Canvas 2D 는 후보 1000개에서도 21.1ms 였다. DOM 노드로
+// 하이라이트를 그리지 않는다 — §5 엣지케이스 10(후보 수백 개) 이 바로
+// 이 지점을 지적한다.
+
+function showDiag(text) {
+  const d = document.getElementById("diag");
+  if (!d) return;
+  d.textContent = text;
+  d.hidden = false;
+}
+
+let LABEL = "?";
+try {
+  LABEL = window.__TAURI__.webviewWindow.getCurrentWebviewWindow().label;
+} catch (e) {
+  // label 을 못 읽어도 렌더링 자체는 계속 시도한다 — 진단 문구에만 반영.
+}
+
+const canvas = document.getElementById("hl-canvas");
+const ctx = canvas.getContext("2d");
+
+// 팔레트 기본값 — Rust 가 항상 완전한 palette 를 보낸다는 전제지만,
+// 필드 누락 시에도 화면이 새하얗게/새까맣게 죽지 않도록 §4.2 의 제안
+// 기본값을 그대로 폴백으로 둔다.
+const PALETTE_FALLBACK = {
+  highlight_fill: "rgba(255, 214, 0, 0.35)",
+  highlight_stroke: "rgba(255, 214, 0, 0.9)",
+  selected_fill: "rgba(10, 132, 255, 0.30)",
+  selected_stroke: "#0A84FF",
+  line_stroke: "#0A84FF",
+  label_fg: "#ffffff",
+  label_bg: "rgba(0, 0, 0, 0.72)",
+  bar_bg: "rgba(0, 0, 0, 0.72)",
+  bar_fg: "#ffffff",
+  unselected_border_pt: 1.0,
+  selected_border_pt: 2.0,
+  line_width_pt: 1.5,
+  animation_ms: 120,
+};
+
+function paletteOf(payload) {
+  const p = payload.palette || {};
+  const merged = {};
+  for (const k in PALETTE_FALLBACK) merged[k] = (p[k] !== undefined && p[k] !== null) ? p[k] : PALETTE_FALLBACK[k];
+  return merged;
+}
+
+// backing store 를 devicePixelRatio 에 맞춘다 — 이게 없으면 배율이 다른
+// 디스플레이(Retina + 비Retina 혼용)에서 하이라이트 테두리가 흐려진다
+// (수용 기준: "배율이 다른 디스플레이에서 하이라이트가 흐려지지 않는다").
+// canvas.width/height 를 다시 쓰면 transform 이 identity 로 리셋되므로
+// 매번 setTransform 을 다시 걸어야 한다.
+function sizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeCanvas();
+
+let lastPayload = null;
+window.addEventListener("resize", () => {
+  sizeCanvas();
+  if (lastPayload) draw(lastPayload);
+});
+
+// ── 라벨 배경/텍스트 위치 계산 ──────────────────────────────────────────
+const LABEL_FONT = "11px -apple-system, system-ui, sans-serif";
+const LABEL_PAD_X = 4;
+const LABEL_H = 14;
+const LABEL_GAP = 2;
+
+function labelBoxFor(rect, textWidth) {
+  const w = textWidth + LABEL_PAD_X * 2;
+  let y = rect.y - LABEL_GAP - LABEL_H;
+  // ⚠️ 라벨이 창 밖(위쪽)으로 나가면 하이라이트 사각형 아래에 그린다.
+  if (y < 0) y = rect.y + rect.height + LABEL_GAP;
+  return { x: rect.x, y, w, h: LABEL_H };
+}
+
+function roundRectPath(x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+// ── 애니메이션 상태 ──────────────────────────────────────────────────
+// ⚠️ requestAnimationFrame 루프를 상시 돌리지 않는다 — 선택이 바뀐 뒤
+// animation_ms 동안만 추가 프레임을 요청하고 스스로 멈춘다. 유휴 상태에서
+// 이 창이 CPU 를 먹으면 오버레이가 항상 떠 있다는 성격상(§3.1) 배터리에
+// 바로 영향을 준다.
+let selKey = null; // 직전 프레임에서 선택된 매치의 식별 문자열
+let animStart = 0;
+let animEnd = 0; // 0 이면 애니메이션 없음(즉시 스냅)
+
+function keyOfSelected(payload) {
+  const items = payload.highlights || [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].selected) {
+      const r = items[i].rect;
+      return items[i].label + "|" + r.x + "," + r.y + "," + r.width + "," + r.height;
+    }
+  }
+  return null;
+}
+
+function easeOutCubic(t) {
+  const u = 1 - t;
+  return 1 - u * u * u;
+}
+
+// ── 실제 드로잉 ──────────────────────────────────────────────────────
+function draw(payload) {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const pal = paletteOf(payload);
+  const items = payload.highlights || [];
+
+  ctx.clearRect(0, 0, w, h);
+
+
+  // 1. 연결선 — 하이라이트보다 먼저 그려 선이 하이라이트를 가리지 않게 한다.
+  if (payload.line) {
+    const l = payload.line;
+    ctx.save();
+    ctx.strokeStyle = pal.line_stroke;
+    ctx.lineWidth = pal.line_width_pt;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 2. 비선택 매치 — 출처별로 묶어서 그린다(fillStyle/strokeStyle 전환 최소화).
+  //    OCR 은 실선, Accessibility 는 파선 — 파선인 이유는 AX 매치가 텍스트
+  //    위치가 아니라 요소 전체(더 넓고 거친 프레임)이기 때문이다(§3.5).
+  //    사용자가 "이건 텍스트 위치가 아니라 요소 전체"임을 시각적으로 알 수
+  //    있어야 한다.
+  ctx.lineWidth = pal.unselected_border_pt;
+  ctx.fillStyle = pal.highlight_fill;
+  ctx.strokeStyle = pal.highlight_stroke;
+
+  ctx.setLineDash([]);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.selected || it.source === "Accessibility") continue;
+    const r = it.rect;
+    ctx.fillRect(r.x, r.y, r.width, r.height);
+    ctx.strokeRect(r.x, r.y, r.width, r.height);
+  }
+
+  ctx.setLineDash([4, 3]);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.selected || it.source !== "Accessibility") continue;
+    const r = it.rect;
+    ctx.fillRect(r.x, r.y, r.width, r.height);
+    ctx.strokeRect(r.x, r.y, r.width, r.height);
+  }
+  ctx.setLineDash([]);
+
+  // 3. 선택된 매치 — 항상 마지막에, 다른 하이라이트 위로. 출처가 AX 든
+  //    OCR 이든 강조 표현 자체는 동일하게 적용한다(§3.5, 추정).
+  let selRect = null;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].selected) { selRect = items[i]; break; }
+  }
+  if (selRect) {
+    const r = selRect.rect;
+    ctx.fillStyle = pal.selected_fill;
+    ctx.fillRect(r.x, r.y, r.width, r.height);
+
+    // 테두리만 페이드 인 — 채움은 즉시 보여도 어색하지 않지만, 테두리가
+    // 서서히 나타나는 쪽이 "선택이 여기로 옮겨왔다"는 신호로 더 뚜렷하다.
+    let alpha = 1;
+    if (animEnd) {
+      const t = Math.min(1, Math.max(0, (performance.now() - animStart) / (animEnd - animStart)));
+      alpha = easeOutCubic(t);
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = pal.selected_stroke;
+    ctx.lineWidth = pal.selected_border_pt;
+    ctx.strokeRect(r.x, r.y, r.width, r.height);
+    ctx.restore();
+  }
+
+  // 4. 라벨 — 배경을 한 번에, 텍스트를 한 번에 그려 fillStyle 전환을 줄인다.
+  ctx.font = LABEL_FONT;
+  ctx.textBaseline = "middle";
+  const boxes = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const tw = ctx.measureText(it.label).width;
+    boxes.push(labelBoxFor(it.rect, tw));
+  }
+  ctx.fillStyle = pal.label_bg;
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    roundRectPath(b.x, b.y, b.w, b.h, 3);
+    ctx.fill();
+  }
+  ctx.fillStyle = pal.label_fg;
+  for (let i = 0; i < items.length; i++) {
+    const b = boxes[i];
+    ctx.fillText(items[i].label, b.x + LABEL_PAD_X, b.y + b.h / 2 + 0.5);
+  }
+
+  // 6. 상한 정책 발동 표시 — §4.2 의 후보 상한(200개)이 발동했음을
+  //    사용자가 알 수 있게 우하단에 작게 표시한다.
+  if (payload.omitted > 0) {
+    const text = "+" + payload.omitted + "개 더";
+    ctx.font = LABEL_FONT;
+    const tw = ctx.measureText(text).width;
+    const pad = 6;
+    const bw = tw + pad * 2;
+    const bh = 18;
+    const bx = w - bw - 10;
+    const by = h - bh - 10;
+    ctx.fillStyle = pal.bar_bg;
+    roundRectPath(bx, by, bw, bh, 4);
+    ctx.fill();
+    ctx.fillStyle = pal.bar_fg;
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, bx + pad, by + bh / 2 + 0.5);
+  }
+}
+
+// ── 프레임 코얼레싱 ──────────────────────────────────────────────────
+// 한 rAF 프레임 안에 여러 payload 가 도착하면 마지막 것만 그린다(§3.6).
+let pending = null;
+let rafScheduled = false;
+
+function scheduleFrame() {
+  if (rafScheduled) return;
+  rafScheduled = true;
+  requestAnimationFrame(() => {
+    rafScheduled = false;
+    if (!pending) return;
+    const payload = pending;
+    pending = null;
+    lastPayload = payload;
+    draw(payload);
+    // 선택 테두리 페이드 인이 진행 중이면 그 구간에 한해 추가 프레임을
+    // 요청한다 — 애니메이션이 끝나면 이 재귀는 스스로 멈춘다.
+    if (animEnd && performance.now() < animEnd) {
+      pending = lastPayload;
+      scheduleFrame();
+    }
+  });
+}
+
+function onFrame(payload) {
+  const key = keyOfSelected(payload);
+  if (payload.animate && key !== selKey) {
+    const ms = (payload.palette && payload.palette.animation_ms) || PALETTE_FALLBACK.animation_ms;
+    animStart = performance.now();
+    animEnd = animStart + ms;
+  } else if (!payload.animate) {
+    // accessibilityDisplayShouldReduceMotion — 즉시 스냅.
+    animEnd = 0;
+  }
+  selKey = key;
+  pending = payload;
+  scheduleFrame();
+}
+
+const tauri = window.__TAURI__;
+if (!tauri || !tauri.core || !tauri.event) {
+  showDiag("overlay-highlight: window.__TAURI__ 누락 (withGlobalTauri 확인)");
+} else {
+  const { invoke } = tauri.core;
+  // ⭐⭐ **`tauri.event.listen` 을 쓰면 안 된다.** 그 함수는 리스너를
+  // `target: Any` 로 등록해서, Rust 쪽이 `emit_to(EventTarget::webview_window(…))`
+  // 로 **대상을 지정해 보내도 모든 창이 다 받는다.** 실기기에서 실제로
+  // 밟았다 — 디스플레이 3 의 창이 디스플레이 2 의 프레임을 그려, 연결선이
+  // 엉뚱한 화면에 그려지고 경계를 넘는 선이 끊긴 것처럼 보였다.
+  // `getCurrentWebviewWindow().listen(…)` 은 리스너를 **이 창**으로 등록한다.
+  const self_ = tauri.webviewWindow.getCurrentWebviewWindow();
+
+  self_.listen("overlay://frame", (ev) => {
+    try {
+      onFrame(ev.payload);
+    } catch (e) {
+      showDiag("overlay-highlight: 렌더 실패 — " + String(e));
+    }
+  }).then(() => {
+    return invoke("overlay_surface_ready", { label: LABEL });
+  }).catch((e) => {
+    showDiag("overlay-highlight: 초기화 실패 — " + String(e));
+  });
+}
+</script>
+</body>
+</html>

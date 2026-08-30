@@ -17,6 +17,7 @@ ultrakey-korean = { workspace = true }
 ultrakey-permissions = { workspace = true }
 ultrakey-i18n = { workspace = true }
 ultrakey-seek = { workspace = true }
+ultrakey-overlay = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -25,7 +26,11 @@ tracing-subscriber = { workspace = true }
 # 별도로 추가하지 않는다, 위임 지시). `image-png` 는 트레이 아이콘을 32x32.png 에서
 # `tauri::image::Image::from_bytes` 로 런타임 디코딩하는 데 필요하다(둘 다 워크스페이스
 # 루트가 아니라 이 앱 크레이트의 tauri 항목에만 붙인다).
-tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+# ⭐ `macos-private-api` — F-03 오버레이가 요구하는 `transparent: true` 창이
+# 이 기능 없이는 만들어지지 않는다(`WebviewWindowBuilder::transparent` 자체가
+# 컴파일되지 않는다). App Store 배포와 배타적이지만 이 제품은 애초에 비샌드박스
+# 직접 배포다(`code-signing.md`, `platform-constraints.md` §3) — 잃는 것이 없다.
+tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = { workspace = true }
 
 [build-dependencies]

@@ -117,6 +117,18 @@ pub const KOREAN_WON_KEY_TYPES_BACKTICK: &str = "korean.wonKeyTypesBacktick";
 /// D-K9). 구현·리뷰 양쪽에서 놓치기 쉬운 지점이라 여기서도 명시해 둔다.
 pub const KOREAN_DISABLE_IN_REMOTE_DESKTOP: &str = "korean.disableInRemoteDesktop";
 
+// ── F-03 Seek 오버레이(`seek-overlay-ui.md` §3.4, 이슈 #34) ──
+//
+// ⭐ **부재 = 기본값** (F-15 §3.6). 검색 바를 한 번도 옮기지 않았으면 이 두 키가
+// 아예 없고, 그때의 기본 위치는 "호출 시점에 커서가 있는 디스플레이의 상단부
+// 중앙" 이다(§3.4 `(추정)`). 사용자가 드래그해 옮기는 **즉시** 기록한다 —
+// 원본의 `persistPosition` 과 같은 규약(§1.1, defaults 실측).
+
+/// 검색 바 창의 좌상단 x — **전역 화면 좌표(pt, 좌상단 원점)**.
+pub const SEEK_SEARCH_BAR_X: &str = "seek.searchBar.x";
+/// 검색 바 창의 좌상단 y — 상동.
+pub const SEEK_SEARCH_BAR_Y: &str = "seek.searchBar.y";
+
 // ── F-17 키보드별 설정(`per-device-settings.md` §3.3~3.4, D-17-2) —
 // `ultrakey_core::perdevice` 가 소비한다 ──
 //
@@ -194,6 +206,8 @@ pub fn all() -> &'static [&'static str] {
         KOREAN_HANJA_KEY_CONVERTS_HANJA,
         KOREAN_WON_KEY_TYPES_BACKTICK,
         KOREAN_DISABLE_IN_REMOTE_DESKTOP,
+        SEEK_SEARCH_BAR_X,
+        SEEK_SEARCH_BAR_Y,
         PER_DEVICE_MANAGED,
     ]
 }
@@ -228,6 +242,8 @@ mod tests {
                     || key.starts_with("presets.")
                     || key.starts_with("general.")
                     || key.starts_with("korean.")
+                    // F-03 Seek 오버레이(이슈 #34) — 검색 바 위치.
+                    || key.starts_with("seek.")
                     || key.starts_with("perDevice."),
                 "접두사 규칙을 벗어난 키: {key}"
             );

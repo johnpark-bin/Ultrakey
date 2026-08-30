@@ -73,6 +73,15 @@ use ultrakey_presets::{
 
 /// ⭐ F-10 메뉴 항목 id — 그대로 i18n 카탈로그 키이기도 하다(고유하고, 라벨을
 /// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
+/// ⭐ F-03 Seek 오버레이 (이슈 #34) — 창 생성·네이티브 설정·증분 수신.
+mod overlay;
+/// ⭐ F-03 실기기 검증 하네스 (이슈 #34). `ULTRAKEY_OVERLAY_DEMO` 가 없으면
+/// 아무것도 하지 않는다. F-01(세션 상태 머신)이 들어오면 지워도 된다.
+mod overlay_demo;
+/// ⭐ F-03 P3 실측 하네스 (이슈 #34). `ULTRAKEY_OVERLAY_SPIKE` 가 없으면
+/// 아무것도 하지 않는다 — 제품 경로에 끼어들지 않는다.
+mod overlay_spike;
+
 mod menu_ids {
     pub const IGNORE_APP: &str = "menu.ignore_app";
     pub const SETTINGS: &str = "menu.settings";
@@ -2263,7 +2272,13 @@ fn main() {
     // 트레이 아이콘·엔진·`CGEventTap` 을 단 한 순간도 만들지 않는다. 종료는
     // 정리할 자원이 아무것도 없는 시점이라 `Engine::shutdown()` 같은 절차 없이
     // 바로 반환해도 안전하다.
-    if bundle::other_instance_running() {
+    // ⭐ F-03 의 두 하네스(P3 스파이크·오버레이 데모, 이슈 #34)는 이 판정을
+    // 건너뛴다. 둘 다 `setup()` 안에서 권한 감시·엔진 기동보다 **먼저
+    // 반환**하므로 `CGEventTap` 을 단 한 순간도 만들지 않는다 — §5 항목 1 이
+    // 막으려는 것(탭 두 개)이 애초에 발생하지 않는다. 이 예외가 없으면 이미
+    // 떠 있는 인스턴스(병렬 위임의 검증용 빌드 등)를 죽이지 않고서는 오버레이를
+    // 띄워 볼 수도, 렌더링 지연을 잴 수도 없다.
+    if !overlay_spike::enabled() && !overlay_demo::enabled() && bundle::other_instance_running() {
         tracing::warn!(
             "같은 번들 ID 로 이미 실행 중인 인스턴스가 있다 — 새 CGEventTap 을 설치하지 \
              않고 이 프로세스를 즉시 종료한다(§5 항목 1)"
@@ -2314,6 +2329,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state.clone())
+        // ⭐ F-03 P3 스파이크가 웹뷰에서 ack 을 받는 통로(이슈 #34). 스파이크가
+        // 꺼져 있으면 아무도 쓰지 않는 빈 상자로 남는다.
+        .manage(std::sync::Arc::new(overlay_spike::SpikeChannel::default()))
+        // ⭐ F-03 오버레이 웹뷰 창들의 공유 상태(준비 여부·마지막 프레임).
+        .manage(std::sync::Arc::new(Mutex::new(overlay::SurfaceState::default())))
         .invoke_handler(tauri::generate_handler![
             modal_copy,
             open_settings,
@@ -2327,11 +2347,25 @@ fn main() {
             general_set_hide_menu_bar_icon,
             open_keyboard_settings,
             keyboard_fn_state,
+            overlay_spike::overlay_spike_ack,
+            overlay_spike::overlay_spike_ready,
+            overlay::overlay_surface_ready,
+            overlay::overlay_select_match,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // 3-b) ⭐ F-03 P3 실측(이슈 #34) — 환경변수가 있을 때만. 스파이크는
+            // 제품 세션이 아니라 숫자를 얻는 것이 목적이라, 측정이 끝나면
+            // 스스로 프로세스를 끝낸다. 권한 감시·엔진 기동보다 **앞**에 두어
+            // 측정 중에 엔진이 끼어들지 않게 한다.
+            if overlay_spike::enabled() {
+                tracing::warn!("⭐ ULTRAKEY_OVERLAY_SPIKE — F-03 P3 렌더링 지연 실측 모드로 기동한다");
+                overlay_spike::start(app.handle());
+                return Ok(());
+            }
 
             // 4) ⭐ 설정 저장소 초기화(F-15 §3.1) — `app_data_dir()` 은 실행 중인
             // 앱 핸들이 있어야 얻을 수 있어 `main()` 앞부분이 아니라 여기서 한다.
@@ -2384,6 +2418,23 @@ fn main() {
                 .gate_controller
                 .set_korean_exclusion_enabled(korean_settings.disable_in_remote_desktop);
             *state.store.lock().unwrap() = settings_store;
+
+            // 4-b) ⭐ F-03 실기기 검증 하네스(이슈 #34) — 환경변수가 있을 때만.
+            // 설정 저장소가 채워진 **뒤**에 둔다: 검색 바 위치(F-15 "부재 =
+            // 기본값")를 읽어야 하기 때문이다.
+            if overlay_demo::enabled() {
+                let stored = {
+                    let store = state.store.lock().unwrap();
+                    overlay_demo::read_stored_origin(&store)
+                };
+                tracing::warn!(?stored, "⭐ ULTRAKEY_OVERLAY_DEMO — F-03 오버레이 검증 모드");
+                overlay_demo::start(app.handle(), stored);
+                // ⛔ 여기서 반환한다 — 데모 모드는 **엔진(CGEventTap)을 켜지
+                // 않는다.** 오버레이 검증에 리매핑이 필요 없고, 탭을 안 켜야
+                // 이미 떠 있는 인스턴스와 나란히 돌릴 수 있다(아래 단일
+                // 인스턴스 예외의 전제가 이것이다).
+                return Ok(());
+            }
 
             let handle = app.handle().clone();
             // ⭐ 이슈 #32 Phase 1 — 설정 창 크기 복원 + 디바운스 저장 배선. 저장소를
