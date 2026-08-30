@@ -39,11 +39,13 @@
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
-use tauri::{LogicalSize, Manager, State, Wry};
+use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
 
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
 use ultrakey_core::keycode::{KeyCode, SourceKey};
@@ -1053,38 +1055,47 @@ fn key_affects_modifier_rules(key: &str) -> bool {
     )
 }
 
-/// `hyperkey.md` §4 / `preferences-ui.md` §3.1 실측값(pt). 탭 전환 시 창을 이
-/// 크기로 리사이즈한다(D-E: 창 조작은 반드시 `on_main_thread` 로만).
-fn tab_window_size(tab: &str) -> Option<(u32, u32)> {
-    match tab {
-        "seek" => Some((555, 378)),
-        "hyperkey" => Some((710, 517)),
-        "presets" => Some((825, 527)),
-        // ⭐ **실측으로 확정했다**(명세 §9 #5 가 "구현 후 실제 렌더링 크기 측정"
-        // 으로 남긴 자리). 이 탭의 마크업을 실제로 렌더해 잰 값:
-        //   panel-korean scrollHeight = 416px · .panel 상하 패딩 = 40px ·
-        //   타이틀바 = 28px  →  필요한 창 높이 = 484
-        // 너비 613 은 항목이 한 줄에 들어가는 General 과 같아 그대로 쓴다.
-        // ⚠️ 처음 잡았던 잠정치 400 은 **약 84px 모자라** 내용이 잘렸다 —
-        // 지어낸 값을 쓰지 않는다는 규범이 실제로 값을 바꾼 사례다.
-        //
-        // ⓘ 관찰: 같은 방법으로 재면 `presets`(내용 690px, 창 527)와
-        // `general`(내용 408px, 창 273)은 **내용이 창보다 크다.** 그 둘은
-        // SuperKey v1.66 을 실측한 원본 창 크기를 그대로 쓰는 자리라
-        // (preferences-ui.md §3.1) 클론의 마크업이 더 길어진 결과다.
-        // ⛔ 이번 범위에서 고치지 않는다 — F-16 이 만든 문제가 아니다.
-        "korean" => Some((613, 484)),
-        // ⭐ F-17 `Keyboards` 탭(이슈 #28). 명세 `per-device-settings.md` §3.1.4 는
-        // 이 탭이 **신설이라 실측 근거가 없다**고 밝히며 `Hyperkey` 와 같은
-        // 710×517 을 **잠정 목표**로 제안했다 — 그 값을 그대로 쓴다.
-        // ⚠️ 위 `korean` 처럼 실제 렌더링을 재서 확정한 값이 **아니다.**
-        // 목록 편집기(§3.4.1)는 행 수에 따라 높이가 변하므로, 창을 늘이는 대신
-        // 목록 영역만 세로 스크롤한다(§3.1.4) — 그래서 고정값 하나로 족하다.
-        "keyboards" => Some((710, 517)),
-        "general" => Some((613, 273)),
-        _ => None,
-    }
+/// 설정 창에 실재하는 탭 이름 화이트리스트 — `settings.html` 의 `const TABS` 와
+/// 항상 양방향으로 일치해야 한다(`tests::every_tab_in_settings_html_is_a_known_tab`
+/// 가 검증한다).
+///
+/// ⭐ 이 화이트리스트 자체는 이슈 #28 에서 실기기로 터진 결함 때문에 반드시
+/// 있어야 한다: `settings.html` 이 `Keyboards` 탭을 `TABS` 에 넣었는데 이쪽(당시
+/// `tab_window_size`)에 대응 항목을 넣지 않아 `settings_set_tab` 이 `알 수 없는
+/// 탭: keyboards` 로 거부하고 **설정 창 전체가 오류 화면으로 죽었다.** 창 크기
+/// 테이블(예전 `tab_window_size`)은 이슈 #32 Phase 1 에서 걷어냈다 — 탭마다
+/// 창을 리사이즈하는 원본 SuperKey 동작을 클론이 따르지 않기로 결정했기
+/// 때문이다(단일 크기 고정 + 사용자 조절 크기 영속, 아래 `SETTINGS_WINDOW_DEFAULT`
+/// 참고). 그래도 "프런트가 아는 탭을 Rust 도 아는가"라는 검증 자체는 여전히
+/// 필요해 이 화이트리스트로 남긴다.
+const KNOWN_TABS: &[&str] = &["seek", "hyperkey", "presets", "korean", "keyboards", "general"];
+
+fn is_known_tab(tab: &str) -> bool {
+    KNOWN_TABS.contains(&tab)
 }
+
+/// 설정 창 기본 크기 — 가장 큰 탭(`Presets`)이 잘리지 않는 크기(이슈 #32 Phase 1).
+///
+/// ⭐ **실측값이다**(2026-08-30). 창 너비 825pt 에서 각 탭 `#panel-<탭>` 을 실제로
+/// 렌더해 `scrollHeight` 를 쟀다:
+///   seek 55 · hyperkey 402 · presets **749** · korean 539 · keyboards 665 ·
+///   general 426
+/// 가장 큰 것은 `presets` 749. 여기에 `.panel` 상하 패딩 40 + 창 크롬(타이틀바)
+/// 32 를 더해 높이 **821**. (크롬 32 는 같은 실측에서 확인했다 — 창 높이 527 일
+/// 때 `window.innerHeight` 가 495 였다.)
+/// ⚠️ 예전 `tab_window_size` 의 `korean` 항목이 쓰던 "타이틀바 28" 은 이 실측과
+/// 어긋난다 — 이 값을 정할 때는 32 를 쓴다.
+/// 너비 825 는 원본 `Presets` 탭 실측값이자 6개 탭 중 최대값이라 그대로 쓴다.
+///
+/// ⚠️ 남은 불확실성: `seek` 은 M3 미구현이라 패널이 사실상 비어 있다(55px) — 이
+/// 실측이 최종값이 아니다. M3 가 들어오면 다시 재야 한다.
+///
+/// ⭐ 실제 기본 크기는 `tauri.conf.json` 의 `settings` 창 선언이 정한다(Tauri 가
+/// 창을 만들 때 그 값을 쓴다) — 이 상수는 그 값의 근거를 문서화하고
+/// `tests::settings_window_default_matches_tauri_conf` 로 드리프트를 잡기 위한
+/// 것이라 런타임 경로에서는 참조하지 않는다.
+#[allow(dead_code)]
+const SETTINGS_WINDOW_DEFAULT: (u32, u32) = (825, 821);
 
 /// hyperkey + presets + korean 세 설정 묶음을 합쳐 `EngineConfig` 하나로 조립하는
 /// 단일 지점(위임 지시서 §4) — `Engine::reconfigure` 로 넘길 값은 항상 이 함수를 거친다.
@@ -1299,6 +1310,15 @@ struct AppState {
     /// 해지되므로 앱 생애주기 내내 들고 있어야 한다 — 값 자체는 읽지 않는다.
     #[allow(dead_code)]
     system_event_observer: Mutex<Option<SystemEventObserver>>,
+    // ── 이슈 #32 Phase 1: 설정 창 크기 영속(F-15 규약) ──────────────────────
+    /// 우리가 방금 `resize_settings_window()` 로 프로그램적으로 넣은 논리 크기.
+    /// `on_settings_window_resized` 가 이 값과 같은 `Resized` 이벤트를 "사용자가
+    /// 조절한 것"으로 착각하지 않도록 걸러내는 데 쓴다 — `settings_set_tab` 의
+    /// `persist` 인자와 같은 이유(F-15 §8, 그 문서 주석 참고)로 존재한다.
+    last_applied_window_size: Mutex<Option<(u32, u32)>>,
+    /// 창 크기 저장 디바운스 스레드의 손잡이. `wire_window_size_persistence` 가
+    /// `setup()` 안에서 한 번 채운다 — 이벤트마다 스레드를 새로 만들지 않는다.
+    window_size_debouncer: Mutex<Option<WindowSizeDebouncer>>,
 }
 
 #[tauri::command]
@@ -1832,15 +1852,22 @@ fn settings_resolve_conflict(
     }
 }
 
-/// 탭 전환 — 창 리사이즈(§3.1·§3.3, D-E) + (`persist` 일 때만) `ui.lastTab` 저장.
+/// 탭 전환 — 탭 화이트리스트 검증 + (`persist` 일 때만) `ui.lastTab` 저장.
+///
+/// ⚠️ 이슈 #32 Phase 1 부터 이 커맨드는 **창을 리사이즈하지 않는다** — 원본
+/// SuperKey 는 탭마다 창 크기를 바꾸지만(§3.1·§3.3), 클론은 단일 크기로
+/// 고정하고 사용자가 조절한 크기를 영속화하기로 결정했다(`SETTINGS_WINDOW_DEFAULT`,
+/// `wire_window_size_persistence` 참고). 그래도 프런트가 모르는 탭 이름이
+/// 들어오면 여전히 거부한다 — `is_known_tab` 화이트리스트의 존재 이유(이슈 #28
+/// 회귀 방지)는 리사이즈 여부와 무관하다.
 ///
 /// ⭐ **`persist` 인자가 왜 필요한가 — F-15 §8 수용 기준을 지키기 위해서다.**
-/// 프런트엔드는 창을 처음 그릴 때도 이 커맨드를 불러 "마지막 탭의 크기"로 창을
-/// 맞춰야 한다(§3.1: 탭마다 창 크기가 다르다). 그런데 그때도 `ui.lastTab` 을 쓰면
-/// **환경설정 창을 열기만 해도 `settings.json` 이 생긴다** — "설정을 한 번도 건드리지
-/// 않으면 저장 파일이 아예 생기지 않는다"(F-15 §8, §3.1)가 첫 실행에서 바로 깨진다.
-/// 그래서 최초 렌더는 `persist: false`(리사이즈만), 사용자가 실제로 탭을 누르거나
-/// 방향키로 옮긴 경우에만 `persist: true` 로 부른다.
+/// 프런트엔드는 창을 처음 그릴 때도 이 커맨드를 불러 탭 상태를 맞춰야 한다.
+/// 그런데 그때도 `ui.lastTab` 을 쓰면 **환경설정 창을 열기만 해도 `settings.json`
+/// 이 생긴다** — "설정을 한 번도 건드리지 않으면 저장 파일이 아예 생기지
+/// 않는다"(F-15 §8, §3.1)가 첫 실행에서 바로 깨진다. 그래서 최초 렌더는
+/// `persist: false`, 사용자가 실제로 탭을 누르거나 방향키로 옮긴 경우에만
+/// `persist: true` 로 부른다.
 ///
 /// 기각한 대안: "저장된 값과 다를 때만 쓴다" — 저장된 값이 **없을 때**(첫 실행)
 /// 기본 탭을 쓰게 되므로 같은 문제가 그대로 남는다. 구분해야 하는 것은 값의 차이가
@@ -1848,11 +1875,12 @@ fn settings_resolve_conflict(
 #[tauri::command]
 fn settings_set_tab(
     state: State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
     tab: String,
     persist: bool,
 ) -> Result<(), String> {
-    let size = tab_window_size(&tab).ok_or_else(|| format!("알 수 없는 탭: {tab}"))?;
+    if !is_known_tab(&tab) {
+        return Err(format!("알 수 없는 탭: {tab}"));
+    }
 
     if persist {
         let mut store = state.store.lock().map_err(|e| e.to_string())?;
@@ -1861,7 +1889,6 @@ fn settings_set_tab(
         }
     }
 
-    resize_settings_window(&app, size);
     Ok(())
 }
 
@@ -2117,6 +2144,8 @@ fn main() {
         normal_menu: Mutex::new(None),
         unauthorized_menu: Mutex::new(None),
         system_event_observer: Mutex::new(None),
+        last_applied_window_size: Mutex::new(None),
+        window_size_debouncer: Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -2193,6 +2222,9 @@ fn main() {
             *state.store.lock().unwrap() = settings_store;
 
             let handle = app.handle().clone();
+            // ⭐ 이슈 #32 Phase 1 — 설정 창 크기 복원 + 디바운스 저장 배선. 저장소를
+            // `state.store` 로 옮긴 바로 다음(위 줄)이라야 저장된 크기를 읽을 수 있다.
+            wire_window_size_persistence(&handle, &state);
             let state_for_monitor = state.clone();
 
             // 5-b) ⭐ F-10 메뉴바(`NSStatusItem`) — 정상/`unauthorizedMenu` 두 벌을
@@ -2432,6 +2464,224 @@ fn resize_settings_window(handle: &tauri::AppHandle, size: (u32, u32)) {
     on_main_thread(handle, "settings", "resize_settings", move |w| {
         let _ = w.set_size(LogicalSize::new(width as f64, height as f64));
     });
+}
+
+// ── 이슈 #32 Phase 1: 설정 창 크기 영속(F-15 규약) ──────────────────────────
+
+/// 저장된 `ui.windowWidth`/`ui.windowHeight` 를 복원 가능한 크기로 해석한다.
+///
+/// 둘 다 있어야 `Some` 을 반환한다 — 하나만 있으면 `None`("부재 = 기본값",
+/// F-15 §3.1, `tauri.conf.json` 의 `SETTINGS_WINDOW_DEFAULT` 가 그대로 쓰인다).
+/// 방어적 범위(너비 320..=6000, 높이 240..=6000)를 벗어나도 `None` — 손상되었거나
+/// 미래 버전이 써 둔 값을 그대로 믿지 않는다. 순수 함수라 단위 테스트로 직접
+/// 부른다.
+fn restored_window_size(width: Option<f64>, height: Option<f64>) -> Option<(u32, u32)> {
+    let (w, h) = (width?, height?);
+    if !w.is_finite() || !h.is_finite() {
+        return None;
+    }
+    let w = w.round();
+    let h = h.round();
+    if !(320.0..=6000.0).contains(&w) || !(240.0..=6000.0).contains(&h) {
+        return None;
+    }
+    Some((w as u32, h as u32))
+}
+
+/// 설정 창 크기 저장을 디바운스하는 전용 스레드의 손잡이.
+///
+/// ⚠️ `WindowEvent::Resized` 는 드래그 중 매 픽셀마다 발생한다 — 이벤트마다 파일을
+/// 쓰면 안 되고, 이벤트마다 스레드를 새로 띄워서도 안 된다(스레드 이름이 로그에
+/// 남는다는 이 저장소의 관례, 이슈 #10 — 매번 새로 뜨면 그 이름이 의미가 없다).
+/// 그래서 스레드 하나를 앱 생애주기 내내 띄워 두고, `Mutex` + `Condvar` 로 "마지막
+/// 이벤트로부터 400ms 동안 조용하면 그때 한 번만 쓴다"는 디바운스를 구현한다.
+struct WindowSizeDebouncer {
+    shared: Arc<WindowSizeDebounceShared>,
+    /// 스레드를 앱 생애주기 내내 살려 두려고 들고 있을 뿐, 값 자체는 읽지 않는다
+    /// (`system_event_observer` 와 같은 규약).
+    #[allow(dead_code)]
+    thread: JoinHandle<()>,
+}
+
+struct WindowSizeDebounceShared {
+    lock: Mutex<WindowSizeDebounceInner>,
+    condvar: Condvar,
+}
+
+#[derive(Default)]
+struct WindowSizeDebounceInner {
+    /// 가장 최근에 요청받은, 아직 쓰지 않은 크기.
+    pending: Option<(u32, u32)>,
+    /// 이 시각까지 새 이벤트가 없으면 `pending` 을 쓴다.
+    deadline: Option<Instant>,
+}
+
+impl WindowSizeDebouncer {
+    /// 마지막 `Resized` 로부터 이 시간 동안 조용하면 한 번만 저장한다.
+    const DEBOUNCE: Duration = Duration::from_millis(400);
+
+    fn spawn(state: Arc<AppState>) -> Self {
+        let shared = Arc::new(WindowSizeDebounceShared {
+            lock: Mutex::new(WindowSizeDebounceInner::default()),
+            condvar: Condvar::new(),
+        });
+        let shared_for_thread = shared.clone();
+        let thread = thread::Builder::new()
+            .name("ultrakey-window-size".to_string())
+            .spawn(move || window_size_debounce_loop(shared_for_thread, state))
+            .expect("설정 창 크기 디바운스 스레드 생성 실패");
+        WindowSizeDebouncer { shared, thread }
+    }
+
+    /// 사용자가 창을 조절했다고 판단된 새 크기를 알린다. 마감을 400ms 뒤로
+    /// 미루기만 할 뿐, 여기서 직접 쓰지 않는다 — 실제 쓰기는 디바운스 스레드가 한다.
+    fn notify(&self, size: (u32, u32)) {
+        let mut inner = self.shared.lock.lock().unwrap();
+        inner.pending = Some(size);
+        inner.deadline = Some(Instant::now() + Self::DEBOUNCE);
+        self.shared.condvar.notify_one();
+    }
+}
+
+/// [`WindowSizeDebouncer::spawn`] 이 띄우는 전용 스레드의 본체.
+fn window_size_debounce_loop(shared: Arc<WindowSizeDebounceShared>, state: Arc<AppState>) {
+    loop {
+        let mut guard = shared.lock.lock().unwrap();
+        // 예약된 마감이 없으면 무기한 대기 — `notify()` 가 깨워 줄 때까지 스핀하지
+        // 않는다. 마감이 있으면 그 시각까지만 기다리고, 깨어났을 때 아직 마감
+        // 전이면(= 그사이 `notify()` 가 마감을 다시 미뤘다면) 다시 대기한다.
+        loop {
+            match guard.deadline {
+                None => guard = shared.condvar.wait(guard).unwrap(),
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    guard = shared.condvar.wait_timeout(guard, deadline - now).unwrap().0;
+                }
+            }
+        }
+        let size = guard.pending.take();
+        guard.deadline = None;
+        drop(guard);
+        if let Some(size) = size {
+            persist_window_size(&state, size);
+        }
+    }
+}
+
+/// `ui.windowWidth`/`ui.windowHeight` 를 실제로 디스크에 쓴다. 저장 실패는
+/// (디스크·권한 문제 등) 로그만 남기고 앱을 죽이지 않는다 — 창 크기 저장은
+/// 핵심 기능이 아니다.
+fn persist_window_size(state: &Arc<AppState>, size: (u32, u32)) {
+    let mut store = state.store.lock().unwrap();
+    if let Err(e) = store.set(keys::UI_WINDOW_WIDTH, &size.0) {
+        tracing::error!(error = %e, "설정 창 너비 저장 실패");
+    }
+    if let Err(e) = store.set(keys::UI_WINDOW_HEIGHT, &size.1) {
+        tracing::error!(error = %e, "설정 창 높이 저장 실패");
+    }
+}
+
+/// 설정 창의 `WindowEvent::Resized` 배선 — `setup()` 이 설정 저장소를 만든 직후
+/// 한 번만 부른다. 저장된 크기가 있으면 복원하고, 디바운스 저장 스레드를 띄운
+/// 뒤 `Resized` 이벤트를 구독한다.
+fn wire_window_size_persistence(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    // 1) 저장된 크기가 있으면 복원한다. 하나라도 없으면 `tauri.conf.json` 의
+    //    `SETTINGS_WINDOW_DEFAULT` 가 그대로 쓰이므로 조용히 넘어간다("부재 =
+    //    기본값"). 둘 다 있는데 범위를 벗어나면 그 저장값이 손상되었다는
+    //    뜻이라 경고를 남긴다.
+    let (raw_width, raw_height): (Option<f64>, Option<f64>) = {
+        let store = state.store.lock().unwrap();
+        (
+            store.get(keys::UI_WINDOW_WIDTH),
+            store.get(keys::UI_WINDOW_HEIGHT),
+        )
+    };
+    if raw_width.is_some() && raw_height.is_some() {
+        match restored_window_size(raw_width, raw_height) {
+            Some(size) => {
+                // 이 크기는 사용자가 조절한 게 아니라 우리가 방금 프로그램적으로
+                // 넣는 것이다 — 곧이어 도착할 `Resized` 에코를 저장으로 착각하면
+                // 안 된다(`settings_set_tab` 의 `persist` 인자와 같은 이유).
+                *state.last_applied_window_size.lock().unwrap() = Some(size);
+                resize_settings_window(handle, size);
+            }
+            None => {
+                tracing::warn!(
+                    ?raw_width,
+                    ?raw_height,
+                    "저장된 설정 창 크기가 방어적 범위를 벗어나 기본값을 쓴다"
+                );
+            }
+        }
+    }
+
+    // 2) 디바운스 저장 스레드를 기동한다 — 앱 생애주기 동안 하나만 존재한다.
+    *state.window_size_debouncer.lock().unwrap() = Some(WindowSizeDebouncer::spawn(state.clone()));
+
+    // 3) 사용자가 드래그로 바꾼 크기를 구독한다.
+    match handle.get_webview_window("settings") {
+        Some(window) => {
+            let window_for_events = window.clone();
+            let state_for_events = state.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::Resized(physical_size) = event {
+                    on_settings_window_resized(
+                        &state_for_events,
+                        &window_for_events,
+                        *physical_size,
+                    );
+                }
+            });
+        }
+        None => {
+            tracing::error!("설정 창을 찾지 못해 창 크기 저장 배선을 걸지 못했다");
+        }
+    }
+}
+
+/// 설정 창의 `Resized` 이벤트 하나를 처리한다 — 저장할 가치가 있는 사용자
+/// 조작인지 판정하고, 맞으면 디바운스 스레드로 넘긴다.
+///
+/// ⭐ 무시해야 하는 두 경우(둘 다 F-15 §8 "설정을 한 번도 건드리지 않으면
+/// `settings.json` 이 생기지 않는다"를 지키기 위해서다 — `settings_set_tab` 의
+/// `persist` 인자와 같은 근거):
+/// 1. 창이 아직 보이지 않을 때(`is_visible() == Ok(false)`) — 창 생성·초기 배치
+///    단계에서 오는 리사이즈일 뿐, 사용자가 조절한 게 아니다.
+/// 2. 우리가 방금 `resize_settings_window()` 로 프로그램적으로 넣은 크기와 같을
+///    때 — 그 결과로 되돌아오는 이벤트를 저장하면 창을 열기만 해도(복원 시)
+///    `settings.json` 에 같은 값을 다시 쓰는 의미 없는 왕복이 생긴다.
+fn on_settings_window_resized(
+    state: &Arc<AppState>,
+    window: &WebviewWindow,
+    physical_size: PhysicalSize<u32>,
+) {
+    if !matches!(window.is_visible(), Ok(true)) {
+        return;
+    }
+
+    // ⭐ 논리 좌표로 변환해서 저장한다 — `resize_settings_window` 가 복원 때 넣는
+    // `LogicalSize` 와 단위를 맞춰야 한다. `PhysicalSize` 를 그대로 저장하면
+    // Retina(scale_factor 2.0)에서 다음 실행 때 창이 두 배로 커진다.
+    let scale_factor = window.scale_factor().unwrap_or(1.0);
+    let logical = physical_size.to_logical::<f64>(scale_factor);
+    let size = (logical.width.round() as u32, logical.height.round() as u32);
+
+    {
+        let mut last_applied = state.last_applied_window_size.lock().unwrap();
+        if *last_applied == Some(size) {
+            return;
+        }
+        // 크기가 다르면 더는 "우리가 방금 넣은 값" 취급을 하지 않는다 — 사용자가
+        // 실제로 창을 조절하기 시작했다는 뜻이다.
+        *last_applied = None;
+    }
+
+    if let Some(debouncer) = state.window_size_debouncer.lock().unwrap().as_ref() {
+        debouncer.notify(size);
+    }
 }
 
 // ============================================================================
@@ -2907,32 +3157,34 @@ fn general_set_hide_menu_bar_icon(state: State<'_, Arc<AppState>>, on: bool) -> 
 mod tests {
     use super::*;
 
-    // tab_window_size() — `preferences-ui.md` §3.1 실측값과 정확히 일치해야 한다.
+    /// `is_known_tab` 이 6개 탭을 전부 알고, 모르는 이름은 거부한다.
     #[test]
-    fn tab_window_size_matches_spec_values() {
-        assert_eq!(tab_window_size("seek"), Some((555, 378)));
-        assert_eq!(tab_window_size("hyperkey"), Some((710, 517)));
-        assert_eq!(tab_window_size("presets"), Some((825, 527)));
-        assert_eq!(tab_window_size("korean"), Some((613, 484)));
-        // F-17 `Keyboards` — 명세 §3.1.4 의 잠정값(실측 아님).
-        assert_eq!(tab_window_size("keyboards"), Some((710, 517)));
-        assert_eq!(tab_window_size("general"), Some((613, 273)));
-        assert_eq!(tab_window_size("bogus"), None);
+    fn is_known_tab_knows_all_six_tabs() {
+        for tab in ["seek", "hyperkey", "presets", "korean", "keyboards", "general"] {
+            assert!(is_known_tab(tab), "`{tab}` 은 KNOWN_TABS 에 있어야 한다");
+        }
+        assert!(!is_known_tab("bogus"));
     }
 
     /// ⭐ **회귀 방지 — 프론트의 탭 목록과 Rust 의 탭 화이트리스트가 어긋나지 않는다.**
     ///
     /// F-17(이슈 #28) 실기기 검증에서 실제로 터진 결함이다: `settings.html` 이
-    /// `Keyboards` 탭을 `TABS` 에 넣었는데 [`tab_window_size`] 에 대응 항목을
-    /// 넣지 않아, `settings_set_tab` 이 `알 수 없는 탭: keyboards` 로 거부하고
-    /// **설정 창 전체가 오류 화면으로 죽었다.**
+    /// `Keyboards` 탭을 `TABS` 에 넣었는데 (당시 `tab_window_size`, 지금은
+    /// `KNOWN_TABS`) 에 대응 항목을 넣지 않아, `settings_set_tab` 이 `알 수 없는
+    /// 탭: keyboards` 로 거부하고 **설정 창 전체가 오류 화면으로 죽었다.** 이슈
+    /// #32 Phase 1 에서 탭별 창 크기 테이블(`tab_window_size`)은 없앴지만 — 탭
+    /// 전환이 더 이상 창을 리사이즈하지 않기 때문이다 — 이 화이트리스트와 이
+    /// 회귀 방지 테스트는 그대로 남는다. 크기와 무관하게 "프런트가 아는 탭을
+    /// Rust 도 아는가"는 여전히 검증해야 한다.
     ///
     /// ⚠️ `tests/frontend_wiring.rs` 는 HTML **텍스트**만 검사하므로 이 어긋남을
-    /// 잡을 수 없다 — 한쪽은 JS 배열이고 다른 쪽은 Rust `match` 다. 두 목록을
+    /// 잡을 수 없다 — 한쪽은 JS 배열이고 다른 쪽은 Rust 슬라이스다. 두 목록을
     /// 실제로 대조하는 것은 이 테스트뿐이다(같은 크레이트 안이라 private
-    /// 함수를 부를 수 있다).
+    /// 상수를 참조할 수 있다). **양방향**으로 검사한다 — `TABS` 에 있는데
+    /// `KNOWN_TABS` 에 없는 탭(이슈 #28 의 결함)뿐 아니라, `KNOWN_TABS` 에
+    /// 있는데 `TABS` 에 없는 죽은 항목도 잡는다.
     #[test]
-    fn every_tab_in_settings_html_has_a_window_size() {
+    fn every_tab_in_settings_html_is_a_known_tab() {
         let html = include_str!("../ui/settings.html");
         let line = html
             .lines()
@@ -2956,11 +3208,66 @@ mod tests {
         );
         for tab in &tabs {
             assert!(
-                tab_window_size(tab).is_some(),
-                "settings.html 의 TABS 에 있는 `{tab}` 탭에 tab_window_size() 항목이 \
-                 없다 — settings_set_tab 이 그 탭을 거부해 설정 창이 죽는다"
+                is_known_tab(tab),
+                "settings.html 의 TABS 에 있는 `{tab}` 탭이 KNOWN_TABS 에 없다 — \
+                 settings_set_tab 이 그 탭을 거부해 설정 창이 죽는다"
             );
         }
+        for tab in KNOWN_TABS {
+            assert!(
+                tabs.contains(tab),
+                "KNOWN_TABS 에 있는 `{tab}` 탭이 settings.html 의 TABS 에 없다 — \
+                 죽은 화이트리스트 항목이다"
+            );
+        }
+    }
+
+    // restored_window_size() — 이슈 #32 Phase 1, F-15 §3.1 "부재 = 기본값".
+    #[test]
+    fn restored_window_size_needs_both_dimensions() {
+        assert_eq!(
+            restored_window_size(Some(900.0), Some(700.0)),
+            Some((900, 700))
+        );
+        assert_eq!(restored_window_size(Some(900.0), None), None);
+        assert_eq!(restored_window_size(None, Some(700.0)), None);
+        assert_eq!(restored_window_size(None, None), None);
+    }
+
+    #[test]
+    fn restored_window_size_rejects_out_of_range_values() {
+        assert_eq!(restored_window_size(Some(100.0), Some(700.0)), None); // 너비 미달
+        assert_eq!(restored_window_size(Some(900.0), Some(100.0)), None); // 높이 미달
+        assert_eq!(restored_window_size(Some(9000.0), Some(700.0)), None); // 너비 초과
+        assert_eq!(restored_window_size(Some(900.0), Some(9000.0)), None); // 높이 초과
+        // 경계값은 포함이다.
+        assert_eq!(
+            restored_window_size(Some(320.0), Some(240.0)),
+            Some((320, 240))
+        );
+        assert_eq!(
+            restored_window_size(Some(6000.0), Some(6000.0)),
+            Some((6000, 6000))
+        );
+    }
+
+    /// `tauri.conf.json` 의 `settings` 창 기본 크기가 `SETTINGS_WINDOW_DEFAULT`
+    /// 와 어긋나지 않는지 재확인한다 — 값 자체는 이 상수의 doc 주석이 근거를
+    /// 댄다(2026-08-30 실측), 여기서는 두 값이 드리프트하지 않는지만 본다.
+    #[test]
+    fn settings_window_default_matches_tauri_conf() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json 파싱 실패");
+        let windows = conf["app"]["windows"]
+            .as_array()
+            .expect("tauri.conf.json 에 app.windows 배열이 있어야 한다");
+        let settings_window = windows
+            .iter()
+            .find(|w| w["label"] == "settings")
+            .expect("`settings` 라벨 창이 있어야 한다");
+        let (width, height) = SETTINGS_WINDOW_DEFAULT;
+        assert_eq!(settings_window["width"].as_u64(), Some(width as u64));
+        assert_eq!(settings_window["height"].as_u64(), Some(height as u64));
     }
 
     // validate_and_apply() — keys::all() 에 없는 키는 거부된다.

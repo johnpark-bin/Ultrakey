@@ -146,14 +146,14 @@
 </div>
 
 <div class="shell" id="shell">
-  <!-- ⭐ 탭 전환 시 창 크기(pt, preferences-ui.md §3.1 실측값) — 실제 리사이즈는
-       main.rs 의 tab_window_size()/settings_set_tab 이 소유한다. 여기서는
-       그 값이 무엇인지만 문서화한다: Seek 555×378 · Hyperkey 710×517 ·
-       Presets 825×527 · Korean 613×484(실측: 내용 416 + 패딩 40 + 타이틀바 28) ·
-       Keyboards 710×517(per-device-settings.md §3.1.4 잠정값, 실측 아님 — 이 탭은
-       신설이라 실측 근거가 없다. 디바이스 팝업 + 두 그룹의 밀도가 Hyperkey 탭과
-       비슷할 것으로 보아 그 값을 잠정 목표로 재사용한다. 정확한 pt 값은 실제 구현 후
-       이 문서가 실측·확정해야 한다) · General 613×273. -->
+  <!-- ⭐ 탭 목록 — main.rs 의 KNOWN_TABS 화이트리스트와 항상 양방향으로 일치해야
+       한다(`tests::every_tab_in_settings_html_is_a_known_tab`, 이슈 #28 회귀 방지).
+       원본 SuperKey 는 탭마다 창을 리사이즈하지만(preferences-ui.md §3.1·§3.3),
+       이 클론은 이슈 #32 Phase 1 부터 **단일 크기로 고정**하기로 했다 — 탭 전환은
+       더 이상 창 크기를 바꾸지 않는다. 창의 기본 크기는 tauri.conf.json 의
+       settings 창 선언(825×821 — main.rs SETTINGS_WINDOW_DEFAULT 주석에 근거를
+       실측해 두었다)이 정하고, 사용자가 드래그로 조절한 크기는 F-15 저장 키
+       ui.windowWidth/ui.windowHeight 로 영속화되어 다음 실행 때 복원된다. -->
   <nav class="sidebar" role="tablist" aria-orientation="vertical" id="tablist">
     <button role="tab" id="tab-seek" data-tab="seek" aria-selected="false" aria-controls="panel-seek" tabindex="-1"></button>
     <button role="tab" id="tab-hyperkey" data-tab="hyperkey" aria-selected="false" aria-controls="panel-hyperkey" tabindex="-1"></button>
@@ -1410,14 +1410,14 @@ if (!tauri || !tauri.core) {
       btn.tabIndex = active ? 0 : -1;
       $(`panel-${name}`).hidden = !active;
     }
-    // ⭐ 창 리사이즈는 여기서 직접 하지 않는다 — Rust 쪽 settings_set_tab 이
-    // on_main_thread 로 set_size 를 호출한다(D-E: 창 조작은 반드시 메인
-    // 스레드로 비동기 디스패치).
+    // ⭐ 이슈 #32 Phase 1 부터 탭 전환은 창 크기를 바꾸지 않는다 — 이 invoke 는
+    // 이제 (1) Rust 쪽 탭 화이트리스트(KNOWN_TABS) 검증과 (2) persist 가 true 일
+    // 때 ui.lastTab 저장, 이 두 가지만 한다.
     //
-    // ⭐ `persist` 는 리사이즈가 아니라 **ui.lastTab 저장 여부**를 가른다. 최초
-    // 렌더에서도 창 크기는 맞춰야 하지만(§3.1: 탭마다 크기가 다르다), 그때 저장까지
-    // 하면 **환경설정 창을 열기만 해도 settings.json 이 생겨** F-15 §8 의 "한 번도
-    // 건드리지 않으면 파일이 없다"가 첫 실행에서 바로 깨진다.
+    // ⭐ `persist` 는 **ui.lastTab 저장 여부**를 가른다. 최초 렌더에서도 이
+    // 커맨드를 불러야 하지만, 그때 저장까지 하면 **환경설정 창을 열기만 해도
+    // settings.json 이 생겨** F-15 §8 의 "한 번도 건드리지 않으면 파일이 없다"가
+    // 첫 실행에서 바로 깨진다.
     invoke("settings_set_tab", { tab, persist }).catch((err) => {
       showFatal("Failed to switch tab: " + String(err));
     });
@@ -1521,7 +1521,7 @@ if (!tauri || !tauri.core) {
       if (bootstrap.notice) {
         showNotice(tf(bootstrap.notice.messageKey, [bootstrap.notice.arg]));
       }
-      // 최초 렌더 — 리사이즈만 하고 저장하지 않는다(위 activateTab 주석 참고).
+      // 최초 렌더 — 탭 화이트리스트 검증만 하고 저장하지 않는다(위 activateTab 주석 참고).
       activateTab(bootstrap.state.lastTab || "hyperkey", { persist: false });
     } catch (err) {
       showFatal("Failed to render: " + String(err));
