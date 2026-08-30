@@ -25,7 +25,8 @@ fn read_tauri_conf() -> serde_json::Value {
 
 fn read_index_html() -> String {
     let path = manifest_dir().join("ui/index.html");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("ui/index.html 을 읽지 못했다({path:?}): {e}"))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("ui/index.html 을 읽지 못했다({path:?}): {e}"))
 }
 
 fn read_settings_html() -> String {
@@ -55,7 +56,8 @@ fn read_ko_catalog() -> serde_json::Value {
 
 fn read_main_rs() -> String {
     let path = manifest_dir().join("src/main.rs");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("src/main.rs 을 읽지 못했다({path:?}): {e}"))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("src/main.rs 을 읽지 못했다({path:?}): {e}"))
 }
 
 /// ⭐ `window.__TAURI__` 를 참조하면서 `withGlobalTauri` 가 꺼져 있으면(또는
@@ -135,11 +137,17 @@ fn index_html_의_body_는_transparent_배경을_쓰지_않는다() {
     // 스타일 블록만 대상으로 좁혀서(주석 등에 우연히 같은 문자열이 섞이는 것을
     // 피하려고) `body { ... }` 규칙 안에 `background: transparent` 가 있는지
     // 검사한다.
-    let style_start = html.find("<style>").expect("index.html 에 <style> 블록이 없다");
-    let style_end = html.find("</style>").expect("index.html 에 </style> 종료 태그가 없다");
+    let style_start = html
+        .find("<style>")
+        .expect("index.html 에 <style> 블록이 없다");
+    let style_end = html
+        .find("</style>")
+        .expect("index.html 에 </style> 종료 태그가 없다");
     let style = &html[style_start..style_end];
 
-    let body_start = style.find("body {").expect("index.html 의 <style> 안에 body 규칙이 없다");
+    let body_start = style
+        .find("body {")
+        .expect("index.html 의 <style> 안에 body 규칙이 없다");
     let body_rule_end = style[body_start..]
         .find('}')
         .map(|i| body_start + i)
@@ -147,7 +155,8 @@ fn index_html_의_body_는_transparent_배경을_쓰지_않는다() {
     let body_rule = &style[body_start..body_rule_end];
 
     assert!(
-        !body_rule.contains("background: transparent") && !body_rule.contains("background:transparent"),
+        !body_rule.contains("background: transparent")
+            && !body_rule.contains("background:transparent"),
         "ui/index.html 의 body 규칙이 background: transparent 를 쓴다. \
          tauri.conf.json 의 창 설정에 transparent: true 가 없으므로 이 설정은 \
          아무 효과가 없고, 렌더가 실패했을 때 창이 텅 비어 보이는 실패 모드를 \
@@ -164,13 +173,20 @@ fn index_html_의_body_는_transparent_배경을_쓰지_않는다() {
 
 /// `<script>...</script>` 블록의 원문을 돌려준다(주석 제거 없음).
 fn extract_script_block(html: &str) -> &str {
-    let start = html.find("<script").expect("settings.html 에 <script> 태그가 없다");
+    let start = html
+        .find("<script")
+        .expect("settings.html 에 <script> 태그가 없다");
     let tag_end = html[start..]
         .find('>')
         .map(|i| start + i + 1)
         .expect("settings.html 의 <script> 시작 태그가 닫히지 않았다");
-    let end = html.find("</script>").expect("settings.html 에 </script> 종료 태그가 없다");
-    assert!(tag_end < end, "settings.html 의 <script> 블록 범위 계산이 어긋났다");
+    let end = html
+        .find("</script>")
+        .expect("settings.html 에 </script> 종료 태그가 없다");
+    assert!(
+        tag_end < end,
+        "settings.html 의 <script> 블록 범위 계산이 어긋났다"
+    );
     &html[tag_end..end]
 }
 
@@ -301,7 +317,10 @@ fn settings_html_의_settings_점_리터럴은_전부_카탈로그_키다() {
     // 하나라도 있는지만 확인한다(오탐 없이 접두사 자체의 오타는 여전히 잡는다).
     let (prefixes, exact): (Vec<_>, Vec<_>) = settings_keys.iter().partition(|k| k.ends_with('.'));
 
-    let missing: Vec<_> = exact.iter().filter(|k| !known_keys.contains(k.as_str())).collect();
+    let missing: Vec<_> = exact
+        .iter()
+        .filter(|k| !known_keys.contains(k.as_str()))
+        .collect();
     assert!(
         missing.is_empty(),
         "settings.html 이 참조하는 다음 카탈로그 키가 resources/i18n/en.json 에 없다: {missing:?}"
@@ -460,7 +479,11 @@ fn settings_html_의_한영_한자_컨트롤은_활성이고_hint_문구를_가�
     let html = read_settings_html();
 
     for (checkbox_id, hint_id, badge_id) in [
-        ("korean-han-eng", "korean-han-eng-hint", "korean-han-eng-badge"),
+        (
+            "korean-han-eng",
+            "korean-han-eng-hint",
+            "korean-han-eng-badge",
+        ),
         ("korean-hanja", "korean-hanja-hint", "korean-hanja-badge"),
     ] {
         let input_needle = format!("id=\"{checkbox_id}\"");
@@ -526,11 +549,23 @@ fn korean_점_리터럴이_en_ko_양쪽_카탈로그에_모두_있다() {
          Korean 탭 배선이 빠졌을 수 있다"
     );
 
-    let missing_en: Vec<_> = korean_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
-    let missing_ko: Vec<_> = korean_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+    let missing_en: Vec<_> = korean_keys
+        .iter()
+        .filter(|k| !en_keys.contains(k.as_str()))
+        .collect();
+    let missing_ko: Vec<_> = korean_keys
+        .iter()
+        .filter(|k| !ko_keys.contains(k.as_str()))
+        .collect();
 
-    assert!(missing_en.is_empty(), "en.json 에 없는 settings.korean.* 키: {missing_en:?}");
-    assert!(missing_ko.is_empty(), "ko.json 에 없는 settings.korean.* 키: {missing_ko:?}");
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 settings.korean.* 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 settings.korean.* 키: {missing_ko:?}"
+    );
 }
 
 // ⭐ F-10(menu-bar-and-lifecycle.md) — 메뉴바(NSStatusItem) 재발 방지 테스트.
@@ -565,7 +600,10 @@ fn main_rs_의_menu_점_리터럴은_전부_en_카탈로그_키다() {
         "src/main.rs 에서 \"menu.*\" 리터럴을 하나도 찾지 못했다 — 추출 로직이 깨졌을 수 있다"
     );
 
-    let missing: Vec<_> = menu_keys.iter().filter(|k| !known_keys.contains(k.as_str())).collect();
+    let missing: Vec<_> = menu_keys
+        .iter()
+        .filter(|k| !known_keys.contains(k.as_str()))
+        .collect();
     assert!(
         missing.is_empty(),
         "src/main.rs 가 참조하는 다음 트레이 메뉴 카탈로그 키가 resources/i18n/en.json 에 없다: {missing:?}"
@@ -584,11 +622,23 @@ fn main_rs_의_menu_점_리터럴은_en_ko_양쪽_카탈로그에_모두_있다(
     let menu_keys = menu_dot_literals_in_main_rs();
     assert!(!menu_keys.is_empty());
 
-    let missing_en: Vec<_> = menu_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
-    let missing_ko: Vec<_> = menu_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+    let missing_en: Vec<_> = menu_keys
+        .iter()
+        .filter(|k| !en_keys.contains(k.as_str()))
+        .collect();
+    let missing_ko: Vec<_> = menu_keys
+        .iter()
+        .filter(|k| !ko_keys.contains(k.as_str()))
+        .collect();
 
-    assert!(missing_en.is_empty(), "en.json 에 없는 메뉴 키: {missing_en:?}");
-    assert!(missing_ko.is_empty(), "ko.json 에 없는 메뉴 키: {missing_ko:?}");
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 메뉴 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 메뉴 키: {missing_ko:?}"
+    );
 }
 
 /// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
@@ -702,7 +752,10 @@ fn bundle_icon_목록의_파일이_전부_존재한다() {
     let icons = conf["bundle"]["icon"]
         .as_array()
         .expect("tauri.conf.json 의 bundle.icon 이 배열이 아니다");
-    assert!(!icons.is_empty(), "tauri.conf.json 의 bundle.icon 이 비어 있다");
+    assert!(
+        !icons.is_empty(),
+        "tauri.conf.json 의 bundle.icon 이 비어 있다"
+    );
 
     for entry in icons {
         let rel = entry.as_str().expect("bundle.icon 항목이 문자열이 아니다");
@@ -784,10 +837,10 @@ fn settings_html_에_keyboards_탭_고정_컨트롤_4개가_있다() {
     let html = read_settings_html();
 
     for id in [
-        "keyboards-device-picker",       // 1. 디바이스 선택 팝업
-        "keyboards-keyremap-heading",    // 2. 그룹 제목 — 키 변환 세트
-        "keyboards-functionkeys-heading", // 2. 그룹 제목 — Function Keys
-        "keyboards-fnstate-badge",       // 3. macOS 상태 표시줄 — 뱃지
+        "keyboards-device-picker",            // 1. 디바이스 선택 팝업
+        "keyboards-keyremap-heading",         // 2. 그룹 제목 — 키 변환 세트
+        "keyboards-functionkeys-heading",     // 2. 그룹 제목 — Function Keys
+        "keyboards-fnstate-badge",            // 3. macOS 상태 표시줄 — 뱃지
         "keyboards-open-system-settings-btn", // 3. macOS 상태 표시줄 — 버튼
     ] {
         assert!(
@@ -882,12 +935,22 @@ fn keyboards_탭_신규_i18n_키_24개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.functionKeys.function.volumeDown",
         "preferences.keyboards.functionKeys.function.volumeUp",
     ];
-    assert_eq!(KEYS.len(), 24, "이 목록 자체가 24개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라");
+    assert_eq!(
+        KEYS.len(),
+        24,
+        "이 목록 자체가 24개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+    );
 
     let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
     let missing_ko: Vec<_> = KEYS.iter().filter(|k| !ko.contains(**k)).collect();
-    assert!(missing_en.is_empty(), "en.json 에 없는 Keyboards 탭 키: {missing_en:?}");
-    assert!(missing_ko.is_empty(), "ko.json 에 없는 Keyboards 탭 키: {missing_ko:?}");
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 Keyboards 탭 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 Keyboards 탭 키: {missing_ko:?}"
+    );
 }
 
 /// `settings.html` 이 문자열 리터럴로 참조하는 모든 `preferences.keyboards.*` 키가
@@ -911,11 +974,23 @@ fn settings_html_의_preferences_keyboards_점_리터럴이_en_ko_양쪽_카탈�
          Keyboards 탭 배선이 빠졌을 수 있다"
     );
 
-    let missing_en: Vec<_> = keyboards_keys.iter().filter(|k| !en_keys.contains(k.as_str())).collect();
-    let missing_ko: Vec<_> = keyboards_keys.iter().filter(|k| !ko_keys.contains(k.as_str())).collect();
+    let missing_en: Vec<_> = keyboards_keys
+        .iter()
+        .filter(|k| !en_keys.contains(k.as_str()))
+        .collect();
+    let missing_ko: Vec<_> = keyboards_keys
+        .iter()
+        .filter(|k| !ko_keys.contains(k.as_str()))
+        .collect();
 
-    assert!(missing_en.is_empty(), "en.json 에 없는 preferences.keyboards.* 키: {missing_en:?}");
-    assert!(missing_ko.is_empty(), "ko.json 에 없는 preferences.keyboards.* 키: {missing_ko:?}");
+    assert!(
+        missing_en.is_empty(),
+        "en.json 에 없는 preferences.keyboards.* 키: {missing_en:?}"
+    );
+    assert!(
+        missing_ko.is_empty(),
+        "ko.json 에 없는 preferences.keyboards.* 키: {missing_ko:?}"
+    );
 }
 
 /// 탭별 창 크기 문서 주석(§3.1.4)에 `Keyboards` 값이 있고, 그 값이 **잠정값이며

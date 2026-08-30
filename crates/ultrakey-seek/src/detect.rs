@@ -79,14 +79,28 @@ pub struct DetectionOutcome {
 }
 
 impl DetectionOutcome {
-    /// ⚠️ **조용한 실패 판정** — 소스 A 가 아무것도 못 찾았고 그 이유가
-    /// 권한 부재인가.
+    /// ⚠️ **조용한 실패 판정** — 소스 A 의 결과를 믿을 수 없는가.
     ///
-    /// 명세 §5 는 #1(권한 없음)과 #2(텍스트 없는 화면)를 서로 다른 케이스로
-    /// 둔다. 후보 0개만으로는 둘을 구분할 수 없으므로 권한 상태를 함께 본다.
+    /// ⭐⭐ **후보 수를 보지 않고 권한 상태만 본다.** 처음에는
+    /// `ocr_count == 0 && 권한 없음` 으로 썼는데, **실기기 검증이 그것을
+    /// 반증했다**: 권한 없이 캡처하면 데스크톱 배경만 오는 것이 아니라
+    /// **메뉴 막대까지 함께 온다**(메뉴 막대는 보호 대상이 아니다). 실제로
+    /// 권한을 되돌린 뒤 캡처했을 때 `Gitkraken` · `window Help` · `view` 등
+    /// **후보 5개**가 나왔다 — 0개가 아니므로 그 조건은 발화하지 않았을 것이다.
+    ///
+    /// 즉 "후보가 0개인가" 는 권한 부재의 신뢰할 수 있는 신호가 아니다.
+    /// 권한이 없으면 후보가 몇 개 나오든 **소스 A 는 화면의 실제 내용을 보고
+    /// 있지 않다.** 명세 §5 는 #1(권한 없음)과 #2(텍스트 없는 화면)를 서로
+    /// 다른 케이스로 두는데, 그 둘을 가르는 것은 후보 수가 아니라 권한이다.
     #[must_use]
     pub fn ocr_blocked_by_permission(&self) -> bool {
-        self.ocr_count == 0 && self.screen_recording == ScreenRecordingStatus::Denied
+        self.screen_recording == ScreenRecordingStatus::Denied
+    }
+
+    /// 소스 A·B 를 합쳐 후보가 하나도 없는가 (명세 §5 #2).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.candidates.is_empty()
     }
 }
 

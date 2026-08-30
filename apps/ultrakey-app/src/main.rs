@@ -2018,7 +2018,11 @@ fn run_seek_detect_probe() {
 
     if outcome.ocr_blocked_by_permission() {
         tracing::error!(
-            "⚠️ 소스 A 후보 0개 + Screen Recording 권한 없음 — 조용한 실패다.              화면 기록 권한을 부여하고 앱을 재시작해야 한다(F-11 §1.3)"
+            ocr_count = outcome.ocr_count,
+            "⚠️ Screen Recording 권한이 없다 — 소스 A 는 조용히 실패한 상태다. 캡처는 \
+             성공했지만 담긴 것은 데스크톱 배경과 메뉴 막대뿐이므로, 후보가 몇 개 \
+             나왔든 화면의 실제 내용이 아니다. 화면 기록 권한을 부여하고 앱을 \
+             재시작해야 한다(F-11 §1.3)"
         );
     }
 
