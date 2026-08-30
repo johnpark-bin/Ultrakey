@@ -451,6 +451,33 @@ M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(nu
 
 ---
 
+## ⚠️ 항목 2·3 사전 확인 — 다른 HID 계층 리매퍼가 있는가 (2026-08-30 신설)
+
+⭐ **이것을 먼저 보지 않으면 검증 결과를 오독한다.** M2 1차 검증에서 실제로 그랬다.
+
+`CGEventTap`(경로 A)은 **HID 드라이버보다 위**에 있다. 그래서 Karabiner-Elements 처럼 가상 HID 장치로 키를 바꾸는 도구가 깔려 있으면, **Ultrakey 는 원본 키코드를 볼 기회 자체가 없다** — 이미 바뀐 키가 도착한다.
+
+실측(2026-08-30): 검증 기기에 Karabiner-Elements 가 `caps_lock ↔ left_control` 을 맞바꿔 두고 있었다. 그래서 `Remap key to hyper key: caps lock` 을 켜고 물리 caps lock 을 눌러도 hyper 가 발동하지 않았다 — 탭에 도착한 키코드가 `left control` 이었기 때문이다. **Ultrakey 의 결함이 아니라 경로 A 의 구조적 한계다.**
+
+검증 전에 반드시 확인한다:
+
+```sh
+# 1) 다른 리매퍼가 도는가
+ps aux | grep -iE "[k]arabiner|[b]etterTouch|[h]ammerspoon"
+# 2) macOS 자체 modifier 리매핑이 있는가
+defaults find modifiermapping
+# 3) 커널 매핑(경로 B)이 남아 있는가
+hidutil property --get UserKeyMapping
+# 4) Karabiner 가 있다면 무엇을 바꾸는가
+python3 -c "import json,os;d=json.load(open(os.path.expanduser('~/.config/karabiner/karabiner.json')));[print(p.get('name'),p.get('simple_modifications')) for p in d['profiles'] if p.get('selected')]"
+```
+
+**대처**: 리매퍼를 끄거나, **그 리매퍼가 실제로 내보내는 키코드**를 hyper 소스로 지정한다. 위 실측에서는 후자를 택했다 — hyper 소스를 `left control` 로 바꾸니(물리 caps lock 이 Karabiner 를 거쳐 `left control` 로 도착한다) 정상 동작했다. 리매퍼를 끄지 않아도 검증이 성립하고, 사용자 환경을 건드리지 않는다는 것이 이 선택의 근거다.
+
+⛔ 이 조건은 **명세에도 없었고 이 문서에도 없었다.** `key-remapping-engine.md` §5 에 엣지 케이스로 함께 추가했다.
+
+---
+
 ## 항목 2 — `caps lock` 을 hyper 로 지정하면 다른 앱이 `⌃⌥⌘⇧` 4개 modifier 를 인식한다
 
 > 근거 명세: `hyperkey.md` §3.1 · §8
@@ -492,6 +519,25 @@ M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(nu
 
 ⚠️ **알려진 한계 — 버그가 아니다.** Keyboard Maestro 류 shortcut recorder 에 hyper 소스 키로 단축키를 **등록(recording)** 하는 것은 실패할 수 있다. 그러나 물리 modifier 4개로 등록해 둔 단축키의 **트리거는 정상이어야 한다** — 이 비대칭이 명세(`hyperkey.md` §3.4, §8)가 요구하는 동작이다.
 
+### ✅ 실측 결과 (2026-08-30, M2 1차 / 이슈 #13) — **통과**
+
+사전 확인(위)에 따라 hyper 소스를 `left control` 로 지정하고(물리 caps lock 이 Karabiner 를 거쳐 그 키코드로 도착한다), `Include shift` 는 켠 채로 물리 caps lock 을 누른 상태에서 `A` 를 눌렀다. 관찰 수단은 `docs/dev/tools/modifier-probe.html`(Chrome).
+
+| # | type | key | code | ⌃ | ⌥ | ⌘ | ⇧ | ⇪ | combo |
+| ---: | :--- | :--- | :--- | :-: | :-: | :-: | :-: | :-: | :--- |
+| 95 | keydown | Control | ControlLeft | T | T | T | T | F | `⌃⌥⌘⇧` |
+| 96 | keydown | A | KeyA | T | T | T | T | F | `⌃⌥⌘⇧` |
+| 97 | keyup | Control | ControlLeft | F | F | F | F | F | — |
+
+- ⭐ **`KeyA` 의 keydown 이 `⌃⌥⌘⇧` 4개를 전부 싣고 도착했다.** 이 값은 Ultrakey 가 만든 것이 아니라 **WindowServer 가 브라우저에 전달한 이벤트**에서 읽은 것이므로, "다른 앱이 인식한다"가 그대로 뒷받침된다.
+- ⭐ **caps lock 잠금이 걸리지 않았다**(⇪ 열 전부 `F`, 글자도 대문자 고정이 아니다) — 원본 keyDown 이 소비된다는 뜻이다.
+- 소스 키를 떼자 다음 이벤트에서 4개가 전부 해제됐다.
+- 증거: [`screenshots/issue-13-probe-hyper-4-modifiers.png`](screenshots/issue-13-probe-hyper-4-modifiers.png)
+
+⛔ **이 항목을 처음 수행하면서 M1 의 엔진 결함 하나를 찾아 고쳤다.** macOS 는 modifier 키의 누름/뗌을 `KeyDown`/`KeyUp` 이 아니라 **`FlagsChanged` 하나로만** 보내는데, 중재기가 `FlagsChanged` 를 `_ => None` 으로 흘려보내고 있었다. 소스 키 35종 중 F1~F24 를 뺀 전부가 modifier 키이므로 **hyper/meh/bleh 는 어떤 소스 키로도 발동한 적이 없었다.** M1 의 자동 테스트가 전부 `KeyDown`/`KeyUp` 으로만 이벤트를 만들어 이 경로를 건드리지 않았고, 이 항목이 환경설정 UI 부재로 **한 번도 수행되지 않아** 드러나지 않았다. 수정 전 상태의 증거: [`screenshots/issue-13-probe-before-fix.png`](screenshots/issue-13-probe-before-fix.png) — 원본 `CapsLock` keydown 이 그대로 통과하고 잠금까지 걸렸다. **실기기 검증을 완료 조건에 두는 이유가 이것이다.**
+
+⬜ **2-b(meh · bleh)와 2-c(마우스 이벤트)는 이번에 수행하지 않았다.** 같은 코드 경로(`handle_modifier_source_event`)를 타므로 회귀 테스트로는 덮여 있으나, 실기기 확인은 남아 있다.
+
 ### 2-b. meh · bleh
 
 `Hyperkey` 탭에서 meh·bleh 체크박스를 켜고 **서로 다른 소스 키**를 고른다(같은 키를 고르면 hyper 가 이긴다 — UI 가 경고를 띄운다).
@@ -528,7 +574,22 @@ M1 은 등록 규칙이 0개라 `hidutil property --get UserKeyMapping` 이 `(nu
 | 저장 파일 | `~/Library/Application Support/app.ultrakey.Ultrakey/settings.json` 의 `values` 에 그 키가 **즉시** 생긴다(F-15 §3.1.1 결정 1) |
 | meh · bleh | ⭐ **영향받지 않는다.** 이 토글은 hyper 에만 적용된다(§3.1) — meh/bleh 의 `⇧` 는 여전히 켜져야 한다 |
 
-⚠️ `hyperkey.md` §9 #5 가 남긴 미해결 질문: hyper 가 **Active 인 도중** 이 토글을 바꾸면 즉시 반영되는지 다음 keyDown 부터인지 확정되지 않았다. 관찰되면 그 결과를 명세 §9 에 기록한다.
+### ✅ 실측 결과 (2026-08-30, M2 1차 / 이슈 #13) — **통과**
+
+항목 2 의 상태에서 환경설정 창의 shift 포함 토글을 껐다. **앱을 재시작하지 않았다.**
+
+| # | type | key | code | ⌃ | ⌥ | ⌘ | ⇧ | combo |
+| ---: | :--- | :--- | :--- | :-: | :-: | :-: | :-: | :--- |
+| 38 | keydown | a | KeyA | T | T | T | **F** | `⌃⌥⌘` |
+| 39 | keyup | a | KeyA | T | T | T | **F** | `⌃⌥⌘` |
+
+- ⭐ **`⇧` 만 정확히 빠졌다.** 글자도 소문자 `a` 로 도착했다(shift 가 실제로 실리지 않았다는 독립적 방증).
+- 창의 조합 미리보기가 `⌃⌥⌘⇧` → `⌃⌥⌘` 로 **즉시** 바뀌었고, 같은 순간 저장 파일에 `hyperkey.includeShiftInHyper: false` 가 생겼다.
+- 증거: [`screenshots/issue-13-probe-hyper-no-shift.png`](screenshots/issue-13-probe-hyper-no-shift.png)
+
+⭐ **`hyperkey.md` §9 #5 가 남긴 미해결 질문이 부분적으로 해소됐다.** "hyper 가 Active 인 도중 이 토글을 바꾸면 어떻게 되는가"에 대해 관찰된 것은: **토글은 즉시 엔진에 반영되고(로그에 `설정 변경을 반영해 Arbiter 를 재구성했다`), 그와 동시에 상태가 강제 리셋된다.** 따라서 "누른 채로 바꾸는" 경우 자체가 성립하지 않고 다음 누름부터 새 조합이 적용된다. 다만 **소스 키를 물리적으로 누른 채 토글을 바꾸는 상황은 재현하지 않았다**(환경설정 창을 클릭하려면 키를 놓아야 한다) — 그 경우는 여전히 `(미확정)`이다.
+
+⬜ **meh · bleh 가 영향받지 않는지는 이번에 확인하지 않았다** — 두 슬롯을 켜지 않은 채로 검증했다. 단위 테스트는 `hyper_flags()`/`meh_flags()`/`bleh_flags()` 가 독립임을 덮는다.
 
 ---
 
