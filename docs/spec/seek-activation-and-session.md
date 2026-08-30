@@ -131,7 +131,7 @@ F-01 은 이 기능의 **활성화 트리거, 세션의 생명주기, 세션 중
 | `Remap key to Seek:` | 팝업 버튼(35항목) | ⭐ **`-`(미설정)** (실측: AX 트리 + `defaults` 부재) — 기존 명세의 `caps lock` 은 틀렸다 | 항상 | **35종 확정**, 표시 순서: `-` · `caps lock` · `right option` · `right shift` · `right command` · `right control` · `left option` · `left shift` · `left command` · `left control` · `menu (PC)` · `F1`~`F24`. ⭐ **`globe` 이 없다** — Hyperkey 탭의 동일 성격 팝업(hyper/meh/bleh 소스 키, 35종)에는 `globe` 이 있고 `-` 가 없어 **두 팝업의 열거형이 다르다**(§5 참조) | `seekRemapKeycode` (`-` 는 `0`) | app-bundle-analysis.md §6.1, §2.2 |
 | `Only show while the remapped key is held` | 체크박스 | ⭐ **☐** (실측: AX 트리 + `defaults` 부재) — 기존 명세의 ☑ 는 틀렸다 | ⭐ **`Remap key to Seek:` ≠ `-` 일 때만 활성화**, `-` 이면 비활성(dimmed)(실측: 팝업을 `F13` 으로 바꾸자 활성화, `-` 로 되돌리자 다시 비활성 — app-bundle-analysis.md §7 #2) | ☑(hold 모드) / ☐(toggle 모드) | `seekExecuteOnClose` | app-bundle-analysis.md §6.1, §2.2, §7 |
 | `Semicolon highlights next match` | 체크박스 | ⭐ **☐** (실측: AX 트리 + `defaults` 부재) — 기존 명세의 ☑ 는 틀렸다 | 항상 | ☑ / ☐. v1.51 부터 물리 키코드 기준으로 판정(레이아웃 독립) | `semicolonCycleSeek` | app-bundle-analysis.md §6.1, §2.2 |
-| (`Presets` 탭) `Quick press caps lock to execute:` = `Seek` | 팝업 선택지(49종 중 첫 항목, 그 아래 구분선) | ⭐ **신규 확정된 세 번째 활성화 경로**. 그룹 자체 기본값은 ☐ / `caps lock`(§7의 Presets 탭 기본값 참조) — 선택지에 `Seek` 를 고르면 그 경로가 활성화됨 | `Presets` 탭에서 이 팝업이 `Seek` 로 설정되어 있을 때 | — | — (저장 키는 `power-user-presets.md` F-08.2 소관) | app-bundle-analysis.md §6.3, §2.3 |
+| (`Presets` 탭) `Quick press caps lock to execute:` = `Seek` | 팝업 선택지(48종 중 첫 항목, 그 아래 구분선) | ⭐ **신규 확정된 세 번째 활성화 경로**. 그룹 자체 기본값은 ☐ / `caps lock`(§7의 Presets 탭 기본값 참조) — 선택지에 `Seek` 를 고르면 그 경로가 활성화됨 | `Presets` 탭에서 이 팝업이 `Seek` 로 설정되어 있을 때 | — | — (저장 키는 `power-user-presets.md` F-08.2 소관) | app-bundle-analysis.md §6.3, §2.3 |
 
 ## 5. 엣지 케이스와 실패 모드
 

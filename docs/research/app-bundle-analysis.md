@@ -483,11 +483,13 @@ nib 에는 구형 문구(`Open System Preferences` / `Go to System Preferences`)
 | 팝업 | 선택지 |
 | :--- | :--- |
 | `Remap caps lock to:` (50종) | `esc` · **`nothing (disable it)`** · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F24` |
-| `Quick press caps lock to execute:` (49종) | ⭐ **`Seek`** · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · **`/`** |
+| `Quick press caps lock to execute:` (49종 — ⚠️ 재계수 결과 선택지는 48종, 아래 주 참조) | ⭐ **`Seek`** · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · **`/`** |
 | `Caps lock + [ ]` (2종) | `H J K L` · **`I J K L`** |
 | `Caps lock + home row = [ ]` (2종) | `symbol row (A = !)` · **`function row (A = F1)`** |
 | `Quick press left or right shift …` (4종) | `( )` · **`[ ]`** · **`{ }`** · **`< >`** |
 | `Remap paste …` (4종) | `Right ⌘` · **`Left ⌘`** · **`Either ⌘`** · **`Hyper key`** |
+
+⭐ **2026-08-30 재계수 정정(M2 2차 / 이슈 #15)**: 나열된 항목을 그대로 세면 `Seek` 1 + `esc`~`volume down` 26 + `F1`~`F20` 20 + `/` 1 = **48개**다. "49" 는 그 사이의 **구분선(separator)을 AX 항목 하나로 함께 센 수**로 보인다 — `AXMenuItem` 구분선은 AX 트리에 자식으로 나타나므로 자연스러운 오차다 `(추정)`. 구현은 **선택 가능한 48종**으로 한다. 대조군: `Remap caps lock to:` 는 구분선이 없고 나열 항목이 정확히 50개로 맞는다.
 
 ⭐ **`Quick press caps lock to execute:` 의 첫 항목이 `Seek` 다** — quick press 로 Seek 세션을 여는 경로가 존재한다. 이는 `Seek` 탭의 두 활성화 경로(단축키·키 리맵) 외의 **세 번째 활성화 경로**이며, 명세에 없었다.
 
