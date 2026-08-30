@@ -6,6 +6,7 @@ members = [
     "crates/ultrakey-engine",
     "crates/ultrakey-layout",
     "crates/ultrakey-hyperkey",
+    "crates/ultrakey-presets",
     "crates/ultrakey-permissions",
     "crates/ultrakey-i18n",
     "apps/ultrakey-app",
@@ -27,6 +28,7 @@ ultrakey-platform    = { path = "crates/ultrakey-platform" }
 ultrakey-engine      = { path = "crates/ultrakey-engine" }
 ultrakey-layout      = { path = "crates/ultrakey-layout" }
 ultrakey-hyperkey    = { path = "crates/ultrakey-hyperkey" }
+ultrakey-presets     = { path = "crates/ultrakey-presets" }
 ultrakey-permissions = { path = "crates/ultrakey-permissions" }
 ultrakey-i18n        = { path = "crates/ultrakey-i18n" }
 
