@@ -1074,6 +1074,13 @@ fn tab_window_size(tab: &str) -> Option<(u32, u32)> {
         // (preferences-ui.md §3.1) 클론의 마크업이 더 길어진 결과다.
         // ⛔ 이번 범위에서 고치지 않는다 — F-16 이 만든 문제가 아니다.
         "korean" => Some((613, 484)),
+        // ⭐ F-17 `Keyboards` 탭(이슈 #28). 명세 `per-device-settings.md` §3.1.4 는
+        // 이 탭이 **신설이라 실측 근거가 없다**고 밝히며 `Hyperkey` 와 같은
+        // 710×517 을 **잠정 목표**로 제안했다 — 그 값을 그대로 쓴다.
+        // ⚠️ 위 `korean` 처럼 실제 렌더링을 재서 확정한 값이 **아니다.**
+        // 목록 편집기(§3.4.1)는 행 수에 따라 높이가 변하므로, 창을 늘이는 대신
+        // 목록 영역만 세로 스크롤한다(§3.1.4) — 그래서 고정값 하나로 족하다.
+        "keyboards" => Some((710, 517)),
         "general" => Some((613, 273)),
         _ => None,
     }
@@ -2787,8 +2794,53 @@ mod tests {
         assert_eq!(tab_window_size("hyperkey"), Some((710, 517)));
         assert_eq!(tab_window_size("presets"), Some((825, 527)));
         assert_eq!(tab_window_size("korean"), Some((613, 484)));
+        // F-17 `Keyboards` — 명세 §3.1.4 의 잠정값(실측 아님).
+        assert_eq!(tab_window_size("keyboards"), Some((710, 517)));
         assert_eq!(tab_window_size("general"), Some((613, 273)));
         assert_eq!(tab_window_size("bogus"), None);
+    }
+
+    /// ⭐ **회귀 방지 — 프론트의 탭 목록과 Rust 의 탭 화이트리스트가 어긋나지 않는다.**
+    ///
+    /// F-17(이슈 #28) 실기기 검증에서 실제로 터진 결함이다: `settings.html` 이
+    /// `Keyboards` 탭을 `TABS` 에 넣었는데 [`tab_window_size`] 에 대응 항목을
+    /// 넣지 않아, `settings_set_tab` 이 `알 수 없는 탭: keyboards` 로 거부하고
+    /// **설정 창 전체가 오류 화면으로 죽었다.**
+    ///
+    /// ⚠️ `tests/frontend_wiring.rs` 는 HTML **텍스트**만 검사하므로 이 어긋남을
+    /// 잡을 수 없다 — 한쪽은 JS 배열이고 다른 쪽은 Rust `match` 다. 두 목록을
+    /// 실제로 대조하는 것은 이 테스트뿐이다(같은 크레이트 안이라 private
+    /// 함수를 부를 수 있다).
+    #[test]
+    fn every_tab_in_settings_html_has_a_window_size() {
+        let html = include_str!("../ui/settings.html");
+        let line = html
+            .lines()
+            .find(|l| l.contains("const TABS"))
+            .expect("settings.html 에 `const TABS = [...]` 선언이 있어야 한다");
+        let inside = line
+            .split_once('[')
+            .and_then(|(_, r)| r.split_once(']'))
+            .map(|(m, _)| m)
+            .expect("`const TABS` 가 대괄호 배열이어야 한다");
+
+        let tabs: Vec<&str> = inside
+            .split(',')
+            .map(|t| t.trim().trim_matches(['"', '\'']))
+            .filter(|t| !t.is_empty())
+            .collect();
+
+        assert!(
+            tabs.len() >= 6,
+            "탭이 6개 미만이다 — 파싱이 깨졌을 가능성이 크다: {tabs:?}"
+        );
+        for tab in &tabs {
+            assert!(
+                tab_window_size(tab).is_some(),
+                "settings.html 의 TABS 에 있는 `{tab}` 탭에 tab_window_size() 항목이 \
+                 없다 — settings_set_tab 이 그 탭을 거부해 설정 창이 죽는다"
+            );
+        }
     }
 
     // validate_and_apply() — keys::all() 에 없는 키는 거부된다.
