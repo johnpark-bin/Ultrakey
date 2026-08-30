@@ -45,6 +45,9 @@
     border-radius: 6px;
     font: inherit;
     width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .sidebar button[aria-selected="true"] {
     background: color-mix(in srgb, currentColor 14%, transparent);
@@ -52,6 +55,20 @@
   }
   .sidebar button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
   .sidebar button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+
+  /* ⭐ 탭 아이콘(이슈 #40 ②) — 자산 파일 없는 **인라인 SVG 선화**다. 색을
+     하드코딩하지 않고 `stroke: currentColor` 만 쓰므로 :root 의
+     `color-scheme: light dark` 가 정한 전경색을 그대로 따라간다 — 라이트에서
+     검정, 다크에서 흰 선화가 된다(index.html 의 `<svg class="app-icon">` 과
+     같은 규약, 테마별 사본이 필요 없는 이유). 형태 어휘도 정본 아이콘과
+     맞춘다: viewBox 24×24 · fill none · stroke-width 2(docs/dev/icons.md §2). */
+  .tab-icon {
+    width: 16px; height: 16px; flex: 0 0 auto;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+    opacity: .7;
+  }
+  .sidebar button[aria-selected="true"] .tab-icon { opacity: 1; }
 
   .panel { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; }
   .tabpanel h1 { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
@@ -187,12 +204,37 @@
        실측해 두었다)이 정하고, 사용자가 드래그로 조절한 크기는 F-15 저장 키
        ui.windowWidth/ui.windowHeight 로 영속화되어 다음 실행 때 복원된다. -->
   <nav class="sidebar" role="tablist" aria-orientation="vertical" id="tablist">
-    <button role="tab" id="tab-seek" data-tab="seek" aria-selected="false" aria-controls="panel-seek" tabindex="-1"></button>
-    <button role="tab" id="tab-hyperkey" data-tab="hyperkey" aria-selected="false" aria-controls="panel-hyperkey" tabindex="-1"></button>
-    <button role="tab" id="tab-presets" data-tab="presets" aria-selected="false" aria-controls="panel-presets" tabindex="-1"></button>
-    <button role="tab" id="tab-korean" data-tab="korean" aria-selected="false" aria-controls="panel-korean" tabindex="-1"></button>
-    <button role="tab" id="tab-keyboards" data-tab="keyboards" aria-selected="false" aria-controls="panel-keyboards" tabindex="-1"></button>
-    <button role="tab" id="tab-general" data-tab="general" aria-selected="false" aria-controls="panel-general" tabindex="-1"></button>
+    <!-- ⭐ 아이콘은 라벨 왼쪽 인라인 SVG 다(이슈 #40 ②). 원본 SuperKey v1.66 도
+         탭마다 아이콘을 달았고(실측: docs/research/screenshots/02~05-*-tab.png),
+         Seek(십자선 조준경)·Hyperkey(구체 + 초승달 하이라이트)·Presets(원반
+         더미)·General(4각 반짝임)은 그 실측 모양을 선화로 옮긴 것이다. Korean·
+         Keyboards 는 원본에 없는 우리 탭이라(F-16·F-17) 같은 어휘로 새로 그렸다.
+         라벨은 `t()` 가 채우므로 <span> 으로 분리해 둔다 — button 자체에
+         textContent 를 쓰면 아이콘이 지워진다. -->
+    <button role="tab" id="tab-seek" data-tab="seek" aria-selected="false" aria-controls="panel-seek" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4"/></svg>
+      <span id="tab-seek-label"></span>
+    </button>
+    <button role="tab" id="tab-hyperkey" data-tab="hyperkey" aria-selected="false" aria-controls="panel-hyperkey" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M5.6 18.4A11 11 0 0 0 18.4 5.6"/></svg>
+      <span id="tab-hyperkey-label"></span>
+    </button>
+    <button role="tab" id="tab-presets" data-tab="presets" aria-selected="false" aria-controls="panel-presets" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="7" rx="8.5" ry="3.5"/><path d="M3.5 12c0 1.93 3.81 3.5 8.5 3.5s8.5-1.57 8.5-3.5"/><path d="M3.5 17c0 1.93 3.81 3.5 8.5 3.5s8.5-1.57 8.5-3.5"/></svg>
+      <span id="tab-presets-label"></span>
+    </button>
+    <button role="tab" id="tab-korean" data-tab="korean" aria-selected="false" aria-controls="panel-korean" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 5h8.5l-2.5 14"/><path d="M16.5 3v18"/><path d="M16.5 11.5h4.5"/></svg>
+      <span id="tab-korean-label"></span>
+    </button>
+    <button role="tab" id="tab-keyboards" data-tab="keyboards" aria-selected="false" aria-controls="panel-keyboards" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h.01M9.5 13.5h.01M13 13.5h.01M16.5 13.5h.01M8 16.5h8"/></svg>
+      <span id="tab-keyboards-label"></span>
+    </button>
+    <button role="tab" id="tab-general" data-tab="general" aria-selected="false" aria-controls="panel-general" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 2.5 12.4 8.6 18.5 10.5 12.4 12.4 10.5 18.5 8.6 12.4 2.5 10.5 8.6 8.6Z"/><path d="M18 15.5 18.7 17.8 21 18.5 18.7 19.2 18 21.5 17.3 19.2 15 18.5 17.3 17.8Z"/></svg>
+      <span id="tab-general-label"></span>
+    </button>
   </nav>
 
   <main class="panel">
@@ -514,7 +556,9 @@
 
          고정 컨트롤 4개(§3.1.5): 디바이스 선택 좌측 패인 1(이슈 #31 ④ — Karabiner
          식 배치로 재설계, 아래 근거 참고) + 그룹 제목 2("키 변환 세트",
-         "Function Keys") + macOS Function Keys 상태 표시줄(뱃지+버튼) 1.
+         "Function Keys") + macOS Function Keys 상태 표시줄(뱃지+버튼) 1. ⭐ 이슈
+         #40 ① 로 상태 표시줄만 2패인 레이아웃 **밖**, 탭 최상단으로 나왔다 —
+         나머지 3개는 그대로 패인 안이다.
          기능 1(가변 M행): 가변 길이 목록 편집기(§3.4.1) — JS 의 renderKeyRemapGroup()
          이 매 렌더마다 행을 새로 그린다(다른 탭의 renderTrackpadExtra() 와 같은
          "② 숨김" 패턴 — DOM 을 통째로 비우고 다시 채운다).
@@ -559,6 +603,25 @@
     <section id="panel-keyboards" class="tabpanel" role="tabpanel" aria-labelledby="tab-keyboards" hidden>
       <h1 id="keyboards-heading"></h1>
 
+      <!-- ⭐ 고정 컨트롤 2 — macOS Function Keys 상태 표시줄(§3.5.1). 이슈 #40 ①
+           로 `.keyboards-detail-pane` 안에서 **탭 최상단**으로 올라왔다. 근거:
+           이 값은 macOS **전역** 설정 하나를 읽은 것이라(main.rs 의
+           `fn_state::f_keys_are_standard()` 는 디바이스를 인자로 받지 않는다)
+           디바이스를 바꿔 골라도 절대 달라지지 않는다. 우측 상세 패인 안에
+           있으면 "선택된 디바이스의 값"이라는 잘못된 인상을 준다 — 사용자가
+           실제로 그렇게 읽었다(이슈 #40 ①). 참조 대상인 Karabiner 도 같은
+           배치다(docs/research/screenshots/issue-31-karabiner-function-keys-menu.png
+           — 이 표시줄이 디바이스 목록 **위**, 창 최상단에 있다). 명세도 원래
+           §3.5.1 에서 "`Keyboards` 탭 상단"이라고 못박고 있었다.
+           읽기 전용 뱃지 + 시스템 설정 버튼. 이 값을 우리가 쓰지 않는다 — 읽기만 한다. -->
+      <div class="row">
+        <span id="keyboards-fnstate-label"></span>
+        <span class="badge" id="keyboards-fnstate-badge"></span>
+        <button id="keyboards-open-system-settings-btn"></button>
+      </div>
+
+      <hr />
+
       <div class="keyboards-layout">
         <!-- 고정 컨트롤 1 — 디바이스 선택 좌측 패인(이슈 #31 ④). "For all devices"
              + 연결된 키보드 + 미연결 키보드(제품명 + 접미사) 순서(§3.1.2 표),
@@ -573,16 +636,6 @@
         ></div>
 
         <div class="keyboards-detail-pane">
-          <!-- 고정 컨트롤 2 — macOS Function Keys 상태 표시줄(§3.5.1). 읽기 전용
-               뱃지 + 시스템 설정 버튼. 이 값을 우리가 쓰지 않는다 — 읽기만 한다. -->
-          <div class="row">
-            <span id="keyboards-fnstate-label"></span>
-            <span class="badge" id="keyboards-fnstate-badge"></span>
-            <button id="keyboards-open-system-settings-btn"></button>
-          </div>
-
-          <hr />
-
           <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1). -->
           <h2 class="group" id="keyboards-keyremap-heading"></h2>
           <div id="keyboards-keyremap-list"></div>
@@ -769,12 +822,14 @@ if (!tauri || !tauri.core) {
   let activeTab = "hyperkey";
 
   function applyStrings() {
-    $("tab-seek").textContent = t("settings.tab.seek");
-    $("tab-hyperkey").textContent = t("settings.tab.hyperkey");
-    $("tab-presets").textContent = t("settings.tab.presets");
-    $("tab-korean").textContent = t("settings.tab.korean");
-    $("tab-keyboards").textContent = t("settings.tab.keyboards");
-    $("tab-general").textContent = t("settings.tab.general");
+    // ⭐ 아이콘(인라인 SVG)이 같은 button 안에 있으므로 button 이 아니라 라벨
+    // <span> 에 넣는다 — button.textContent 는 아이콘까지 지운다(이슈 #40 ②).
+    $("tab-seek-label").textContent = t("settings.tab.seek");
+    $("tab-hyperkey-label").textContent = t("settings.tab.hyperkey");
+    $("tab-presets-label").textContent = t("settings.tab.presets");
+    $("tab-korean-label").textContent = t("settings.tab.korean");
+    $("tab-keyboards-label").textContent = t("settings.tab.keyboards");
+    $("tab-general-label").textContent = t("settings.tab.general");
 
     $("seek-title").textContent = t("settings.placeholder.title");
     $("seek-body").textContent = t("settings.placeholder.seek.body");
@@ -1435,6 +1490,11 @@ if (!tauri || !tauri.core) {
     currentPerDevice = perDevice;
 
     populateDeviceList(perDevice.devices);
+    // ⭐ 이 값만은 디바이스별이 아니다 — bootstrap 이 실어 오는 macOS 전역
+    // 설정의 스냅샷이라 어느 디바이스를 골라도 같다(이슈 #40 ① 이 표시줄을
+    // 탭 최상단으로 올린 근거). 여기서 그리는 것은 최초 1회 페인트일 뿐이고,
+    // 그 뒤로는 refreshMacosFnStateBadge() 의 폴링이 디바이스 선택과 무관하게
+    // 갱신한다.
     renderMacosFnStateBadge(perDevice.fnStateIsStandard);
     renderKeyRemapGroup(perDevice, currentDevice);
     renderFunctionKeysGroup(perDevice, currentDevice);
