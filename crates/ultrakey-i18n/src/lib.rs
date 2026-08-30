@@ -166,6 +166,25 @@ impl Catalog {
         }
         self.get(key)
     }
+
+    /// 이 카탈로그의 전체 항목을 en 폴백까지 병합해 돌려준다.
+    ///
+    /// ⭐ 웹뷰(F-09 환경설정 창)가 문자열을 개별 커맨드로 하나씩 가져가면 왕복이 수십 번
+    /// 생긴다. 카탈로그는 작고 정적이므로 한 번에 넘긴다 — 소스는 여전히 하나뿐이라
+    /// §3.1.5 "단일 카탈로그" 결정을 그대로 지킨다.
+    ///
+    /// 자기 로케일 값이 우선하고, 자기 로케일에 없는 키만 en 값으로 채운다
+    /// ([`Catalog::get`] 의 개별 폴백 규칙과 동일).
+    pub fn entries(&self) -> std::collections::BTreeMap<String, String> {
+        let mut merged: std::collections::BTreeMap<String, String> = self
+            .fallback
+            .iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        merged.extend(self.entries.iter().map(|(k, v)| (k.clone(), v.clone())));
+        merged
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +296,28 @@ mod tests {
         let ko = Catalog::for_locale(Locale::Ko);
         assert_eq!(en.get("app.name"), "Ultrakey");
         assert_eq!(ko.get("app.name"), "Ultrakey");
+    }
+
+    /// ko 카탈로그의 `entries()` 가 en 과 키 집합이 같고, 값 중 하나 이상이
+    /// 실제로 한국어여야 한다 — en 폴백이 조용히 전체를 덮어써 버리는 버그를
+    /// 잡아낸다.
+    #[test]
+    fn entries_merges_en_fallback_and_keeps_own_locale_keys() {
+        let en = Catalog::for_locale(Locale::En);
+        let ko = Catalog::for_locale(Locale::Ko);
+
+        let en_entries = en.entries();
+        let ko_entries = ko.entries();
+
+        let en_keys: BTreeSet<_> = en_entries.keys().cloned().collect();
+        let ko_keys: BTreeSet<_> = ko_entries.keys().cloned().collect();
+        assert_eq!(en_keys, ko_keys, "entries() 의 키 집합이 en/ko 사이에 달라서는 안 된다");
+
+        assert_eq!(ko_entries.get("common.ok").map(String::as_str), Some("확인"));
+
+        let has_korean_value = ko_entries
+            .values()
+            .any(|v| v.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)));
+        assert!(has_korean_value, "ko entries() 에 한국어 값이 하나도 없다");
     }
 }

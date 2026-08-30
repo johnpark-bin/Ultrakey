@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>Ultrakey modifier probe</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin:0; padding:24px 28px; font:14px/1.6 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.lead { margin:0 0 18px; opacity:.7; font-size:13px; }
+  .mods { display:flex; gap:10px; margin:0 0 18px; }
+  .mod {
+    flex:1; text-align:center; padding:18px 8px; border-radius:10px;
+    border:2px solid color-mix(in srgb, currentColor 20%, transparent);
+    background: color-mix(in srgb, currentColor 5%, transparent);
+    font-size:34px; font-weight:600; opacity:.35; transition:none;
+  }
+  .mod .name { display:block; font-size:11px; font-weight:500; letter-spacing:.04em; opacity:.8; }
+  .mod.on { opacity:1; background:#0a84ff; color:#fff; border-color:#0a84ff; }
+  #verdict { font-size:15px; font-weight:600; margin:0 0 14px; padding:10px 12px; border-radius:8px;
+             background: color-mix(in srgb, currentColor 8%, transparent); }
+  table { border-collapse:collapse; width:100%; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  th,td { text-align:left; padding:4px 8px; border-bottom:1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  th { opacity:.6; font-weight:600; }
+  td.t { color:#30a14e; font-weight:600; }
+  td.f { opacity:.4; }
+</style>
+</head>
+<body>
+<h1>Ultrakey modifier probe</h1>
+<p class="lead">
+  이 페이지는 <strong>Ultrakey 와 완전히 무관한 다른 앱(브라우저)</strong>이 실제로 어떤 modifier 를 인식하는지 보여준다.
+  hyper 소스 키(기본 <code>caps lock</code>)를 누른 채 아무 글자 키나 누르면, 그 keydown 이 실어 온 modifier 상태가 아래에 그대로 찍힌다.
+  <br>근거: <code>docs/dev/manual-verification.md</code> 항목 2·3.
+</p>
+
+<div class="mods">
+  <div class="mod" id="m-ctrl">⌃<span class="name">control</span></div>
+  <div class="mod" id="m-alt">⌥<span class="name">option</span></div>
+  <div class="mod" id="m-meta">⌘<span class="name">command</span></div>
+  <div class="mod" id="m-shift">⇧<span class="name">shift</span></div>
+  <div class="mod" id="m-caps">⇪<span class="name">caps lock</span></div>
+</div>
+
+<div id="verdict">아직 키 입력이 없다. 이 창을 클릭해 포커스를 준 뒤, hyper 소스 키를 누른 채 <kbd>A</kbd> 를 눌러라.</div>
+
+<table>
+  <thead><tr><th>#</th><th>type</th><th>key</th><th>code</th><th>⌃</th><th>⌥</th><th>⌘</th><th>⇧</th><th>⇪</th><th>combo</th></tr></thead>
+  <tbody id="log"></tbody>
+</table>
+
+<script>
+const ids = { ctrl:"m-ctrl", alt:"m-alt", meta:"m-meta", shift:"m-shift", caps:"m-caps" };
+let n = 0;
+
+function symbols(e) {
+  let s = "";
+  if (e.ctrlKey)  s += "⌃";
+  if (e.altKey)   s += "⌥";
+  if (e.metaKey)  s += "⌘";
+  if (e.shiftKey) s += "⇧";
+  return s || "—";
+}
+
+function paint(e) {
+  const caps = e.getModifierState ? e.getModifierState("CapsLock") : false;
+  const on = { ctrl:e.ctrlKey, alt:e.altKey, meta:e.metaKey, shift:e.shiftKey, caps };
+  for (const k in ids) document.getElementById(ids[k]).classList.toggle("on", !!on[k]);
+
+  const combo = symbols(e);
+  const v = document.getElementById("verdict");
+  if (combo === "⌃⌥⌘⇧")      v.textContent = "✅ hyper — ⌃⌥⌘⇧ 4개 전부 인식됨 (key: " + e.key + ")";
+  else if (combo === "⌃⌥⌘")   v.textContent = "✅ hyper (shift 제외) — ⌃⌥⌘ 3개만 인식됨 (key: " + e.key + ")";
+  else if (combo === "⌃⌥⇧")   v.textContent = "✅ meh — ⌃⌥⇧ 3개 인식됨 (⌘ 없음) (key: " + e.key + ")";
+  else if (combo === "⌃⌘⇧")   v.textContent = "✅ bleh — ⌃⌘⇧ 3개 인식됨 (⌥ 없음) (key: " + e.key + ")";
+  else                        v.textContent = "현재 조합: " + combo + " (key: " + e.key + ", code: " + e.code + ")";
+
+  // 캡스락 잠금 자체가 켜지면 안 된다 — 원본 keyDown 이 소비되어야 하기 때문이다.
+  if (caps) v.textContent += "  ⚠️ CapsLock 잠금이 켜져 있다 — 원본 keyDown 이 소비되지 않았다는 뜻이다.";
+
+  const row = document.createElement("tr");
+  const cell = (t, cls) => { const td = document.createElement("td"); td.textContent = t; if (cls) td.className = cls; return td; };
+  const b = (x) => cell(x ? "T" : "F", x ? "t" : "f");
+  row.append(cell(++n), cell(e.type), cell(e.key), cell(e.code),
+             b(e.ctrlKey), b(e.altKey), b(e.metaKey), b(e.shiftKey), b(caps), cell(combo));
+  const log = document.getElementById("log");
+  log.prepend(row);
+  while (log.children.length > 40) log.lastChild.remove();
+
+  console.log("[probe]", e.type, e.code, "ctrl=" + e.ctrlKey, "alt=" + e.altKey,
+              "meta=" + e.metaKey, "shift=" + e.shiftKey, "caps=" + caps, "combo=" + combo);
+}
+
+for (const t of ["keydown", "keyup"]) {
+  window.addEventListener(t, (e) => { e.preventDefault(); paint(e); }, true);
+}
+</script>
+</body>
+</html>
