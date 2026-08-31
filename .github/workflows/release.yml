@@ -130,8 +130,18 @@ jobs:
             APP_PATH="$(find target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)"
             test -n "$APP_PATH" || { echo "::error::.app 번들을 찾지 못했습니다"; exit 1; }
             ENTITLEMENTS="apps/ultrakey-app/entitlements.plist"
-            # 번들 안에 Sparkle.framework 같은 중첩 코드(XPC·헬퍼·프레임워크)가 있으면
-            # 안쪽부터 먼저 서명한 뒤 메인을 다시 서명한다(build-signed.sh §3 과 동일).
+            # ⭐ Sparkle.framework 을 번들에 넣고 Ultrakey Dev 로 중첩 서명 — Team ID 불일치
+            # 크래시를 막는 핵심 스텝. tauri bundler 는 frameworks 설정을 Contents/Frameworks
+            # 로 복사하지 않아 fetch-sparkle 산출물을 직접 넣어야 한다(실측: Contents 가
+            # Frameworks 없이 생성됨). dyld 는 메인 앱과 프레임워크의 Team ID 가 다르면
+            # 로드를 거부한다 — 중첩 서명으로 서명 주체를 메인과 맞춘다.
+            if [ -d "apps/ultrakey-app/Sparkle.framework" ]; then
+              mkdir -p "${APP_PATH}/Contents/Frameworks"
+              cp -R apps/ultrakey-app/Sparkle.framework "${APP_PATH}/Contents/Frameworks/"
+              echo "  Sparkle.framework 를 번들에 포함하고 중첩 서명한다"
+            fi
+            # 중첩 코드가 하나라도 있으면 안쪽부터 먼저 서명한 뒤 메인을 다시 서명한다
+            # (build-signed.sh §3 과 동일 — Team ID 불일치 크래시 방지).
             if [ -d "${APP_PATH}/Contents/Frameworks" ]; then
               find "${APP_PATH}/Contents/Frameworks" -depth \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) -print0 |
                 while IFS= read -r -d '' nested; do
