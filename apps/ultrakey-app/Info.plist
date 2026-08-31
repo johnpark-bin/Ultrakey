@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ⭐ F-13 자동 업데이트 (Sparkle) — docs/spec/auto-update.md §4.1 실측값 준수.
+	     이 파일은 tauri-cli 가 번들 Info.plist 에 자동 병합한다(tauri.conf.json 과
+	     같은 디렉터리에 있으면 병합 — docs/dev/auto-update-server.md §2).
+	     CFBundle* 키는 Tauri 가 생성하므로 여기엔 SU* 키만 둔다. -->
+	<key>SUFeedURL</key>
+	<!-- ⚠️ 자리표시자다 — 실제 호스팅 준비 후 문서(docs/dev/auto-update-server.md)에
+	     따라 교체한다. HTTPS 만 허용된다(명세 §5-12). -->
+	<string>https://example.com/ultrakey/updates.xml</string>
+	<!-- ⚠️ 개발용 EdDSA 공개키(아래). 개인키는 이 개발 머신의 키체인과(문서화된)
+	     CI 시크릿에만 존재한다 — 절대 커밋하지 않는다. -->
+	<key>SUPublicEDKey</key>
+	<string>hEBYABNXGExw6rB6QUURW8X6+HwcRwXdkO00fvkl/2A=</string>
+	<!-- ⭐ 출고 기본값 OFF(§4.1 실측: SUEnableAutomaticChecks=false) — Sparkle 의
+	     자체 기본값은 true 라서 명시적으로 꺼 둔다. General 탭 체크박스가 켜면
+	     런타임에 UserDefaults 로 반전된다. -->
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<!-- 48시간 주기(§4.1 실측: SUScheduledCheckInterval=172800). -->
+	<key>SUScheduledCheckInterval</key>
+	<integer>172800</integer>
+</dict>
+</plist>

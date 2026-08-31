@@ -71,6 +71,13 @@ tauri-plugin-opener     = "2.5.4"
 # F-15 설정 export/import (이슈 #39 Phase 2) — 네이티브 열기/저장 대화상자.
 # `tauri ^2.10` 를 요구해 2.11.5 와 호환된다(2026-08-31 crates.io 조회로 검증).
 tauri-plugin-dialog     = "2.7.2"
+# ⭐ F-13 자동 업데이트(docs/spec/auto-update.md §7 판정) — Sparkle.framework 를
+# 감싸는 커뮤니티 플러그인 0.2.5(2026-08-25 발행, crates.io 최신 확인 · 소스
+# 직접 검증: init() 은 무인자, 설정은 Info.plist). macOS 전용 — 실제 의존은
+# apps/ultrakey-app 의 [target.'cfg(target_os = "macos")'] 표에서 선언한다.
+# tauri 2.9.5+ 요구 — 워크스페이스의 2.11.5 로 충족. 프레임워크 획득은
+# scripts/fetch-sparkle.sh(docs/dev/auto-update-server.md).
+tauri-plugin-sparkle-updater = "0.2.5"
 
 [profile.release]
 lto = "thin"

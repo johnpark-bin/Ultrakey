@@ -65,6 +65,9 @@ echo "  ✅ entitlements 파일: ${ENTITLEMENTS}"
 echo
 echo "== 2. universal 빌드 =="
 cd "${REPO_ROOT}"
+# ⭐ F-13 — Sparkle 프레임워크가 없으면 먼저 내려받는다 (tauri-plugin-sparkle-updater
+#   build.rs 가 컴파일 시점에 프레임워크를 요구한다). 멱등 — 이미 있으면 그대로 둔다.
+./scripts/fetch-sparkle.sh
 cargo tauri build --target universal-apple-darwin
 
 echo
@@ -92,10 +95,40 @@ if [ -z "${APP_PATH}" ]; then
 fi
 echo "  대상: ${APP_PATH}"
 
-codesign --force --deep --options runtime \
+codesign --force --options runtime \
 	--entitlements "${ENTITLEMENTS}" \
 	--sign "${SIGN_IDENTITY}" \
 	"${APP_PATH}"
+
+# ⭐ F-13 — Sparkle 프레임워크가 번들에 들어갔다면 `--deep` 대신 **안쪽부터 개별
+# 서명**한다(docs/dev/code-signing.md §7). Tauri 번들러가 프레임워크를
+# Contents/Frameworks 에 복사해 두고, 이 스크립트는 그 위에 다시 Ultrakey Dev
+# 주체로 서명해 번들 전체를 같은 주체로 맞춘다. 순서: XPC/헬퍼 → 프레임워크 →
+# 메인 앱(마지막 메인 재서명으로 프레임워크를 중첩 코드로 포함).
+if [ -d "${APP_PATH}/Contents/Frameworks/Sparkle.framework" ]; then
+	SINGED_SPARKLE=1
+	echo "  -- Sparkle.framework 중첩 코드(XPC·헬퍼 앱) 개별 서명 --"
+	# find 의 -o 는 -print0 보다 우선순위가 낮아 두 조건을 괄호로 묶어야 한다.
+	find "${APP_PATH}/Contents/Frameworks/Sparkle.framework" \
+		\( -name "*.xpc" -o -name "*.app" \) -print0 |
+		while IFS= read -r -d '' nested; do
+			echo "    ${nested##*/}"
+			codesign --force --options runtime --sign "${SIGN_IDENTITY}" "${nested}"
+		done
+	echo "  -- Sparkle.framework 번들 자체 서명 --"
+	codesign --force --options runtime --sign "${SIGN_IDENTITY}" \
+		"${APP_PATH}/Contents/Frameworks/Sparkle.framework"
+fi
+
+# 프레임워크를 포함해 메인 앱을 다시 서명한다 — 메인 서명이 중첩 참조(cdhash)를
+# 기록해야 하므로 프레임워크를 먼저 서명한 뒤 이 단계를 거친다. `--deep` 없이
+# 메인 번들만 서명하면 이미 서명된 프레임워크는 그대로 보존된다.
+if [ "${SINGED_SPARKLE:-0}" = "1" ]; then
+	codesign --force --options runtime \
+		--entitlements "${ENTITLEMENTS}" \
+		--sign "${SIGN_IDENTITY}" \
+		"${APP_PATH}"
+fi
 
 echo
 echo "== 4. 검증 =="

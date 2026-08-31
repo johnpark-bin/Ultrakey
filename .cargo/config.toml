@@ -1,0 +1,14 @@
+# tauri-plugin-sparkle-updater build.rs 가 `SPARKLE_FRAMEWORK_PATH` 환경 변수로
+# Sparkle.framework 를 찾는다(docs/dev/auto-update-server.md §1).
+#
+# 이 값은 docs/dev/code-signing.md §5 의 무서명/자체 서명 개발 빌드와 무관하게
+# **항상 필요하다** — 플러그인 크레이트의 build.rs 가 컴파일 시점에 프레임워크를
+# 링크해야 하기 때문이다(빌드가 실패하면 "프레임워크를 찾을 수 없다"고 panic).
+# `relative = true` 는 이 파일이 있는 디렉터리(워크스페이스 루트) 기준으로 해석한다.
+[env]
+SPARKLE_FRAMEWORK_PATH = { value = "apps/ultrakey-app", relative = true }
+# `cargo test` 바이너리는 `target/debug/deps/`에 있어 dyld rpath(`@executable_path/../Frameworks`
+# → `target/debug/Frameworks`)로는 프레임워크를 못 찾는다. dev/test 실행 경로용 폴백 —
+# dyld 가 `apps/ultrakey-app/Sparkle.framework` 를 직접 찾게 한다. (`tauri build` 산출
+# .app 은 Contents/Frameworks 를 쓰므로 이 폴백이 실제 배포에는 관여하지 않는다.)
+DYLD_FRAMEWORK_PATH = { value = "apps/ultrakey-app", relative = true }

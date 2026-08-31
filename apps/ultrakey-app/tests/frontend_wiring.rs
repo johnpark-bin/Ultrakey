@@ -556,8 +556,7 @@ fn settings_html_의_한영_한자_컨트롤은_활성이고_hint_문구를_가�
             "korean-han-eng-badge",
         ),
         ("korean-hanja", "korean-hanja-hint", "korean-hanja-badge"),
-    ] {
-        let input_needle = format!("id=\"{checkbox_id}\"");
+    ] {        let input_needle = format!("id=\"{checkbox_id}\"");
         let input_pos = html
             .find(&input_needle)
             .unwrap_or_else(|| panic!("settings.html 에 id=\"{checkbox_id}\" 컨트롤이 없다"));
@@ -706,10 +705,10 @@ fn main_rs_의_menu_점_리터럴은_다섯_카탈로그_모두에_있다() {
 }
 
 /// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
-/// `Settings…` · `About` · `Advanced ▸ (Synthesize Caps Lock Remap / Relaunch)` ·
-/// `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을 전부 갖추고 있는지
-/// 이름만으로 재확인한다. `Purchase`(F-12)·`Check for Updates…`(F-13)가 실수로
-/// 다시 들어오면(범위 밖) 이 테스트가 아니라 코드 리뷰에서 걸러야 하지만, 적어도
+/// `Settings…` · `Check for Updates…`(F-13) · `About` · `Advanced ▸ (Synthesize Caps
+/// Lock Remap / Relaunch)` · `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을
+/// 전부 갖추고 있는지 이름만으로 재확인한다. `Purchase`(F-12) 만 실수로 다시
+/// 들어오면(범위 밖) 이 테스트가 아니라 코드 리뷰에서 걸러야 하지만, 적어도
 /// 필수 항목이 빠지는 회귀는 여기서 잡는다.
 #[test]
 fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
@@ -717,6 +716,7 @@ fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
     for id in [
         "menu.ignore_app",
         "menu.settings",
+        "menu.check_for_updates",
         "menu.about",
         "menu.advanced",
         "menu.advanced.synthesize_caps_remap",
@@ -731,10 +731,44 @@ fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
     }
 }
 
+/// ⭐ F-13 — General 탭 `Check for updates automatically` 체크박스가 **활성** 컨트롤로
+/// 출하됐는지 검증한다: disabled 가 아니고, data-key(`general.autoUpdate`)가 붙고,
+/// 미구현 배지가 없다. 이전 구현은 이 자리를 disabled+badge 로 비워 두었는데, F-13
+/// 배선이 들어왔으므로 활성화됐다(명세 §4.1 "체크박스 1개").
+#[test]
+fn settings_html_의_자동_업데이트_체크박스는_활성이다() {
+    let html = read_settings_html();
+
+    let input_needle = r#"id="auto-update""#;
+    let input_pos = html
+        .find(input_needle)
+        .unwrap_or_else(|| panic!("settings.html 에 id=\"auto-update\" 컨트롤이 없다"));
+    let tag_end = html[input_pos..]
+        .find('>')
+        .map(|i| input_pos + i)
+        .unwrap_or_else(|| panic!("id=\"auto-update\" 의 <input> 태그가 닫히지 않았다"));
+    let tag = &html[input_pos..tag_end];
+    assert!(
+        !tag.contains("disabled"),
+        "id=\"auto-update\" 체크박스가 여전히 disabled 다 — F-13 은 활성 컨트롤로 출하해야 한다"
+    );
+    assert!(
+        html.contains(r#"data-key="general.autoUpdate""#),
+        "'auto-update' 체크박스에 data-key=\"general.autoUpdate\" 가 없다 — settings_set 라우팅과 엮이지 않는다"
+    );
+    assert!(
+        !html.contains(r#"id="auto-update-badge""#),
+        "id=\"auto-update-badge\" 가 여전히 남아 있다 — 활성 컨트롤에는 미구현 배지를 두지 않는다"
+    );
+    assert!(
+        html.contains(r#"id="auto-update-why""#),
+        "id=\"auto-update-why\" 부제 문단이 없다"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 아이콘(이슈 #16) — 정본 SVG 와 그것을 쓰는 세 자리가 어긋나지 않게 잡는다.
 // ─────────────────────────────────────────────────────────────────────────────
-
 fn read_source_svg() -> String {
     // 정본은 워크스페이스 루트의 assets/app-icon/ultrakey.svg 하나뿐이다.
     let path = manifest_dir().join("../../assets/app-icon/ultrakey.svg");

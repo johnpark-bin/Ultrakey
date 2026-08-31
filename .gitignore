@@ -28,3 +28,9 @@ apps/ultrakey-app/gen/schemas/
 
 # ── macOS ───────────────────────────────────────────────────────────────────
 .DS_Store
+
+# ── F-13 자동 업데이트 (Sparkle) ──────────────────────────────────────────
+# scripts/fetch-sparkle.sh 가 받아 두는 이진 산출물 — 커밋하지 않는다
+# (프레임워크가 커밋되면 cdhash·리뷰·스토리지 비용이 모두 쓸데없이 늘어난다).
+apps/ultrakey-app/Sparkle.framework/
+apps/ultrakey-app/sparkle-bin/

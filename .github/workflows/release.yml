@@ -32,6 +32,10 @@ jobs:
             exit 1
           fi
       - uses: Swatinem/rust-cache@v2
+      # F-13 — 플러그인이 컴파일 시점에 프레임워크를 요구하므로(없으면 build.rs panic)
+      # cargo test/clippy 전에 받아둔다.
+      - name: Sparkle 프레임워크 내려받기
+        run: ./scripts/fetch-sparkle.sh
       - name: cargo test
         run: cargo test --workspace
       - name: cargo clippy
@@ -51,6 +55,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustup 타깃 추가
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      # F-13 — `tauri build` 가 실행하는 플러그인 build.rs(프레임워크 링크)에 필요.
+      - name: Sparkle 프레임워크 내려받기
+        run: ./scripts/fetch-sparkle.sh
       - name: tauri-cli 설치 (npm 사전 빌드 바이너리)
         run: npm install --global @tauri-apps/cli@2.11.4
       - name: universal 빌드 + DMG (서명·공증 시크릿 주입)
