@@ -19,6 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
+        with:
+          # macos-15 라벨이 arm64 러너로 라우팅되면서, 아키텍처를 키에 넣지 않으면
+          # x86_64 캐시가 arm64 러너에 복원돼 build-script 바이너리가 실행 불가(exit 126)가 된다.
+          key: ${{ runner.arch }}
       # F-13 — tauri-plugin-sparkle-updater 가 컴파일 시점에 Sparkle.framework 를
       # 요구하므로(없으면 build.rs panic) cargo test/clippy 전에 받아둔다.
       - name: Sparkle 프레임워크 내려받기
