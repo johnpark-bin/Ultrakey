@@ -68,56 +68,83 @@ jobs:
         run: ./scripts/fetch-sparkle.sh
       - name: tauri-cli 설치 (npm 사전 빌드 바이너리)
         run: npm install --global @tauri-apps/cli@2.11.4
-      - name: universal 빌드 + DMG (서명·공증 시크릿 주입)
+      - name: universal 빌드 + DMG (서명 게이트)
         id: build
         # 시크릿 미설정 시 이 매핑은 빈 문자열이 된다 — 아래 가드가 빈 값을
         # 환경에서 제거한다. 게이트 설계 근거: 이슈 #50 계획 코멘트 결정 3.
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          # tauri-bundler 는 환경 변수의 "존재"(var_os) 로 서명 여부를 판정한다 —
-          # 빈 문자열도 존재로 잡아 빈 인증서 임포트를 시도해 실패한다. 또한 공증
-          # 자격이 부분적으로만 있으면(APPLE_ID+APPLE_PASSWORD 있고 Team ID 없음) MissingTeamId
-          # 로 하드 실패한다. 그래서 불완전한 그룹은 빌드 직전에 환경에서 제거한다.
-          # 근거: tauri-apps/tauri crates/tauri-bundler/src/bundle/macos/{sign,app}.rs
-          SIGNED=false
           NOTARIZED=false
-          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; then
-            SIGNED=true
-            # 자체 서명 인증서(issuer==subject)는 임포트 직후 신뢰 사슬이 없어 codesign 이
-            # 유효 신원으로 해석하지 못해 "failed to resolve signing identity" 로 실패한다.
-            # GitHub 도메인에 신뢰 루트로 등록해 Tauri 번들러가 임포트한 키체인에서도
-            # 유효 신원으로 보이게 한다. Developer ID 는 Apple 사슬이 이미 신뢰라 건너뛴다.
-            printf '%s' "$APPLE_CERTIFICATE" | base64 -d > /tmp/cert.p12
-            openssl pkcs12 -in /tmp/cert.p12 -passin "pass:$APPLE_CERTIFICATE_PASSWORD" \
-              -nokeys -clcerts -out /tmp/cert.pem -passout pass:
-            ISSUER_CN="$(openssl x509 -in /tmp/cert.pem -noout -issuer | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
-            SUBJECT_CN="$(openssl x509 -in /tmp/cert.pem -noout -subject -nameopt oneline | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
-            if [ "$ISSUER_CN" = "$SUBJECT_CN" ]; then
-              echo "::notice::자체 서명 인증서 감지(${SUBJECT_CN}) — 시스템 신뢰 등록"
-              # -d(관리자 도메인)는 sudo 없이 실행하면 헤드리스 러너에서 인가 프롬프트를
-              # 못 띄워 영구 대기에 빠진다 — 러너는 비밀번호 없는 sudo 를 제공하므로 직접 쓴다.
-              sudo security add-trusted-cert -d -r trustRoot /tmp/cert.pem
-            fi
-          else
-            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
-            echo "::warning::서명 시크릿 미설정/불완전 — 미서명으로 빌드합니다 (실패 아님)"
-          fi
           if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
             NOTARIZED=true
           else
             unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
             echo "::warning::공증 시크릿 미설정/불완전 — 공증 없이 진행합니다"
           fi
+          # ⭐ 서명은 Tauri 번들러에게 맡기지 않는다 — Developer ID(.p12)든 자체 서명이든
+          # 번들러의 find-identity 신원 해석은 키체인 신뢰 사슬 문제로 실패할 수 있다.
+          # 대신 build-signed.sh 와 동일하게 tauri build(번들만) → 명시적 codesign 으로
+          # 임시 키체인 안에서 직접 서명한다(Sparkle 중첩 서명 포함).
+          SIGNED=false
+          if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ]; then
+            SIGNED=true
+            echo "::notice::서명 인증서 감지 — 직접 codesign 으로 서명한다"
+          else
+            echo "::warning::서명 시크릿 미설정/불완전 — 미서명으로 빌드합니다 (실패 아님)"
+          fi
           echo "signed=${SIGNED}" >> "$GITHUB_OUTPUT"
           echo "notarized=${NOTARIZED}" >> "$GITHUB_OUTPUT"
-          tauri --version
           tauri build --target universal-apple-darwin
+          # ── 서명: build-signed.sh 의 방식을 그대로 재현 ──
+          if [ "$SIGNED" = "true" ]; then
+            KEYCHAIN=ultrakey-sign.keychain-db
+            KC_PASS="$(openssl rand -hex 16)"
+            security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+            security set-keychain-settings -t 900 "$KEYCHAIN"
+            security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+            printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | base64 -d > /tmp/cert.p12
+            CERT_P12_PASS="${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+            security import /tmp/cert.p12 -k "$KEYCHAIN" -f pkcs12 -P "$CERT_P12_PASS" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+            printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | base64 -d > /tmp/cert.b64 2>/dev/null || true
+            openssl pkcs12 -in /tmp/cert.p12 -passin "pass:$CERT_P12_PASS" -nokeys -clcerts \
+              -out /tmp/cert.pem -passout pass:
+            IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"[^"]*"' | head -n1 | tr -d '"')"
+            if [ -z "$IDENTITY" ]; then
+              echo "::error::키체인에서 유효한 코드 서명 신원을 찾지 못했습니다"
+              exit 1
+            fi
+            echo "::notice::서명 신원: ${IDENTITY}"
+            APP_PATH="$(find target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)"
+            test -n "$APP_PATH" || { echo "::error::.app 번들을 찾지 못했습니다"; exit 1; }
+            ENTITLEMENTS="apps/ultrakey-app/entitlements.plist"
+            # 번들 안에 Sparkle.framework 같은 중첩 코드(XPC·헬퍼·프레임워크)가 있으면
+            # 안쪽부터 먼저 서명한 뒤 메인을 다시 서명한다(build-signed.sh §3 과 동일).
+            if [ -d "${APP_PATH}/Contents/Frameworks" ]; then
+              find "${APP_PATH}/Contents/Frameworks" -depth \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) -print0 |
+                while IFS= read -r -d '' nested; do
+                  echo "  서명: ${nested##*/}"
+                  codesign --force --options runtime --sign "$IDENTITY" "${nested}"
+                done
+            fi
+            codesign --force --options runtime --entitlements "${ENTITLEMENTS}" \
+              --sign "$IDENTITY" "${APP_PATH}"
+            codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+            echo "  ✅ 서명 완료: ${APP_PATH}"
+            # 번들러가 만든 DMG 는 서명 전 .app 을 담고 있으므로, 서명된 .app 으로 재생성한다.
+            DMG_PATH="$(find target/universal-apple-darwin/release/bundle -name '*.dmg' | head -n1)"
+            test -n "$DMG_PATH" || { echo "::error::기존 DMG 를 찾지 못했습니다"; exit 1; }
+            STAGING="$(mktemp -d)"
+            cp -R "${APP_PATH}" "${STAGING}/"
+            ln -s /Applications "${STAGING}/Applications"
+            rm -f "${DMG_PATH}"
+            hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"
+            echo "  ✅ 서명된 DMG 재생성: ${DMG_PATH}"
+          fi
       - name: DMG 산출물 확인
         run: |
           set -euo pipefail
