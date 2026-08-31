@@ -106,6 +106,11 @@ jobs:
             security create-keychain -p "$KC_PASS" "$KEYCHAIN"
             security set-keychain-settings -t 900 "$KEYCHAIN"
             security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+            # ⭐ codesign 은 키체인 검색 목록(keychain search list)에서만 신원을 찾는다.
+            # 임시 키체인을 만든 채로 두면 login.keychain 만 검색해 "no identity found" 가 난다.
+            # 로컬 스크립트는 사용자 키체인에 이미 인증서가 있으므로 이 단계가 필요 없지만,
+            # CI 임시 키체인은 새 키체인이라 검색 목록에 명시적으로 등록해야 한다.
+            security list-keychains -d user -s "$KEYCHAIN" "$(security list-keychains -d user | tr -d '\"')"
             printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | base64 -d > /tmp/cert.p12
             CERT_P12_PASS="${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
             security import /tmp/cert.p12 -k "$KEYCHAIN" -f pkcs12 -P "$CERT_P12_PASS" -T /usr/bin/codesign
