@@ -129,11 +129,11 @@ F-09 §3.1 의 탭별 컨트롤 개수 표는 지금까지 전부 고정 정수�
 
 | 항목 | 개수 |
 | :--- | :--- |
-| 고정 컨트롤 | 4개 — 디바이스 선택 좌측 패인 1(이슈 #31 ④, §3.1.2) + 그룹 제목 2("키 변환 세트", "Function Keys") + macOS Function Keys 상태 표시줄(읽기전용 뱃지 + 시스템 설정 버튼) 1. ⭐ 이 넷 중 **상태 표시줄만 2패인 밖 상단 영역**에 있다(이슈 #40 ①, §3.1.2) — 나머지 셋은 패인 안이다 |
+| 고정 컨트롤 | **8개**(이슈 #46 갱신) — 디바이스 선택 좌측 패인 1(이슈 #31 ④, §3.1.2) + 그룹 제목 2("키 변환 세트", "Function Keys")(이제 각각 복사 버튼 1개씩을 품는 제목 행, §3.7) + **복사 버튼 2**(기능 1·기능 2 그룹 제목 행 각 1, ① dimmed) + **상속 복귀 버튼 1**(기능 1 전용, ② 숨김) + **상태 뱃지 1**(기능 1 전용, ③ 인라인) + macOS Function Keys 상태 표시줄(읽기전용 뱃지 + 시스템 설정 버튼) 1. ⭐ 이 여덟 중 **상태 표시줄만 2패인 밖 상단 영역**에 있다(이슈 #40 ①, §3.1.2) — 나머지는 패인 안이다. (② 숨김 컨트롤도 "설계상 고정 슬롯"으로 센다 — `For all devices` 선택 시 DOM 에서 사라질 뿐) |
 | 기능 1 (가변) | 선택된 디바이스/공통 계층의 행 수만큼(0행 이상) — 각 행은 팝업 2개 + 삭제 버튼 1 |
 | 기능 2 (고정) | 12개 — F1~F12 각각 선택 팝업 1개(§3.5) |
 
-F-09 §4 에 편입할 때는 "고정 16개 + 가변 M행(기능 1)"으로 표기할 것을 제안한다.
+F-09 §4 에 편입할 때는 "고정 20개 + 가변 M행(기능 1)"으로 표기할 것을 제안한다.
 
 ### 3.2 디바이스 식별과 열거
 
@@ -368,6 +368,30 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 ---
 
+### 3.7 ⭐ 공통 설정 복사 · 상속 복귀 · 상태 표시 (이슈 #46)
+
+§§3.3~3.6 의 2계층 폴백이 곧 "상속 + 오버라이드" 모델이다. 이 절은 그 위의 UI 조작을 정의한다. 저장 키·값 타입·`Tri` 의미는 §3.3 그대로 — 복사는 기존 키에 기존 값 타입을 쓰는 것뿐이고 **새 저장 키가 없다**.
+
+#### 3.7.1 복사 버튼 — 여기서 말하는 "복사"의 의미
+
+선택된 디바이스의 우측 상세 패인, 두 그룹(기능 1 · 기능 2) 제목 행에 각각 하나씩 둔다. 방향은 "공통(`For all devices`) → 선택 디바이스"로 고정이다. 기능 1 복사는 공통의 `rows` 배열 전체를 디바이스 키로 통째 기록한다(§3.4 완전 대체의 쓰기 판본). 기능 2 복사는 **희소**다 — 공통에 명시적 목적지가 있는 F-키만 디바이스 키로 기록한다(공통의 `null`·부재 키는 기록하지 않는다 — 부재면 어차피 상속되므로 결과가 같다).
+
+⭐ **복사는 스냅샷이다**: 복사된 값은 복사 시점의 공통 값 그대로 디바이스에 고정되며, 이후 공통이 바뀌어도 따라가지 않는다. 복사되지 않은 키는 계속 상속하고, 이후 공통에 **새로** 생긴 값도 상속한다 — 스냅샷의 단위는 "복사 시점에 공통에 값이 있던 항목"이다.
+
+**활성 조건**: `For all devices` 선택 중에는 복사 버튼이 나타나지 않는다(② 숨김 — 공통 위에 복사 원천이 없다). 디바이스 선택 중에는 복사할 것이 있을 때만 활성이다(① dimmed — 기능 1: 공통 `rows` 가 명시적 비어 있지 않은 배열일 때. 기능 2: 공통에 Value 인 F-키가 1개 이상일 때).
+
+**오버라이드 확인**: 복사가 **실제로 무엇인가를 바꿀 때만** 확인 대화상자를 띄운다(이미 같은 값이면 그냥 실행). "무엇인가를 바꾼다"의 기준은 기존 디바이스 전용 값(키)이 새 값과 **다른 값으로** 교체될 때다 — 같은 값으로의 교체(no-op)는 파괴가 없고, 디바이스 키가 **부재**(상속 중)인 채로의 복사는 스냅샷 물질화라 파괴되는 데이터가 없어 둘 다 확인 없이 실행한다(이슈 #31 ① 의 저장 억제 철학의 연장). 확인 후의 쓰기는 무조건 교체다 — 병합하지 않는다(기능 1: 디바이스 배열 전체가 공통 배열로 대체. 기능 2: 겹치는 F-키만 교체, 겹치지 않는 디바이스 전용 값은 보존). 확인 UI 는 프런트가 소유한다 — 충돌 대화상자와 달리 서버 상태 기계가 필요 없다(계획 D7: `#conflict-overlay`/`settings_resolve_conflict` 는 Presets 전용 페이로드라 재사용하지 않고 전용 `#confirm-overlay` 를 둔다).
+
+#### 3.7.2 상속 복귀
+
+오버라이드(값)든 끔(`null`)이든 디바이스 계층의 명시적 상태를 버리고 상속으로 돌아가는 조작은 **디바이스 키 삭제**(`settings_unset`)다. 기능 2 는 F-키 팝업의 `--- (공통 설정을 따름)` 선택지가 이미 이 수단이다. 기능 1 은 그룹에 `공통 설정 따르기` 버튼을 두어 같은 수단(디바이스의 `keyRemap.rows` 키 삭제)에 연결한다 — 행을 "전부 지우는"(=`null` 끔) 것과 구별된다: 끔은 이 디바이스에서만 공통을 무시하고 꺼버리는 것이고, 상속 복귀는 공통을 다시 따르는 것이다. 버튼은 디바이스 계층에 `keyRemap.rows` 키가 존재할 때만 표시된다(② 숨김 — 부재는 이미 상속 중이라 되돌릴 대상이 없다).
+
+#### 3.7.3 상태 표시
+
+기능 1 그룹 제목에 상태 뱃지를 둔다 — `상속됨`(디바이스 키 부재) / `이 키보드 전용 설정`(배열 값) / `이 키보드에서 끔`(`null`). `For all devices` 선택 중에는 숨긴다(공통 계층에는 상태 개념이 없다). 상속 중 행은 편집 가능한 상태로 그대로 보여준다(어느 행을 고치든 그 순간 §3.4 의 완전 대체로 이 디바이스 전용 배열이 된다 — 기존 동작). 기능 2 는 행별 팝업의 선택지(공통 따름/목적지/표준 F-키)가 곧 상태 표시라 추가 UI 를 두지 않는다. 종속 표현 분류: 뱃지 = ③ 인라인, 복사 버튼 = ① dimmed, 복귀 버튼 = ② 숨김(§3.1.3 확장).
+
+---
+
 ## 4. 설정 항목
 
 ### 4.1 `Keyboards` 탭 문자열 카탈로그(신규 키)
@@ -386,10 +410,22 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | `preferences.keyboards.keyRemap.addRow` | `+ Add item` | `+ 항목 추가` |
 | `preferences.keyboards.keyRemap.emptyList` | `No key conversions for this device yet.` | `아직 이 키보드에 등록된 변환이 없습니다.` |
 | `preferences.keyboards.keyRemap.duplicateFromWarning` | `This key is already remapped in another row.` | `이 키는 이미 다른 행에서 변환되고 있습니다.` |
+| `preferences.keyboards.keyRemap.inheritedFromCommon` | `These conversions come from “For all devices”. Editing any row here makes this keyboard's own list; deleting them all turns conversions off for this keyboard only.` | `이 변환들은 “모든 키보드” 설정을 따르고 있습니다. 여기서 한 행이라도 고치면 이 키보드 전용 목록이 되고, 전부 지우면 이 키보드에서만 변환이 꺼집니다.` |
+| `preferences.keyboards.keyRemap.revertToCommon` | `Revert to common setting` | `공통 설정 따르기` |
+| `preferences.keyboards.copy.button` | `Copy from “For all devices”` | `“모든 키보드” 설정 복사` |
+| `preferences.keyboards.copy.confirmTitle` | `Overwrite this keyboard's settings?` | `이 키보드의 설정을 교체할까요?` |
+| `preferences.keyboards.copy.confirmBody` | `This will replace this keyboard's {0} with the settings from “For all devices”.` | `이 키보드의 {0}(을)를 “모든 키보드” 설정으로 교체합니다.` |
+| `preferences.keyboards.copy.confirmContinue` | `Overwrite` | `교체` |
+| `preferences.keyboards.status.inherited` | `Inherited from “For all devices”` | `“모든 키보드” 설정을 따름` |
+| `preferences.keyboards.status.override` | `Custom for this keyboard` | `이 키보드 전용 설정` |
+| `preferences.keyboards.status.off` | `Off for this keyboard` | `이 키보드에서 끔` |
 | `preferences.keyboards.functionKeys.followCommon` | `--- (Follow common setting)` | `--- (공통 설정을 따름)` |
 | `preferences.keyboards.functionKeys.useStandardFKey` | `Use as standard function key` | `표준 F-키로 사용` |
 | `preferences.keyboards.functionKeys.macosStatus.label` | `macOS setting: "Use F1, F2, etc. keys as standard function keys"` | `macOS 설정: "F1, F2 등의 키를 표준 기능 키로 사용"` |
 | `preferences.keyboards.functionKeys.macosStatus.openButton` | `Open System Settings` | `시스템 설정 열기` |
+| `preferences.keyboards.functionKeys.macosStatus.on` | `On` | `켜짐` |
+| `preferences.keyboards.functionKeys.macosStatus.off` | `Off` | `꺼짐` |
+| `preferences.keyboards.functionKeys.macosStatus.unknown` | `Unknown` | `알 수 없음` |
 | `preferences.keyboards.functionKeys.disable` | `Nothing (disable this key)` | `아무 동작 없음 (이 키 비활성화)` |
 | `preferences.keyboards.functionKeys.unverifiedHint` | `This destination's usage page has not been verified to work through hidutil.` | `이 목적지의 usage page 가 hidutil 을 통해 실제로 동작하는지는 아직 확인되지 않았습니다.` |
 | `preferences.keyboards.functionKeys.category.disable` | `Disable` | `비활성화` |
@@ -409,6 +445,8 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | `preferences.keyboards.functionKeys.category.others` | `Others` | `기타` |
 
 > ⚠️ 이 카피는 이 명세 문서의 **제안**이지 최종 확정된 UI 카피가 아니다. 원본 SuperKey 에 대응 문구가 없으므로(§1 divergence) 표절 대상 원문이 없다 — F-09 UI 구현·리뷰 단계에서 조정될 수 있다. ⚖️ 카테고리 영문 라벨은 **우리 문구다** — Karabiner 의 카테고리 이름을 그대로 베끼지 않았다. 대부분은 그 분류를 가리키는 자연스러운 영어라 결과적으로 같아지지만(`Modifier keys`·`Arrow keys` 등), 두 곳은 의도적으로 다르게 썼다: Karabiner 의 `Keys in pc keyboards` → `PC keyboard keys`, `Generic GUI application control keys` → `GUI application control keys`. 이 기능이 참조한 것은 **어떤 목적지가 어느 분류에 속하는가라는 사실**이지 그 표현이 아니다(§3.5 "출처").
+
+> ⭐ **이슈 #46 로 추가된 8개 키와 보충한 4개**(`keyRemap.inheritedFromCommon`·`macosStatus.on/off/unknown` — 카탈로그에는 이미 있던 키)는 위 표에 en·ko 값만 적었다. zh·es·ja 는 D6 로케일 확장 규약(`localization-and-input-sources.md` §3.1.2-a)에 따라 **같은 키 집합**과 위치 인자 `{0}` 집합을 유지한다 — 실제 값은 `resources/i18n/*.json` 이 정본이고, `ultrakey-i18n` 의 키 집합/위치 인자 동일성 테스트가 5개 언어를 강제한다.
 
 ### 4.2 기능 1 — 디바이스별 키 변환 세트
 
@@ -487,6 +525,12 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 - [ ] 매칭 사전 없이 `--set` 을 호출하는 코드 경로가 이 기능 관련 코드 전체에 하나도 없다(정적 검토로 확인 가능).
 - [ ] 기능 1/기능 2/D-1 이 같은 디바이스의 같은 소스 키를 동시에 요구하면 §3.6 규칙 5 의 우선순위대로 결정론적으로 하나만 적용되고, 밀린 쪽이 UI 에 표시된다.
 - [ ] ⭐ macOS Function Keys 상태 표시줄이 디바이스 선택 2패인보다 **위**, 전체 폭의 독립 영역에 있고, 좌측 패인에서 디바이스를 바꿔 골라도 그 뱃지 값이 달라지지 않는다(§3.1.2, 이슈 #40 ①).
+- [ ] (이슈 #46) `For all devices` 에 등록한 기능 1/2 설정을 선택 디바이스로 복사할 수 있고(복사 버튼 ×2), 복사 후 공통 설정을 바꿔도 복사된 디바이스 값은 바뀌지 않는다(독립 스냅샷, §3.7.1).
+- [ ] (이슈 #46) 기능 2 복사는 공통에 명시적 값이 있는 F-키만 디바이스로 기록하고(희소), 공통에 새로 추가된 F-키 값은 복사받지 않은 디바이스에 계속 상속된다(§3.7.1).
+- [ ] (이슈 #46) 복사가 기존 디바이스 전용 값을 실제로 바꿀 때만 확인 대화상자가 뜨고, 취소하면 아무것도 저장되지 않으며, 같은 값이면 대화상자 없이 진행된다(§3.7.1).
+- [ ] (이슈 #46) 기능 1 에서 오버라이드/끔 상태의 디바이스를 `공통 설정 따르기` 로 복귀시키면 디바이스 키가 삭제되어(저장 파일에서 키 부재 확인) 공통 값을 따른다(§3.7.2).
+- [ ] (이슈 #46) 기능 1 그룹의 상속/오버라이드/끔 상태 뱃지가 선택 디바이스에 맞게 표시된다(§3.7.3).
+- [ ] (이슈 #46) 새 저장 키가 없다 — 복사·복귀 전후로 설정 파일에 `perDevice.<id>.*` 외 키가 생기지 않는다(정적/동적 검토, 계획 D6).
 
 ---
 
