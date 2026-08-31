@@ -88,7 +88,7 @@ mod tests {
         });
         assert!(matches!(
             validate,
-            ValidateResponse::Valid { cache_issued_at: _, .. }
+            ValidateResponse::Valid { .. }
         ));
 
         let deactivate = p.deactivate(DeactivateRequest {
