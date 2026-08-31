@@ -391,6 +391,9 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // F-18(이슈 #39 Phase 3) — `open_event_viewer` invoke 실패 진단 문구. 위
         // 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
         "Failed to open the Event Viewer: ",
+        // ⭐ 이슈 #46 — `settings_copy_common_to_device` invoke 실패 진단 문구.
+        // 위 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
+        "Failed to copy settings: ",
     ];
 
     let html = read_settings_html();
@@ -1110,6 +1113,67 @@ fn settings_html_이_settings_unset과_open_keyboard_settings를_invoke한다() 
     }
 }
 
+/// ⭐ 이슈 #46 — Keyboards 탭에 복사·복귀·상태·확인 오버레이 DOM 슬롯이 전부
+/// 존재한다(계획 §4.2). 기존 id 는 그대로 두고 **추가분 슬롯**만 검사한다.
+#[test]
+fn settings_html_에_keyboards_탭_복사_복귀_상태_컨트롤이_있다() {
+    let html = read_settings_html();
+    for id in [
+        // 그룹 제목 행 2개(기능 1·기능 2)의 복사 버튼.
+        "keyboards-keyremap-copy-btn",
+        "keyboards-functionkeys-copy-btn",
+        // 상속 복귀(② 숨김), 상태 뱃지(③ inline), 확인 오버레이(D7) + 버튼 2종.
+        "keyboards-keyremap-revert-btn",
+        "keyboards-keyremap-status-badge",
+        "confirm-overlay",
+        "confirm-cancel",
+        "confirm-continue",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 이슈 #46 컨트롤 id=\"{id}\" 가 없다"
+        );
+    }
+}
+
+/// ⭐ 이슈 #46 — 복사 커맨드가 프런트 invoke 와 백엔드 등록 양쪽에 배선돼 있다
+/// (계획 §6.3): settings.html 이 `settings_copy_common_to_device` 를 부르고,
+/// main.rs 에 커맨드 선언과 `generate_handler!` 등록이 존재한다.
+#[test]
+fn 키보드_복사_커맨드가_invoke_배선되어_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"invoke("settings_copy_common_to_device""#),
+        "ui/settings.html 이 invoke(\"settings_copy_common_to_device\", …) 를 호출하지 않는다"
+    );
+
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("fn settings_copy_common_to_device("),
+        "main.rs 에 settings_copy_common_to_device 커맨드 선언이 없다"
+    );
+    assert!(
+        main_rs.contains("settings_copy_common_to_device,"),
+        "generate_handler! 등록 목록에 settings_copy_common_to_device 가 없다"
+    );
+}
+
+/// ⭐ 이슈 #46 — 상속 복귀(디바이스 키 삭제)는 기존 `commitUnset` 경로
+/// (= `settings_unset` 커맨드)를 그대로 쓴다(계획 D4 — 백엔드 변경 0줄).
+#[test]
+fn 키보드_상속_복귀는_settings_unset을_쓴다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"commitUnset(keyRemapRowsKey(currentDevice))"#),
+        "복귀 버튼 핸들러가 commitUnset(keyRemapRowsKey(currentDevice)) 경로를 쓰지 않는다"
+    );
+    let unset_fn = extract_js_function(&html, "async function commitUnset(");
+    assert!(
+        unset_fn.contains(r#"invoke("settings_unset""#),
+        "commitUnset() 이 settings_unset 을 invoke 하지 않는다"
+    );
+}
+
 /// ⭐ 이슈 #31 ③ — macOS `Use F1, F2…` 연동 두 가지.
 ///
 /// (a) `시스템 설정 열기` 는 Keyboard 최상단이 아니라 **Function Keys 패널**로
@@ -1142,7 +1206,7 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
     );
 }
 
-/// 명세 §4.1 표의 29개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 28개)가
+/// 명세 §4.1 표의 41개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 40개)가
 /// en.json·ko.json 양쪽에 전부 있다. ⚠️ 탭 라벨 키만 명세 제안(`preferences.tabs.
 /// keyboards.title`) 대신 기존 코드베이스 관례(`settings.tab.<탭>`)를 따라
 /// `settings.tab.keyboards` 로 잡았다 — settings.html 의 근거 주석 참고.
@@ -1150,8 +1214,13 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
 /// ⭐ 이슈 #31 ② — 옛 `functionKeys.function.*` 12종(시스템 기능 8종짜리 어휘)은
 /// 목적지 카탈로그 313종/15카테고리로 갈아치워졌다. 그 12종을 15개 카테고리 +
 /// `disable` + `unverifiedHint`(17개)로 대체한다 — 24 - 12 + 17 = 29.
+///
+/// ⭐ 이슈 #46 — 29개 목록이 빠뜨리고 있던 4개(카탈로그·settings.html 에는
+/// 존재하는데 이 테스트 목록에만 없던 것: `keyRemap.inheritedFromCommon` ·
+/// `macosStatus.on/off/unknown`)를 같은 패스에 보충하고, 복사·복귀·상태 표시
+/// 신규 8개를 더한다 — 29 + 4 + 8 = 41(계획 §4.5 "테스트 영향").
 #[test]
-fn keyboards_탭_신규_i18n_키_29개가_en_ko_양쪽에_있다() {
+fn keyboards_탭_신규_i18n_키_41개가_en_ko_양쪽에_있다() {
     let en = flatten_catalog(&read_en_catalog());
     let ko = flatten_catalog(&read_ko_catalog());
 
@@ -1163,11 +1232,24 @@ fn keyboards_탭_신규_i18n_키_29개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.group.functionKeys.title",
         "preferences.keyboards.keyRemap.addRow",
         "preferences.keyboards.keyRemap.emptyList",
+        // ⭐ 이슈 #46 — 종전 목록에서 누락돼 있던 4개 중 하나(카탈로그·settings.html
+        // 에는 존재). 29 → 41 보충 패스에 포함한다.
+        "preferences.keyboards.keyRemap.inheritedFromCommon",
         "preferences.keyboards.keyRemap.duplicateFromWarning",
+        // ⭐ 이슈 #46 — 신규: 상속 복귀·복사·확인 오버레이·상태 뱃지 계열 8개.
+        "preferences.keyboards.keyRemap.revertToCommon",
+        "preferences.keyboards.copy.button",
+        "preferences.keyboards.copy.confirmTitle",
+        "preferences.keyboards.copy.confirmBody",
+        "preferences.keyboards.copy.confirmContinue",
         "preferences.keyboards.functionKeys.followCommon",
         "preferences.keyboards.functionKeys.useStandardFKey",
         "preferences.keyboards.functionKeys.macosStatus.label",
         "preferences.keyboards.functionKeys.macosStatus.openButton",
+        // ⭐ 이슈 #46 — 누락돼 있던 4개 중 나머지 3개(macOS 상태 표시줄의 3상태).
+        "preferences.keyboards.functionKeys.macosStatus.on",
+        "preferences.keyboards.functionKeys.macosStatus.off",
+        "preferences.keyboards.functionKeys.macosStatus.unknown",
         "preferences.keyboards.functionKeys.disable",
         "preferences.keyboards.functionKeys.unverifiedHint",
         "preferences.keyboards.functionKeys.category.disable",
@@ -1185,11 +1267,15 @@ fn keyboards_탭_신규_i18n_키_29개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.functionKeys.category.guiApplicationControlKeys",
         "preferences.keyboards.functionKeys.category.remoteControlButtons",
         "preferences.keyboards.functionKeys.category.others",
+        // ⭐ 이슈 #46 — 기능 1 그룹 상태 뱃지 3상태.
+        "preferences.keyboards.status.inherited",
+        "preferences.keyboards.status.override",
+        "preferences.keyboards.status.off",
     ];
     assert_eq!(
         KEYS.len(),
-        29,
-        "이 목록 자체가 29개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+        41,
+        "이 목록 자체가 41개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
     );
 
     let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
