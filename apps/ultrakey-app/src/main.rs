@@ -1283,16 +1283,22 @@ struct AppMeta {
     settings_file_exists: bool,
 }
 
-/// `open_log_file()` 이 실제로 여는 경로와 같은 계산이지만 파일을 열지는 않는다
-/// — About 패널에 "어디에 로그를 쓰는가"만 보여주면 된다.
+/// `~/Library/Logs/Ultrakey` 디렉터리 경로 — 로그를 다루는 세 함수
+/// (`log_file_path_display`·`open_log_file`·`open_log_folder`)가 공유하는 단일
+/// 출처다(이슈 #47). 경로 조각을 두 곳에 하드코딩하던 것을 한 곳으로 모은다.
+/// HOME 환경변수가 없으면 `None` — 호출자가 각자의 방식으로 반응한다(빈 문자열
+/// 표시 · 로그 개방 포기 · 조용히 무시).
+fn log_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("Library/Logs/Ultrakey"))
+}
+
+/// `log_dir()` 의 경로에 `ultrakey.log` 를 이어 붙인 표시 문자열 — About 패널에
+/// "어디에 로그를 쓰는가"만 보여주면 된다(파일 자체는 열지 않는다). HOME 없음 시
+/// 빈 문자열이 되는 것은 기존 동작 그대로다.
 fn log_file_path_display() -> String {
-    match std::env::var_os("HOME") {
-        Some(home) => std::path::PathBuf::from(home)
-            .join("Library/Logs/Ultrakey/ultrakey.log")
-            .display()
-            .to_string(),
-        None => String::new(),
-    }
+    log_dir()
+        .map(|dir| dir.join("ultrakey.log").display().to_string())
+        .unwrap_or_default()
 }
 
 fn build_app_meta(app: &tauri::AppHandle, store: &SettingsStore) -> AppMeta {
@@ -2470,6 +2476,33 @@ struct EventViewerPoll {
     notice: Option<String>,
 }
 
+/// 이슈 #47 — `General` 탭의 `Open Log Folder in Finder` 버튼.
+///
+/// 위임 지시서의 제약("경로가 없으면(로그 미생성) 조용히 무시하거나 비활성화")을
+/// 그대로 따른다 — 디렉터리 부재는 `Ok(())` + 경고 로그로 조용히 넘기고 **만들지도
+/// 않는다**(이 커맨드는 읽기 전용이다: 디렉터리 생성은 기동 시 `open_log_file` 이
+/// 맡는 고유 책임). 진짜 예외인 `open` spawn 실패만 `Err` 로 알린다 —
+/// `open_event_viewer` 와 같은 기존 커맨드 계약(`Result<(), String>` + 프런트
+/// 진단)이다. Finder 는 macOS 표준 `open <디렉터리>` CLI 로 연다(`on_menu_relaunch`
+/// 선례) — 새 플랫폼 의존을 들이지 않는다.
+#[tauri::command]
+fn open_log_folder() -> Result<(), String> {
+    let Some(dir) = log_dir() else {
+        tracing::warn!("HOME is not set; cannot open the log folder");
+        return Ok(());
+    };
+    if !dir.is_dir() {
+        tracing::warn!(path = %dir.display(), "log folder does not exist; nothing to open");
+        return Ok(());
+    }
+    std::process::Command::new("open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    tracing::info!(path = %dir.display(), "opened the log folder in Finder");
+    Ok(())
+}
+
 /// F-18 §3.1·§3.2 — `General` 탭의 `Open Event Viewer` 버튼.
 ///
 /// 오버레이 창(`overlay.rs`)과 같은 관례로 `tauri.conf.json` 에 미리 선언하지
@@ -3233,8 +3266,7 @@ fn init_logging() {
 fn open_log_file() -> Option<std::fs::File> {
     const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
-    let home = std::env::var_os("HOME")?;
-    let dir = std::path::PathBuf::from(home).join("Library/Logs/Ultrakey");
+    let dir = log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
 
     let path = dir.join("ultrakey.log");
@@ -3576,6 +3608,7 @@ fn main() {
             keyboard_fn_state,
             settings_export,
             settings_import,
+            open_log_folder,
             open_event_viewer,
             eventviewer_poll,
             eventviewer_clear,

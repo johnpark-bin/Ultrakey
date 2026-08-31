@@ -127,6 +127,11 @@
     background: color-mix(in srgb, currentColor 6%, transparent); }
   #about p { margin: 2px 0; word-break: break-all; }
 
+  /* ⭐ 이슈 #47 — 로그인 시 실행 행의 버전 버튼을 우측 끝으로 정렬한다(원본
+     실측 "첫 행 우측", preferences-ui.md §4.4). .row 가 flex 이므로
+     margin-left: auto 한 줄로 동작하고, 체크박스 라벨 길이가 달라져도 유지된다. */
+  #version-btn { margin-left: auto; }
+
   button {
     font: inherit;
     padding: 5px 12px;
@@ -836,6 +841,11 @@
       </div>
       <p class="hint" id="general-language-hint"></p>
 
+      <!-- ⭐ 이슈 #47 — 언어 블록 다음부터 Startup & menu bar 섹션 경계. Presets
+           탭의 <hr /> + h2.group 정본 패턴으로 그룹 경계를 시각화한다(계획 D1). -->
+      <hr />
+      <h2 class="group" id="general-startup-heading"></h2>
+
       <div class="row">
         <label class="checkbox-row">
           <input type="checkbox" id="launch-on-login" data-key="general.launchOnLogin" />
@@ -894,9 +904,15 @@
       </div>
       <p class="hint why" id="purchase-why"></p>
 
+      <!-- ⭐ 이슈 #47 — License 섹션 헤딩(신규). remove_activation·purchase 두
+           행을 묶는다(계획 D1). `license.why` 키와 별개로 공존한다. -->
+      <hr />
+      <h2 class="group" id="general-license-heading"></h2>
+
       <!-- ⭐ F-15 §3.4 설정 export/import(이슈 #39 Phase 2). 파일 대화상자는
            Rust 쪽(`settings_export`/`settings_import` 커맨드)에서만 연다 — 이
            버튼은 그 커맨드를 부를 뿐이다. -->
+      <hr />
       <h2 class="group" id="general-transfer-heading"></h2>
       <div class="row">
         <button id="settings-export-btn"></button>
@@ -905,11 +921,18 @@
       <p class="hint" id="general-transfer-hint"></p>
       <p id="general-transfer-result" hidden></p>
 
+      <!-- ⭐ 이슈 #47 — 진단 섹션 경계(구분선만 추가, 기존 헤딩 유지). -->
+      <hr />
+
       <!-- ⭐ F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창. 이 버튼은 `open_event_viewer`
            커맨드로 그 창을 연다(`docs/spec/event-viewer.md` §3.1). -->
       <h2 class="group" id="general-diagnostics-heading"></h2>
       <div class="row">
         <button id="open-event-viewer-btn"></button>
+        <!-- ⭐ 이슈 #47 — 로그 폴더 열기 버튼(`open_log_folder` 커맨드). Event
+             Viewer 와 같은 진단 버튼이라 같은 .row 에 둔다(transfer 의
+             export/import 한 행 2버튼 선례와 동일). -->
+        <button id="open-log-folder-btn"></button>
       </div>
       <p class="hint" id="general-event-viewer-hint"></p>
 
@@ -1132,6 +1155,12 @@ if (!tauri || !tauri.core) {
     $("general-diagnostics-heading").textContent = t("settings.general.diagnostics");
     $("open-event-viewer-btn").textContent = t("settings.general.event_viewer");
     $("general-event-viewer-hint").textContent = t("settings.general.event_viewer.hint");
+
+    // ⭐ 이슈 #47 — 섹션 헤딩 2개(신규)+ 로그 폴더 버튼. 기존 transfer·diagnostics
+    // 헤딩 배선과 같은 방식으로 카탈로그에서 채운다.
+    $("general-startup-heading").textContent = t("settings.general.startup");
+    $("general-license-heading").textContent = t("settings.general.license");
+    $("open-log-folder-btn").textContent = t("settings.general.open_log_folder");
 
     const badgeText = t("settings.badge.unimplemented");
     for (const id of [
@@ -2501,6 +2530,15 @@ if (!tauri || !tauri.core) {
   $("open-event-viewer-btn").addEventListener("click", () => {
     invoke("open_event_viewer").catch((err) => {
       showFatal("Failed to open the Event Viewer: " + String(err));
+    });
+  });
+
+  // ⭐ 이슈 #47 — 로그 폴더 열기. `open_log_folder` 커맨드는 디렉터리 부재를
+  // 조용히 Ok(()) 로 처리하므로(위임 지시서 "경로 없으면 조용히 무시" 제약) 이
+  // 진단 문구는 `open` spawn 실패(진짜 예외)에만 도달한다.
+  $("open-log-folder-btn").addEventListener("click", () => {
+    invoke("open_log_folder").catch((err) => {
+      showFatal("Failed to open the log folder: " + String(err));
     });
   });
 
