@@ -89,6 +89,20 @@ jobs:
           NOTARIZED=false
           if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; then
             SIGNED=true
+            # 자체 서명 인증서(issuer==subject)는 임포트 직후 신뢰 사슬이 없어 codesign 이
+            # 유효 신원으로 해석하지 못해 "failed to resolve signing identity" 로 실패한다.
+            # GitHub 도메인에 신뢰 루트로 등록해 Tauri 번들러가 임포트한 키체인에서도
+            # 유효 신원으로 보이게 한다. Developer ID 는 Apple 사슬이 이미 신뢰라 건너뛴다.
+            printf '%s' "$APPLE_CERTIFICATE" | base64 -d > /tmp/cert.p12
+            openssl pkcs12 -in /tmp/cert.p12 -passin "pass:$APPLE_CERTIFICATE_PASSWORD" \
+              -nokeys -clcerts -out /tmp/cert.pem -passout pass:
+            ISSUER_CN="$(openssl x509 -in /tmp/cert.pem -noout -issuer | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
+            SUBJECT_CN="$(openssl x509 -in /tmp/cert.pem -noout -subject -nameopt oneline | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
+            if [ "$ISSUER_CN" = "$SUBJECT_CN" ]; then
+              echo "::notice::자체 서명 인증서 감지($(SUBJECT_CN)) — 시스템 신뢰 등록"
+              security add-trusted-cert -d -r trustRoot /tmp/cert.pem \
+                || sudo security add-trusted-cert -d -r trustRoot /tmp/cert.pem
+            fi
           else
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
             echo "::warning::서명 시크릿 미설정/불완전 — 미서명으로 빌드합니다 (실패 아님)"
