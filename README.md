@@ -32,7 +32,9 @@ cargo install tauri-cli --version "^2" --locked
 # 순수 로직 테스트 — macOS 권한도 서명도 필요 없다
 cargo test -p ultrakey-core -p ultrakey-i18n -p ultrakey-hyperkey -p ultrakey-layout
 
-# 워크스페이스 전체
+# 워크스페이스 전체 — ⭐ F-13: tauri-plugin-sparkle-updater 가 컴파일 시점에
+# Sparkle.framework 를 요구하므로(없으면 build.rs 실패) 먼저 내려받는다. 멱등.
+./scripts/fetch-sparkle.sh
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 

@@ -94,6 +94,7 @@ mod seek;
 mod menu_ids {
     pub const IGNORE_APP: &str = "menu.ignore_app";
     pub const SETTINGS: &str = "menu.settings";
+    pub const CHECK_FOR_UPDATES: &str = "menu.check_for_updates";
     pub const ABOUT: &str = "menu.about";
     pub const ADVANCED: &str = "menu.advanced";
     pub const SYNTHESIZE_CAPS_REMAP: &str = "menu.advanced.synthesize_caps_remap";
@@ -122,6 +123,12 @@ mod settings_keys {
     /// `localization-and-input-sources.md` §3.1.2-a). **부재 = 시스템 언어를
     /// 따른다**(F-15 "부재 = 기본값") — `System` 을 고르면 이 키 자체를 지운다.
     pub const GENERAL_LANGUAGE: &str = "general.language";
+    /// F-13 — General 탭 `Check for updates automatically` 체크박스. ⚠️ 이 키는
+    /// `SettingsStore` 에 저장되지 않는다 — 정본은 Sparkle 의 UserDefaults
+    /// (`SUEnableAutomaticChecks`)이고, 이 체크박스는 `settings_set` 라우팅에서
+    /// 플러그인 API 로만 다룬다(F-15 저장 규약 밖 — launch-on-login 과 같은 이유로
+    /// 거울 파일을 만들지 않는다).
+    pub const GENERAL_AUTO_UPDATE: &str = "general.autoUpdate";
 
     // ⭐ `ultrakey-core` 가 소유한 키를 재수출한다 — 여기서 문자열을 다시 쓰면
     // 오타가 컴파일을 통과해 버린다(`keys.rs` 상단 주석과 같은 이유).
@@ -529,6 +536,10 @@ struct GeneralView {
     /// (키 부재 또는 알 수 없는 값 — §3.1.2-a "폴백"). 언어 선택 팝업의 초기값에
     /// 쓴다.
     language: Option<String>,
+    /// F-13 — General 탭 `Check for updates automatically` 체크박스. 정본은
+    /// Sparkle(UserDefaults)이고 `build_settings_state` 가 넘겨주는 미러다
+    /// (`AppState::auto_update_checks_enabled`).
+    auto_update: bool,
 }
 
 /// ⭐ A-2(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) — 저장된
@@ -547,7 +558,7 @@ fn resolve_stored_language(store: &SettingsStore) -> Option<Locale> {
     found
 }
 
-fn general_view(store: &SettingsStore) -> GeneralView {
+fn general_view(store: &SettingsStore, auto_update: bool) -> GeneralView {
     // ⭐ B-1 — 정본은 언제나 OS 다. 저장된 값(거울)은 판정 자체가 불가능할 때
     // (`Unsupported`)만 폴백으로 쓴다.
     let status = login_item::status();
@@ -566,6 +577,7 @@ fn general_view(store: &SettingsStore) -> GeneralView {
             .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
             .unwrap_or(false),
         language: resolve_stored_language(store).map(|locale| locale.code().to_string()),
+        auto_update,
     }
 }
 
@@ -858,6 +870,7 @@ fn settings_set_per_device(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -1226,12 +1239,17 @@ struct SettingsState {
     per_device: PerDeviceView,
 }
 
+/// 설정 창이 화면을 다시 그리는 데 필요한 전부를 한 번에 조립한다(각 인자는
+/// 독립적으로 의미 있는 view 입력이라 `seek.rs` 의 관례와 같이 허용한다 —
+/// 구조체로 묶으면 호출부마다 필드 채우기를 흩뜨린다).
+#[allow(clippy::too_many_arguments)]
 fn build_settings_state(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
     seek: &SeekSettings,
     store: &SettingsStore,
+    auto_update: bool,
     save_error: Option<String>,
     pending_conflict: Option<PendingConflictView>,
 ) -> SettingsState {
@@ -1265,7 +1283,7 @@ fn build_settings_state(
         presets: presets_view(presets),
         preset_options: preset_options_view(),
         caps_lock_alias_active: caps_lock_alias.is_some(),
-        general: general_view(store),
+        general: general_view(store, auto_update),
         korean: korean_view(korean),
         seek: seek_view(seek, quick_press_opens_seek(presets)),
         pending_conflict,
@@ -1654,6 +1672,22 @@ struct AppState {
     /// 넘치면 앞에서 버린다. `open_event_viewer` 가 등록하는 싱크가 여기 쓰고,
     /// `eventviewer_poll` 이 여기서 읽는다. 창을 닫으면 비운다(§3.2).
     event_viewer_buffer: Mutex<VecDeque<ultrakey_engine::trace::ViewerRecord>>,
+    // ── F-13 자동 업데이트(Sparkle) ────────────────────────────────────────
+    /// General 탭 체크박스가 그리는 자동 확인 상태 — 정본은 Sparkle 의
+    /// UserDefaults(`SUEnableAutomaticChecks`)이고, 이 값은
+    /// [`refresh_auto_update_checks`] 가 부팅·토글 시점에 동기화하는 미러다.
+    /// `.app` 번들 밖(`tauri dev`)에서는 항상 `false`.
+    auto_update_checks: ArcSwap<bool>,
+}
+
+impl AppState {
+    /// [`GeneralView::auto_update`] 를 채우는 미러 읽기. 토글 결과를
+    /// [`refresh_auto_update_checks`] 가 다시 읽어 반영하므로, 미러가 어긋날
+    /// 수 있는 다른 쓰기 경로가 없다(Sparkle 의 UserDefaults 는 이 체크박스가
+    /// 유일한 작성자 — launch-on-login 과 달리 OS 측 변경이 없다).
+    fn auto_update_checks_enabled(&self) -> bool {
+        **self.auto_update_checks.load()
+    }
 }
 
 #[tauri::command]
@@ -1727,7 +1761,16 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     let seek = state.seek.lock().unwrap().clone();
     let store = state.store.lock().unwrap();
     let settings_state =
-        build_settings_state(&hyperkey, &presets, &korean, &seek, &store, None, None);
+        build_settings_state(
+            &hyperkey,
+            &presets,
+            &korean,
+            &seek,
+            &store,
+            state.auto_update_checks_enabled(),
+            None,
+            None,
+        );
     let meta = build_app_meta(&app, &store);
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
@@ -1767,7 +1810,7 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
     let seek = state.seek.lock().map_err(|e| e.to_string())?.clone();
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
-        &hyperkey, &presets, &korean, &seek, &store, None, None,
+        &hyperkey, &presets, &korean, &seek, &store, state.auto_update_checks_enabled(), None, None,
     ))
 }
 
@@ -1832,6 +1875,9 @@ fn settings_set(
     }
     if key == settings_keys::GENERAL_LANGUAGE {
         return settings_set_general_language(&app, &state, value);
+    }
+    if key == settings_keys::GENERAL_AUTO_UPDATE {
+        return settings_set_auto_update_check(&app, &state, value);
     }
 
     if key.starts_with("presets.") {
@@ -1900,6 +1946,139 @@ fn settings_set_general_language(
     current_settings_state(state)
 }
 
+/// F-13 — General 탭 `Check for updates automatically` 체크박스 토글.
+///
+/// 저장 계층은 `SettingsStore` 가 아니라 **Sparkle 의 UserDefaults** 다
+/// (`settings_keys::GENERAL_AUTO_UPDATE` 주석). 이 함수는:
+/// 1) 플러그인 API 로 Sparkle 에 요청하고
+/// 2) **실제 도달한 상태를 다시 읽어** 미러를 갱신한 뒤(launch-on-login B-1 교훈:
+///    Ok 를 받았다는 것과 값이 반영됐다는 것은 다르다)
+/// 3) 새 `SettingsState` 를 돌려준다.
+///
+/// `.app` 번들 밖(`tauri dev`)에서는 플러그인이 준비되지 않아 오류를 돌려준다 —
+/// General 탭 체크박스는 .app 에서만 동작하는 것이 정상이다(명세 §7, §8).
+fn settings_set_auto_update_check(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    value: serde_json::Value,
+) -> Result<SettingsState, String> {
+    let enabled = value
+        .as_bool()
+        .ok_or_else(|| format!("{} must be a boolean", settings_keys::GENERAL_AUTO_UPDATE))?;
+
+    refresh_auto_update_check(app, state, Some(enabled))?;
+    current_settings_state(state)
+}
+
+/// F-13 — 플러그인(Sparkle)에 자동 확인 상태를 적용하고 결과를 미러에 반영한다.
+///
+/// `want` 가 `Some(on)` 이면 먼저 `set_automatically_checks_for_updates` 를
+/// 호출하고, 그 뒤 **실제 상태를 다시 읽어** 미러에 반영한다 — API 가 `Ok` 를
+/// 줬어도 UserDefaults 에 반영되지 않았을 수 있으므로 값 확인을 생략하지 않는다
+/// (launch-on-login B-1 과 같은 순서). `None` 이면 요청 없이 현재 상태만 읽는다
+/// (부팅 시점 동기화).
+fn refresh_auto_update_check(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    want: Option<bool>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_sparkle_updater::SparkleUpdaterExt;
+        let Some(updater) = app.sparkle_updater() else {
+            // .app 밖 — 토글 요청이면 명시적으로 실패를 알리고, 부팅 동기화면
+            // 미러를 false 로 유지한다(dev 모드에서는 자동 확인이 애초에 없다).
+            if want.is_some() {
+                return Err(state
+                    .catalog
+                    .load()
+                    .get("menu.check_for_updates.not_ready")
+                    .to_string());
+            }
+            state.auto_update_checks.store(Arc::new(false));
+            return Ok(());
+        };
+
+        if let Some(on) = want {
+            updater
+                .set_automatically_checks_for_updates(on)
+                .map_err(|e| e.to_string())?;
+        }
+        let reached = updater
+            .automatically_checks_for_updates()
+            .map_err(|e| e.to_string())?;
+        if want == Some(reached) || want.is_none() {
+            state.auto_update_checks.store(Arc::new(reached));
+            tracing::info!(enabled = reached, "automatic update checks state synchronized");
+        } else {
+            tracing::error!(
+                requested = want,
+                reached,
+                "automatic update checks did not reach the requested state"
+            );
+            state.auto_update_checks.store(Arc::new(reached));
+            return Err(state
+                .catalog
+                .load()
+                .get("menu.check_for_updates.not_ready")
+                .to_string());
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, state, want);
+    }
+    Ok(())
+}
+
+/// F-13 메뉴바 `Check for Updates…` 클릭 — 즉시 appcast 를 재조회한다.
+/// 결과 표시("업데이트 있음"/"최신 버전"/오류)는 전부 **Sparkle 표준 UI** 가
+/// 처리한다(명세 §2 시나리오 3, `check_for_updates` 는 `SPUStandardUpdater
+/// Controller` 의 네이티브 대화상자를 연다). `.app` 밖에서는 항목이 비활성이라
+/// 여기 도달하지 않는 것이 정상이지만, 방어적으로 한 번 더 확인한다.
+fn on_menu_check_for_updates(app: &tauri::AppHandle, _state: &Arc<AppState>) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_sparkle_updater::SparkleUpdaterExt;
+        match app.sparkle_updater() {
+            Some(updater) => match updater.check_for_updates() {
+                Ok(()) => tracing::info!("manual check for updates started"),
+                Err(e) => tracing::error!(error = %e, "manual check for updates failed"),
+            },
+            None => tracing::warn!(
+                "manual check for updates ignored: updater not ready (outside an .app bundle)"
+            ),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// F-13 §5-10 — Sparkle 이 업데이트를 설치하고 **재시작하기 직전**에 F-10 의
+/// 종료 전 정리 계약을 실행한다: event tap 을 쥔 채 종료되면 눌려 있던 합성
+/// modifier 가 시스템에 남는다(`menu-bar-and-lifecycle.md` §5 항목 5).
+///
+/// 배선: 플러그인 이벤트 `sparkle://will-relaunch-application` — Sparkle 의
+/// `updaterWillRelaunchApplication:` delegate 가 **프로세스 종료 전에 동기로**
+/// 부른다(tauri-plugin-sparkle-updater `delegate.rs`). 이 콜백 안에서
+/// `force_reset_state()`(modifier 해소) → `shutdown()`(blocking — 탭 스레드가
+/// 정리를 마칠 때까지 join) 순서로 실행하므로, 콜백이 끝나는 시점에는
+/// 유저-보이는 상태가 이미 원상복구된 뒤다.
+fn prepare_engine_for_update_restart(state: &Arc<AppState>) {
+    let mut guard = match state.engine.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to lock engine before update relaunch");
+            return;
+        }
+    };
+    if let Some(engine) = guard.take() {
+        engine.force_reset_state();
+        engine.shutdown();
+        tracing::info!("engine cleaned up before Sparkle update relaunch");
+    }
+}
+
 /// F-17 §3.3 "공통 따름" — `settings_unset` 커맨드. `settings_set` 에 `value: null`
 /// 을 보내는 것과 **다르다**: `null` 은 명시적 끔이고, 이 커맨드는 키 자체를
 /// 지워 상위 계층(공통) 값을 따르게 한다(`settings.html` 851~866행 계약 —
@@ -1935,6 +2114,7 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         None,
         None,
     ))
@@ -2057,6 +2237,7 @@ fn settings_copy_common_to_device(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -2638,6 +2819,7 @@ fn settings_set_hyperkey(
                 &korean_snapshot,
                 &seek_snapshot,
                 &store,
+                state.auto_update_checks_enabled(),
                 None,
                 Some(pending),
             ));
@@ -2685,6 +2867,7 @@ fn settings_set_hyperkey(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -2738,6 +2921,7 @@ fn settings_set_preset(
                 &korean_snapshot,
                 &seek_snapshot,
                 &store,
+                state.auto_update_checks_enabled(),
                 None,
                 Some(pending),
             ));
@@ -2791,6 +2975,7 @@ fn settings_set_preset(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -2856,6 +3041,7 @@ fn settings_set_korean(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -3109,6 +3295,7 @@ fn settings_set_seek(
         &korean_snapshot,
         &seek_snapshot,
         &store,
+        state.auto_update_checks_enabled(),
         save_error,
         None,
     ))
@@ -3575,15 +3762,24 @@ fn main() {
         last_applied_window_size: Mutex::new(None),
         window_size_debouncer: Mutex::new(None),
         event_viewer_buffer: Mutex::new(VecDeque::new()),
+        auto_update_checks: ArcSwap::new(Arc::new(false)),
     });
 
-    tauri::Builder::default()
+    let app_builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // F-15 §3.4 설정 export/import(이슈 #39 Phase 2) — 네이티브 파일 대화상자.
         // `settings_export`/`settings_import` 커맨드가 Rust 쪽에서만 이 플러그인의
         // Rust API 를 쓴다(위 Cargo.toml 주석 참고) — 웹뷰가 직접 invoke 하지 않으므로
         // capability 파일이 필요 없다.
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(target_os = "macos")]
+    let app_builder = app_builder
+        // ⭐ F-13 — Sparkle 업데이터. `init()` 은 인자가 없고 설정은 전부
+        // Info.plist 에서 읽는다(책임 배분: docs/spec/auto-update.md §7).
+        .plugin(tauri_plugin_sparkle_updater::init());
+
+    app_builder
         .manage(state.clone())
         // ⭐ F-03 P3 스파이크가 웹뷰에서 ack 을 받는 통로(이슈 #34). 스파이크가
         // 꺼져 있으면 아무도 쓰지 않는 빈 상자로 남는다.
@@ -3772,6 +3968,26 @@ fn main() {
             }
             setup_front_app_tracking(app.handle(), &state);
 
+            // ⭐ F-13 — 부팅 시점 자동 확인 상태 동기화 + 업데이트 재시작 전 정리 훅.
+            // General 탭 체크박스가 이 미러를 그린다(정본은 Sparkle). 이벤트 콜백은
+            // Sparkle delegate 가 프로세스 종료 **전에 동기로** 부르므로, modifier
+            // 해소가 끝난 뒤에만 재시작이 진행된다(명세 §5-10, §8).
+            if let Err(e) = refresh_auto_update_check(app.handle(), &state, None) {
+                tracing::error!(error = %e, "failed to synchronize automatic update checks at boot");
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_sparkle_updater::SparkleUpdaterExt;
+                if let Some(updater) = app.handle().sparkle_updater() {
+                    let state_for_relaunch = state.clone();
+                    updater.set_event_callback(Some(Arc::new(move |event, _payload| {
+                        if event == "sparkle://will-relaunch-application" {
+                            prepare_engine_for_update_restart(&state_for_relaunch);
+                        }
+                    })));
+                }
+            }
+
             // 5) F-11 권한 감시. 전이가 오면 엔진을 켜거나 모달을 띄운다.
             let timings = EngineConfig::default().timings;
             let monitor = PermissionMonitor::start(
@@ -3796,7 +4012,7 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("Tauri 앱을 초기화하지 못했다")
-        .run(|_app_handle, event| match event {
+        .run(|app_handle, event| match event {
             tauri::RunEvent::ExitRequested { code, api, .. } => {
                 // §5 항목 7: "창을 닫아도 앱은 종료되지 않는다" — 메뉴바 상주 앱은
                 // 명시적 `Quit`(메뉴 또는 설정 창 버튼, 둘 다 `shutdown_and_exit`)
@@ -3810,7 +4026,15 @@ fn main() {
                     tracing::info!("exit requested due to window close; continuing to run");
                     api.prevent_exit();
                 } else {
-                    tracing::info!("exit requested; engine cleanup already done");
+                    // ⭐ F-13 — Sparkle 이 업데이트 재시작을 위해 프로세스를 끝내는
+                    // 경로도 여기를 지난다. `will-relaunch` 이벤트 콜백이 이미
+                    // 정리했다면 엔진은 `guard.take()` 로 빠져 있어 이 호출은
+                    // 멱등으로 아무것도 하지 않는다. 어떤 종료 경로라도 엔진이
+                    // 남아 있으면(콜백이 안 불린 엣지) 여기서 마저 정리한다 —
+                    // `shutdown()` 은 탭 스레드를 join 하므로 반환 시점에는
+                    // 유저-보이는 상태(눌린 modifier)가 원상복구돼 있다.
+                    prepare_engine_for_update_restart(&app_handle.state::<Arc<AppState>>());
+                    tracing::info!("exit requested; engine cleanup verified");
                 }
             }
             tauri::RunEvent::Reopen { .. } => {
@@ -4319,7 +4543,7 @@ fn ignore_menu_text(catalog: &Catalog, front_app: Option<&AppIdentity>) -> Strin
 }
 
 /// 정상 메뉴(§3.3, `docs/dev/architecture.md` §6.7 이 확정한 구성) 조립.
-/// `Purchase`(F-12)·`Check for Updates…`(F-13)는 범위 밖이라 넣지 않는다.
+/// `Purchase`(F-12) 는 범위 밖이라 넣지 않는다.
 fn build_normal_menu(
     handle: &tauri::AppHandle,
     catalog: &Catalog,
@@ -4342,6 +4566,16 @@ fn build_normal_menu(
         menu_ids::SETTINGS,
         catalog.get(menu_ids::SETTINGS),
         true,
+        None::<&str>,
+    )?;
+    // ⭐ F-13 — 메뉴바 수동 확인. 원본 실측 배치(Settings…와 About 사이, §3.3)를
+    // 그대로 따른다. `.app` 번들 밖(`tauri dev`)에서는 확인할 대상 자체가 없으므로
+    // Relaunch 와 같은 기준으로 비활성화한다(위임 지시 "수동 확인은 메뉴바").
+    let check_for_updates_item = MenuItem::with_id(
+        handle,
+        menu_ids::CHECK_FOR_UPDATES,
+        catalog.get(menu_ids::CHECK_FOR_UPDATES),
+        bundle::is_running_from_app_bundle(),
         None::<&str>,
     )?;
     // ⭐ 결정(위임 지시서): 별도 About 창을 새로 만들지 않는다 — 설정 창 General
@@ -4400,6 +4634,7 @@ fn build_normal_menu(
             &ignore_item,
             &sep_top,
             &settings_item,
+            &check_for_updates_item,
             &about_item,
             &advanced_menu,
             &sep_bottom,
@@ -4590,6 +4825,7 @@ fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuE
     match event.id().0.as_str() {
         menu_ids::IGNORE_APP => on_menu_ignore_app(state),
         menu_ids::SETTINGS | menu_ids::ABOUT => show_settings_window(app),
+        menu_ids::CHECK_FOR_UPDATES => on_menu_check_for_updates(app, state),
         menu_ids::SYNTHESIZE_CAPS_REMAP => on_menu_toggle_synthesize_caps_lock_remap(state),
         menu_ids::RELAUNCH => on_menu_relaunch(app, state),
         menu_ids::QUIT => on_menu_quit(app, state),
@@ -6116,6 +6352,7 @@ mod tests {
             &korean,
             &seek,
             &store,
+            false,
             Some("디스크 가득 참".to_string()),
             None,
         );
@@ -6133,6 +6370,8 @@ mod tests {
         assert!(obj.contains_key("general"));
         assert!(obj.contains_key("pendingConflict"));
         assert_eq!(obj["pendingConflict"], serde_json::Value::Null);
+        // ⭐ F-13 — General 탭 자동 확인 체크박스도 camelCase 로 실린다.
+        assert_eq!(obj["general"]["autoUpdate"], false);
 
         // ⭐ F-01 `Seek` 탭 계약 — 다른 위임의 `settings.html` 이 이 모양을 전제한다.
         let seek_json = obj["seek"].as_object().unwrap();
@@ -6217,6 +6456,7 @@ mod tests {
             &KoreanSettings::default(),
             &SeekSettings::default(),
             &store,
+            false,
             None,
             None,
         );
@@ -6308,6 +6548,7 @@ mod tests {
         let ids = [
             menu_ids::IGNORE_APP,
             menu_ids::SETTINGS,
+            menu_ids::CHECK_FOR_UPDATES,
             menu_ids::ABOUT,
             menu_ids::ADVANCED,
             menu_ids::SYNTHESIZE_CAPS_REMAP,

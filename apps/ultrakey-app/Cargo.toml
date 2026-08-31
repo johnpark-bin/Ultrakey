@@ -63,5 +63,12 @@ global-hotkey = { workspace = true }
 # 상태로 동작한다), 이 크레이트를 더해도 그 상태를 그대로 유지한다.
 tauri-plugin-dialog = { workspace = true }
 
+# ⭐ F-13(docs/spec/auto-update.md §7 판정: Rust 바인딩) — Sparkle.framework 를
+# 감싸는 커뮤니티 플러그인. macOS 전용이라 타깃 테이블로 선언한다(다른 플랫폼
+# 컴파일을 막음). init() 은 인자를 받지 않고 설정은 Info.plist 에서 읽는다.
+# 프레임워크는 scripts/fetch-sparkle.sh 가 내려받는다(빌드 전 실행 필수).
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-sparkle-updater = { workspace = true }
+
 [build-dependencies]
 tauri-build = { workspace = true }

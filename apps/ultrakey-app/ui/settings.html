@@ -867,10 +867,12 @@
       </div>
 
       <div class="row">
-        <label class="checkbox-row disabled">
-          <input type="checkbox" id="auto-update" disabled />
+        <!-- ⭐ F-13 — 자동 업데이트 스위치. 원본 실측 그대로의 라벨
+             (`Check for updates automatically`, §4.1)이며 출고 기본값은 ☐
+             (Info.plist SUEnableAutomaticChecks=false — F-15 "부재=기본값"). -->
+        <label class="checkbox-row">
+          <input type="checkbox" id="auto-update" data-key="general.autoUpdate" />
           <span id="auto-update-label"></span>
-          <span class="badge" id="auto-update-badge"></span>
         </label>
       </div>
       <p class="hint why" id="auto-update-why"></p>
@@ -1164,12 +1166,12 @@ if (!tauri || !tauri.core) {
 
     const badgeText = t("settings.badge.unimplemented");
     for (const id of [
-      "auto-update-badge",
       "menu-bar-icon-badge",
       "remove-activation-badge",
       "purchase-badge",
       // ⭐ F-16 2단계(한/영·한자)는 §3.2 의 근거 3중으로 해소되어 활성 컨트롤로
       // 출하한다 — 더 이상 이 미구현 배지 루프에 속하지 않는다(D-K16).
+      // (⭐ F-13 auto-update-badge 도 이 루프에서 빠졌다 — 활성 컨트롤이 됐다.)
     ]) {
       $(id).textContent = badgeText;
     }
@@ -2336,8 +2338,9 @@ if (!tauri || !tauri.core) {
     $("korean-won-backtick").checked = state.korean.wonKeyTypesBacktick;
     $("korean-remote-desktop").checked = state.korean.disableInRemoteDesktop;
 
-    // F-10 — 이제 실제로 동작하는 두 항목(나머지 General 컨트롤은 F-12/F-13 범위라 여전히 비활성).
+    // F-10 — 실제로 동작하는 항목들(자동 업데이트는 F-13 으로 활성, F-12 라이선스 컨트롤만 비활성).
     $("launch-on-login").checked = state.general.launchOnLogin;
+    $("auto-update").checked = state.general.autoUpdate;
     $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;
     // ⭐ B-4(이슈 #39, §3.5-a) — `requires-approval` 일 때만 안내 행을 보인다.
     renderHiddenNote(

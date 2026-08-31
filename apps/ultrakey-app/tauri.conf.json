@@ -42,7 +42,10 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "frameworks": [
+        "Sparkle.framework"
+      ]
     },
     "icon": [
       "icons/32x32.png",
