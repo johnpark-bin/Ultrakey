@@ -227,6 +227,24 @@ fn strip_line_comments(script: &str) -> String {
         .join("\n")
 }
 
+/// `<!-- ... -->` HTML 주석을 잘라낸다(닫히지 않은 주석은 끝까지 버린다). 이
+/// 파일의 정신("문자열을 못 믿고 스스로 방어한다")에 따라, 주석 안의 산문이
+/// 마크업 스캔을 오염시키는 것을 막기 위한 최소 도구다(이슈 #47 — `<hr />` 를
+/// 주석에 쓴 한국어 주석이 구분선 카운트를 흔들 수 있다).
+fn strip_html_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + 3..],
+            None => rest = "",
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// 큰따옴표로 감싸인 문자열 리터럴을 전부 뽑는다. 이스케이프된 `\"` 는 이
 /// 파일에 등장하지 않으므로 단순한 번갈아-토글 스캔으로 충분하다.
 fn extract_double_quoted_literals(text: &str) -> Vec<String> {
@@ -391,6 +409,11 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // F-18(이슈 #39 Phase 3) — `open_event_viewer` invoke 실패 진단 문구. 위
         // 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
         "Failed to open the Event Viewer: ",
+        // ⭐ 이슈 #47 — `open_log_folder` invoke 실패 진단 문구. 위 항목들과 같은
+        // 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로). 디렉터리 부재는
+        // 커맨드가 조용히 Ok(()) 로 처리하므로 이 문구는 `open` spawn 실패에만
+        // 도달한다.
+        "Failed to open the log folder: ",
         // ⭐ 이슈 #46 — `settings_copy_common_to_device` invoke 실패 진단 문구.
         // 위 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
         "Failed to copy settings: ",
@@ -1158,6 +1181,29 @@ fn 키보드_복사_커맨드가_invoke_배선되어_있다() {
     );
 }
 
+/// ⭐ 이슈 #47 — 로그 폴더 열기 커맨드가 프런트 invoke 와 백엔드 등록 양쪽에
+/// 배선돼 있다(계획 §6.2-c, `키보드_복사_커맨드가_invoke_배선되어_있다` 패턴):
+/// settings.html 이 `open_log_folder` 를 부르고, main.rs 에 커맨드 선언과
+/// `generate_handler!` 등록이 존재한다.
+#[test]
+fn 로그_폴더_커맨드가_invoke_배선되어_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"invoke("open_log_folder""#),
+        "ui/settings.html 이 invoke(\"open_log_folder\", …) 를 호출하지 않는다"
+    );
+
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("fn open_log_folder("),
+        "main.rs 에 open_log_folder 커맨드 선언이 없다"
+    );
+    assert!(
+        main_rs.contains("open_log_folder,"),
+        "generate_handler! 등록 목록에 open_log_folder 가 없다"
+    );
+}
+
 /// ⭐ 이슈 #46 — 상속 복귀(디바이스 키 삭제)는 기존 `commitUnset` 경로
 /// (= `settings_unset` 커맨드)를 그대로 쓴다(계획 D4 — 백엔드 변경 0줄).
 #[test]
@@ -1682,6 +1728,32 @@ fn 이슈_39_phase_2_3_신규_카탈로그_키가_다섯_카탈로그_모두에_
     }
 }
 
+/// ⭐ 이슈 #47 — 이번 회차가 5개 카탈로그 전부에 새로 넣은 키 3개(섹션 헤딩
+/// `startup`·`license` 2개 + 로그 폴더 버튼 1개). 위 `NEW_KEYS_FOR_ISSUE_39_*` 와
+/// 같은 이유로 별도 목록으로 명시적으로 잡는다. ⚠️ `settings.general.license` 는
+/// 기존 `settings.general.license.why`(구매·해제 why 문구)와 **별개 키**로 공존한다
+/// — 카탈로그는 평평한 키-값 맵이라 충돌하지 않는다(계획 §2 D2).
+const NEW_KEYS_FOR_ISSUE_47: &[&str] = &[
+    "settings.general.startup",
+    "settings.general.license",
+    "settings.general.open_log_folder",
+];
+
+#[test]
+fn 이슈_47_신규_카탈로그_키가_다섯_카탈로그_모두에_있다() {
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        let missing: Vec<_> = NEW_KEYS_FOR_ISSUE_47
+            .iter()
+            .filter(|k| !keys.contains(**k))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{locale}.json 에 없는 이슈 #47 신규 키: {missing:?}"
+        );
+    }
+}
+
 /// A-3 — `General` 탭에 export/import 버튼이 있고, 대응 커맨드를 invoke 한다.
 /// 파일 대화상자는 Rust 쪽에서만 연다는 결정(위임 지시서 A-1)의 프런트 쪽
 /// 증거이기도 하다 — `settings.html` 에는 `tauri_plugin_dialog` 관련 문자열이
@@ -1689,13 +1761,25 @@ fn 이슈_39_phase_2_3_신규_카탈로그_키가_다섯_카탈로그_모두에_
 #[test]
 fn settings_html_에_export_import_이벤트뷰어_버튼이_있고_커맨드를_invoke_한다() {
     let html = read_settings_html();
-    for id in ["settings-export-btn", "settings-import-btn", "open-event-viewer-btn"] {
+    // ⭐ 이슈 #47 — `open-log-folder-btn`(로그 폴더 열기) 추가. 진단 버튼이라
+    // open-event-viewer-btn 과 같은 목록에 둔다.
+    for id in [
+        "settings-export-btn",
+        "settings-import-btn",
+        "open-event-viewer-btn",
+        "open-log-folder-btn",
+    ] {
         assert!(
             html.contains(&format!(r#"id="{id}""#)),
             "settings.html 에 <button id=\"{id}\"> 가 없다"
         );
     }
-    for command in ["settings_export", "settings_import", "open_event_viewer"] {
+    for command in [
+        "settings_export",
+        "settings_import",
+        "open_event_viewer",
+        "open_log_folder",
+    ] {
         assert!(
             html.contains(&format!("invoke(\"{command}\"")),
             "ui/settings.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
@@ -1706,6 +1790,45 @@ fn settings_html_에_export_import_이벤트뷰어_버튼이_있고_커맨드를
         "settings.html 이 tauri_plugin_dialog 를 웹뷰에서 직접 부른다 — \
          Rust 쪽(settings_export/settings_import 커맨드)에서만 열어야 한다(위임 지시서 A-1)"
     );
+}
+
+/// ⭐ 이슈 #47 — General 탭이 `<hr />` 4개 + 섹션 헤딩 4개로 묶인다(계획 §2 D1):
+/// 언어(무헤딩) → Startup & menu bar → License → 설정 파일 → 진단.
+///
+/// hr 카운트는 **panel-general 스코프로 한정**한다 — 전체 HTML 에서 세면 다른
+/// 탭 수정(Presets·Hyperkey 의 hr)에 취약하다. 또 스코프 추출 후 HTML 주석을
+/// 제거하고 센다(이 줄 위 한국어 주석 안의 `<hr />` 산문이 카운트를 흔들 수
+/// 있다 — 이 파일의 "문자열을 못 믿고 스스로 방어한다" 정신). 헤딩 id 는
+/// 부분 문자열 오탐을 피해 `id="{id}"` 꼴로 검사한다.
+#[test]
+fn general_탭에_섹션_헤딩과_구분선이_있다() {
+    let html = read_settings_html();
+    let start = html
+        .find(r#"<section id="panel-general""#)
+        .expect("settings.html 에 <section id=\"panel-general\"> 가 없다");
+    let end = html[start..]
+        .find("</section>")
+        .expect("panel-general 이 </section> 로 닫히지 않는다")
+        + start;
+    let panel = strip_html_comments(&html[start..end]);
+
+    let hr_count = panel.matches("<hr").count();
+    assert_eq!(
+        hr_count, 4,
+        "panel-general 안의 <hr /> 개수가 4 가 아니다(주석 제거 후 카운트)"
+    );
+
+    for id in [
+        "general-startup-heading",
+        "general-license-heading",
+        "general-transfer-heading",
+        "general-diagnostics-heading",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 섹션 헤딩 id=\"{id}\" 가 없다"
+        );
+    }
 }
 
 /// B-1 — `eventviewer.html` 이 `eventviewer_poll`·`eventviewer_clear` 를 invoke 한다.
