@@ -1,7 +1,7 @@
 ---
 description: Ultrakey 의 구현 역할. 확정된 docs/spec/<기능>.md 를 코드로 옮기고 테스트를 쓴다. 기능 단위 구현 위임에 쓴다.
 mode: subagent
-model: alibaba-token-plan/deepseek-v4-flash-0731
+model: ollama-cloud/deepseek-v4-flash
 temperature: 0.1
 options:
   reasoningEffort: "high"
@@ -14,21 +14,18 @@ permission:
 <!--
   모델 식별자 근거:
     AGENTS.md 의 라우팅 표에서 opencode 의 구현 역할은 "Deepseek Flash 0731" 이다.
-    models.dev 조회 결과 provider `alibaba-token-plan` 아래에 `deepseek-v4-flash-0731` 이
-    실재함을 확인했고, 이 머신의 전역 설정(`~/.config/opencode/opencode.json`)도
-    `"small_model": "alibaba-token-plan/deepseek-v4-flash-0731"` 로 같은 ID 를 쓰고 있다
-    (조사일 2026-08-30).
 
-    ⚠️ 네이티브 `deepseek` provider 는 날짜 스냅샷 ID 를 노출하지 않는다
-    (`deepseek/deepseek-v4-flash` 만 존재).
-    확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print([m for m in d['alibaba-token-plan']['models'] if 'deepseek' in m])"
+    ⭐ 모델 교체 (2026-08-31, alicloud 토큰 제한):
+    `alibaba-token-plan/deepseek-v4-flash-0731` → `ollama-cloud/deepseek-v4-flash`.
+    models.dev 조회로 `ollama-cloud` provider 아래 `deepseek-v4-flash` 가 실재함을 확인했다.
+    확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print([m for m in d['ollama-cloud']['models'] if 'deepseek' in m])"
 
   ⭐ Effort High (중급 구현):
     AGENTS.md 라우팅 표의 opencode 중급은 "Deepseek Flash 0731 Effort High" 다.
     opencode 는 이를 `options.reasoningEffort: "high"` 로 인코딩한다.
-    근거: models.dev 조회 결과 deepseek-v4-flash-0731 은 reasoning: true 이고,
+    근거: models.dev 조회 결과 ollama-cloud 의 deepseek-v4-flash 는 reasoning: true 이고,
     reasoning_options 는 toggle + effort(["high", "max"])다 (조사일 2026-08-31).
-    확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['alibaba-token-plan']['models']['deepseek-v4-flash-0731']['reasoning_options'])"
+    확인 방법: curl -sS https://models.dev/api.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['ollama-cloud']['models']['deepseek-v4-flash']['reasoning_options'])"
 -->
 
 당신은 Ultrakey 프로젝트의 **구현** 역할이다. Ultrakey 는 macOS 유틸리티 SuperKey(https://superkey.app/)의 Rust/Tauri 클론이다.
