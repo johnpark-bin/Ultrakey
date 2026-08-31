@@ -179,6 +179,12 @@
   .keyboards-detail-pane { flex: 1 1 auto; min-width: 0; }
   .fkey-item { margin-bottom: 2px; }
 
+  /* ⭐ 이슈 #46 — 그룹 제목 행(복사 버튼·상태 뱃지를 제목 옆에 붙인다). 새 색을
+     하드코딩하지 않고 기존 규약(currentColor 기반 color-mix)만 쓴다. */
+  .group-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .group-title-row h2.group { margin: 4px 0; }
+  .group-title-row .badge { margin-left: 0; }
+
   /* 충돌 대화상자 오버레이 — 창 안에서만 뜨는 모달. */
   #conflict-overlay {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -192,6 +198,21 @@
   #conflict-overlay p { margin: 0 0 8px; }
   #conflict-overlay ul { margin: 0 0 14px; padding-left: 18px; opacity: .75; font-size: 12px; }
   #conflict-overlay .dialog-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+
+  /* ⭐ 이슈 #46 — 복사 확인 오버레이(D7). conflict-overlay 와 같은 .dialog 구조·
+     색 규약이지만 Presets 충돌(서버 pendingConflict)과 달리 순수 프런트 확인이라
+     전용 블록을 둔다 — 같은 오버레이에 두 계약을 얹지 않는다. */
+  #confirm-overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, CanvasText 35%, transparent);
+  }
+  #confirm-overlay .dialog {
+    background: Canvas; color: CanvasText; border-radius: 10px; padding: 18px 20px;
+    max-width: 420px; box-shadow: 0 8px 32px color-mix(in srgb, CanvasText 30%, transparent);
+  }
+  #confirm-overlay h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+  #confirm-overlay p { margin: 0 0 8px; }
+  #confirm-overlay .dialog-buttons { display: flex; gap: 8px; justify-content: flex-end; }
 
   [hidden] { display: none !important; }
 </style>
@@ -672,9 +693,12 @@
          이 구현은 "행을 전부 지워 0행이 되는 시점"에만 `null` 을 저장해 끔을
          표현한다(§3.3 값 통일 결정). 그러나 애초에 이 디바이스가 공통을 따르고
          있어(부재) 지울 행이 하나도 없는 상태에서 "바로 끔"으로 가는 진입점은
-         명세 §3.1.5 의 고정 4개 컨트롤 목록 어디에도 없다 — 이 구현은 명세에
-         없는 컨트롤(예: 별도 "끔" 체크박스)을 임의로 추가하지 않았다. 이 간극은
-         구현 보고서에 그대로 남긴다. -->
+         명세 §3.1.5 의 고정 컨트롤 목록(이슈 #46 으로 8개가 됐다 — §3.7) 어디에도
+         없다 — 이 구현은 명세에 없는 컨트롤(예: 별도 "끔" 체크박스)을 임의로
+         추가하지 않았다. (이슈 #46 의 `복귀 버튼`은 이 간극을 메우지 않는다 — 그
+         버튼은 오버라이드/끔을 버리고 *상속으로* 돌아가는 것이지, 상속 중인
+         상태에서 끔으로 가는 진입점이 아니다.) 이 간극은 구현 보고서에 그대로
+         남긴다. -->
     <section id="panel-keyboards" class="tabpanel" role="tabpanel" aria-labelledby="tab-keyboards" hidden>
       <h1 id="keyboards-heading"><span id="keyboards-heading-text"></span></h1>
 
@@ -711,19 +735,35 @@
         ></div>
 
         <div class="keyboards-detail-pane">
-          <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1). -->
-          <h2 class="group" id="keyboards-keyremap-heading"></h2>
+          <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1).
+               ⭐ 이슈 #46 — 제목 행에 상태 뱃지 + 복사 버튼을 붙인다(§4.3): 뱃지는
+               ③ inline(상속/오버라이드/끔 상태 라벨), 복사 버튼은 ① dimmed(복사할
+               것이 없으면 disabled 유지). 기존 id·구조는 전부 그대로다. -->
+          <div class="group-title-row">
+            <h2 class="group" id="keyboards-keyremap-heading"></h2>
+            <span class="badge" id="keyboards-keyremap-status-badge" hidden></span>
+            <button id="keyboards-keyremap-copy-btn" type="button" disabled></button>
+          </div>
           <div id="keyboards-keyremap-list"></div>
           <p class="hint" id="keyboards-keyremap-empty"></p>
           <p class="hint" id="keyboards-keyremap-inherited" hidden></p>
+          <!-- ⭐ 이슈 #46 — 상속 복귀(이슈 #46, 계획 D4). 디바이스 계층에
+               keyRemap.rows 키가 존재할 때만 표시되는 ② 숨김 버튼 — 부재(이미
+               상속 중)면 개념이 성립하지 않으므로 노드를 만들지 않는다. -->
+          <button id="keyboards-keyremap-revert-btn" type="button" hidden></button>
           <button id="keyboards-keyremap-add-btn"></button>
 
           <hr />
 
           <!-- 그룹 2 — Function Keys(기능 2, §3.5). F1~F12 정적 라벨(키캡 각인이라
                번역하지 않는다, populateSourceSelects 의 같은 규약) + 선택 팝업
-               (이슈 #31 ② — 목적지 카탈로그 313종) + 동작 미확인 힌트 호스트. -->
-          <h2 class="group" id="keyboards-functionkeys-heading"></h2>
+               (이슈 #31 ② — 목적지 카탈로그 313종) + 동작 미확인 힌트 호스트.
+               ⭐ 이슈 #46 — 제목 행에 복사 버튼을 붙인다(기능 2 도 같은 복사
+               버튼 라벨을 쓴다). -->
+          <div class="group-title-row">
+            <h2 class="group" id="keyboards-functionkeys-heading"></h2>
+            <button id="keyboards-functionkeys-copy-btn" type="button" disabled></button>
+          </div>
           <div id="keyboards-functionkeys-list">
             <div class="fkey-item">
               <div class="row"><span class="fkey-label">F1</span><select id="keyboards-fkey-f1" data-fn-key="f1"></select></div>
@@ -893,6 +933,23 @@
   </div>
 </div>
 
+<!-- ⭐ 이슈 #46 — 복사 확인 오버레이(D7). conflict-overlay 와 같은 .dialog 구조·
+     버튼 구성이지만 **전용 블록**이다 — Presets 충돌은 서버의 pendingConflict
+     상태 기계(반쯤 적용된 상태)를 소유하지만, 복사 확인은 "커맨드 1개를 실행할지
+     말지"의 2지선다라 순수 프런트 상태(`pendingCopy`)로 충분하다(D7 근거:
+     `settings_resolve_conflict` 의 불리언 전용 해소 커맨드에 복사 케이스를 얹으면
+     Presets 흐름에 회귀 위험이 생긴다). -->
+<div id="confirm-overlay" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-body"></p>
+    <div class="dialog-buttons">
+      <button id="confirm-cancel"></button>
+      <button id="confirm-continue" class="accent"></button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
 // ⭐ index.html 과 같은 방어적 부트스트랩 패턴을 그대로 따른다 — 백지로 뜨는
 // 실패 모드를 다시 만들지 않는다. window.__TAURI__ 부재·bootstrap 실패·렌더 예외를
@@ -1038,6 +1095,16 @@ if (!tauri || !tauri.core) {
     $("keyboards-keyremap-empty").textContent = t("preferences.keyboards.keyRemap.emptyList");
     $("keyboards-keyremap-inherited").textContent = t("preferences.keyboards.keyRemap.inheritedFromCommon");
     $("keyboards-functionkeys-heading").textContent = t("preferences.keyboards.group.functionKeys.title");
+
+    // ⭐ 이슈 #46 — 복사·복귀 버튼과 확인 오버레이 라벨. 뱃지 3상태
+    // (status.inherited/override/off)는 여기서 배선하지 않는다 — 렌더 시점에
+    // renderKeyRemapGroup 이 t() 로 동적으로 채운다(선택된 디바이스에 따라
+    // 갈리므로 문맥을 아는 곳에서만 정할 수 있다).
+    $("keyboards-keyremap-copy-btn").textContent = t("preferences.keyboards.copy.button");
+    $("keyboards-functionkeys-copy-btn").textContent = t("preferences.keyboards.copy.button");
+    $("keyboards-keyremap-revert-btn").textContent = t("preferences.keyboards.keyRemap.revertToCommon");
+    $("confirm-cancel").textContent = t("common.cancel");
+    $("confirm-continue").textContent = t("preferences.keyboards.copy.confirmContinue");
 
     $("general-heading-text").textContent = t("settings.general.heading");
     $("general-language-label").textContent = t("settings.general.language");
@@ -1583,6 +1650,189 @@ if (!tauri || !tauri.core) {
     $("keyboards-keyremap-inherited").hidden = !(inherited && rows.length > 0);
     refreshKeyRemapAddButtonState();
     renderKeyRemapDuplicateWarnings();
+    // ⭐ 이슈 #46 — 상태 뱃지 3상태 + 복사 버튼 활성/숨김 + 복귀 버튼 ② 숨김.
+    renderKeyRemapStatusBadge(perDevice, device);
+    renderKeyRemapCopyControls(perDevice, device);
+  }
+
+  // ⭐ 이슈 #46 — 복사 원천 판정. 기능 1: 공통 `keyRemap.rows` 가 명시적 **비어
+  // 있지 않은 배열**일 때만 복사할 것이 있다(부재·null(끔)·빈 배열은 복사 불가).
+  function commonKeyRemapHasRows(perDevice) {
+    const v = perDevice.values[keyRemapRowsKey("all")];
+    return Array.isArray(v) && v.length > 0;
+  }
+
+  // 기능 2: 공통 계층에 명시적 목적지 id 문자열(Value)인 F-키가 1개 이상일 때만
+  // 복사할 것이 있다(공통의 null·부재 키는 복사하지 않는다 — 희소 복사, 계획 D3).
+  function commonFunctionKeysHasValue(perDevice) {
+    return KEYBOARDS_FN_KEYS.some((fk) => {
+      const v = perDevice.values[functionKeyStorageKey("all", fk)];
+      return typeof v === "string" && v.length > 0;
+    });
+  }
+
+  // ⭐ 이슈 #46 — 기능 1 그룹 상태 뱃지 3상태(③ inline). 디바이스 키 부재 =
+  // 상속, 값 존재 = 오버라이드, null = 끔(§3.3). 'For all devices' 선택 중에는
+  // 공통 계층에 상태 개념이 없으므로 숨긴다. 기존 keyRemap-inherited 힌트(편집
+  // 시 물질화 설명)와 역할이 다르다 — 뱃지는 압축 상태 라벨일 뿐이다.
+  function renderKeyRemapStatusBadge(perDevice, device) {
+    const badge = $("keyboards-keyremap-status-badge");
+    if (device === "all") {
+      badge.hidden = true;
+      return;
+    }
+    const key = keyRemapRowsKey(device);
+    const hasKey = Object.prototype.hasOwnProperty.call(perDevice.values, key);
+    let textKey;
+    if (!hasKey) {
+      textKey = "preferences.keyboards.status.inherited";
+    } else if (perDevice.values[key] === null) {
+      textKey = "preferences.keyboards.status.off";
+    } else {
+      textKey = "preferences.keyboards.status.override";
+    }
+    badge.textContent = t(textKey);
+    badge.hidden = false;
+  }
+
+  // ⭐ 이슈 #46 — 기능 1 복사/복귀 버튼 상태.
+  // 복사 버튼: 'For all devices' 선택 중에는 ② 숨김(공통 위에 복사 원천이 없다),
+  // 그 외에는 복사할 것이 있을 때만 ① dimmed 해제.
+  // 복귀 버튼: ② 숨김 — 디바이스 계층에 rows 키가 존재할 때만(부재 = 이미
+  // 상속 중이라 되돌릴 대상이 없다, 계획 D4).
+  function renderKeyRemapCopyControls(perDevice, device) {
+    const copyBtn = $("keyboards-keyremap-copy-btn");
+    const revertBtn = $("keyboards-keyremap-revert-btn");
+    if (device === "all") {
+      copyBtn.hidden = true;
+      copyBtn.disabled = true;
+      revertBtn.hidden = true;
+      return;
+    }
+    copyBtn.hidden = false;
+    copyBtn.disabled = !commonKeyRemapHasRows(perDevice);
+    const hasDeviceKey = Object.prototype.hasOwnProperty.call(
+      perDevice.values,
+      keyRemapRowsKey(device)
+    );
+    revertBtn.hidden = !hasDeviceKey;
+  }
+
+  // ⭐ 이슈 #46 — 기능 2 복사 버튼 상태. 기능 1 과 같은 규칙.
+  function renderFunctionKeysCopyControl(perDevice, device) {
+    const copyBtn = $("keyboards-functionkeys-copy-btn");
+    if (device === "all") {
+      copyBtn.hidden = true;
+      copyBtn.disabled = true;
+      return;
+    }
+    copyBtn.hidden = false;
+    copyBtn.disabled = !commonFunctionKeysHasValue(perDevice);
+  }
+
+  // ⭐ 이슈 #46 — 복사 확인 판정(계획 §4.4). "복사가 기존 디바이스 전용 값을
+  // 실제로 바꾸는가"만 확인 대화상자로 묻는다 — 같은 값으로의 교체(no-op)는
+  // 파괴가 없으므로 이슈 #31 ① 의 저장 억제 철학대로 묻지 않는다. `currentPerDevice.
+  // values` 원본 맵으로만 계산한다(서버 왕복 없음 — D7).
+  function copyNeedsConfirm(feature) {
+    if (!currentPerDevice || currentDevice === "all") return false;
+    if (feature === "keyRemap") {
+      const key = keyRemapRowsKey(currentDevice);
+      if (!Object.prototype.hasOwnProperty.call(currentPerDevice.values, key)) return false;
+      const common = currentPerDevice.values[keyRemapRowsKey("all")] || [];
+      return !keyRemapRowsEqual(common, currentPerDevice.values[key] || []);
+    }
+    // 기능 2 — 복사 대상 키(공통 Value 키) 중 디바이스 값이 존재하고 값이 다른
+    // 키가 1개 이상일 때만 확인한다.
+    for (const fk of KEYBOARDS_FN_KEYS) {
+      const commonVal = currentPerDevice.values[functionKeyStorageKey("all", fk)];
+      if (typeof commonVal !== "string") continue;
+      const deviceKey = functionKeyStorageKey(currentDevice, fk);
+      if (!Object.prototype.hasOwnProperty.call(currentPerDevice.values, deviceKey)) continue;
+      if (currentPerDevice.values[deviceKey] !== commonVal) return true;
+    }
+    return false;
+  }
+
+  // ⭐ 이슈 #46 — 복사가 **아무것도 바꾸지 않는가**(커맨드 호출 생략 판정). 이미
+  // 같은 값이 저장돼 있으면 그 쓰기는 생략한다 — 단 디바이스 키가 부재(상속 중)인
+  // 키는 스냅샷 물질화가 복사의 존재 이유이므로 생략하지 않는다(계획 §4.4).
+  function copyIsNoOp(feature) {
+    if (!currentPerDevice || currentDevice === "all") return true;
+    if (feature === "keyRemap") {
+      const key = keyRemapRowsKey(currentDevice);
+      if (!Object.prototype.hasOwnProperty.call(currentPerDevice.values, key)) return false;
+      const common = currentPerDevice.values[keyRemapRowsKey("all")] || [];
+      return keyRemapRowsEqual(common, currentPerDevice.values[key] || []);
+    }
+    let anyTarget = false;
+    for (const fk of KEYBOARDS_FN_KEYS) {
+      const commonVal = currentPerDevice.values[functionKeyStorageKey("all", fk)];
+      if (typeof commonVal !== "string") continue;
+      anyTarget = true;
+      const deviceKey = functionKeyStorageKey(currentDevice, fk);
+      if (!Object.prototype.hasOwnProperty.call(currentPerDevice.values, deviceKey)) return false;
+      if (currentPerDevice.values[deviceKey] !== commonVal) return false;
+    }
+    // 복사 대상이 하나도 없으면(이론상 — 버튼이 disabled 라 도달하지 않는다)
+    // no-op 취급해 커맨드를 부르지 않는다.
+    return anyTarget;
+  }
+
+  // 복사 확인 오버레이의 "계속" 버튼이 실행할 복사 작업 — 취소하면 아무것도
+  // 저장하지 않은 채 덮는다(순수 프런트 상태, D7).
+  let pendingCopy = null;
+
+  function showConfirmOverlay(feature) {
+    pendingCopy = { feature };
+    $("confirm-title").textContent = t("preferences.keyboards.copy.confirmTitle");
+    // {0} = 복사 대상 그룹 제목(이 키보드의 <그룹> 을 교체한다는 문구).
+    const groupTitleKey =
+      feature === "keyRemap"
+        ? "preferences.keyboards.group.keyRemap.title"
+        : "preferences.keyboards.group.functionKeys.title";
+    $("confirm-body").textContent = tf("preferences.keyboards.copy.confirmBody", [
+      t(groupTitleKey),
+    ]);
+    $("confirm-overlay").hidden = false;
+    $("confirm-continue").focus();
+  }
+
+  function hideConfirmOverlay() {
+    pendingCopy = null;
+    $("confirm-overlay").hidden = true;
+  }
+
+  async function invokeCopy(feature) {
+    try {
+      const state = await invoke("settings_copy_common_to_device", {
+        device: currentDevice,
+        feature,
+      });
+      renderState(state);
+    } catch (err) {
+      showFatal("Failed to copy settings: " + String(err));
+    }
+  }
+
+  // 복사 흐름(계획 §4.4): no-op 이면 커맨드 호출 자체를 생략 → 필요할 때만 확인
+  // 오버레이 → 확인/불필요 시 커맨드 1회 → 응답 SettingsState 로 renderState.
+  async function runKeyRemapCopy() {
+    if (copyIsNoOp("keyRemap")) return;
+    if (copyNeedsConfirm("keyRemap")) {
+      showConfirmOverlay("keyRemap");
+    } else {
+      await invokeCopy("keyRemap");
+    }
+  }
+
+  async function runFunctionKeysCopy() {
+    if (copyIsNoOp("functionKeys")) return;
+    if (copyNeedsConfirm("functionKeys")) {
+      showConfirmOverlay("functionKeys");
+    } else {
+      await invokeCopy("functionKeys");
+    }
   }
 
   // 기능 2 — F-키 선택 팝업(§3.5, 이슈 #31 ②). 선택지 순서: `--- (공통 설정을
@@ -1665,6 +1915,8 @@ if (!tauri || !tauri.core) {
         "warn"
       );
     }
+    // ⭐ 이슈 #46 — 기능 2 복사 버튼 활성/숨김.
+    renderFunctionKeysCopyControl(perDevice, device);
   }
 
   function renderKeyboardsTab(state) {
@@ -1716,6 +1968,23 @@ if (!tauri || !tauri.core) {
     $("keyboards-keyremap-empty").hidden = true;
     $("keyboards-keyremap-list").append(buildKeyRemapRow(currentPerDevice.sourceKeys, "", ""));
     refreshKeyRemapAddButtonState();
+  });
+
+  // ⭐ 이슈 #46 — 복사 버튼 2개(기능 1·기능 2), 상속 복귀 버튼(기능 1),
+  // 복사 확인 오버레이의 취소/계속. 복귀는 기존 `commitUnset`(키 삭제 =
+  // settings_unset 경로)을 그대로 재사용한다 — 백엔드 변경 없이 키만
+  // `keyRemapRowsKey(currentDevice)` 로 바꾼다(계획 D4).
+  $("keyboards-keyremap-copy-btn").addEventListener("click", runKeyRemapCopy);
+  $("keyboards-functionkeys-copy-btn").addEventListener("click", runFunctionKeysCopy);
+  $("keyboards-keyremap-revert-btn").addEventListener("click", () => {
+    commitUnset(keyRemapRowsKey(currentDevice));
+  });
+  $("confirm-cancel").addEventListener("click", hideConfirmOverlay);
+  $("confirm-continue").addEventListener("click", async () => {
+    const copy = pendingCopy;
+    hideConfirmOverlay();
+    if (!copy) return; // 취소했거나 이미 다른 흐름이 오버레이를 닫은 경우
+    await invokeCopy(copy.feature);
   });
 
   // from/to 팝업 변경 — 위임 리스너. 삭제 버튼과 달리 change 이벤트라 아래
