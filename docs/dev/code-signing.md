@@ -133,7 +133,7 @@ open <산출 .app>   (또는 Finder 에서 직접 실행)
 | 서명 | Developer ID (Team ID `XSYZ3E4B7D`) | 개발 중: 고정 자체 서명 인증서(`Ultrakey Dev`). 배포 시: Developer ID |
 | Hardened Runtime | 활성 (`flags=0x10000(runtime)`) | ✅ 활성 — `codesign --options runtime` |
 | App Sandbox | **없음** | ✅ 없음 — `CGEventTap`·`AXUIElement`·IOHID·비공개 프레임워크는 샌드박스에서 쓸 수 없다. 이 때문에 Mac App Store 배포가 불가능하고, 직접 배포(+ Sparkle)가 유일한 경로다 |
-| Entitlements | **`com.apple.security.cs.allow-jit` 하나뿐** | ✅ 동일 — `apps/ultrakey-app/entitlements.plist` 에 이 키 하나만 선언한다 |
+| Entitlements | **`com.apple.security.cs.allow-jit` 하나뿐** | ⚠️ 개발 중(자체 서명)에는 `com.apple.security.cs.disable-library-validation` 도 함께 선언한다 — 이유는 §9 참조. Developer ID 배포로 넘어가면 이 키는 다시 뺄 수 있다(§9) |
 | 아키텍처 | Universal (`x86_64` + `arm64`) | ✅ 동일 — `cargo tauri build --target universal-apple-darwin` + `lipo` |
 
 ⭐ 여기서 확인해야 할 것 하나: **TCC 권한은 entitlement 로 선언되지 않는다.** Accessibility·Screen Recording·Input Monitoring 은 `entitlements.plist` 어디에도 나타나지 않으며, "어떤 권한이 필요한가" 는 번들 메타데이터가 아니라 **실제로 링크·호출하는 API** 로만 판정된다(`platform-constraints.md` §0.1). `com.apple.security.cs.allow-jit` 은 WebKit(Sparkle·Paddle 이 링크) 이 요구하는 것으로 보이나 확정되지 않았다(`(미확정)`).
@@ -171,3 +171,37 @@ open <산출 .app>   (또는 Finder 에서 직접 실행)
 **등록 절차**: `gh secret set APPLE_CERTIFICATE < cert.b64`(시크릿마다 반복) 또는 Settings → Secrets and variables → Actions. ⛔ **시크릿 값을 어떤 저장소 파일에도 절대 써넣지 않는다** — 이 문서는 절차만 다룬다.
 
 **첫 릴리즈 / 미서명 교체 절차**: 미서명 드래프트 릴리즈로 파이프라인 자체를 검증하는 것은 문제없다. 시크릿을 설정한 뒤 서명된 빌드로 교체하려면 → 드래프트 릴리즈 삭제 → 원격 태그 삭제 → **같은 태그를 다시 푸시**(워크플로 재실행).
+
+---
+
+## 9. Sparkle 라이브러리 검증(library validation) 예외 — 이슈 #61
+
+### 증상
+
+자체 서명 빌드(로컬 `build-signed.sh` · CI release 모두)로 만든 `Ultrakey.app` 이 실행 즉시 dyld 크래시로 종료됐다.
+
+```
+Termination Reason: Namespace DYLD, Code 1, Library missing
+Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle
+Reason: ... code signature ... not valid for use in process:
+        mapping process and mapped file (non-platform) have different Team IDs
+```
+
+### 원인
+
+메인 앱과 번들된 `Sparkle.framework` 모두 `Authority=Ultrakey Dev`, `TeamIdentifier=not set`, `flags=0x10000(runtime)` — 즉 F-13(Sparkle) 의 중첩 재서명(`build-signed.sh` §3)은 서명 주체를 정확히 맞추고 있었다. 그런데도 크래시가 난 이유는 서명 주체 불일치가 아니라 **하드닝 런타임의 library validation** 때문이다. `--options runtime` 이 켜지면 dyld 는 로드하는 각 라이브러리에 대해 (a) Apple 플랫폼 바이너리이거나 (b) 메인 실행 파일과 **동일한 비어 있지 않은(non-empty) Team ID** 로 서명됐을 것을 요구한다. 자체 서명 인증서(§2)는 Apple 발급이 아니므로 Team ID 가 애초에 없고, **빈 Team ID 끼리는 "같은 팀" 으로 인정되지 않는다** — 따라서 재서명 절차를 아무리 정교하게 맞춰도 이 조합은 구조적으로 통과할 수 없다.
+
+SuperKey v1.66(§7)이 같은 구성(Hardened Runtime, entitlement 은 `allow-jit` 뿐)으로도 문제가 없는 이유는 **Developer ID**(Team ID `XSYZ3E4B7D`, 비어 있지 않음)로 서명하기 때문이다. 개발 중 자체 서명에만 해당하는 문제다.
+
+### 결정
+
+`apps/ultrakey-app/entitlements.plist` 에 `com.apple.security.cs.disable-library-validation` (`true`) 를 추가했다. 로컬 `build-signed.sh` 와 CI `release.yml` 모두 이 파일 하나를 참조하므로(경로: `apps/ultrakey-app/entitlements.plist`) 수정 한 곳으로 양쪽이 고쳐진다. `build-signed.sh` §4 검증에도 서명된 앱의 entitlements 에 이 키가 실제로 들어갔는지 확인하는 단계를 추가해 회귀를 막는다.
+
+### 기각한 대안
+
+- **`--options runtime` 제거(하드닝 런타임 끄기)** — library validation 자체가 사라져 크래시는 멎지만, 향후 Developer ID + 공증 구성(하드닝 런타임 필수, §8)과 서명 구성이 갈라진다. `com.apple.security.cs.allow-jit` entitlement 도 하드닝 런타임 플래그 하에서만 의미가 있다. 기각.
+- **Sparkle 원본 서명 유지(재서명하지 않음)** — 원본은 Sparkle Project 의 Developer ID Team ID 를 갖고 있어, 빈 Team ID 인 메인 앱과 오히려 더 확실하게 불일치한다. 기각.
+
+### Developer ID 배포로 넘어갈 때
+
+Developer ID(비어 있지 않은 Team ID)로 서명하면 앱과 Sparkle 이 같은 실제 Team ID 를 공유하게 되어 library validation 이 원래 방식대로 통과한다 — 이 entitlement 은 **개발 중 자체 서명 전용 예외**다. §8 의 CI 서명 그룹이 활성화된 배포 빌드에서 이 키를 유지할지 뺄지는 별도로 검토한다(유지해도 동작에는 영향 없음 — library validation 을 요구가 아니라 예외로 만드는 키이므로 이미 통과하는 경로를 막지 않는다).

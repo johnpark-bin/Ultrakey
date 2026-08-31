@@ -140,6 +140,18 @@ echo
 echo "  -- codesign -dv --entitlements :- --"
 codesign -dv --entitlements :- "${APP_PATH}"
 
+echo
+echo "  -- entitlements: disable-library-validation --"
+# F-13(Sparkle) 은 Team ID 없는 자체 서명이라 하드닝 런타임의 library validation 을
+# 구조적으로 통과할 수 없다(docs/dev/code-signing.md §9, 이슈 #61). 이 키가 빠지면
+# 서명된 결과물은 만들어져도 실행 즉시 dyld 크래시가 나므로 여기서 반드시 걸러낸다.
+if codesign -d --entitlements :- --xml "${APP_PATH}" 2>/dev/null |
+	grep -q '<key>com.apple.security.cs.disable-library-validation</key>'; then
+	echo "  ✅ com.apple.security.cs.disable-library-validation 존재"
+else
+	fail "서명된 앱의 entitlements 에 com.apple.security.cs.disable-library-validation 이 없다. ${ENTITLEMENTS} 를 확인한다(이슈 #61)."
+fi
+
 EXECUTABLE_NAME="$(basename "${APP_PATH}" .app)"
 EXECUTABLE_PATH="${APP_PATH}/Contents/MacOS/${EXECUTABLE_NAME}"
 if [ ! -x "${EXECUTABLE_PATH}" ]; then
