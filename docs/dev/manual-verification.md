@@ -2538,3 +2538,74 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 | 11-6 b (화면 밖) | 로그 + 크래시 없음 |
 | 11-7 (설정 4조합) | 브라우저 새 탭 등 |
 | 11-8 (원본 대조) | 📝 기록(필수 검증 아님) |
+
+---
+
+## 14. F-13 자동 업데이트(Sparkle) — 수동 검증
+
+> **검증 전 필수**: Sparkle 은 `.app` 번들이 있어야 동작한다(명세 §7, `tauri-plugin-sparkle-updater` 는
+> `NSBundle.mainBundle().bundleIdentifier` 가 비면 `tauri dev` 에서 비활성 — `sparkle_updater()` 가 `None`).
+> 반드시 `./scripts/build-signed.sh` 로 서명된 universal `.app` 을 만들어 `open` 으로 실행한다
+> (`docs/dev/code-signing.md §5` 개발 루프). 빌드 전 `./scripts/fetch-sparkle.sh`(멱등)가 프레임워크를 받아 둔 상태여야 컴파일이 된다.
+
+사전 준비: `security find-identity -v -p codesigning` 에 `Ultrakey Dev` 가 보이는지, 그리고 `open <경로>/Ultrakey.app` 로 띄운다. 로그는 `tail -f ~/Library/Logs/Ultrakey/ultrakey.log` 로 본다(§0).
+
+### 14-1. 번들에 Sparkle 프레임워크가 실려 있다
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | `ls <...>/Ultrakey.app/Contents/Frameworks/` | `Sparkle.framework` 디렉터리 존재 |
+| 2 | `<...>/Sparkle.framework/Versions/B/Sparkle` 로 `file` | `Mach-O universal binary ... [x86_64] [arm64]` |
+| 3 | `codesign --verify --strict --verbose=2 <...>/Sparkle.framework` | 오류 없이 통과(우리 주체로 서명됨) |
+
+### 14-2. Info.plist 에 SU 키가 박혀 있다 (tauri-cli 자동 병합)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | `/usr/libexec/PlistBuddy -c 'Print' <...>/Ultrakey.app/Contents/Info.plist` | `SUFeedURL`(자리표시자 https 값) · `SUPublicEDKey`(베이스64 43자) · `SUEnableAutomaticChecks`=`false` · `SUScheduledCheckInterval`=`172800` |
+| 2 | CFBundle* 키가 Tauri 가 만든 값 | `CFBundleVersion` 가 `tauri.conf.json version` 과 일치 |
+
+### 14-3. 메뉴바 `Check for Updates…` 동작 (수동 확인)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 앱 로드 후 메뉴바 아이콘 → 메뉴 | `Settings…` 와 `About` 사이에 `Check for Updates…` 항목이 보이고 **활성**(`.app` 이므로) |
+| 2 | `Check for Updates…` 클릭 | Sparkle 표준 창이 뜨며 "업데이트 확인 중…" 표시. 자리표시자 URL 이므로 이내 **오류 문구**(retrieve 오류) 또는 "최신 버전" — ⚠️ 서버 없이는 "최신"이 진짜 갱신 유무와 무관 |
+| 3 | `.app` 이 아닌 `tauri dev` 로 실행 | 항목이 **비활성**(`bundle::is_running_from_app_bundle` 로 판단) — `.app` 만 활성 |
+
+- 로그: `~/.herdr/.../ultrakey.log` 에 `manual check for updates started`(영어) 남는지 확인.
+- Sparkle 자체 로그: `log stream --predicate 'subsystem == "org.sparkle-project.Sparkle"' --info`(명세 §6; `.app` 실행 시 콘솔 확인용).
+
+### 14-4. General 탭 자동 확인 체크박스 (출고 기본 OFF)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 환경설정 General 탭 | `Check for updates automatically` 체크박스가 **활성**(비활성·배지 아님)이고 **☐**(꺼짐) 가 기본 |
+| 2 | 체크하면 | `defaults read app.ultrakey.Ultrakey SUEnableAutomaticChecks` → `1`(UserDefaults 로 저장, Sparkle 이 실제로 읽는 값) |
+| 3 | 재실행 | 체크 상태가 ☑ 로 유지(Sparkle UserDefaults 영속) |
+| 4 | 다시 해제 | `defaults read ... SUEnableAutomaticChecks` → `0` |
+
+> ⚠️ **F-15 와의 관계**: 이 체크박스는 `SettingsStore`(settings.json)에 **저장하지 않는다** — 정본은
+> Sparkle 의 UserDefaults 이고, `settings.json` 에 이 키를 쓰지 않아 "설정을 안 건드리면 파일이 안 생긴다"
+> (F-15 §8)도 지켜진다.
+
+### 14-5. 자동 확인이 실제 48h 로 동작하는가 (배경 주기)
+
+서버가 실재할 때만 확인 가능한 항목이다(명세 §3.2). 자동 확인이 켜진 상태에서 배경 조회가
+`SUScheduledCheckInterval`(172800s) 만큼 떨어져 발생하는지 로그/Sparkle os_log 로 관찰한다.
+⚠️ 서버 미구성이므로 **이번 위임에서는 미검증 항목**이다 — `docs/dev/auto-update-server.md` 의 호스팅 절차 뒤에 수행할 것.
+
+### 14-6. 실기기 전체 왕복 (다운로드→서명 검증→설치→재시작)
+
+명세 §8 의 핵심(서명 검증 실패 시 설치 금지 · 신·구 서명 주체 일치 · 재시작 전 modifier 해제)은
+**실제 appcast + DMG + 개인키가 있어야** 확인된다. 서버 준비(`docs/dev/auto-update-server.md`) 후:
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 신버전 appcast + DMG 를 https 호스트에 배포, `SUFeedURL` 을 그 URL 로 교체해 빌드 | `Check for Updates…` 에 "신버전 있음 + 릴리스 노트" |
+| 2 | 정상 경로로 설치 | 설치 후 재시작. 신규 `.app` 이 이전과 **같은 서명 주체** — Accessibility 등 **권한 재승인 없이 유지** |
+| 3 | ⛔ 서명을 **위조**한 DMG(appcast edSignature 뒤섞기) | `"The update is improperly signed..."` 오류, **설치 거부**, 기존 `.app` 보존 |
+| 4 | 재시작 직전 눌린 modifier | 정리 로그(`will-relaunch` → `engine cleaned up before Sparkle update relaunch`) — stuck 없음 |
+| 5 | 오프라인 앱cast 파싱 실패 | 크래시 없이 다음 주기/오류만(§8) |
+
+> ⚠️ **14-6 전체는 실기기 미검증** — 서버가 없어 이번 위임에서 실행하지 못했다. 절차만 확정된 상태다.
