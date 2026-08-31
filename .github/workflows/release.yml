@@ -160,7 +160,12 @@ jobs:
             cp -R "${APP_PATH}" "${STAGING}/"
             ln -s /Applications "${STAGING}/Applications"
             rm -f "${DMG_PATH}"
-            hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"
+            # 직전 bundle_dmg.sh 가 띄운 디스크 이미지 마운트가 남아 있으면
+            # hdiutil create 가 Resource busy 로 실패한다 — 마운트를 먼저 분리하고,
+            # 잔여 디스크 이미지 헬퍼를 정리한 뒤 재시도한다.
+            hdiutil info | grep -q "$DMG_PATH" && hdiutil detach "$(hdiutil info | awk -v d="$DMG_PATH" '$0 ~ d {print $1; exit}')" 2>/dev/null || true
+            hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}" \
+              || { sleep 5; hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"; }
             echo "  ✅ 서명된 DMG 재생성: ${DMG_PATH}"
           fi
       - name: DMG 산출물 확인
