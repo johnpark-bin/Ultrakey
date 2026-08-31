@@ -100,8 +100,9 @@ jobs:
             SUBJECT_CN="$(openssl x509 -in /tmp/cert.pem -noout -subject -nameopt oneline | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
             if [ "$ISSUER_CN" = "$SUBJECT_CN" ]; then
               echo "::notice::자체 서명 인증서 감지(${SUBJECT_CN}) — 시스템 신뢰 등록"
-              security add-trusted-cert -d -r trustRoot /tmp/cert.pem \
-                || sudo security add-trusted-cert -d -r trustRoot /tmp/cert.pem
+              # -d(관리자 도메인)는 sudo 없이 실행하면 헤드리스 러너에서 인가 프롬프트를
+              # 못 띄워 영구 대기에 빠진다 — 러너는 비밀번호 없는 sudo 를 제공하므로 직접 쓴다.
+              sudo security add-trusted-cert -d -r trustRoot /tmp/cert.pem
             fi
           else
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
