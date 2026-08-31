@@ -2609,3 +2609,87 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 | 5 | 오프라인 앱cast 파싱 실패 | 크래시 없이 다음 주기/오류만(§8) |
 
 > ⚠️ **14-6 전체는 실기기 미검증** — 서버가 없어 이번 위임에서 실행하지 못했다. 절차만 확정된 상태다.
+
+## 15. F-12 라이선싱과 트라이얼 — 수동 검증 (이슈 #59)
+
+> ⭐ 명세 §7 결정 — 실제 Paddle 은 붙이지 않고 **no-op `LicenseProvider`(항상 라이선스
+> 활성)** 를 기본으로 한다. 그래서 자동화 가능한 검증( 상태 머신·오프라인 유예·시계
+> 조작 완화·기산점 계산)은 전부 `ultrakey-license` 의 단위 테스트로 이미 통과했고,
+> 아래는 그걸로 검증할 수 없는 **실기기 전용** 항목이다 — Keychain(`Security.framework`)
+> 저장 진짜 살아남는가, IOPlatformUUID 가 실제로 읽히는가, General 탭 UI 가 진짜
+> 그려지는가.
+
+### 15-1. 사전 준비
+
+- 서명된 `.app` 번들로 실행한다(`./scripts/build-signed.sh`). `tauri dev` 로는 부모
+  프로세스 권한 문제가 있어 General 탭이 온전히 동작하지 않을 수 있다.
+- `ULTRAKEY_LOG=debug` 로 실행해 라이선스 판정 로그(`license state evaluated`)를 본다.
+
+### 15-2. 체험 기산점이 Keychain 에 기록되는가(§3.5, §5-10)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 최초 실행(Keychain 에 항목 없음) | 로그에 `license state evaluated state=trial days_remaining=20` |
+| 2 | General 탭에서 라이선스 상태 확인 | "체험판 — N일 남음" 표시(no-op 활성이라 상태가 라이선스 활성이면 no-op 경로 정상 — 아래 15-3 참고) |
+| 3 | ⭐ Keychain 항목 존재 확인 | `security find-generic-password -s com.ultrakey.license.trial` — `trial_record` JSON 이 담겨 있다 |
+| 4 | **앱을 완전히 삭제(`~/Library/Application Support` 포함) 후 재설치** | 같은 기기에서 기산점이 초기화되지 않는다 — Keychain 에 살아 있음(§8-3). `security find-generic-password` 로 같은 `trial_started_at` 확인 |
+| 5 | `security delete-generic-password -s com.ultrakey.license.trial` 후 재실행 | 체험이 리셋된다(받아들이는 잔여 위험, §3.5) |
+
+> ⚠️ **no-op 경로 주의점**: 현재 빌드는 항상 라이선스 활성이므로 `evaluate_on_start` 가
+> Keychain 에 캐시가 없어도 체험 판정에 도달하지만, `NoopLicenseProvider` 를 주입해
+> 라이선스 활성이 우선한다(§3.2 "최우선"). 그래서 15-2 는 **Keychain 에 trial 항목이
+> 기록되는가**가 핵심이지, 화면에 "체험판"이 보이는가는 아니다 — 화면은 no-op 이라
+> 항상 라이선스 활성으로 표시될 수 있다. 체험 UI 배선을 눈으로 보려면 no-op 을 끄는
+> 진단 플래그(현재 없음)가 필요하다 — 그 전까지는 General 탭 상태 표시가
+> "License active" 로 그려지는지가 배선 검증이다.
+
+### 15-3. General 탭 라이선스 UI 배선(§4.2)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 서명된 앱 실행 → General 탭 | "License active" 표시 + "Licensed" 배지 + "이 기기 비활성화" 버튼 활성 |
+| 2 | "이 기기 비활성화" 클릭 | 확인 대화상자("이 기기를 비활성화할까요?")가 먼저 뜨고, `Deactivate` 를 눌러야만 실행(§5-13) |
+| 3 | 확인 후 | no-op: `Deactivated` → 라이선스 상태가 재평가됨(no-op 은 다시 활성으로) — 로그에 `license state evaluated state=licensed` |
+| 4 | 라이선스 키 입력란에 아무 키/빈 값 후 "Activate" | 빈 값이면 "Enter a license key first."; 키 있으면 no-op `activated` |
+
+### 15-4. IOPlatformUUID 가 실제로 읽히는가(§3.6, §8 실기기)
+
+| # | 조작 | 기대 결과 |
+| :--- | :--- | :--- |
+| 1 | 로그에 device_id 확인 | `activate`/`deactivate` 시 no-op 이 device_id 를 받는다. 활성화 성공 로그에 기기 슬롯 `0/3` |
+| 2 | (원본 대조 — 저장소 필수 검증 아님) `ioreg -rd1 -c IOPlatformExpertDevice` | `IOPlatformUUID` 값이 로그/Keychain 의 device_id 와 일치해야 한다 |
+
+> ⚠️ **IOPlatformUUID 는 부팅마다 바뀔 수 있다**(애플이 문서화하지 않은 동작). 이게
+> 재부팅 후에도 안정적인지는 이 위임에서 검증하지 못했다 — 하드웨어 교체 = 새 슬롯
+> 소모라는 §3.6 동작이 성립하려면 부팅 간 안정이 필요한데, `(미확정)` 이다.
+
+### 15-5. 이 절차로도 확인할 수 **없는** 것
+
+- **오프라인 유예(§3.4)가 실제 캐시에서 동작하는가** — no-op 은 항상 활성이라 유예
+  경계를 재현할 방법이 없다. 이는 `ultrakey-license::machine` 단위 테스트로 검증됐다.
+- **시계 조작 완화(§3.5/§3.6)가 실제 Keychain `last_seen_at` 으로 동작하는가** — 같은
+  이유. 단위 테스트로 검증됐다.
+- **`limit_reached`(3대) — 4번째 기기에서의 활성화 거부** — no-op 이 항상 `activated` 라
+  도달 불가. §8-6 은 no-op 하에서 구조적으로 성립이 불가능하며, Paddle 실연동
+  시점에 재검증한다(명세 §7).
+- **refunded/revoked 즉시 무효(§8-8)의 실제 서버 응답 경로** — 서버가 없어 도달 불가.
+  `ultrakey-license` 단위 테스트(`refunded_revalidation_clears_cache_and_invalidates`)로
+  검증됐다.
+
+### ✅ 통과 판정 요약
+
+| 항목 | 자동화 | 실기기 |
+| :--- | :--- | :--- |
+| 기산점 최초 기록 → 체험 중 | ✅ 단위 테스트 | ✅ 15-2 (Keychain 기록) |
+| 20일 경과 → 체험 만료 | ✅ 단위 테스트 | ⚠️ 키보드를 20일 돌릴 수 없어 미검증 |
+| 재설치에도 기산점 유지 | — | ✅ 15-2 #4 (실기기 전용) |
+| 유효키 활성화 → 라이선스 활성 + 캐시 저장 | ✅ 단위 테스트 | ⚠️ no-op 라 서버 검증 불가 |
+| 오프라인 유예 유지 | ✅ 단위 테스트 | (no-op) |
+| refunded/revoked 즉시 무효 | ✅ 단위 테스트 | (no-op) |
+| 무효 → 체험만료 재전이(체험중 복귀 금지) | ✅ 단위 테스트 | — |
+| 시계 과거 되돌려도 남은 일수 증가 금지 | ✅ 단위 테스트 | ⚠️ 실기기로 시계 조작 재현 어려움 |
+| 최소 식별자(검증 페이로드 필드 제한) | ✅ 구조 검증 | — |
+| 비활성화 확인 대화상자 | ✅ 로직 | ✅ 15-3 #2 |
+| IOPlatformUUID 취득 | — | ⚠️ 15-4 (로그로 확인) |
+| `limit_reached`·3대 제한 | ⛔ no-op 하 도달 불가 | Paddle 연동 시점에 재검증 |
+

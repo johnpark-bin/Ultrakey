@@ -105,6 +105,13 @@
     margin-left: 4px;
   }
 
+  /* ⭐ F-12 — 비활성화 확인의 위험 버튼. 되돌릴 수 없는 조작(§5-13)이라 accent
+     와 구분되는 붉은 강조를 준다. */
+  .danger {
+    background: color-mix(in srgb, red 22%, Canvas);
+    border: 1px solid color-mix(in srgb, red 60%, currentColor);
+  }
+
   .preview { font-weight: 600; font-size: 14px; min-width: 64px; }
 
   /* ③ 문장 중간 삽입 렌더러 — 라벨 문장 뒤에 체크박스 여럿이 한 줄로 이어진다.
@@ -894,6 +901,26 @@
       </div>
       <p class="hint why" id="menu-bar-icon-why"></p>
 
+      <hr />
+      <h2 class="group" id="general-license-heading"></h2>
+
+      <!-- ⭐ F-12 라이선스 UI(이슈 #59, `licensing-and-trial.md` §4.2 의도적 설계).
+           원본이 Paddle 별도 창에 위임한 것을 General 탭에 인라인으로 노출한다. -->
+      <div class="row">
+        <span id="license-status"></span>
+        <span class="badge" id="license-state-badge"></span>
+      </div>
+      <p class="hint" id="license-status-why"></p>
+
+      <div class="row">
+        <label>
+          <span id="license-key-label"></span>
+          <input type="text" id="license-key-input" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="license-activate-btn" class="accent"></button>
+      </div>
+      <p class="hint" id="license-activate-why"></p>
+
       <div class="row">
         <button id="remove-activation-btn" disabled></button>
         <span class="badge" id="remove-activation-badge"></span>
@@ -905,11 +932,6 @@
         <span class="badge" id="purchase-badge"></span>
       </div>
       <p class="hint why" id="purchase-why"></p>
-
-      <!-- ⭐ 이슈 #47 — License 섹션 헤딩(신규). remove_activation·purchase 두
-           행을 묶는다(계획 D1). `license.why` 키와 별개로 공존한다. -->
-      <hr />
-      <h2 class="group" id="general-license-heading"></h2>
 
       <!-- ⭐ F-15 §3.4 설정 export/import(이슈 #39 Phase 2). 파일 대화상자는
            Rust 쪽(`settings_export`/`settings_import` 커맨드)에서만 연다 — 이
@@ -1142,7 +1164,14 @@ if (!tauri || !tauri.core) {
     $("hide-menu-bar-icon-why").textContent = t("settings.general.hide_menu_bar_icon.why");
     $("menu-bar-icon-label").textContent = t("settings.general.menu_bar_icon");
     $("menu-bar-icon-why").textContent = t("settings.general.menu_bar_icon.why");
-    $("remove-activation-btn").textContent = t("settings.general.remove_activation");
+    // ⭐ F-12 라이선스 UI — §4.2 의 라벨 전부.
+    $("license-status-why").textContent = t("settings.general.license.status.hint");
+    $("license-key-label").textContent = t("settings.general.license.key");
+    $("license-activate-btn").textContent = t("settings.general.license.activate");
+    $("license-activate-why").textContent = t("settings.general.license.key.hint");
+    // ⭐ §4.2 의도적 재설계 — 원본의 `Remove Oldest Activation`(가장 오래된 활성화
+    // 해제)과 달리, 클론은 "이 기기 비활성화" 기기 단위 모델을 쓴다(§3.3.2 정정 노트).
+    $("remove-activation-btn").textContent = t("settings.general.license.deactivate");
     $("remove-activation-why").textContent = t("settings.general.license.why");
     $("purchase-btn").textContent = t("settings.general.purchase");
     $("purchase-why").textContent = t("settings.general.license.why");
@@ -1167,11 +1196,11 @@ if (!tauri || !tauri.core) {
     const badgeText = t("settings.badge.unimplemented");
     for (const id of [
       "menu-bar-icon-badge",
-      "remove-activation-badge",
       "purchase-badge",
       // ⭐ F-16 2단계(한/영·한자)는 §3.2 의 근거 3중으로 해소되어 활성 컨트롤로
       // 출하한다 — 더 이상 이 미구현 배지 루프에 속하지 않는다(D-K16).
       // (⭐ F-13 auto-update-badge 도 이 루프에서 빠졌다 — 활성 컨트롤이 됐다.)
+      // (⭐ F-12 license-state-badge 도 이 루프에서 빠졌다 — 활성 상태 표시가 됐다.)
     ]) {
       $(id).textContent = badgeText;
     }
@@ -1831,6 +1860,11 @@ if (!tauri || !tauri.core) {
 
   function hideConfirmOverlay() {
     pendingCopy = null;
+    pendingDeactivation = false;
+    // ⭐ F-12 — 비활성화 확인에 쓴 위험 버튼 스타일·라벨을 복사 확인 기본값으로
+    // 되돌린다(재사용하는 오버레이라 다음 사용을 위해 초기화한다).
+    $("confirm-continue").classList.remove("danger");
+    $("confirm-continue").textContent = t("preferences.keyboards.copy.confirmContinue");
     $("confirm-overlay").hidden = true;
   }
 
@@ -2012,6 +2046,14 @@ if (!tauri || !tauri.core) {
   });
   $("confirm-cancel").addEventListener("click", hideConfirmOverlay);
   $("confirm-continue").addEventListener("click", async () => {
+    // ⭐ F-12 — "이 기기 비활성화" 확인 흐름(§5-13): pendingDeactivation 이면
+    // 키보드 복사가 아니라 비활성화를 실행한다.
+    if (pendingDeactivation) {
+      pendingDeactivation = false;
+      hideConfirmOverlay();
+      await runDeactivation();
+      return;
+    }
     const copy = pendingCopy;
     hideConfirmOverlay();
     if (!copy) return; // 취소했거나 이미 다른 흐름이 오버레이를 닫은 경우
@@ -2371,6 +2413,48 @@ if (!tauri || !tauri.core) {
       : t("settings.general.about.settings_absent");
   }
 
+  // ⭐ F-12(이슈 #59) — General 탭 라이선스 상태 표시. 백엔드 `license_state` 가
+  // 준 `LicenseView` 로 상태 문자열·남은 일수·슬롯 현황을 그린다. `is_licensed`
+  // = true 일 때만 "이 기기 비활성화" 버튼을 활성화한다(§4.2 "비활성 상태에서는
+  // 회색 처리").
+  function renderLicense(license) {
+    const statusEl = $("license-status");
+    const badgeEl = $("license-state-badge");
+    badgeEl.textContent = "";
+
+    let label;
+    if (license.state === "licensed") {
+      label = t("settings.general.license.status.licensed");
+      if (license.activationsUsed != null) {
+        label = tf("settings.general.license.status.licensed.slots", [
+          String(license.activationsUsed),
+          String(license.activationsLimit),
+        ]);
+        badgeEl.textContent = t("settings.general.license.status.licensed.badge");
+      }
+    } else if (license.state === "trial" && license.daysRemaining != null) {
+      label = tf("settings.general.license.status.trial", [String(license.daysRemaining)]);
+    } else if (license.state === "trial_expired") {
+      label = t("settings.general.license.status.expired");
+    } else {
+      label = t("settings.general.license.status.invalid");
+    }
+    statusEl.textContent = label;
+
+    // "이 기기 비활성화" — 라이선스 활성일 때만 활성화(§4.2 회색 처리).
+    $("remove-activation-btn").disabled = !license.isLicensed;
+  }
+
+  async function refreshLicense() {
+    try {
+      const license = await invoke("license_state");
+      renderLicense(license);
+    } catch (err) {
+      // 라이선스 상태 조회 실패는 심각하지 않다 — 상태 배지만 "문제 있음"으로 두고
+      // 계속 쓴다. 사유는 로그에 맡긴다(Rust 쪽).
+    }
+  }
+
   function showNotice(text) {
     const el = $("notice");
     el.textContent = text;
@@ -2545,6 +2629,62 @@ if (!tauri || !tauri.core) {
     });
   });
 
+  // ⭐ F-12(이슈 #59) — 활성화·비활성화 버튼.
+  $("license-activate-btn").addEventListener("click", async () => {
+    const key = $("license-key-input").value.trim();
+    if (!key) {
+      $("license-status").textContent = t("settings.general.license.key.required");
+      return;
+    }
+    try {
+      const license = await invoke("license_activate", { licenseKey: key });
+      renderLicense(license);
+    } catch (err) {
+      // §5 실패 모드: 한도 초과·키 오류 등은 사유별 문구로 안내한다.
+      const reason = String(err);
+      const map = {
+        "limit_reached": "settings.general.license.fail.limit",
+        "invalid_key": "settings.general.license.fail.invalid",
+        "refunded": "settings.general.license.fail.refunded",
+        "network_error": "settings.general.license.fail.network",
+      };
+      $("license-status").textContent = map[reason]
+        ? t(map[reason]) : tf("settings.general.license.fail.generic", [reason]);
+    }
+  });
+
+  // §5-13 · §3.3.2 실측 노트 — "이 기기 비활성화" 는 되돌릴 수 없는 조작이므로
+  // 실행 전 확인 대화상자를 반드시 거친다. `confirm-overlay` 를 재사용해
+  // "확인해야만 요청이 전송"된다.
+  let pendingDeactivation = false;
+  $("remove-activation-btn").addEventListener("click", () => {
+    pendingDeactivation = true;
+    const title = t("settings.general.license.deactivate.title");
+    const body = t("settings.general.license.deactivate.body");
+    $("confirm-title").textContent = title;
+    $("confirm-body").textContent = body;
+    $("confirm-continue").textContent = t("settings.general.license.deactivate.continue");
+    $("confirm-continue").classList.add("danger");
+    $("confirm-overlay").hidden = false;
+    $("confirm-continue").focus();
+  });
+
+  async function runDeactivation() {
+    try {
+      const license = await invoke("license_deactivate");
+      renderLicense(license);
+    } catch (err) {
+      // §5-8 서버 다운 — 낙관적으로 풀지 않았다. 사유를 상태 줄에 보여준다.
+      const reason = String(err);
+      const map = {
+        "network_error": "settings.general.license.fail.deactivate.network",
+        "not_found": "settings.general.license.fail.deactivate.not_found",
+      };
+      $("license-status").textContent = map[reason]
+        ? t(map[reason]) : tf("settings.general.license.fail.generic", [reason]);
+    }
+  }
+
   // ⭐ A-3(D6, 이슈 #39, §3.1.2-a) — `settings_bootstrap` 을 (다시) 불러 화면
   // 전체를 그리는 단일 경로. `boot()` 의 최초 렌더와, 언어를 바꾼 뒤의 재렌더가
   // 이 함수 하나를 공유한다 — 문자열을 부분 갱신하는 별도 코드를 만들면 라벨을
@@ -2564,6 +2704,9 @@ if (!tauri || !tauri.core) {
     populateLanguageSelect(bootstrap.languages);
     renderState(bootstrap.state);
     renderGeneral(bootstrap.meta);
+    // ⭐ F-12 — 라이선스 상태는 별도 커맨드로 조회해 그린다(설정 부트스트랩 상태
+    // 에 포함하지 않는 이유: 라이선스는 설정이 아니라 Keychain 기반 실행 상태다).
+    refreshLicense();
     if (bootstrap.notice) {
       showNotice(tf(bootstrap.notice.messageKey, [bootstrap.notice.arg]));
     }

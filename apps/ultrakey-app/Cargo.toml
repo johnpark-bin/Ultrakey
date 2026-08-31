@@ -27,6 +27,8 @@ ultrakey-seek-session = { workspace = true }
 # 오케스트레이션(포커스 전환·AX 재조회/press)에 직접 쓰는 건 전부 **기존
 # 워크스페이스 의존**뿐이다 — 신규 크레이트 추가 없음(지시 §MUST NOT DO).
 ultrakey-click = { workspace = true }
+# ⭐ F-12(이슈 #59) — 상태 머신·오프라인 유예·LicenseProvider 추상 계약 순수 로직.
+ultrakey-license = { workspace = true }
 axuielement = { workspace = true }
 objc2-app-kit = { workspace = true }
 # ⭐ General 탭 언어 선택(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) —

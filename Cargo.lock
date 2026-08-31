@@ -4372,6 +4372,7 @@ dependencies = [
  "ultrakey-i18n",
  "ultrakey-korean",
  "ultrakey-layout",
+ "ultrakey-license",
  "ultrakey-overlay",
  "ultrakey-permissions",
  "ultrakey-platform",
@@ -4454,6 +4455,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ultrakey-license"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "ultrakey-overlay"
 version = "0.1.0"
 dependencies = [
@@ -4491,9 +4500,11 @@ dependencies = [
  "objc2-vision",
  "plist",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tracing",
  "ultrakey-core",
+ "ultrakey-license",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+[package]
+name = "ultrakey-license"
+description = "F-12 라이선싱과 트라이얼 — LicenseProvider 추상 계약 · 상태 머신 · 오프라인 유예 · 시계 조작 완화의 순수 로직. no-op 구현체는 항상 라이선스 활성."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+# 요청/응답 계약(§3.3)의 오류 표시용. 자체 타입으로 감싸지 않고 그대로 쓴다.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+### 순수 로직 테스트 전용 — 시계·provider 를 목으로 주입한다.
+
+[package.metadata.docs.rs]
+all-features = true

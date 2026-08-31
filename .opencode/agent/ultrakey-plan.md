@@ -1,7 +1,7 @@
 ---
 description: Ultrakey 의 중급(계획 초안) 역할. 요구 분석·아키텍처 결정·명세 확정·작업 분해의 초안을 잡는다. 코드를 쓰지 않는다. 확정은 상급(호출 세션)이 한다.
 mode: subagent
-model: alibaba-token-plan/deepseek-v4-flash-0731
+model: ollama-cloud/deepseek-v4-flash
 temperature: 0.2
 options:
   reasoningEffort: "high"
@@ -20,6 +20,10 @@ permission:
   ⭐ 모델 식별자 근거 (중급 재매핑):
     AGENTS.md §2 운용 원칙 — 분석·설계·계획 **초안**은 중급 모델이 잡는다.
     opencode 의 중급은 "Deepseek Flash 0731 (Effort High)" — 구현(ultrakey-implement)과 같은 모델이다.
+
+    ⭐ 모델 교체 (2026-08-31, alicloud 토큰 제한):
+    `alibaba-token-plan/deepseek-v4-flash-0731` → `ollama-cloud/deepseek-v4-flash`.
+    models.dev 조회로 `ollama-cloud` provider 아래 `deepseek-v4-flash` 가 실재함을 확인했다.
     ID 검증 근거는 `.opencode/agent/ultrakey-implement.md` 의 주석과 동일하고,
     Effort High 는 `options.reasoningEffort: "high"` 로 인코딩한다.
 

@@ -14,6 +14,7 @@ members = [
     "crates/ultrakey-overlay",
     "crates/ultrakey-seek-session",
     "crates/ultrakey-click",
+    "crates/ultrakey-license",
     "apps/ultrakey-app",
 ]
 
@@ -41,6 +42,7 @@ ultrakey-seek        = { path = "crates/ultrakey-seek" }
 ultrakey-overlay     = { path = "crates/ultrakey-overlay" }
 ultrakey-seek-session = { path = "crates/ultrakey-seek-session" }
 ultrakey-click       = { path = "crates/ultrakey-click" }
+ultrakey-license     = { path = "crates/ultrakey-license" }
 
 # 버전은 2026-08-30 crates.io 조회로 검증됨 (docs/spec/platform-constraints.md §6 과 일치)
 objc2                   = "0.6.4"
