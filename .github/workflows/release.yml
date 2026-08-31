@@ -118,6 +118,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: ultrakey-dmg
+          path: ./dmg-artifact
       - name: 릴리즈 노트 추출 + 드래프트 릴리즈 생성
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,7 +140,9 @@ jobs:
             fi
             printf '\n'
           } > notes.md
-          DMG_PATH="$(find . -path '*/bundle/*' -name '*.dmg' | head -n1)"
+          # 다운로드 아티팩트는 빌드 시점의 `target/.../bundle/` 경로를 보존하지 않는다 —
+          # `bundle/` 경로를 가정하지 않고 고정 디렉토리에서 `.dmg` 를 찾는다.
+          DMG_PATH="$(find ./dmg-artifact -name '*.dmg' | head -n1)"
           test -n "$DMG_PATH" || { echo "::error::아티팩트 다운로드 후 DMG 를 찾지 못했습니다"; exit 1; }
           gh release create "$TAG" \
             --draft \
