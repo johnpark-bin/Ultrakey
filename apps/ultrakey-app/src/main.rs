@@ -3912,6 +3912,21 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             // 조립한다(부재 = 기본값 규약은 `SeekSettings::from_store` 쪽이
             // 이미 반영했다).
             let click_settings = click_settings_from_seek(&seek_settings);
+            // ⭐ 이슈 #48 — UI 로케일(`catalog.locale()`)이 곧 OCR 검색 언어
+            // 기준이다. `catalog.load_full()` 은 항상 성공하고
+            // `ocr_recognition_languages()` 가 빈 목록(영어 단일)을 돌려주면
+            // 기존 동작과 동일하다.
+            let state_for_ocr = state.clone();
+            let ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
+                state_for_ocr
+                    .catalog
+                    .load_full()
+                    .locale()
+                    .ocr_recognition_languages()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            });
             let tx = seek::spawn(
                 handle.clone(),
                 shared,
@@ -3919,6 +3934,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                 seek_config,
                 click_settings,
                 stored_origin,
+                ocr_languages,
                 persist_origin,
             );
             *state.seek_tx.lock().unwrap() = Some(tx);

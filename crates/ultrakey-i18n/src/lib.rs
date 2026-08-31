@@ -110,6 +110,26 @@ impl Locale {
     pub fn all() -> &'static [Locale] {
         &[Locale::En, Locale::Ko, Locale::Zh, Locale::Es, Locale::Ja]
     }
+
+    /// F-02 Seek OCR(`VNRecognizeTextRequest.recognitionLanguages`) 언어 목록.
+    ///
+    /// ⭐ 이슈 #48 — UI 로케일이 곧 검색 언어 기준이다. ⚠️ **첫 원소가 어느
+    /// 모델을 쓸지를 가른다**(`docs/dev/seek-ocr-latency-spike.md` §3 실측:
+    /// `["en-US","ko-KR"]` 은 영어 단일과 결과가 동일 — 한글 0개). 그래서
+    /// 로케일 언어를 **항상 첫 원소**로 두고 `en-US` 를 둘째로 붙인다.
+    ///
+    /// `en` 은 **빈 목록**을 돌려준다 — Vision 기본값(영어)이 곧 미국 영어
+    /// 모델이라 `["en-US"]` 명시와 결과가 동일하고(실측), 기존 동작(미설정 =
+    /// Vision 기본)과 정확히 같게 유지해 회귀를 막는 것이 목적이다.
+    pub fn ocr_recognition_languages(self) -> &'static [&'static str] {
+        match self {
+            Locale::En => &[],
+            Locale::Ko => &["ko-KR", "en-US"],
+            Locale::Zh => &["zh-Hans", "en-US"],
+            Locale::Es => &["es-ES", "en-US"],
+            Locale::Ja => &["ja-JP", "en-US"],
+        }
+    }
 }
 
 /// en 카탈로그 원본. 컴파일 타임에 임베드된다.
@@ -601,5 +621,90 @@ mod tests {
             .values()
             .any(|v| v.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)));
         assert!(has_korean_value, "ko entries() 에 한국어 값이 하나도 없다");
+    }
+
+    /// ⭐ 이슈 #48 — `Locale::Ko` 의 OCR 언어 목록은 `["ko-KR", "en-US"]`
+    /// **순서 그대로**여야 한다. 실측 제약(`docs/dev/seek-ocr-latency-spike.md`
+    /// §3): `["en-US","ko-KR"]` 은 영어 모델을 골라 한글 인식이 영어 단일과
+    /// 결과가 동일해진다(한글 0개) — ko-KR 이 반드시 첫 원소다.
+    #[test]
+    fn ocr_recognition_languages_ko_keeps_ko_kr_first() {
+        assert_eq!(
+            Locale::Ko.ocr_recognition_languages(),
+            &["ko-KR", "en-US"],
+            "ko 의 recognitionLanguages 순서가 어긋났다 — ko-KR 이 첫 원소여야 한글 인식이 된다(이슈 #48 실측 제약)"
+        );
+    }
+
+    /// ⭐ 이슈 #48 — ko 외 로케일도 같은 규칙: 로케일 언어가 **항상 첫 원소**다.
+    /// (`zh-Hans` 간체 · `es-ES` · `ja-JP` — 모두 en 폴백과 짝을 이룬다.)
+    #[test]
+    fn ocr_recognition_languages_other_locales_put_locale_first() {
+        assert_eq!(
+            Locale::Zh.ocr_recognition_languages(),
+            &["zh-Hans", "en-US"],
+            "zh 의 recognitionLanguages 가 어긋났다"
+        );
+        assert_eq!(
+            Locale::Es.ocr_recognition_languages(),
+            &["es-ES", "en-US"],
+            "es 의 recognitionLanguages 가 어긋났다"
+        );
+        assert_eq!(
+            Locale::Ja.ocr_recognition_languages(),
+            &["ja-JP", "en-US"],
+            "ja 의 recognitionLanguages 가 어긋났다"
+        );
+    }
+
+    /// ⭐ 이슈 #48(회귀 방지) — `En` 은 **빈 목록**을 돌려줘야 한다. Vision
+    /// 기본값(영어)이 곧 미국 영어 모델이라 `["en-US"]` 명시와 결과가 동일하고
+    /// (실측), 미설정 = Vision 기본 동작을 그대로 유지한다.
+    #[test]
+    fn en_ocr_recognition_languages_is_empty() {
+        assert!(
+            Locale::En.ocr_recognition_languages().is_empty(),
+            "en 은 빈 목록이어야 한다 — Vision 기본값(영어)을 그대로 쓰는 기존 동작을 유지한다(이슈 #48)"
+        );
+    }
+
+    /// ⭐ 이슈 #48 — 영어 폴백 `en-US` 가 **정확히 2번째 원소**로 들어 있다
+    /// (`En` 제외 4개 로케일 전부). 첫 원소가 로케일 언어인 것과 함께 이 목록의
+    /// 고정된 규약이다.
+    #[test]
+    fn en_us_is_second_in_every_non_english_locale() {
+        let non_english = [Locale::Ko, Locale::Zh, Locale::Es, Locale::Ja];
+        for locale in non_english {
+            let langs = locale.ocr_recognition_languages();
+            assert_eq!(
+                langs.len(),
+                2,
+                "{} 의 recognitionLanguages 길이가 2 가 아니다: {langs:?}",
+                locale.code()
+            );
+            assert_eq!(
+                langs.get(1),
+                Some(&"en-US"),
+                "{} 의 recognitionLanguages 에 en-US 가 정확히 2번째 원소로 없다: {langs:?}",
+                locale.code()
+            );
+        }
+    }
+
+    /// ⭐ 이슈 #48 — 각 로케일의 OCR 언어 목록 원소는 서로 **중복이 없어야**
+    /// 한다. 같은 언어가 두 번 들어가면 Vision 이 같은 모델을 중복 요청해
+    /// 지연만 늘어난다(스파이크 §3 의 대가와 직결).
+    #[test]
+    fn ocr_recognition_languages_have_no_duplicates() {
+        for locale in Locale::all() {
+            let langs = locale.ocr_recognition_languages();
+            let unique: BTreeSet<_> = langs.iter().copied().collect();
+            assert_eq!(
+                unique.len(),
+                langs.len(),
+                "{} 의 recognitionLanguages 목록에 중복이 있다: {langs:?}",
+                locale.code()
+            );
+        }
     }
 }

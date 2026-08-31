@@ -170,6 +170,10 @@ struct WorkerEnv {
     /// 저장된 검색 바 위치를 읽는다(F-15 "부재 = 기본값"). `None` 이면
     /// [`default_search_bar_origin`] 이 기본 위치를 정한다.
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
+    /// ⭐ 이슈 #48 — 세션을 열 때마다 현재 UI 로케일에서 계산한
+    /// `recognitionLanguages` 목록을 읽는다(메인 스레드의 `catalog` 를 캡처한
+    /// 클로저 — `stored_origin` 과 같은 경계).
+    ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
 }
 
 /// F-01 세션 컨트롤러 — 워커 스레드가 **단독 소유**한다(잠금 없음).
@@ -253,7 +257,7 @@ impl SeekController {
                     let _ = self.renderer.show();
 
                     self.generation += 1;
-                    spawn_detection(self.generation, env.tx.clone());
+                    spawn_detection(self.generation, env.tx.clone(), (env.ocr_languages)());
 
                     if env.trace {
                         let elapsed_ms = self
@@ -309,19 +313,26 @@ impl SeekController {
 }
 
 /// ⛔ 워커 스레드 자신이 검출을 돌리면 안 된다(모듈 문서) — 별도 스레드를 띄운다.
-fn spawn_detection(generation: u64, tx: Sender<SeekSignal>) {
+fn spawn_detection(
+    generation: u64,
+    tx: Sender<SeekSignal>,
+    recognition_languages: Vec<String>,
+) {
     let spawned = thread::Builder::new()
         .name("ultrakey-seek-detect".into())
         .spawn(move || {
             let started = Instant::now();
-            // ⭐ `Seek using macOS accessibility`(F-02 설정)이 아직 이 위임의 범위에
-            // 없다 — 저장 키도 UI 도 없다. 그래서 실측 출고 기본값(꺼짐)을 그대로
-            // 코드로 고정한다. 그 설정이 들어오면 이 자리에 `SeekConfig`/전용 설정을
-            // 통해 값을 흘려보내야 한다.
-            let params = DetectionParams {
+            // ⭐ 이슈 #48 — `general.language`(UI 로케일)에서 매핑한
+            // `recognitionLanguages` 목록이 유입된다. 빈 Vec 이면 Vision 기본값
+            // (영어)을 그대로 쓴다 — 로케일 미설정/영어일 때 기존 동작과 동일하다.
+            // ⭐ `Seek using macOS accessibility`(F-02 설정)은 아직 이 위임의 범위에
+            // 없다 — 그 설정이 들어오면 이 자리에 `SeekConfig`/전용 설정을 통해
+            // 값을 흘려보내야 한다(`use_accessibility: false` 는 출고 기본값 고정).
+            let mut params = DetectionParams {
                 use_accessibility: false,
                 ..Default::default()
             };
+            params.recognition.languages = recognition_languages;
 
             let tx_for_display = tx.clone();
             let outcome = detect_candidates(&params, move |result| {
@@ -484,6 +495,9 @@ fn ascii_fallback(keycode: KeyCode, flags: EventFlags) -> Option<char> {
 /// `stored_origin` 은 저장된 검색 바 위치를 읽고, `persist_origin` 은 사용자가
 /// 검색 바를 끌어 옮겼을 때 저장한다(둘 다 `AppState.store` 를 캡처한 클로저 —
 /// 이 파일은 `AppState` 를 모른다, `overlay.rs`/`overlay_demo.rs` 와 같은 경계).
+/// `ocr_languages` 는 세션을 열 때마다 현재 UI 로케일(`general.language`)에서
+/// 계산한 `recognitionLanguages` 목록을 읽는다(`AppState.catalog` 캡처 — 이슈 #48).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     app: tauri::AppHandle,
     shared: Arc<SharedState>,
@@ -491,6 +505,7 @@ pub fn spawn(
     initial_config: SeekConfig,
     initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
+    ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) -> Sender<SeekSignal> {
     let (tx, rx) = unbounded::<SeekSignal>();
@@ -510,6 +525,7 @@ pub fn spawn(
                 initial_config,
                 initial_click_settings,
                 stored_origin,
+                ocr_languages,
                 persist_origin,
             );
         });
@@ -530,6 +546,7 @@ fn run_worker(
     initial_config: SeekConfig,
     initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
+    ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) {
     let trace = std::env::var_os("ULTRAKEY_SEEK_TRACE").is_some();
@@ -554,6 +571,7 @@ fn run_worker(
         tx,
         trace,
         stored_origin,
+        ocr_languages,
     };
     let mut controller = SeekController::new(initial_config, renderer, executor);
 
