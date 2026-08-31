@@ -99,7 +99,7 @@ jobs:
             ISSUER_CN="$(openssl x509 -in /tmp/cert.pem -noout -issuer | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
             SUBJECT_CN="$(openssl x509 -in /tmp/cert.pem -noout -subject -nameopt oneline | sed -E 's/.*CN ?= ?([^,]+).*/\1/')"
             if [ "$ISSUER_CN" = "$SUBJECT_CN" ]; then
-              echo "::notice::자체 서명 인증서 감지($(SUBJECT_CN)) — 시스템 신뢰 등록"
+              echo "::notice::자체 서명 인증서 감지(${SUBJECT_CN}) — 시스템 신뢰 등록"
               security add-trusted-cert -d -r trustRoot /tmp/cert.pem \
                 || sudo security add-trusted-cert -d -r trustRoot /tmp/cert.pem
             fi
