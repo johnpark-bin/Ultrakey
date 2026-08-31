@@ -27,6 +27,7 @@ use crate::keycode::SourceKey;
 use crate::settings::keys as settings_keys;
 
 pub mod destinations;
+pub mod inherit;
 pub mod usage;
 pub use usage::Evidence;
 

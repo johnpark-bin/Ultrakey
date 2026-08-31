@@ -52,7 +52,9 @@ use ultrakey_core::flags::EventFlags;
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
 use ultrakey_core::keycode::{KeyCode, SourceKey};
 use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
-use ultrakey_core::perdevice::{DeviceId, FKey, ManagedLedger};
+use ultrakey_core::perdevice::{
+    inherit, DeviceId, FKey, KeyRemapRow, ManagedLedger, PerDeviceSettings,
+};
 use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent};
@@ -1932,6 +1934,128 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
     ))
 }
 
+/// `settings_copy_common_to_device` 의 파라미터 검증만 뽑아낸 순수 함수(테스트
+/// 대상) — 커맨드 본체가 `State` 를 받아 직접 호출하기 어렵기 때문에
+/// `validate_per_device_key` 와 같은 관례를 따른다(그것도 순수 함수로 뽑아 인라인
+/// 테스트한다).
+///
+/// 거부 조건(계획 §5-(b)): ① `device == "all"`(공통 계층 위에는 복사 원천이 없다)
+/// ② `DeviceId::parse` 실패 ③ `feature` 가 `keyRemap`/`functionKeys` 화이트리스트 밖.
+fn validate_copy_common_to_device_args(device: &str, feature: &str) -> Result<(), String> {
+    if device == keys::PER_DEVICE_COMMON_SCOPE {
+        return Err(format!(
+            "device {device} is the common scope; copy targets a specific device"
+        ));
+    }
+    DeviceId::parse(device).ok_or_else(|| format!("unknown device identifier: {device}"))?;
+    if feature != "keyRemap" && feature != "functionKeys" {
+        return Err(format!("unknown feature: {feature}"));
+    }
+    Ok(())
+}
+
+/// ⭐ 이슈 #46 — "공통 설정 복사" 배치 커맨드. 공통(`For all devices`) 계층의
+/// 값을 선택된 디바이스 계층으로 물질화한다(복사 = 독립 스냅샷 — 계획 D3).
+///
+/// 순서(계획 §5-(b)): 1) 파라미터 화이트리스트 검증 2) store 락 1회 — `PerDevice
+/// Settings` 로 복사 계획 계산(`perdevice::inherit`, 소유 타입으로 추출해 borrow
+/// 종료 — 계획 계산과 쓰기를 **같은 락 안**에서 묶어 락을 한 번만 잡는다) 3) 같은
+/// 락 안에서 쓰기(기능 1 = `keyRemap.rows` 1회, 기능 2 = 계획 수만큼(≤ 12) f-키
+/// 쓰기) 4) 락 해제 → `reconfigure_engine` → `build_settings_state`.
+///
+/// **계획이 비어 있으면(복사할 것이 없음) 아무 키도 쓰지 않고** 현재 상태를 그대로
+/// 돌려준다(에러 아님) — 프런트가 활성 조건으로 막지만 백엔드도 멱등·안전해야
+/// 한다. 쓰기 실패 관용(D-B)은 `settings_set_per_device` 와 같다 — 실패해도
+/// 메모리는 이미 갱신돼 엔진 반영·상태 반환이 그대로 진행되고 `save_error` 만
+/// 실린다.
+#[tauri::command]
+fn settings_copy_common_to_device(
+    state: State<'_, Arc<AppState>>,
+    device: String,
+    feature: String,
+) -> Result<SettingsState, String> {
+    validate_copy_common_to_device_args(&device, &feature)?;
+
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
+
+    let mut store = state.store.lock().map_err(|e| e.to_string())?;
+
+    // 복사 계획 계산 — `settings` 의 store borrow 는 이 블록 스코프 끝에서 종료되어
+    // 아래 쓰기 루프(`&mut store`)와 충돌하지 않는다.
+    let plan_remap: Option<Vec<KeyRemapRow>>;
+    let plan_fnkeys: Vec<(FKey, String)>;
+    {
+        let settings = PerDeviceSettings::new(store.values());
+        match feature.as_str() {
+            "keyRemap" => {
+                plan_remap = inherit::plan_key_remap_copy(&settings);
+                plan_fnkeys = Vec::new();
+            }
+            "functionKeys" => {
+                plan_remap = None;
+                plan_fnkeys = inherit::plan_function_keys_copy(&settings);
+            }
+            _ => {
+                unreachable!("validate_copy_common_to_device_args 가 이미 화이트리스트로 거부했다")
+            }
+        }
+    }
+
+    // 계획이 비어 있으면(복사할 것이 없음) 아무 키도 쓰지 않는다. 락을 먼저 놓아야
+    // `current_settings_state` 의 재락이 데드락하지 않는다(std::sync::Mutex 는
+    // 재진입 불가).
+    let has_plan = plan_remap.is_some() || !plan_fnkeys.is_empty();
+    if !has_plan {
+        drop(store);
+        return current_settings_state(&state);
+    }
+
+    let save_error = if let Some(rows) = &plan_remap {
+        let key = keys::per_device_key_remap_rows(&device);
+        match store.set(&key, rows) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "failed to save setting");
+                Some(e.to_string())
+            }
+        }
+    } else {
+        let mut save_error = None;
+        for (f, id) in &plan_fnkeys {
+            let key = keys::per_device_function_key(&device, *f);
+            if let Err(e) = store.set(&key, id) {
+                tracing::error!(key = %key, error = %e, "failed to save setting");
+                save_error = Some(e.to_string());
+            }
+        }
+        save_error
+    };
+    drop(store);
+
+    reconfigure_engine(
+        &state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &seek_snapshot,
+        false,
+    )?;
+
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &seek_snapshot,
+        &store,
+        save_error,
+        None,
+    ))
+}
+
 /// F-17 §3.5.1 — `시스템 설정 열기` 버튼.
 ///
 /// ⭐ 이슈 #31 ③(a) — **Function Keys 패널로 바로 들어간다.** 예전 URL
@@ -3443,6 +3567,7 @@ fn main() {
             settings_bootstrap,
             settings_set,
             settings_unset,
+            settings_copy_common_to_device,
             settings_set_tab,
             settings_resolve_conflict,
             general_set_launch_on_login,
@@ -5277,6 +5402,57 @@ mod tests {
             &serde_json::json!([{"from": "CapsLock", "to": "F18"}])
         )
         .is_ok());
+    }
+
+    // ⭐ 이슈 #46 — settings_copy_common_to_device 파라미터 검증(계획 §6.2). 커맨드
+    // 본체가 State 를 받아 직접 호출하기 어려워, 검증 판정을 순수 함수
+    // `validate_copy_common_to_device_args` 로 뽑아 `validate_per_device_key` 와
+    // 같은 관례대로 인라인 테스트한다.
+    #[test]
+    fn settings_copy_common_refuses_device_all() {
+        assert!(
+            validate_copy_common_to_device_args(keys::PER_DEVICE_COMMON_SCOPE, "keyRemap").is_err(),
+            "공통 계층('all')에는 복사 원천이 없다 — 거부해야 한다"
+        );
+        assert!(
+            validate_copy_common_to_device_args("all", "functionKeys").is_err(),
+            "공통 계층('all')으로의 복사는 방향이 성립하지 않는다 — 거부해야 한다"
+        );
+    }
+
+    #[test]
+    fn settings_copy_common_refuses_bad_device_and_feature() {
+        // DeviceId::parse 실패 — 콜론 구분자·16진 검증을 통과하지 못하는 스코프.
+        assert!(
+            validate_copy_common_to_device_args("notADevice", "keyRemap").is_err(),
+            "디바이스 id 파싱 실패는 거부해야 한다"
+        );
+        // 알 수 없는 feature — 화이트리스트 {"keyRemap","functionKeys"} 밖.
+        assert!(
+            validate_copy_common_to_device_args("5ac:24f", "keyRemap.rows").is_err(),
+            "키 모양('keyRemap.rows')은 feature 값이 아니다 — 거부해야 한다"
+        );
+        assert!(
+            validate_copy_common_to_device_args("5ac:24f", "all").is_err(),
+            "feature 화이트리스트 밖 값은 거부해야 한다"
+        );
+    }
+
+    #[test]
+    fn settings_copy_common_accepts_valid_device_and_feature() {
+        assert!(validate_copy_common_to_device_args("5ac:24f", "keyRemap").is_ok());
+        assert!(validate_copy_common_to_device_args("5ac:24f", "functionKeys").is_ok());
+    }
+
+    // ⭐ 이슈 #46 — 커맨드가 generate_handler! 등록 목록에 존재한다(§6.2 — 정적
+    // 배선 테스트의 main.rs 쪽 1줄 확인).
+    #[test]
+    fn settings_copy_common_to_device_is_registered_in_generate_handler() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"));
+        assert!(
+            source.contains("settings_copy_common_to_device,"),
+            "generate_handler! 등록 목록에 settings_copy_common_to_device 가 없다"
+        );
     }
 
     // F-17 — collect_per_device_values() 는 `perDevice.` 접두사 키만 원본 JSON
