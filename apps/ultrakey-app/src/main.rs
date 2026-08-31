@@ -80,6 +80,8 @@ use ultrakey_seek_session::{ClickSettings, SeekSettings, SeekShortcut};
 /// 조회할 때도 같은 문자열을 쓸 수 있어 별도 매핑표가 필요 없다).
 /// ⭐ F-03 Seek 오버레이 (이슈 #34) — 창 생성·네이티브 설정·증분 수신.
 mod click_executor;
+/// ⭐ F-12 — 라이선스 배선(`LicenseController`) + General 탭 UI 커맨드.
+mod license;
 mod overlay;
 /// ⭐ F-03 실기기 검증 하네스 (이슈 #34). `ULTRAKEY_OVERLAY_DEMO` 가 없으면
 /// 아무것도 하지 않는다. F-01(세션 상태 머신)이 들어오면 지워도 된다.
@@ -1678,6 +1680,10 @@ struct AppState {
     /// [`refresh_auto_update_checks`] 가 부팅·토글 시점에 동기화하는 미러다.
     /// `.app` 번들 밖(`tauri dev`)에서는 항상 `false`.
     auto_update_checks: ArcSwap<bool>,
+    // ── F-12 라이선싱(이슈 #59) ────────────────────────────────────────────
+    /// 라이선스 상태 판정·활성화·비활성화 컨트롤러. no-op provider(항상 활성) 가
+    /// 기본이고, General 탭 UI 의 백엔드다.
+    license_controller: Arc<license::LicenseController>,
 }
 
 impl AppState {
@@ -2789,6 +2795,97 @@ fn eventviewer_clear(state: State<'_, Arc<AppState>>) {
     }
 }
 
+// ============================================================================
+// F-12 라이선싱 — General 탭 UI 백엔드(이슈 #59).
+// `docs/spec/licensing-and-trial.md` §4.2 의 라이선스 UI(상태 표시·키 입력·
+// 활성화·"이 기기 비활성화")를 노출한다. 판정은 `license::LicenseController` 가
+// 담당하고, 이 커맨드들은 상태를 직렬화해 WebView 에 전달한다.
+// ============================================================================
+
+/// General 탭 "라이선스 상태 표시" 행이 그릴 뷰(명세 §4.2 + §8).
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LicenseView {
+    /// 상태 머신 값(체험 중/체험 만료/라이선스 활성/무효).
+    state: String,
+    /// `state == trial` 일 때의 남은 일수. else `None`.
+    days_remaining: Option<i64>,
+    /// 활성화 슬롯 현황(라이선스 활성 시에만). else `None`.
+    activations_used: Option<u32>,
+    activations_limit: Option<u32>,
+    /// 라이선스가 활성 상태인지 — "이 기기 비활성화" 버튼 활성화 판단.
+    is_licensed: bool,
+}
+
+fn license_view(res: &ultrakey_license::EvaluateResult) -> LicenseView {
+    let state_str = res.state.as_log_str().to_string();
+    let days = res.trial.and_then(|t| t.days_remaining);
+    let (used, limit) = match &res.activations {
+        Some(a) => (Some(a.used), Some(a.limit)),
+        None => (None, None),
+    };
+    LicenseView {
+        state: state_str,
+        days_remaining: days,
+        activations_used: used,
+        activations_limit: limit,
+        is_licensed: res.state == ultrakey_license::LicenseState::Licensed,
+    }
+}
+
+/// 실행 시점 라이선스 상태 조회 — General 탭 부팅·재렌더가 부른다.
+#[tauri::command]
+fn license_state(state: State<'_, Arc<AppState>>) -> LicenseView {
+    let res = state.license_controller.evaluate();
+    license_view(&res)
+}
+
+/// 사용자가 키를 입력하고 "활성화"를 눌렀을 때(§3.3.1).
+///
+/// no-op provider 에서는 항상 `activated`(3/3 과 무관하게) 로 응답한다.
+#[tauri::command]
+fn license_activate(
+    state: State<'_, Arc<AppState>>,
+    license_key: String,
+) -> Result<LicenseView, String> {
+    let outcome = state.license_controller.activate_key(license_key);
+    // 실패(키 오류·한도·네트워크)는 사유 문자열로, 성공은 갱신된 상태로 응답.
+    match outcome {
+        ultrakey_license::ActivationOutcome::Activated {
+            activations_used,
+            activations_limit,
+        } => {
+            let res = state.license_controller.evaluate();
+            tracing::info!(activations_used, activations_limit, "activation ok");
+            Ok(license_view(&res))
+        }
+        ultrakey_license::ActivationOutcome::InvalidKey => Err("invalid_key".to_string()),
+        ultrakey_license::ActivationOutcome::Refunded => Err("refunded".to_string()),
+        ultrakey_license::ActivationOutcome::LimitReached { .. } => Err("limit_reached".to_string()),
+        ultrakey_license::ActivationOutcome::NetworkError => Err("network_error".to_string()),
+    }
+}
+
+/// "이 기기 비활성화"(§3.3.2). 성공만이 슬롯 반납의 진실이다 — 실패는 낙관적으로
+/// 처리하지 않고 사유를 돌려준다(§5-8).
+#[tauri::command]
+fn license_deactivate(state: State<'_, Arc<AppState>>) -> Result<LicenseView, String> {
+    match state.license_controller.deactivate_device() {
+        ultrakey_license::DeactivationOutcome::Deactivated { .. } => {
+            let res = state.license_controller.evaluate();
+            tracing::info!("license deactivated; evaluating state");
+            Ok(license_view(&res))
+        }
+        ultrakey_license::DeactivationOutcome::NotFound => {
+            Err("not_found".to_string())
+        }
+        ultrakey_license::DeactivationOutcome::NetworkError => {
+            Err("network_error".to_string())
+        }
+    }
+}
+
+
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
 /// 재사용한다(배타 대상이 hyper 슬롯일 수 있으므로).
 ///
@@ -3763,6 +3860,8 @@ fn main() {
         window_size_debouncer: Mutex::new(None),
         event_viewer_buffer: Mutex::new(VecDeque::new()),
         auto_update_checks: ArcSwap::new(Arc::new(false)),
+        // F-12 — 부팅 시 Keychain 어댑터 + no-op provider 로 상태 머신을 조립한다.
+        license_controller: license::LicenseController::boot(),
     });
 
     let app_builder = tauri::Builder::default()
@@ -3808,6 +3907,10 @@ fn main() {
             open_event_viewer,
             eventviewer_poll,
             eventviewer_clear,
+            // ── F-12 라이선싱(이슈 #59) — General 탭 UI 백엔드 ──────────────
+            license_state,
+            license_activate,
+            license_deactivate,
             overlay_spike::overlay_spike_ack,
             overlay_spike::overlay_spike_ready,
             overlay::overlay_surface_ready,

@@ -9,9 +9,15 @@ repository.workspace = true
 
 [dependencies]
 ultrakey-core = { workspace = true }
+# ⭐ F-12 — Keychain 어댑터가 `ultrakey-license` 의 `TrialStore`/`CacheStore`
+# 트레이트를 구현한다(순수 로직 크레이트 → 이 크레이트 방향 의존).
+ultrakey-license = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
+# ⭐ F-12 — Keychain 어댑터가 TrialRecord/LicenseCache 를 JSON 직렬화해
+# kSecValueData 로 저장한다.
+serde_json = { workspace = true }
 # F-10 로그인 항목(login_item.rs) macOS 12 폴백이 쓰는 LaunchAgent plist 직렬화.
 # 순수 Rust 라 macOS 여부와 무관하게 빌드·테스트된다 — 타깃별 의존성 절이 아니라
 # 여기(공통 [dependencies])에 둔다.

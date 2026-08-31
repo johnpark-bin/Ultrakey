@@ -327,3 +327,55 @@ pub(crate) enum OpaqueUCKeyboardLayout {}
 pub(crate) const K_UC_KEY_ACTION_DOWN: u16 = 0;
 /// 근거: `UnicodeUtilities.h` — `kUCKeyTranslateNoDeadKeysMask = 1 << 0`.
 pub(crate) const K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK: u32 = 1;
+
+// ============================================================================
+// Security.framework — Keychain (F-12, `licensing-and-trial.md` §3.5)
+// ============================================================================
+//
+// 근거: `Security.framework/Versions/A/Headers/SecItem.h`
+//   OSStatus SecItemCopyMatching(CFDictionaryRef query, CFTypeRef * __nullable
+//       CF_RETURNS_RETAINED result);
+//   OSStatus SecItemAdd(CFDictionaryRef attributes, CFTypeRef * __nullable
+//       CF_RETURNS_RETAINED result);
+//   OSStatus SecItemUpdate(CFDictionaryRef query, CFDictionaryRef
+//       attributesToUpdate);
+//   OSStatus SecItemDelete(CFDictionaryRef query);
+//   OSStatus == int32_t (SecBase.h: `typedef int32_t OSStatus;`).
+//
+// 트라이얼 기산점·라이선스 캐시는 Keychain 의 **generic password** 로 저장한다
+// (§3.5). kSecAttrSynchronizable 를 명시적으로 꺼 iCloud 동기화로 기산점이 여러
+// 기기로 퍼지지 않게 한다(§3.5 "(3) kSecAttrSynchronizable 을 명시적으로 끈다").
+//
+// ⚠️ dict 상수를 담으려면 CFMutableDictionary 를 만들어 넘긴다 — CF·CFMutable 간
+// toll-free bridged 라 `*const CFDictionary` 로 선언한다.
+#[link(name = "Security", kind = "framework")]
+extern "C" {
+    pub(crate) fn SecItemCopyMatching(
+        query: *const CFDictionary,
+        result: *mut *mut c_void,
+    ) -> i32;
+
+    pub(crate) fn SecItemAdd(
+        attributes: *const CFDictionary,
+        result: *mut *mut c_void,
+    ) -> i32;
+
+    pub(crate) fn SecItemUpdate(
+        query: *const CFDictionary,
+        attributes_to_update: *const CFDictionary,
+    ) -> i32;
+
+    pub(crate) fn SecItemDelete(query: *const CFDictionary) -> i32;
+
+    // Security.framework — Keychain 속성 상수(데이터 심볼). 근거: `SecItem.h`.
+    // 각 상수는 데이터 심볼로 노출되어 `Option<&'static CFString>` 로 접근한다.
+    pub(crate) static kSecClass: Option<&'static CFString>;
+    pub(crate) static kSecClassGenericPassword: Option<&'static CFString>;
+    pub(crate) static kSecAttrService: Option<&'static CFString>;
+    pub(crate) static kSecAttrAccount: Option<&'static CFString>;
+    pub(crate) static kSecAttrAccessible: Option<&'static CFString>;
+    pub(crate) static kSecAttrAccessibleAfterFirstUnlock: Option<&'static CFString>;
+    pub(crate) static kSecAttrSynchronizable: Option<&'static CFString>;
+    pub(crate) static kSecValueData: Option<&'static CFString>;
+    pub(crate) static kSecReturnData: Option<&'static CFString>;
+}
