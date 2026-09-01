@@ -505,10 +505,6 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
     }
 }
 
-/// `Korean` 탭 5개 항목 — F-16(`docs/spec/korean-input.md` §4.2). `presets_view` 와
-/// 같은 형식. `han_eng_switches_input_source`/`hanja_key_converts_hanja` 는 2단계에서
-/// 활성화됐다(D-K14) — §3.2 의 키코드가 근거 3중으로 해소되어 UI 도 규칙 평가도
-/// 정상 동작한다.
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KoreanView {
@@ -517,15 +513,34 @@ struct KoreanView {
     hanja_key_converts_hanja: bool,
     won_key_types_backtick: bool,
     disable_in_remote_desktop: bool,
+    /// ⭐ K9(이슈 #73, D-K18) — `modifier 키와 함께 누른 문자 키를 영어 소문자로 입력`.
+    modifier_key_types_lowercase: bool,
+    /// ⭐ K5(이슈 #73, D-K17) — 원격 데스크톱 제외 목록. `None` = 오버라이드 없음
+    /// (기본 12종을 쓴다 — UI 는 기본 목록을 보여준다). `Some(list)` = 사용자가
+    /// 편집한 목록(빈 배열 포함 — "아무 앱도 제외하지 않음"의 명시적 의도).
+    excluded_bundle_ids: Option<Vec<String>>,
+    /// ⭐ K5 — 앱에 내장된 기본 목록(`ultrakey-korean::apps::default_excluded_bundle_ids`).
+    /// 오버라이드 부재 시 UI 가 이 값을 편집기에 채워 넣는다.
+    default_excluded_bundle_ids: Vec<String>,
 }
 
-fn korean_view(k: &KoreanSettings) -> KoreanView {
+fn korean_view(k: &KoreanSettings, store: &SettingsStore) -> KoreanView {
+    // K5 — 저장된 오버라이드 목록(부재 = None). 정규화는 `resolve_excluded_bundle_ids`
+    // 쪽에서 하므로 여기서는 원본을 그대로 실어 보낸다.
+    let excluded: Option<Vec<String>> = store
+        .get(keys::KOREAN_EXCLUDED_BUNDLE_IDS);
     KoreanView {
         shift_space_switches_input_source: k.shift_space_switches_input_source,
         han_eng_switches_input_source: k.han_eng_switches_input_source,
         hanja_key_converts_hanja: k.hanja_key_converts_hanja,
         won_key_types_backtick: k.won_key_types_backtick,
         disable_in_remote_desktop: k.disable_in_remote_desktop,
+        modifier_key_types_lowercase: k.modifier_key_types_lowercase,
+        excluded_bundle_ids: excluded,
+        default_excluded_bundle_ids: ultrakey_korean::default_excluded_bundle_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     }
 }
 
@@ -1290,7 +1305,7 @@ fn build_settings_state(
         preset_options: preset_options_view(),
         caps_lock_alias_active: caps_lock_alias.is_some(),
         general: general_view(store, auto_update),
-        korean: korean_view(korean),
+        korean: korean_view(korean, store),
         seek: seek_view(seek, quick_press_opens_seek(presets)),
         pending_conflict,
         per_device: build_per_device_view(store),
@@ -1446,6 +1461,9 @@ fn build_engine_config(
     // F-16 — `korean.disableInRemoteDesktop` 은 여기 들어오지 않는다(엔진 설정이
     // 아니라 게이트다, D-K3) — `gate_controller.set_korean_exclusion_enabled` 이 따로 처리한다.
     config.rules.korean_rules = korean.to_rules();
+    // ⭐ K9(이슈 #73, D-K18) — modifier+문자키 → 영어 소문자 옵션은 규칙이 아니라
+    // 중재기의 행동 플래그다(`EngineConfig::korean_modifier_lowercase`).
+    config.korean_modifier_lowercase = korean.modifier_key_types_lowercase;
     // ⭐ F-01 — `Remap key to Seek:` 트리거 키. `quick_press_opens`/`toggle_shortcut`
     // 는 `EngineConfig`(F-07 규칙 테이블)의 관심사가 아니다 — F-07 은 리매핑 키
     // 자체의 감시만 하고, 어느 모드로 세션을 열지는 F-01(Seek 워커)이 판정한다.
@@ -2557,7 +2575,7 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     // ⚠️ `seek` 도 함께 되살린다 — F-01(이슈 #39 와 병렬로 머지된 M3-3)이 `AppState`
     // 에 네 번째 메모리 정본을 더했다. 빠뜨리면 import 가 Seek 설정만 조용히
     // 반영하지 않는 "부분 교체"가 되어 §3.4 결정 4(교체)가 깨진다.
-    let (hyperkey, presets, korean, seek, disabled_apps) = {
+    let (hyperkey, presets, korean, seek, disabled_apps, korean_excluded) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let hyperkey = HyperkeySettings::from_store(&store);
         let presets = PresetSettings::from_store(&store);
@@ -2565,7 +2583,14 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
         let seek = SeekSettings::from_store(&store);
         let disabled_apps: Vec<String> =
             store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
-        (hyperkey, presets, korean, seek, disabled_apps)
+        // ⭐ K5(D-K17) — 목록 오버라이드도 import 로 바뀔 수 있다. 같은 잠금 안에서
+        // 함께 읽는다.
+        let korean_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+            store
+                .get::<Vec<String>>(keys::KOREAN_EXCLUDED_BUNDLE_IDS)
+                .as_deref(),
+        );
+        (hyperkey, presets, korean, seek, disabled_apps, korean_excluded)
     };
 
     *state.hyperkey.lock().map_err(|e| e.to_string())? = hyperkey.clone();
@@ -2576,8 +2601,11 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     // ⭐ 게이트도 boot 만큼 되돌린다 — `general.disabledApps`/
     // `korean.disableInRemoteDesktop` 도 import 로 바뀔 수 있는 값이다(D-K3 과
     // 같은 이유로 엔진 설정이 아니라 게이트라 `reconfigure_engine` 이 대신
-    // 해주지 않는다).
+    // 해주지 않는다). ⭐ K5(D-K17) — 제외 목록 오버라이드도 마찬가지다.
     state.gate_controller.set_disabled_apps(disabled_apps);
+    state
+        .gate_controller
+        .set_korean_excluded_apps(korean_excluded);
     state
         .gate_controller
         .set_korean_exclusion_enabled(korean.disable_in_remote_desktop);
@@ -3174,11 +3202,21 @@ fn settings_set_korean(
         true,
     )?;
 
-    // 3) ⭐ 항목 5 는 게이트다 — 엔진 설정이 아니다(D-K3).
+    // 3) ⭐ 항목 5 는 게이트다 — 엔진 설정이 아니다(D-K3). ⭐ K5(D-K17) — 목록
+    // 오버라이드(`korean.excludedBundleIds`)도 게이트다. 이 자리에서 들어온 값으로
+    // 목록을 **통째로 다시 주입**한다 — 저장(4) 이후의 저장소 값을 읽어 주입하면
+    // 저장 실패 시 화면·게이트가 어긋나므로 **들어온 값**을 기준으로 한다.
     if key == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP {
         state
             .gate_controller
             .set_korean_exclusion_enabled(korean_snapshot.disable_in_remote_desktop);
+    }
+    if key == keys::KOREAN_EXCLUDED_BUNDLE_IDS {
+        let ids: Vec<String> = serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))?;
+        state
+            .gate_controller
+            .set_korean_excluded_apps(ultrakey_korean::resolve_excluded_bundle_ids(Some(&ids)));
     }
 
     // 4) 저장.
@@ -3237,6 +3275,25 @@ fn apply_korean_setting(
         }
         k if k == keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP => {
             korean.disable_in_remote_desktop = parse(value, key)?
+        }
+        k if k == keys::KOREAN_MODIFIER_KEY_TYPES_LOWERCASE => {
+            korean.modifier_key_types_lowercase = parse(value, key)?
+        }
+        // ⭐ K5(이슈 #73, D-K17) — 원격 데스크톱 제외 목록의 사용자 오버라이드.
+        // 값은 번들 ID 문자열 배열이다. `KoreanSettings` 가 이 목록을 갖지 않는
+        // 이유: 이 키는 게이트 주입용 **저장 데이터**일 뿐 규칙 산출에 쓰이지 않고,
+        // 부재(기본 12종)와 명시적 빈 배열("아무 앱도 제외 안 함")을 구별해야
+        // 하므로 `KoreanSettings` 필드가 아니라 저장소에서 직접 읽는다. 메모리
+        // 정본이 필요 없는 이유도 같다 — 매번 store 에서 읽어 주입하면 되고,
+        // 저장은 이 커맨드의 step 4(`store.set`)가 그대로 한다.
+        k if k == keys::KOREAN_EXCLUDED_BUNDLE_IDS => {
+            // 배열 검증 — 각 원소는 비지 않은 문자열이어야 한다(정규화는 저장 시점).
+            let ids: Vec<String> = parse(value, key)?;
+            for id in &ids {
+                if ultrakey_korean::normalize_bundle_id(id).is_none() {
+                    return Err(format!("빈 번들 ID 는 저장할 수 없다({key})"));
+                }
+            }
         }
         _ => return Err(format!("{key} cannot be changed through this command")),
     }
@@ -4044,15 +4101,16 @@ fn main() {
                 .get(settings_keys::GENERAL_DISABLED_APPS)
                 .unwrap_or_default();
             state.gate_controller.set_disabled_apps(disabled_apps);
-            // ⭐ F-16 D-K3 — 한국어 전용 앱 제외 게이트. 목록은 `ultrakey-korean` 이
-            // 소유하고(`default_excluded_bundle_ids`) 여기서 주입만 한다. 활성 여부는
-            // `korean.disableInRemoteDesktop`(기본 `true`) 그대로 반영한다.
-            state.gate_controller.set_korean_excluded_apps(
-                ultrakey_korean::default_excluded_bundle_ids()
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
+            // ⭐ F-16 D-K3 — 한국어 전용 앱 제외 게이트. ⭐ K5(이슈 #73, D-K17) —
+            // 저장된 사용자 오버라이드 목록이 있으면 그것이 기본 12종을 **통째로
+            // 대체**한다(`resolve_excluded_bundle_ids` — 병합 규칙의 정본). 활성
+            // 여부는 `korean.disableInRemoteDesktop`(기본 `true`) 그대로 반영한다.
+            let korean_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+                settings_store
+                    .get::<Vec<String>>(keys::KOREAN_EXCLUDED_BUNDLE_IDS)
+                    .as_deref(),
             );
+            state.gate_controller.set_korean_excluded_apps(korean_excluded);
             state
                 .gate_controller
                 .set_korean_exclusion_enabled(korean_settings.disable_in_remote_desktop);

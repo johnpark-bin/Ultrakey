@@ -239,5 +239,13 @@
   "preferences.keyboards.functionKeys.category.applicationLaunchKeys": "アプリケーション起動キー",
   "preferences.keyboards.functionKeys.category.guiApplicationControlKeys": "GUI アプリケーション制御キー",
   "preferences.keyboards.functionKeys.category.remoteControlButtons": "リモコンボタン",
-  "preferences.keyboards.functionKeys.category.others": "その他"
+  "preferences.keyboards.functionKeys.category.others": "その他",
+  "settings.korean.excluded.group": "韓国語キー処理をスキップするアプリ",
+  "settings.korean.excluded.rowPlaceholder": "com.example.App",
+  "settings.korean.excluded.addRow": "アプリを追加",
+  "settings.korean.excluded.removeRow": "アプリを削除",
+  "settings.korean.excluded.emptyList": "スキップするアプリはありません — すべてのアプリで Ultrakey が韓国語キーを処理します。",
+  "settings.korean.excluded.reset": "デフォルトのリストに戻す",
+  "settings.korean.modifier_lowercase": "modifier キーと一緒に文字キーを押したときに英語小文字を入力",
+  "settings.korean.modifier_lowercase.hint": "韓国語入力モードで modifier+文字のショートカットがハングルになる場合、その文字を英語小文字として認識します。⌘・⌃ の組み合わせ(アプリのショートカット)と Caps Lock には干渉しません。"
 }

@@ -239,5 +239,13 @@
   "preferences.keyboards.functionKeys.category.applicationLaunchKeys": "应用程序启动键",
   "preferences.keyboards.functionKeys.category.guiApplicationControlKeys": "GUI 应用程序控制键",
   "preferences.keyboards.functionKeys.category.remoteControlButtons": "遥控器按钮",
-  "preferences.keyboards.functionKeys.category.others": "其他"
+  "preferences.keyboards.functionKeys.category.others": "其他",
+  "settings.korean.excluded.group": "跳过韩语按键处理的应用",
+  "settings.korean.excluded.rowPlaceholder": "com.example.App",
+  "settings.korean.excluded.addRow": "添加应用",
+  "settings.korean.excluded.removeRow": "移除应用",
+  "settings.korean.excluded.emptyList": "不会跳过任何应用 — 所有应用中的韩语按键都由 Ultrakey 处理。",
+  "settings.korean.excluded.reset": "恢复默认列表",
+  "settings.korean.modifier_lowercase": "与修饰键同时按下字母键时输入英文小写",
+  "settings.korean.modifier_lowercase.hint": "在韩语输入模式下,modifier+字母快捷键被输入为韩文时,将其识别为英文小写。不影响 ⌘·⌃ 组合(应用快捷键)和 Caps Lock。"
 }

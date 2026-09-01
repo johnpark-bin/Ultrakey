@@ -239,5 +239,13 @@
   "preferences.keyboards.functionKeys.category.applicationLaunchKeys": "앱 실행 키",
   "preferences.keyboards.functionKeys.category.guiApplicationControlKeys": "GUI 앱 제어 키",
   "preferences.keyboards.functionKeys.category.remoteControlButtons": "리모컨 버튼",
-  "preferences.keyboards.functionKeys.category.others": "기타"
+  "preferences.keyboards.functionKeys.category.others": "기타",
+  "settings.korean.excluded.group": "한국어 키 처리를 건너뛸 앱",
+  "settings.korean.excluded.rowPlaceholder": "com.example.App",
+  "settings.korean.excluded.addRow": "앱 추가",
+  "settings.korean.excluded.removeRow": "앱 제거",
+  "settings.korean.excluded.emptyList": "건너뛸 앱이 없다 — 모든 앱에서 한국어 키를 Ultrakey 가 처리한다.",
+  "settings.korean.excluded.reset": "기본 목록으로 되돌리기",
+  "settings.korean.modifier_lowercase": "modifier 키와 함께 누른 문자 키를 영어 소문자로 입력",
+  "settings.korean.modifier_lowercase.hint": "한국어 입력 모드에서 modifier + 문자 단축키가 한글로 깨질 때, 그 문자를 영어 소문자로 바꿔 인식한다. ⌘·⌃ 조합(앱 단축키)과 caps lock 에는 개입하지 않는다."
 }

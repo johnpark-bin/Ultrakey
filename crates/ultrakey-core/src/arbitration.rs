@@ -14,7 +14,7 @@ use crate::event::{EventKind, InputEvent};
 use crate::flags::EventFlags;
 use crate::keycode::KeyCode;
 use crate::keystate::{KeyStateTable, KoreanLatch};
-use crate::korean::{KoreanImeState, KoreanTrigger};
+use crate::korean::{self, KoreanImeState, KoreanTrigger};
 use crate::quickpress::{QuickPressConfig, QuickPressEvent, QuickPressState};
 use crate::rules::{ComboRule, HoldCondition, ModifierKind, RuleAction, RuleId};
 use crate::settings::EngineConfig;
@@ -370,6 +370,28 @@ impl Arbiter {
         // (v1.62 예방의 핵심, §3-c 표 3행). M1 은 이 호출을 한 번도 하지 않았다.
         if kind == EventKind::KeyDown {
             self.dispatch_other_key_down(cfg, &mut out);
+        }
+
+        // ⭐ K9(이슈 #73, D-K18) — `modifier 키와 함께 누른 문자 키를 영어 소문자로
+        // 입력` 옵션이 켜져 있으면 문자 키의 keyDown 을 먼저 판정한다. 위치: 계층 3
+        // Preset **앞** — 근거: 이 옵션이 켜졌다는 것은 "⌥+문자가 한글로 깨진다"는
+        // 문제를 겪은 사용자이고, 그 modifier+문자 조합을 프리셋이나 F-16 규칙이 가로
+        // 채는 모양은 없다(K9 의 트리거는 문자 키 자체라 preset combo 의 hold 키·F-16
+        // 규칙의 트리거 키와 겹치지 않는다). 다만 **command·control·caps lock 조합은
+        // 발화하지 않는다**(`korean::lowercase_action_for` 내부) — 앱 단축키(⌘C 등)와
+        // 대문자 의도를 보호한다. 그래서 Preset 앞에 두어도 앱 단축키를 삼키지 않는다.
+        // 끄면(기본) 아무 일도 하지 않는다 — 기존 동작과 완전히 같다.
+        if cfg.korean_modifier_lowercase
+            && kind == EventKind::KeyDown
+            && !gates.korean_app_excluded
+        {
+            let pressed = |k: KeyCode| self.state.is_pressed(k);
+            if let Some(lower) = korean::lowercase_action_for(ev.keycode, &pressed) {
+                out.layer = Layer::KoreanInput;
+                out.disposition = Disposition::Consume;
+                out.push_effect(Effect::TypeChar(lower));
+                return out;
+            }
         }
 
         // 계층 3: Preset 조합. 트리거가 이 키이고 hold 조건이 성립하면 발화.
@@ -3368,5 +3390,88 @@ mod tests {
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
         assert_eq!(up.emitted()[0].keycode, KeyCode::RETURN);
         assert_eq!(up.emitted()[0].flags, EventFlags(0x0008_0040));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ⭐ K9 — `modifier 키와 함께 누른 문자 키를 영어 소문자로 입력`(이슈 #73,
+    // D-K18). ⭐ 원본 SuperKey 에 없는 클론 고유 확장이다(명세 §3.7).
+    // ══════════════════════════════════════════════════════════════════════════
+
+    fn k9_config() -> EngineConfig {
+        EngineConfig {
+            korean_modifier_lowercase: true,
+            ..EngineConfig::default()
+        }
+    }
+
+    /// 시나리오 K9-1 — 옵션 ON + shift 눌린 상태에서 `A` keyDown → `Effect::TypeChar('a')`.
+    /// 대문자 조합이 소문자로 인식된다(명세 §3.7).
+    #[test]
+    fn k9_option_shift_letter_emits_type_char_lowercase() {
+        let cfg = k9_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        // shift 를 실제 모양(FlagsChanged + device 비트)으로 누른다.
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)),
+            GateSnapshot::default(),
+            Millis(10),
+        );
+
+        assert_eq!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects(), &[Effect::TypeChar('a')]);
+    }
+
+    /// 시나리오 K9-2 — ⛔ command+A → 발화하지 않는다(앱 단축키 보호, §3.7). 통과다.
+    #[test]
+    fn k9_command_letter_passes_through_for_app_shortcuts() {
+        let cfg = k9_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_COMMAND, 0x0010_0008), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_C, EventFlags(0x0010_0008)),
+            GateSnapshot::default(),
+            Millis(10),
+        );
+
+        assert_ne!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// 시나리오 K9-3 — 옵션 OFF(기본) → 아무 일도 하지 않는다. 기존 동작 보존.
+    #[test]
+    fn k9_option_off_changes_nothing() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)),
+            GateSnapshot::default(),
+            Millis(10),
+        );
+
+        assert_ne!(out.layer(), Layer::KoreanInput);
+        assert!(out.effects().is_empty());
+    }
+
+    /// 시나리오 K9-4 — modifier 없이 문자 키만 누르면 발화하지 않는다 — 그 키의 원래
+    /// 문자(한국어 입력기면 한글 자모)가 나가야 하기 때문이다(§3.7).
+    #[test]
+    fn k9_no_modifier_letter_passes_through() {
+        let cfg = k9_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+
+        assert_ne!(out.layer(), Layer::KoreanInput);
+        assert_eq!(out.disposition(), Disposition::Pass);
     }
 }

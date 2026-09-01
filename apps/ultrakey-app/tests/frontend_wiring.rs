@@ -645,6 +645,109 @@ fn korean_점_리터럴이_en_ko_양쪽_카탈로그에_모두_있다() {
     );
 }
 
+// ⭐ K5·K9(이슈 #73) — Korean 탭 개선의 재발 방지 테스트.
+
+/// K5 — 제외 대상 목록 편집기 3종(헤딩·빈 목록 안내·추가·되돌리기 버튼)과
+/// K9 — modifier 소문자 옵션 체크박스가 `settings.html` 에 존재하고, 저장 키가
+/// 배선돼 있다.
+#[test]
+fn settings_html에_korean_제외_목록_편집기와_modifier_소문자_옵션이_있다() {
+    let html = read_settings_html();
+
+    for id in [
+        "korean-excluded-heading",
+        "korean-excluded-list",
+        "korean-excluded-empty",
+        "korean-excluded-add-btn",
+        "korean-excluded-reset-btn",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 K5 목록 편집기 요소 id=\"{id}\" 가 없다"
+        );
+    }
+    assert!(
+        html.contains("id=\"korean-modifier-lowercase\" data-key=\"korean.modifierKeyTypesLowercase\""),
+        "settings.html 에 K9 체크박스(data-key=\"korean.modifierKeyTypesLowercase\")가 없다"
+    );
+    assert!(
+        html.contains("id=\"korean-modifier-lowercase-label\""),
+        "settings.html 에 K9 라벨(id=\"korean-modifier-lowercase-label\")이 없다"
+    );
+    assert!(
+        html.contains("id=\"korean-modifier-lowercase-hint\""),
+        "settings.html 에 K9 부제(id=\"korean-modifier-lowercase-hint\")가 없다"
+    );
+}
+
+/// K9 — 백엔드 `main.rs` 가 저장 키 2종(`korean.excludedBundleIds`·
+/// `korean.modifierKeyTypesLowercase`)을 다룬다. `apply_korean_setting` 의
+/// match 누락(키 추가 후 배선 누락)을 소스 텍스트로 잡는다.
+#[test]
+fn main_rs가_korean_신규_저장_키를_다룬다() {
+    let main_rs = read_main_rs();
+    for needle in [
+        "KOREAN_EXCLUDED_BUNDLE_IDS",
+        "KOREAN_MODIFIER_KEY_TYPES_LOWERCASE",
+    ] {
+        assert!(
+            main_rs.contains(needle),
+            "main.rs 에 저장 키 상수 {needle} 사용이 없다 — settings_set 배선이 빠졌다"
+        );
+    }
+    // K5 — 목록이 바뀌면 게이트도 다시 주입해야 한다(D-K17, D-K3 과 같은 잊기 쉬운 지점).
+    let set_korean_body_start = main_rs
+        .find("fn settings_set_korean(")
+        .expect("main.rs 에 settings_set_korean 함수가 없다");
+    let body = &main_rs[set_korean_body_start..];
+    let body_end = body[10..]
+        .find("\nfn ")
+        .map(|i| i + 10)
+        .unwrap_or(body.len());
+    let body = &body[..body_end];
+    assert!(
+        body.contains("KOREAN_EXCLUDED_BUNDLE_IDS"),
+        "settings_set_korean 이 korean.excludedBundleIds 변경을 처리하지 않는다 — \
+         목록 편집이 게이트에 반영되지 않는다(D-K17)"
+    );
+    assert!(
+        body.contains("set_korean_excluded_apps"),
+        "settings_set_korean 이 set_korean_excluded_apps 를 부르지 않는다 — \
+         목록 편집이 게이트에 반영되지 않는다(D-K17)"
+    );
+}
+
+/// K9 — `ultrakey-core::settings::EngineConfig` 가 `korean_modifier_lowercase` 를
+/// 갖고 `build_engine_config` 가 채운다. 이게 빠지면 옵션을 켜도 엔진이 모른다.
+#[test]
+fn engine_config가_korean_modifier_lowercase를_운반한다() {
+    let core_settings = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/ultrakey-core/src/settings/mod.rs"
+    ))
+    .expect("crates/ultrakey-core/src/settings/mod.rs 를 읽지 못했다");
+    assert!(
+        core_settings.contains("pub korean_modifier_lowercase: bool"),
+        "EngineConfig 에 korean_modifier_lowercase 필드가 없다"
+    );
+
+    let main_rs = read_main_rs();
+    let fn_start = main_rs
+        .find("fn build_engine_config(")
+        .expect("main.rs 에 build_engine_config 함수가 없다");
+    let body = &main_rs[fn_start..];
+    let body_end = body[10..]
+        .find("\nfn ")
+        .map(|i| i + 10)
+        .unwrap_or(body.len());
+    let body = &body[..body_end];
+    assert!(
+        body.contains("korean.modifier_key_types_lowercase"),
+        "build_engine_config 가 korean.modifier_key_types_lowercase 를 읽지 않는다 — \
+         K9 옵션이 엔진에 반영되지 않는다(D-K18)"
+    );
+}
+
 // ⭐ F-10(menu-bar-and-lifecycle.md) — 메뉴바(NSStatusItem) 재발 방지 테스트.
 //
 // 프런트엔드(HTML/JS)와 달리 트레이 메뉴는 `src/main.rs` 안에서 전부 조립된다
