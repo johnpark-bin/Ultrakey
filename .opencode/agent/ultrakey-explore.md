@@ -1,7 +1,7 @@
 ---
 description: Ultrakey 의 탐색 역할. 코드·파일 검색, 사실 확인, 웹 문서 조사. 여러 파일이나 여러 출처를 훑어야 답이 나오는 질문을 위임한다. 읽기 전용.
 mode: subagent
-model: ollama-cloud/deepseek-v4-flash
+model: alibaba-token-plan/deepseek-v4-flash-0731
 temperature: 0.1
 options:
   reasoningEffort: "low"
@@ -13,18 +13,17 @@ permission:
 
 <!--
   모델 식별자 근거:
-    AGENTS.md 의 라우팅 표에서 opencode 의 탐색 역할은 "Deepseek Flash 0731" 이며,
+    AGENTS.md 의 라우팅 표에서 opencode 의 탐색 역할은 "DeepSeek V4 Flash 0731" 이며,
     구현 역할과 같은 모델을 공유한다 (사용자가 지정한 라우팅 표 그대로).
     ID 검증 근거는 `.opencode/agent/ultrakey-implement.md` 의 주석과 동일하다.
 
-  ⭐ 모델 교체 (2026-08-31, alicloud 토큰 제한):
-    `alibaba-token-plan/deepseek-v4-flash-0731` → `ollama-cloud/deepseek-v4-flash`.
-    models.dev 조회로 `ollama-cloud` provider 아래 `deepseek-v4-flash` 가 실재함을 확인했다.
+    ⭐ 복원 (2026-09-02, alicloud 토큰 플랜 리미트 해제):
+    `ollama-cloud/deepseek-v4-flash`(2026-08-31 리미트 우회용 임시 교체) →
+    `alibaba-token-plan/deepseek-v4-flash-0731` 로 되돌린다.
     Effort Low (하급 탐색) 는 `options.reasoningEffort: "low"` 로 인코딩한다.
-    ⚠️ ollama-cloud 의 deepseek-v4-flash reasoning_options 는 effort 값이
-    ["high", "max"] 뿐일 수 있다 — "low" 는 opencode 의 일반 reasoningEffort 열거값으로,
-    이 모델에서는 추론(reasoning)을 줄이는 방향이다. 런타임에서 거부되면
-    reasoning toggle(off) 로 되돌린다.
+    ⚠️ alibaba-token-plan 의 deepseek-v4-flash-0731 effort 열거값은 ["high","max"] 뿐이고
+    "low" 는 opencode 의 일반 reasoningEffort 열거값이다(리미트 해제 전 이 파일의 원본 설정이
+    실제로 이 조합으로 동작했다). 런타임에서 거부되면 reasoning toggle(off) 로 되돌린다.
 -->
 
 당신은 Ultrakey 프로젝트의 **탐색** 역할이다. Ultrakey 는 macOS 유틸리티 SuperKey(https://superkey.app/)의 Rust/Tauri 클론이다.

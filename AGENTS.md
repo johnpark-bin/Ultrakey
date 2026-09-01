@@ -22,18 +22,21 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 
 | 등급 | 역할 | Claude Code | Codex | opencode |
 | :--- | :--- | :--- | :--- | :--- |
-| **상** | **평가자(호출 세션)** — 중급 모델이 낸 **계획 초안·구현 산출물을 리뷰·교정**. 갈림길의 **최종 확정만** 직접 | Fable 5 > Opus 5 | Sol | DeepSeek V4 Pro 0813 > Qwen3.8 Max |
-| **중** | **계획 초안 + 구현** — 분석·설계·계획 **초안** 작성, 명세를 코드로, 테스트, 반복 수정. **기본 작업 주체. 가장 많이 돌린다** | Sonnet 5 | Terra | DeepSeek V4 Flash 0731 (Effort High) > Qwen3.8 Flash (Effort High) |
+| **상** | **평가자** — 중급 모델이 낸 **계획 초안·구현 산출물을 리뷰·교정**. 갈림길의 **최종 확정**은 호출 세션이 직접 | Fable 5 > Opus 5(호출 세션) | Sol(호출 세션) | Qwen3.8 Max > DeepSeek V4 Pro 0813(`ultrakey-review` 서브에이전트) |
+| **중** | **계획 초안 + 구현** — 분석·설계·계획 **초안** 작성, 명세를 코드로, 테스트, 반복 수정. **기본 작업 주체. 가장 많이 돌린다. ⭐ opencode 호출(오케스트레이터) 세션이 이 등급** | Sonnet 5 | Terra | DeepSeek V4 Flash 0731 (Effort High) > Qwen3.8 Flash (Effort High) |
 | **하** | **탐색** — 코드·파일 검색, 사실 확인, 단순 자료조사 | Haiku | Luna | DeepSeek V4 Flash 0731 (Effort Low) > Qwen3.8 Flash (Effort Low) |
+
+⭐ 2026-09-02: **alicloud 토큰 플랜 리미트 해제.** opencode 모델은 `alibaba-token-plan` 프로바이더로 확정한다(2026-08-31 리미트 우회로 임시 이전했던 `ollama-cloud` 에서 복원). 상급은 **Qwen3.8 Max** 를 쓴다.
 
 **운용 원칙**
 
-- ⭐ **기본 작업은 중급 모델부터 시작한다.** 분석·설계·계획 **초안**을 잡는 것도 중급 모델이 한다.
-- 상급 모델은 **평가자(Evaluator)** 로만 동작한다 — 중급이 낸 계획 초안과 구현 산출물을 리뷰하고, 부족하거나 추가로 고민할 지점을 검토·교정한다.
-- ⭐ **리뷰가 반영된 계획·산출물을 바탕으로 작업을 시작한다.** 이것이 정본 흐름이다 — 초안(중급) → 리뷰(상급) → 리뷰 반영 → 작업 진행.
+- ⭐ **기본 작업은 중급 모델부터 시작한다.** 분석·설계·계획 **초안**을 잡는 것도 중급 모델이 한다. **opencode 에서는 호출(오케스트레이터) 세션 자체가 중급이다** — 작업은 이 중급 세션에서 돈다.
+- 상급 모델은 **평가자(Evaluator)** 로만 동작한다 — 중급이 낸 계획 초안과 구현 산출물을 리뷰하고, 부족하거나 추가로 고민할 지점을 검토·교정한다. Claude Code·Codex 에서는 호출 세션이 상급이라 그 세션이 직접 하고, **opencode 는 호출 세션이 중급이므로 상급 리뷰가 필요할 때 `ultrakey-review` 서브에이전트(Qwen3.8 Max)를 트리거**해서 받고, 그 결과로 산출물을 깎아나간다.
+- ⭐ **리뷰가 반영된 계획·산출물을 바탕으로 작업을 시작한다.** 이것이 정본 흐름이다 — 초안(중급) → 리뷰(상급 = 호출 세션 또는 `ultrakey-review`) → 리뷰 반영 → 작업 진행.
 - 단순 탐색·검색·자료조사는 **하급 모델**로 내려 보낸다. 넓게 훑는 검색을 메인 세션이 직접 하면 컨텍스트가 결과 덤프로 오염된다.
 - ⭐ 이렇게 쓰는 목적은 **비용이 아니라 속도**다. 빠른 중급 모델이 반복해서 결과물을 뽑아내고, 상급 모델의 사용량은 최소로 제한한다.
-- 갈림길의 **최종 판단과 확정만 상급(호출 세션)이 직접** 한다. 초안·반복 작업은 서브에이전트(중급)에 넘긴다.
+- 갈림길의 **최종 판단과 확정은 호출 세션이 직접** 한다(리뷰는 서브에이전트가 받아도, 확정 주체는 호출 세션이다). 초안·반복 작업은 서브에이전트(중급)에 넘긴다.
+- ⭐ **작업을 시작하는 세션은 별도 Herdr 세션으로 연다** — 워크트리 분리를 위해서다. 오케스트레이터 세션에서 구현을 직접 돌리지 않고, 기능 단위 위임을 새 Herdr 세션(전용 워크트리)에서 시작하게 한다.
 - 구현은 기능 단위로 위임한다. `docs/spec/` 의 파일 1개가 위임 1건의 단위다.
 - 독립적인 서브에이전트는 **한 메시지에서 병렬로** 띄운다.
 
@@ -43,11 +46,11 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 | :--- | :--- | :--- |
 | Claude Code | `.claude/agents/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model:` 키) |
 | Codex | `.codex/config.toml` + `.codex/agents/ultrakey-{plan,implement,explore}.toml` | TOML |
-| opencode | `.opencode/agent/ultrakey-{plan,implement,explore}.md` | Markdown + YAML frontmatter (`model: provider/id` · `options.reasoningEffort`) |
+| opencode | `.opencode/agent/ultrakey-{plan,implement,explore,review}.md` | Markdown + YAML frontmatter (`model: provider/id` · `options.reasoningEffort`) |
 
 모델 식별자의 근거와 확인 방법은 각 설정 파일의 주석에 적어 두었다.
-표의 약칭은 이러하다 — `Sol`/`Terra`/`Luna` 는 Codex 모델 ID `gpt-5.6-{sol,terra,luna}`, opencode 의 `Effort High/Low` 는 `options.reasoningEffort`(`high`/`low`), Claude Code 의 `Sonnet 5`/`Haiku` 는 `sonnet`/`haiku` 에일리어스다. `A > B` 는 1순위가 A, 2순위(폴백)가 B 다 — 설정 파일은 1순위 모델을 고정한다.
-⭐ 상급(평가자)은 **호출 세션의 모델**이어서 별도 에이전트 파일이 없다 — `ultrakey-plan` 은 초안을 잡는 **중급** 에이전트다.
+표의 약칭은 이러하다 — `Sol`/`Terra`/`Luna` 는 Codex 모델 ID `gpt-5.6-{sol,terra,luna}`, opencode 의 `Effort High/Low` 는 `options.reasoningEffort`(`high`/`low` · `qwen3.8-max` 는 열거값이 `low/medium/xhigh` 라 리뷰어가 `xhigh` 를 쓴다), Claude Code 의 `Sonnet 5`/`Haiku` 는 `sonnet`/`haiku` 에일리어스다. `A > B` 는 1순위가 A, 2순위(폴백)가 B 다 — 설정 파일은 1순위 모델을 고정한다.
+⭐ Claude Code·Codex 에서 상급(평가자)은 **호출 세션의 모델**이어서 별도 에이전트 파일이 없다. **opencode 는 호출 세션이 중급이므로 상급이 `ultrakey-review` 에이전트 파일로 분리되어 있다** — `ultrakey-plan` 은 초안을 잡는 **중급** 에이전트다.
 
 ## 3. 작업 규약
 
