@@ -55,10 +55,6 @@ pub struct Timings {
     pub keyboard_connect_delay_ms: u64,
     /// (설계 판단) — architecture.md §4: 절전→잠금해제→세션전환 연쇄를 한 번으로 합치는 디바운스.
     pub restart_debounce_ms: u64,
-    /// (설계 판단) — architecture.md §4: 이 횟수를 넘으면 탭 재생성으로 에스컬레이션.
-    pub tap_reenable_max_attempts: u32,
-    /// (설계 판단) — architecture.md §4: 이 횟수를 넘으면 프로세스 재실행 신호로 에스컬레이션.
-    pub tap_recreate_max_attempts: u32,
     /// (설계 판단) — architecture.md §4: 온보딩 중 권한 폴링 주기(짧게 — 사용자가 시스템
     /// 설정에서 막 돌아온 직후를 기다림).
     pub permission_poll_onboarding_ms: u64,
@@ -76,8 +72,6 @@ impl Default for Timings {
             session_delay_ms: 1000,
             keyboard_connect_delay_ms: 1500,
             restart_debounce_ms: 5000,
-            tap_reenable_max_attempts: 5,
-            tap_recreate_max_attempts: 3,
             permission_poll_onboarding_ms: 500,
             permission_poll_background_ms: 5000,
         }
@@ -131,8 +125,6 @@ mod tests {
         assert_eq!(t.session_delay_ms, 1000);
         assert_eq!(t.keyboard_connect_delay_ms, 1500);
         assert_eq!(t.restart_debounce_ms, 5000);
-        assert_eq!(t.tap_reenable_max_attempts, 5);
-        assert_eq!(t.tap_recreate_max_attempts, 3);
         assert_eq!(t.permission_poll_onboarding_ms, 500);
         assert_eq!(t.permission_poll_background_ms, 5000);
     }

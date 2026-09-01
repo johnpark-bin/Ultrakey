@@ -24,10 +24,11 @@ pub enum EngineCommand {
     /// 절전/잠금/Secure Input — stuck modifier 방지(§5 #9). `Arbiter::force_reset` 을
     /// 호출하고, 만들어진 off-flagsChanged 합성 이벤트를 방출한다.
     ForceResetState,
-    /// 탭 재활성화 시도(워치독의 비정상 감지, 또는 탭 자신의 비활성화 통지).
+    /// 탭 상태 확인(워치독의 비정상 감지, 또는 탭 자신의 비활성화 통지). 트램폴린의
+    /// 연속 재활성화 예산이 소진됐거나 권한이 없으면 탭을 해체한다 — 재생성은
+    /// 시도하지 않는다(이슈 #65 Phase 1 리뷰 교정 2, `engine::handle_recover_tap`
+    /// 문서 참고).
     RecoverTap,
-    /// 탭 재생성(재활성화가 반복 실패했을 때의 에스컬레이션, 또는 최초 설치 시도).
-    RecreateTap,
     /// 설정 교체 후 `Arbiter::reconfigure` 호출 — quick press 슬롯 재구성.
     Reconfigure,
     /// 경로 B(F-17) 재적용 — `Some(device)` 면 그 디바이스 하나만

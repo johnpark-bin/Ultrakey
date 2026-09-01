@@ -36,9 +36,8 @@ use ultrakey_platform::secure_input::{DirectSecureInputProbe, SecureInputProbe};
 
 use crate::command::{self, CommandChannel, EngineCommand};
 use crate::lifecycle::{
-    quick_press_tick_delay_hint, tap_state_after_create_attempt, tap_state_after_reenable,
-    AtomicTapState, CreateAttemptResult, RecoveryCounters, RecreateOutcome, ReenableOutcome,
-    TapState,
+    self, quick_press_tick_delay_hint, tap_state_after_create_attempt, tap_state_after_reenable,
+    AtomicTapState, CreateAttemptResult, TapState,
 };
 use crate::path_b::{GlobalD1Migration, HidutilGlobalMigration, LedgerStore, PathBManager};
 use crate::state::SharedState;
@@ -83,9 +82,15 @@ pub enum EngineEvent {
     /// 권한이 없어 탭을 설치하지 못했다 — F-11 온보딩이 처리한다. 이 엔진은 재시도
     /// 루프를 돌지 않고 `NotInstalled` 로 남는다.
     NotTrusted,
-    /// 복구(재활성화·재생성)가 반복 실패했다 — 앱이 프로세스 재실행을 고려해야 한다
-    /// (§5#17). 트리거 조건은 `Timings::tap_recreate_max_attempts`.
-    NeedsRelaunch,
+    /// ⭐ 이슈 #65 Phase 1 리뷰 교정 2·3 — 탭이 살아있던 중에 권한을 잃어(또는
+    /// 트램폴린의 연속 재활성화 예산이 소진돼) `handle_recover_tap` 이 탭을
+    /// 해체했다(`NotInstalled`). 이 엔진은 스스로 재생성을 시도하지 않는다 — 복구는
+    /// 오직 권한 모니터가 `Granted` 를 재확인해 앱이 완전히 새 `Engine` 을 만드는
+    /// 것으로만 일어난다. 앱은 이 사건을 받으면
+    /// `PermissionMonitor::report_tap_create_failed()` 를 호출해, 그동안 호출자가
+    /// 없어 사문화돼 있던 `OutOfSync` 진단 경로를 이 사건에 이어 배선해야 한다
+    /// (교정 3 — §5#17 "재실행 필요" UX 는 이제 이 `OutOfSync` 화면이 대신한다).
+    TapLost,
     /// ⭐ F-01 활성화 경로 3 — quick press caps lock(`Presets` 탭
     /// `Quick press caps lock to execute: Seek`). `Effect::OpenSeek` 이 올라온 것이다.
     SeekOpenRequested,
@@ -338,7 +343,6 @@ struct TapThreadState {
     arbiter: Arbiter,
     tap: Option<EventTap>,
     secure_input: DirectSecureInputProbe,
-    counters: RecoveryCounters,
     tap_state_snapshot: TapState,
     tap_state_atomic: Arc<AtomicTapState>,
     health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>>,
@@ -726,79 +730,70 @@ fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
     apply_effects_outside_tap(&outcome, &table, &on_event);
 }
 
-/// `EngineCommand::RecoverTap` — §3-a `Disabled` 전이의 재활성화 시도.
-fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, commands: &CommandChannel) {
-    // 시도 횟수를 로깅하려면 `record_reenable_result` 가 카운터를 리셋하기 *전* 값을
-    // 잡아 둬야 한다(에스컬레이션 시 0으로 리셋된다) — `docs/dev/manual-verification.md`
-    // 가 "재활성화 성공/실패, 시도 횟수" 로그를 근거로 판정한다.
-    // ⛔ **권한이 이미 사라졌으면 재활성화하지 않는다.**
-    //
-    // 권한을 잃은 탭은 `CGEventTapEnable(true)` 를 불러도 macOS 가 곧바로 다시
-    // 끄고 비활성화 통지를 또 보낸다. 그 통지가 다시 `RecoverTap` 을 만들면
-    // "재활성화 → 즉시 비활성화 → 통지 → 재활성화" 가 끝없이 돈다. 게다가
-    // `tap.is_enabled()` 는 방금 `enable(true)` 한 직후라 **`true` 를 돌려주므로**
-    // 실패 카운터가 매번 리셋되어 재생성 에스컬레이션에도 영원히 도달하지 못한다.
-    //
-    // ⚠️ 이 루프는 탭 스레드의 런루프를 포화시켜 **시스템 전체 입력을 멈춘다**
-    // (실측 회귀 — `event_tap.rs` 트램폴린의 차단기 주석 참고). 여기서 권한을
-    // 먼저 확인하고, 없으면 재활성화 대신 재생성 경로로 보낸다 —
-    // `handle_recreate_tap` 은 탭을 놓은 뒤 `NotTrusted` 를 올려 F-11 온보딩이
-    // 이어받게 한다(§3-a: 권한이 없어 실패하는 것은 정상 경로다).
-    if !ultrakey_platform::accessibility::is_process_trusted() {
-        tracing::warn!(
-            "tap re-enable requested without Accessibility permission; dropping the tap \
-             instead of re-enabling it (prevents a re-enable storm)"
-        );
-        handle_recreate_tap(cell, commands);
+/// `EngineCommand::RecoverTap` — 트램폴린의 즉시 재활성화 통지를 받아 상태를 반영한다.
+///
+/// ⭐ **이슈 #65 Phase 1 리뷰 교정 2.** 이 함수는 더 이상 스스로 `tap.enable(true)`
+/// 를 부르지 않는다. 예전에는 여기서 직접 `enable(true)` 를 부른 뒤 **같은 프레임에서
+/// 곧바로** `tap.is_enabled()` 를 읽었다 — `CGEventTapIsEnabled` 는 마지막으로 설정된
+/// 플래그를 읽을 뿐 macOS 가 곧이어(비동기로) 다시 끌지 여부를 반영하지 않으므로 이
+/// 체크는 사실상 항상 `true` 였고, 실패 카운터가 매번 리셋되어 에스컬레이션에 영원히
+/// 도달하지 못했다(commit 7031351 이 트램폴린 쪽에서만 고치고 이 경로는 그대로 남겨
+/// 뒀던 바로 그 결함 — 이슈 #65 Phase 1 진단 "가설 (a)"). 재활성화 시도 자체는 이제
+/// 트램폴린(`ultrakey_platform::event_tap::ReenableBudget`) 하나가 전담한다 — 이
+/// 함수는 그 결과를 **관찰**만 하고, 예산이 소진됐거나 권한이 없으면 탭을 해체한다.
+///
+/// ⛔ **재생성을 시도하지 않는다.** stale `AXIsProcessTrusted()` 상황에서 "예산 소진 →
+/// 즉시 재생성"은 재생성마다 새 탭 = 새 예산(5회)이 다시 채워지는 **더 느린 폭주**가
+/// 된다(리뷰가 초안의 이 부분을 기각한 근거). 복구는 오직 권한 모니터가 `Granted` 를
+/// 재확인해 앱이 완전히 새 `Engine` 을 만드는 것으로만 일어난다.
+fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>) {
+    let trusted = ultrakey_platform::accessibility::is_process_trusted();
+
+    let mut st = cell.borrow_mut();
+    if st.fatal {
         return;
     }
-
-    let outcome = {
-        let mut st = cell.borrow_mut();
-        if st.fatal {
-            return;
-        }
-        match st.tap.as_ref() {
-            Some(tap) => {
-                tap.enable(true);
-                let enabled = tap.is_enabled();
-                let max_attempts = st.shared.config.load().timings.tap_reenable_max_attempts;
-                let attempt_number = st.counters.reenable_failures() + 1;
-                let result = st.counters.record_reenable_result(enabled, max_attempts);
-                Some((result, attempt_number, max_attempts))
-            }
-            None => None,
-        }
+    let Some((exhausted, enabled)) = st
+        .tap
+        .as_ref()
+        .map(|tap| (tap.reenable_budget_exhausted(), tap.is_enabled()))
+    else {
+        // 탭이 이미 없다 — 이 명령이 도착하기 전에 이미 해체됐거나 아직 설치되지
+        // 않은 상태다. 할 일이 없다(재생성은 시도하지 않는다, 위 문서 참고).
+        return;
     };
 
-    match outcome {
-        Some((ReenableOutcome::Recovered, attempt, _max)) => {
-            tracing::info!(attempt, "tap re-enabled");
-            let mut st = cell.borrow_mut();
-            set_tap_state(&mut st, tap_state_after_reenable(true));
-        }
-        Some((ReenableOutcome::StillFailing, attempt, max)) => {
-            tracing::warn!(attempt, max, "tap re-enable failed; waiting for the next attempt");
-            let mut st = cell.borrow_mut();
-            set_tap_state(&mut st, tap_state_after_reenable(false));
-        }
-        Some((ReenableOutcome::EscalateToRecreate, attempt, max)) => {
+    match lifecycle::recover_tap_decision(trusted, exhausted) {
+        lifecycle::RecoverTapDecision::Teardown => {
             tracing::warn!(
-                attempt,
-                max,
-                "tap re-enable failed the maximum number of times; escalating to recreate"
+                trusted,
+                exhausted,
+                "giving up on this tap — dismantling it instead of re-enabling or \
+                 recreating it (prevents a re-enable storm); recovery is now the \
+                 permission monitor's job"
             );
-            handle_recreate_tap(cell, commands);
+            st.tap = None;
+            st.health_probe_slot.store(None);
+            set_tap_state(&mut st, TapState::NotInstalled);
+            (st.on_event)(EngineEvent::TapLost);
         }
-        None => {
-            tracing::debug!("tap has not been created yet; attempting to recreate it directly");
-            handle_recreate_tap(cell, commands);
+        lifecycle::RecoverTapDecision::KeepAlive => {
+            tracing::info!(enabled, "tap health checked after a disable notification");
+            set_tap_state(&mut st, tap_state_after_reenable(enabled));
         }
     }
 }
 
-/// `EngineCommand::RecreateTap` — 탭을 처음부터 다시 만든다. 최초 설치 시도도 이
-/// 함수를 그대로 쓴다(§3-a `NotInstalled`→`Installing` 전이와 동일한 절차이기 때문).
+/// 탭을 처음부터 만든다 — 최초 설치 시도(`tap_thread_main`)가 이 함수 하나뿐인
+/// 유일한 호출자다(§3-a `NotInstalled`→`Installing` 전이).
+///
+/// ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — 예전에는 `handle_recover_tap` 이 재활성화
+/// 실패 에스컬레이션(`EscalateToRecreate`)과 권한 상실 두 경로 모두에서 이 함수를
+/// 다시 불러 탭을 재생성했다. 이제 그 두 경로는 재생성 없이 탭을 해체하고 권한
+/// 모니터에 넘기므로, 이 함수는 탭 스레드의 생애주기당 **정확히 한 번만** 불린다 —
+/// 그래서 "재생성 실패가 반복되면 프로세스 재실행"(§5#17, 옛 `RecoveryCounters::
+/// recreate_failures`)은 반복될 호출 자체가 없어 의미가 없어졌다. 그 UX 는 이제
+/// `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이 대신한다(교정 3).
 fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &CommandChannel) {
     let start = {
         let mut st = cell.borrow_mut();
@@ -822,41 +817,22 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
             let mut st = cell.borrow_mut();
             st.health_probe_slot.store(probe.map(Arc::new));
             st.tap = Some(tap);
-            let max_attempts = st.shared.config.load().timings.tap_recreate_max_attempts;
-            // 리셋 전 값을 먼저 잡아 둔다(에스컬레이션 시 카운터가 0으로 리셋된다) —
-            // 위 `handle_recover_tap` 과 같은 이유.
-            let attempt_number = st.counters.recreate_failures() + 1;
             let attempt_result = if alive {
+                tracing::info!("tap created");
                 CreateAttemptResult::Success
             } else {
+                // ⚠️ 이론상의 엣지 케이스 — `CGEventTapCreate` 는 보통 이미 활성인
+                // 탭을 반환한다. 만들어졌지만 즉시 비활성인 경우, 여기서는 더 이상
+                // 스스로 `enable()` 을 부르지 않는다(교정 2) — macOS 가 실제로
+                // 이 탭을 다시 비활성화 통지 없이 영구히 죽은 채로 둔다면(전이가
+                // 한 번도 없었으므로), 워치독이 매초 `RecoverTap` 을 보내도
+                // `reenable_budget_exhausted()` 가 계속 `false`(통지가 없었으니
+                // 예산 소비도 없다)라 `KeepAlive` 로만 관찰된다. 실기기에서 관찰된
+                // 적은 없다 — 관찰되면 트램폴린 쪽에 별도 신호가 필요하다.
+                tracing::warn!("tap created but is not enabled yet; the watchdog will keep observing it");
                 CreateAttemptResult::CreatedButDisabled
             };
-            match st.counters.record_recreate_result(alive, max_attempts) {
-                RecreateOutcome::Recovered => {
-                    tracing::info!(attempt = attempt_number, "tap recreated");
-                    set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
-                }
-                RecreateOutcome::StillFailing => {
-                    tracing::warn!(
-                        attempt = attempt_number,
-                        max = max_attempts,
-                        "tap was recreated but is still disabled; waiting for the next attempt"
-                    );
-                    set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
-                }
-                RecreateOutcome::NeedsRelaunch => {
-                    tracing::error!(
-                        attempt = attempt_number,
-                        max = max_attempts,
-                        "tap recreate failed the maximum number of times; the process needs to be relaunched (§5#17)"
-                    );
-                    // ⭐ 프로세스 재실행이 필요하다는 신호일 뿐, 이 탭 자체는 살아있는
-                    // 그대로(`attempt_result` 기준) 상태를 게시한다 — §3-a 표는 이
-                    // 경우를 별도 상태로 정의하지 않는다.
-                    set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
-                    (st.on_event)(EngineEvent::NeedsRelaunch);
-                }
-            }
+            set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
         }
         Err(TapCreateError::NotTrusted) => {
             let mut st = cell.borrow_mut();
@@ -885,7 +861,6 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
 fn drain_commands(
     cell: &RunLoopConfined<TapThreadState>,
     rx: &Receiver<EngineCommand>,
-    commands: &CommandChannel,
     run_loop: &RunLoopHandle,
 ) {
     let mut should_stop = false;
@@ -905,8 +880,7 @@ fn drain_commands(
                     "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );
             }
-            EngineCommand::RecoverTap => handle_recover_tap(cell, commands),
-            EngineCommand::RecreateTap => handle_recreate_tap(cell, commands),
+            EngineCommand::RecoverTap => handle_recover_tap(cell),
             EngineCommand::Reconfigure => {
                 let mut st = cell.borrow_mut();
                 let cfg = st.shared.config.load_full();
@@ -974,7 +948,6 @@ fn tap_thread_main(
         arbiter,
         tap: None,
         secure_input: DirectSecureInputProbe,
-        counters: RecoveryCounters::new(),
         tap_state_snapshot: TapState::NotInstalled,
         tap_state_atomic,
         health_probe_slot,
@@ -991,25 +964,19 @@ fn tap_thread_main(
     let run_loop_for_stop = RunLoopHandle::current()
         .expect("탭 스레드에 CFRunLoop 를 가져올 수 없다 — 있을 수 없는 상황");
 
-    // `CommandChannel` 은 `CommandSource::signaller()` 가 있어야 완성되는데, perform
-    // 콜백 자신도 그 `CommandChannel` 을 알아야(재생성 시 콜백을 다시 만드는 데 필요)
-    // 하는 닭과 달걀 문제가 있다 — 아래 `RunLoopConfined<Option<CommandChannel>>` 로
-    // 늦은 채움(late-fill)을 해결한다. perform 콜백이 실제로 처음 호출되는 시점은
-    // 이 함수가 아래에서 값을 채운 **이후**이므로 항상 `Some` 을 본다.
-    let commands_holder: RunLoopConfined<Option<CommandChannel>> = RunLoopConfined::new(None);
-
+    // ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — `drain_commands` 가 더 이상 `CommandChannel`
+    // 을 쓰지 않는다(예전에는 `RecoverTap` 에스컬레이션이 명령 처리 도중 탭을
+    // 재생성하며 콜백을 다시 만드는 데 필요했다). 그래서 예전에 있던
+    // "perform 콜백이 아직 존재하지 않는 `CommandChannel` 을 참조해야 하는 닭과
+    // 달걀 문제"(`RunLoopConfined<Option<CommandChannel>>` 늦은 채움)도 함께
+    // 사라졌다 — `cmd_rx`/`run_loop_for_stop` 은 이 시점에 이미 값이 있다.
     let perform_cell = cell.clone();
-    let perform_commands_holder = commands_holder.clone();
     let cmd_source = CommandSource::new(Box::new(move || {
-        let maybe_commands = perform_commands_holder.borrow().clone();
-        if let Some(commands) = maybe_commands {
-            drain_commands(&perform_cell, &cmd_rx, &commands, &run_loop_for_stop);
-        }
+        drain_commands(&perform_cell, &cmd_rx, &run_loop_for_stop);
     }));
     cmd_source.add_to_current_runloop();
 
     let commands = CommandChannel::new(cmd_tx, cmd_source.signaller());
-    *commands_holder.borrow_mut() = Some(commands.clone());
 
     // 최초 설치 시도 — §3-a `NotInstalled` → `Installing` → `Active`/`NotInstalled`/`Terminated`.
     handle_recreate_tap(&cell, &commands);
