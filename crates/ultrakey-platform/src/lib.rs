@@ -28,6 +28,7 @@ pub mod hotplug;
 pub mod image_preprocess;
 pub mod keychain;
 pub mod login_item;
+pub mod multitouch;
 pub mod overlay_window;
 pub mod runloop;
 pub mod screen_capture;

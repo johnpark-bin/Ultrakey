@@ -72,7 +72,6 @@
   "settings.hyperkey.mouse.hint": "开启滚动可能会在把 ⌘+滚动 保留给缩放操作的应用中造成误触发。",
   "settings.hyperkey.trackpad.label": "用触控板边缘滑动触发 hyper:",
   "settings.hyperkey.trackpad.hint": "从下方选择的区域轻轻滑入一根手指即可触发,松开即可释放 hyper。",
-  "settings.hyperkey.trackpad.unimplemented": "⚠️ 手势识别尚未构建(F-06,M5)。此设置会被保存,但目前不会生效。",
   "settings.hyperkey.trackpad.change_icon": "触发期间更改菜单栏图标",
   "settings.hyperkey.trackpad.haptic": "触发时给出触觉反馈",
   "settings.hyperkey.area.top_left": "左上",

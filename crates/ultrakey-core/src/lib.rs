@@ -18,3 +18,4 @@ pub mod quickpress;
 pub mod rules;
 pub mod settings;
 pub mod time;
+pub mod trackpad;

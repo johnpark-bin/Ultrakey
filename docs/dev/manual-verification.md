@@ -2693,3 +2693,84 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 | IOPlatformUUID 취득 | — | ⚠️ 15-4 (로그로 확인) |
 | `limit_reached`·3대 제한 | ⛔ no-op 하 도달 불가 | Paddle 연동 시점에 재검증 |
 
+
+## 항목 16 — F-06 트랙패드·Magic Mouse hyper 제스처 (이슈 #63)
+
+> **이 항목은 실기기(물리 트랙패드 또는 Magic Mouse)가 필요하다** — 접촉 프레임은
+> CI 가 재현할 수 없다. 명세 `docs/spec/trackpad-hyper-gesture.md` §8 수용 기준 중
+> "실측" 조건들이 여기서 판정된다. 자동화(단위 테스트)는 §0-bis 를 참고한다.
+
+### 16-0. 전제
+
+1. 트랙패드가 달린 Mac(내장) 또는 외장 Magic Trackpad/Magic Mouse 가 연결돼 있다.
+2. `Hyperkey` 탭에서 `Hyper key source` 슬롯을 켠다(어떤 소스 키든 좋다) —
+   ⭐ F-06 은 hyper 슬롯이 켜져 있어야 리스너가 기동하는 설계다(§3.4 신호의 소비자
+   규약). `Engage hyper key using trackpad:` 도 ☑ 로 켠다.
+3. 영역은 기본값 `top right` 로 둔다.
+
+### 16-1. 기본 동작 — 슬라이드 활성/이탈 해제 (§8 기준 1·2)
+
+1. 설정 창의 Hyperkey 탭에서 `Engage hyper key using trackpad:` 를 ☑ 로 바꾼다.
+   로그에 `trackpad gesture reconfigured` 와 `Registered multitouch device ...`
+   (장치당 1행)이 남는지 확인한다.
+2. 텍스트 편집기에 커서를 두고, 트랙패드 **우측 상단 모서리**에 손가락 1개를 대고
+   안쪽(왼쪽 아래 대각)으로 천천히 민다.
+3. 예상: 약 6mm(코너 트리거 임계) 밀었을 때 로그에 `trackpad edge slide engaged the
+   hyper key (F-06)` 이 남고, 그 순간 이후 키 입력이 `⌃⌥⌘⇧` 조합으로 전달된다
+   (예: hyper+← 를 Rectangle Pro 에 바인딩해 뒀다면 창이 좌측 배치된다).
+4. 손가락을 뗀다. 로그에 `trackpad touch removed; hyper released` 가 남고 modifier
+   가 즉시 풀린다.
+
+### 16-2. 프리즈(§8 마지막 항목)
+
+1. 영역 접촉을 시작해 프리즈 임계(코너 3mm)를 넘긴다 — 커서가 **그 접촉으로부터
+   움직이지 않는다**(화면 커서가 멈춘다). 아직 hyper 는 미활성이다(로그에 Engaged
+   없음).
+2. 더 밀어 트리거 임계(6mm)를 넘기면 hyper 가 켜진다.
+3. 손가락을 떼면 커서 이동이 정상으로 돌아온다.
+
+### 16-3. 취소 경로 (§8 기준 3·4)
+
+- 진입 영역 **밖**(예: 표면 중앙)에서 접촉을 시작해 슬라이드해도 hyper 가 켜지지
+  않는다 — 로그에 아무 상태 변화가 없다.
+- 접촉을 시작한 뒤 **임계 도달 전** 두 번째 손가락을 올리면 `gesture cancelled`
+  디버그 로그가 남고 hyper 는 켜지지 않는다.
+- 영역에 손가락을 대고 바로 떼면(짧은 탭) 아무 로그도 남지 않는다(시나리오 C).
+
+### 16-4. Magic Mouse (§3.5, §8 기준 6)
+
+1. Magic Mouse 를 연결한다. 로그에 `Registered multitouch device` 가 마우스용으로
+   한 번 더 남는다(force_touch 필드 참고).
+2. 같은 제스처가 Magic Mouse 표면에서도 동작하는지 확인한다.
+
+### 16-5. 연결 해제·절전 (§8 기준 8·9·14, §5 항목 3·7·14)
+
+1. 외장 Magic Trackpad 로 hyper 를 Engaged 시킨 상태에서 블루투스를 끊는다 →
+   예상: 워치독(≤2초) 또는 장치 무효화 감지로 hyper 가 강제 해제된다. 로그:
+   `touches are not being detected` 계열.
+2. 잠자기 → 깨어나기 → 제스처가 다시 동작한다(재접속 지연 허용). 로그에 리스너
+   세션 재시작이 남는다(`Restart` 명령 — §5 항목 7 방어).
+3. 워치독 재시작 로그(`touches are not being detected. Restarting.`)는 프레임이
+   2초간 없을 때만 남는다 — 정상 사용 중에는 보이면 안 된다.
+
+### 16-6. 격하(§8 — 심벌 로드 실패 시 무영향)
+
+1. 앱을 끄고, `MultitouchSupport.framework` 를 로드할 수 없는 환경을 흉내 낸다 —
+   예: `DYLD_INSERT_LIBRARIES` 로 프레임워크 로드를 막기 어려우므로, 로그 확인만으로
+   대신한다: **정상 기기에서는 이 항목이 발화하지 않는다.** 대신 코드 리뷰 관찰
+   지점: `MultitouchApi::load()` 의 `Err` 경로가 로그(`MultitouchSupport symbols
+   unavailable; ... disabled for this session`)를 남기고 스레드를 끝내는지.
+2. 격하 상태에서 물리 키 hyper 리매핑(F-05)이 정상 동작하는지 확인한다 —
+   caps lock hold → hyper+키 조합이 그대로 동작해야 한다.
+
+### 16-6. 이 절차로 확인할 수 **없는** 것 (§9 승계)
+
+- 원본의 정확한 임계 수치(§9 #1) — 이 구현의 기본값(코너 3/6mm, 상단 4/9mm,
+  패치 12%, ±30°, 400ms)은 **설계 판단**이다. 체감이 어긋나면 `GestureParams`
+  상수를 조정한다.
+- 코너 진입의 허용각(§9 #2) — ±30° 는 제안값이다.
+- 콜백이 주는 좌표축 원점 방향(좌하 원점 가정) — 위 절차에서 "영역이 반대쪽에서
+  반응하면" 좌표 관례가 예상과 다른 것이므로 `in_entry_zone`/`inward_direction`
+  의 축 해석을 뒤집는다.
+- 드라이버 레벨 팜 리젝션 이전/이후 데이터 여부(§5 항목 11) — 손바닥을 의도적으로
+  대보고 오탐 여부를 관찰한다.

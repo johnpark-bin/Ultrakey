@@ -7,6 +7,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gesture;
+
 use serde::{Deserialize, Serialize};
 
 use ultrakey_core::flags::EventFlags;

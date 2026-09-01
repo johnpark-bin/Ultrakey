@@ -72,7 +72,6 @@
   "settings.hyperkey.mouse.hint": "スクロールをオンにすると、⌘+スクロールを拡大縮小に割り当てているアプリで誤動作することがあります。",
   "settings.hyperkey.trackpad.label": "トラックパッドの端をスワイプして hyper をトリガーする:",
   "settings.hyperkey.trackpad.hint": "選択した領域から指を1本、軽く滑らせると発動し、離すと解除されます。",
-  "settings.hyperkey.trackpad.unimplemented": "⚠️ ジェスチャー認識はまだ実装されていません(F-06、M5)。この値は保存されますが、今のところ効果はありません。",
   "settings.hyperkey.trackpad.change_icon": "作動中はメニューバーアイコンを変更する",
   "settings.hyperkey.trackpad.haptic": "トリガー時に触覚フィードバックを与える",
   "settings.hyperkey.area.top_left": "左上",

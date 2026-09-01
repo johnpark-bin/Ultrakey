@@ -13,6 +13,7 @@ use arc_swap::ArcSwap;
 use ultrakey_core::gate::AtomicAppGate;
 use ultrakey_core::korean::AtomicKoreanImeGate;
 use ultrakey_core::settings::EngineConfig;
+use ultrakey_core::trackpad::AtomicTrackpadPhase;
 use ultrakey_layout::LayoutResolver;
 
 /// 탭 스레드와 메인(호출) 스레드가 공유하는 상태.
@@ -33,12 +34,22 @@ use ultrakey_layout::LayoutResolver;
 ///   refresh_input_source`)을 받을 때마다 `classify_input_source_languages` 로 판정한
 ///   값을 게시하고, 콜백은 이 원자값을 O(1) 로드만 한다. 기본값 `Unknown` 은 fail-closed
 ///   다 — 게시가 아직 한 번도 일어나지 않았어도 F-16 규칙이 오발화하지 않는다.
+/// - `trackpad` — F-06 트랙패드 제스처 게이트(`trackpad-hyper-gesture.md` §3.4). ⭐ 이
+///   엔진은 이 값을 켜지 않는다 — 트랙패드 리스너 스레드(`apps/ultrakey-app` 소유,
+///   `ultrakey-platform::multitouch` 비공개 FFI)가 제스처 상태 머신의 전이마다
+///   `store` 한다. 이 엔진은 콜백 임계 경로에서 이 원자값을 O(1) 로드만 한다 —
+///   리스너가 존재하지 않는 구성(비공개 API 격하)에서도 값은 항상 `Off` 이고
+///   중재 판정은 기존과 완전히 동일하다(§8 격하 수용 기준).
 pub struct SharedState {
     pub config: ArcSwap<EngineConfig>,
     pub gate: Arc<AtomicAppGate>,
     pub seek_session_active: AtomicBool,
     pub layout: Arc<LayoutResolver>,
     pub korean_ime: AtomicKoreanImeGate,
+    /// ⭐ F-06 — 트랙패드 제스처 게이트. 리스너 스레드가 게시하고 콜백은 읽기만 한다.
+    /// ⛔ 리스너가 `store` 하는 값은 `ultrakey-core::trackpad::TrackpadPhase` 이다 —
+    /// 이 엔진은 이 값을 쓰지 않고, `GateSnapshot` 으로 스냅샷을 찍어 넘길 뿐이다.
+    pub trackpad: Arc<AtomicTrackpadPhase>,
 }
 
 impl SharedState {
@@ -49,6 +60,7 @@ impl SharedState {
             seek_session_active: AtomicBool::new(false),
             layout: Arc::new(LayoutResolver::new()),
             korean_ime: AtomicKoreanImeGate::new(),
+            trackpad: Arc::new(AtomicTrackpadPhase::new()),
         })
     }
 }

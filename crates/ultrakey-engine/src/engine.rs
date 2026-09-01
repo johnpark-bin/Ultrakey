@@ -22,6 +22,7 @@ use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
 use ultrakey_core::settings::EngineConfig;
 use ultrakey_core::time::Millis;
+use ultrakey_core::trackpad::TrackpadPhase;
 
 use ultrakey_layout::LayoutTable;
 
@@ -618,11 +619,19 @@ fn on_tap_event(
         flags: event.flags(),
         autorepeat: event.is_autorepeat(),
     };
-    // ⭐ 원자값 3개 로드뿐이다 — 락·할당·로깅 없음(architecture.md §2.2).
+    // ⭐ 원자값 4개 로드뿐이다 — 락·할당·로깅 없음(architecture.md §2.2).
+    // F-06 트랙패드 게이트는 리스너 스레드가 게시하고 이곳(콜백)은 읽기만 한다 —
+    // 리스너가 없는 구성(격하)에서도 `Off` 로 안전한 기본값이다.
+    let trackpad_phase = st.shared.trackpad.load();
     let gates = GateSnapshot {
         seek_active: st.shared.seek_session_active.load(Ordering::Acquire),
         korean_app_excluded: st.shared.gate.is_korean_disabled(),
         korean_ime: st.shared.korean_ime.load(),
+        trackpad_hyper_active: trackpad_phase == TrackpadPhase::Engaged,
+        trackpad_freeze_cursor: matches!(
+            trackpad_phase,
+            TrackpadPhase::Frozen | TrackpadPhase::Engaged
+        ),
     };
     let outcome = st.arbiter.arbitrate(&cfg, &input, gates, now);
 

@@ -422,7 +422,6 @@
         <select id="trackpad-area" data-key="hyperkey.trackpad.area"></select>
       </div>
       <p class="hint" id="trackpad-hint"></p>
-      <p class="warn" id="trackpad-unimplemented"></p>
 
       <!-- 11. ② 숨김 — trackpad.enabled 가 꺼지면 이 컨테이너 안의 두 체크박스
            행은 DOM 에 존재조차 하지 않는다(display:none 이 아니다). JS 의
@@ -1109,7 +1108,6 @@ if (!tauri || !tauri.core) {
     $("mouse-hint").textContent = t("settings.hyperkey.mouse.hint");
     $("trackpad-label").textContent = t("settings.hyperkey.trackpad.label");
     $("trackpad-hint").textContent = t("settings.hyperkey.trackpad.hint");
-    $("trackpad-unimplemented").textContent = t("settings.hyperkey.trackpad.unimplemented");
 
     const sourceLabel = t("settings.hyperkey.source_label");
     for (const id of ["hyper-source", "meh-source", "bleh-source"]) {
