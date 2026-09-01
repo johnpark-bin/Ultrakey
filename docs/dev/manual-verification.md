@@ -1169,6 +1169,33 @@ kd key="(" code=KeyA kc=65 shift=false
 | 5 | 설정 창을 닫았다 다시 연다 | `Advanced` 접힘 상태는 **유지되지 않는다**(기본 접힘으로 복귀 — 접힘 상태는 저장하지 않는다, D1). `synthesizeCapsLockRemap` 값은 유지된다 |
 | 6 | 트레이 메뉴 `Advanced ▸` | `Relaunch` 만 있다(이슈 #77 — synthesize 항목 제거) |
 
+### 7-j. ⭐ 트레이 아이콘 Bartender 호환성 (이슈 #78)
+
+사전 조건: **Bartender 가 설치된 실기기.** 이 항목은 조사 계획
+[`../plan/issue-78-tray-icon-bartender.md`](../plan/issue-78-tray-icon-bartender.md) §3 단계 2·D3 의
+**사용자 수행 절차**다. 우리 코드의 계측은 이미 들어가 있다(단계 1, `main.rs`:
+`tray set_visible called` / `tray set_menu replaced` / `tray ignore menu item refreshed` /
+`tray status_item snapshot` — 원인 확정 후에도 남겨 둔다).
+
+⛔ **검증자가 시스템 설정·Bartender 설정을 바꾸지 않는다** — 아래 3·4 는 **사용자가 직접** 수행한다.
+
+| # | 수행자 | 조작 | 기대 |
+| :--- | :--- | :--- | :--- |
+| 1 | 검증자 | 서명된 `.app` 을 `open --env ULTRAKEY_LOG=debug` 로 실행한다 | 기동 로그에 `tray status_item snapshot status_item_exists=true button_image_exists=true` 가 **1초 간격**으로 찍힌다(이 계측은 `debug` 전용이라 기본 레벨에서는 안 보인다) |
+| 2 | 검증자 | 평소처럼 사용하며 **깜빡임이 발생하는 시각을 기록**하며 관찰한다 | — |
+| 3 | ⭐ **사용자** | Bartender 설정에서 Ultrakey 를 **제외 목록**에 넣고 깜빡임이 사라지는지 본다 | 사라지면 **Bartender 의 숨김·복원(H1/H4)이 원인 확정**. 남아 있으면 우리 코드·macOS 자체 가능성(H2/H3/시스템 공간부족) |
+| 4 | ⭐ **사용자** | Bartender 를 **완전히 종료**하고 깜빡임이 사라지는지 본다 | 사라지면 위와 같은 확정. **Bartender 를 꺼도 깜빡이면 macOS 자체의 공간 부족 숨김**(H4 변형) |
+| 5 | 검증자 | `~/Library/Logs/Ultrakey/ultrakey.log` 에서 아래 3 가지 계측을 깜빡임 시각과 대조한다 | 아래 판정 대조 |
+| 6 | 검증자 | ⭐ **로그 파일을 이슈 #78 댓글로 회신**한다 | 이후 원인 판정·수정(단계 3)으로 진행 |
+
+판정 대조(로그) — 깜빡임 발생 시각 전후를 본다:
+
+| 로그 | 있으면 | 없으면 |
+| :--- | :--- | :--- |
+| `tray set_visible called` | **우리 코드 개입** — `source=boot`/`toggle` 필드로 트리거 출처를 알 수 있다 | **Bartender 단독 동작** |
+| `tray set_menu replaced` | 그 시각과 깜빡임 시각의 **시간적 상관**을 보라 — 상관이 없으면 H2·H3 기각 | — |
+| `tray status_item snapshot` (`debug` 전용) | ⭐ 숨김 구간에 `status_item_exists=false` 면 **NSStatusItem 제거**, `true` 면 **숨김 처리** — H1/H4 판정의 핵심 재료 | — |
+
 ## 📌 실측 결과 (2026-08-31, 이슈 #39 / General 탭 확장)
 
 빌드: `./scripts/build-signed.sh` → `target/universal-apple-darwin/release/bundle/macos/Ultrakey.app` 를 `open` 으로 실행.

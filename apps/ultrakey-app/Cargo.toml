@@ -31,6 +31,9 @@ ultrakey-click = { workspace = true }
 ultrakey-license = { workspace = true }
 axuielement = { workspace = true }
 objc2-app-kit = { workspace = true }
+# ⭐ 이슈 #78 — 트레이(NSStatusItem) 상태 스냅샷 폴링 계측에서
+# `NSStatusItem::button(mtm)` 의 `MainThreadMarker` 를 얻는 데 쓴다.
+objc2 = { workspace = true }
 # ⭐ General 탭 언어 선택(이슈 #39, `localization-and-input-sources.md` §3.1.2-a) —
 # `AppState.catalog` 를 재시작 없이 교체하기 위해 쓴다. `ultrakey-engine` 이 이미
 # 워크스페이스에 들여온 크레이트라 새로 추가하는 것이 아니다.

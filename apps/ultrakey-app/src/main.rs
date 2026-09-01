@@ -44,6 +44,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
+use objc2::MainThreadMarker;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
 use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
@@ -4201,6 +4202,9 @@ fn main() {
             if let Err(e) = setup_tray(app.handle(), &state) {
                 tracing::error!(error = %e, "failed to initialize menu bar (NSStatusItem)");
             }
+            // ⭐ 이슈 #78 — 트레이 상태 스냅샷 폴러(1초 간격, `debug` 로그). 트레이가
+            // 만들어진 뒤여야 의미 있는 샘플이 남으므로 `setup_tray` 다음에 띄운다.
+            spawn_tray_snapshot_poller(app.handle().clone(), state.clone());
             setup_front_app_tracking(app.handle(), &state);
 
             // ⭐ 이슈 #68 — 두 번째 프로세스의 "설정창 띄워라" 분산 알림 구독.
@@ -4311,14 +4315,14 @@ fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to
     tracing::info!(?to, "on_permission_transition entered");
     if should_stop_engine_for(to) {
         show_modal(handle);
-        apply_tray_menu_for_permission(handle, state, false);
+        apply_tray_menu_for_permission(handle, state, false, "permission");
         queue_engine_stop(handle, state);
     } else {
         hide_modal(handle);
         // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 생겼으니 권한이 생겼다고 창을
         // 자동으로 띄우지 않는다(과거 M2 1차 임시 조치를 걷어낸다 — 원래
         // 계획대로다). 대신 트레이 메뉴를 정상 메뉴로 되돌린다(§3.1).
-        apply_tray_menu_for_permission(handle, state, true);
+        apply_tray_menu_for_permission(handle, state, true, "permission");
         queue_engine_start(handle, state);
     }
 }
@@ -5109,6 +5113,14 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
 
     // §5 항목 2·§4 "Hide menu bar icon" — 마지막으로 저장된 값을 기동 시 반영한다.
     if hide_menu_bar_icon {
+        // ⭐ 이슈 #78 계측 — Bartender 가 숨김·복원할 때 우리 코드가 개입하는지
+        // 시간적 상관으로 배제하기 위한 호출 기록이다. 빈도가 낮아 `info` 로
+        // 남긴다(계획 §2 D2 — 원인 확정 후에도 존치).
+        tracing::info!(
+            visible = false,
+            source = "boot",
+            "tray set_visible called"
+        );
         if let Err(e) = tray.set_visible(false) {
             tracing::warn!(error = %e, "failed to apply tray icon hidden state");
         }
@@ -5122,6 +5134,58 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
     Ok(())
 }
 
+/// ⭐ 이슈 #78 — 트레이(NSStatusItem) 상태 스냅샷을 1초 간격으로 남기는 계측
+/// 폴러. `setup()` 이 트레이를 만든 직후 한 번만 띄운다.
+///
+/// Bartender 설치 실기기에서 판정해야 할 핵심 질문(계획 §2 D3)은 "Bartender 가
+/// 아이콘을 숨길 때 NSStatusItem 이 **제거되는가**(`status_item_exists=false`),
+/// **숨김 처리되는가**(`=true`)다. 볼 수 있는 정보는 `tray-icon` 의
+/// `ns_status_item()` 접근자와 그 `button.image` 유무뿐이다 — 둘 다 **메인 스레드
+/// 전용**이라 `run_on_main_thread` 로 디스패치한다(리스크 #6 — `apply_tray_menu_
+/// for_permission` 의 선례). 폴링 스레드는 큐잉만 하고 즉시 돌아오므로
+/// "백그라운드 스레드에서 메인 스레드를 동기적으로 기다리지 마라" 규칙을 지킨다.
+///
+/// 로그 레벨은 `debug` 다 — 1초 간격이라 `info` 로 남기면 로그 파일을 오염시킨다
+/// (계획 §2 D2 ⚠️·리스크 #3). `ULTRAKEY_LOG=debug` 로 켰을 때만 기록된다.
+fn spawn_tray_snapshot_poller(handle: tauri::AppHandle<Wry>, state: Arc<AppState>) {
+    thread::Builder::new()
+        .name("ultrakey-tray-poll".to_string())
+        .spawn(move || loop {
+            let state_for_closure = state.clone();
+            let dispatched = handle.run_on_main_thread(move || {
+                let Some(tray) = state_for_closure.tray.lock().unwrap().clone() else {
+                    return;
+                };
+                let _ = tray.with_inner_tray_icon(|inner| {
+                    if let Some(status_item) = inner.ns_status_item() {
+                        // 메인 스레드 안이므로 `MainThreadMarker::new()` 는
+                        // 항상 `Some` — `button(mtm)` 호출 조건을 그대로
+                        // 반영한다(marker 를 못 얻는 경우는 존재하지 않는다).
+                        let has_button_image = MainThreadMarker::new()
+                            .and_then(|mtm| status_item.button(mtm))
+                            .map(|button| button.image().is_some())
+                            .unwrap_or(false);
+                        tracing::debug!(
+                            status_item_exists = true,
+                            button_image_exists = has_button_image,
+                            "tray status_item snapshot"
+                        );
+                    } else {
+                        tracing::debug!(
+                            status_item_exists = false,
+                            "tray status_item snapshot"
+                        );
+                    }
+                });
+            });
+            if let Err(e) = dispatched {
+                tracing::error!(error = %e, "failed to dispatch tray status snapshot to the main thread");
+            }
+            thread::sleep(Duration::from_secs(1));
+        })
+        .expect("트레이 상태 스냅샷 폴러 스레드 생성 실패");
+}
+
 /// 권한 상태 전이에 맞춰 트레이의 메뉴를 정상/`unauthorizedMenu` 로 갈아 끼운다.
 ///
 /// ⭐ **메인 스레드로 비동기 디스패치한다** — 호출자(`on_permission_transition`)는
@@ -5131,7 +5195,19 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
 /// 스레드에서 그걸 직접 부르면 그 스레드가 블록된다 — 탭 스레드만큼 치명적이진
 /// 않지만 같은 규칙("백그라운드 스레드에서 메인 스레드를 동기적으로 기다리지
 /// 마라")을 일관되게 지킨다.
-fn apply_tray_menu_for_permission(handle: &tauri::AppHandle, state: &Arc<AppState>, granted: bool) {
+///
+/// `reason` 은 교체를 유발한 트리거 출처("permission"=권한 전이 / "language"=언어
+/// 변경)다 — ⭐ 이슈 #78 계측이 깜빡임 발생 시각과 `set_menu` 교체 시각의
+/// **시간적 상관**을 보기 위한 레이블이다(계획 §2 D2). `set_menu` 는 NSStatusItem 을
+/// 유지한 채 메뉴만 교체하므로 아이콘 리페인트를 직접 유발하지 않는다(`tray-icon`
+/// 0.24.2 실측) — 이 계측은 교체 시점과 Bartender 의 메뉴 추적이 겹치는 타이밍
+/// 문제(H2)를 판정하는 재료다.
+fn apply_tray_menu_for_permission(
+    handle: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    granted: bool,
+    reason: &'static str,
+) {
     let state_for_closure = state.clone();
     let dispatched = handle.run_on_main_thread(move || {
         let Some(tray) = state_for_closure.tray.lock().unwrap().clone() else {
@@ -5143,6 +5219,11 @@ fn apply_tray_menu_for_permission(handle: &tauri::AppHandle, state: &Arc<AppStat
             state_for_closure.unauthorized_menu.lock().unwrap().clone()
         };
         if let Some(menu) = menu {
+            tracing::info!(
+                reason,
+                granted,
+                "tray set_menu replaced"
+            );
             if let Err(e) = tray.set_menu(Some(menu)) {
                 tracing::warn!(error = %e, "failed to replace tray menu");
             }
@@ -5196,7 +5277,7 @@ fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         .and_then(|m| m.as_ref().map(|m| m.state()))
         .map(|s| s == PermissionState::Granted)
         .unwrap_or(false);
-    apply_tray_menu_for_permission(handle, state, granted);
+    apply_tray_menu_for_permission(handle, state, granted, "language");
     refresh_ignore_menu_item(state);
 }
 
@@ -5248,6 +5329,18 @@ fn refresh_ignore_menu_item(state: &Arc<AppState>) {
     let _ = item.set_text(ignore_menu_text(&catalog, front_app.as_ref()));
     let _ = item.set_enabled(front_app.is_some());
     let _ = item.set_checked(disabled);
+
+    // ⭐ 이슈 #78 계측(H3 판정 재료) — 최전면 앱 전환·언어 변경·Ignore 토글마다
+    // 항목을 갱신한 사실과 그 시점의 최전면 앱을 남긴다. `NSMenuItem` 수준의
+    // 변경이라 NSStatusItem 의 아이콘·가시성과는 무관하지만(`tray-icon` 실측),
+    // Bartender 가 메뉴 항목 변경까지 추적해 아이콘을 다시 그리는지 시간적
+    // 상관으로 판정한다. 앱 전환 빈도로 찍히지만 `debug` 로 두면 판정 로그가
+    // 보이지 않아 `info` 를 유지한다(계획 §2 D2 ⚠️ — 원인 확정 후에도 존치).
+    tracing::info!(
+        front_app = ?front_app.as_ref().map(|a| a.name.as_str()),
+        disabled,
+        "tray ignore menu item refreshed"
+    );
 }
 
 /// `Relaunch` 클릭 — 현재 실행 파일을 `open -n -b <bundle-id>` 로 새로 띄우고
@@ -5515,6 +5608,14 @@ fn set_hide_menu_bar_icon_internal(state: &Arc<AppState>, on: bool) -> Result<()
     }
     let tray_guard = state.tray.lock().map_err(|e| e.to_string())?;
     if let Some(tray) = tray_guard.as_ref() {
+        // ⭐ 이슈 #78 계측 — 트리거 출처는 "toggle"(General 탭 `Hide menu bar icon`
+        // 체크박스)이다. Bartender 의 숨김·복원과 우리 `set_visible` 의 시각이
+        // 겹치는지 상관을 보기 위한 기록(계획 §2 D2 — 원인 확정 후에도 존치).
+        tracing::info!(
+            visible = !on,
+            source = "toggle",
+            "tray set_visible called"
+        );
         tray.set_visible(!on).map_err(|e| e.to_string())?;
     }
     Ok(())
