@@ -24,7 +24,6 @@
        모서리 바깥이 하위 화면과 이질감 없이 섞인다. */
     background: transparent;
     font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-    color: var(--bar-fg);
   }
   [hidden] { display: none !important; }
 
@@ -37,6 +36,14 @@
     border-radius: 12px;
     border: 1px solid color-mix(in srgb, var(--bar-fg) 18%, transparent);
     background: var(--bar-bg);
+    /* ⭐ 글자색은 반드시 여기(#root)에서 선언한다 — 이슈 #67. applyPalette()
+       는 JS 로 #root 요소에만 CSS 변수를 inline 세팅한다. `var()` 는 선언이
+       붙은 요소 기준으로 해석되므로, 글자색이 `html, body` 쪽에 있으면 JS 가
+       갱신한 값이 닿지 않고 첫 페인트용 폴백(흰색)이 영원히 쓰인다 — 라이트
+       테마에서 흰 배경 위 흰 글자가 되는 결함이 그것이었다. #root 안의 모든
+       텍스트는 상속으로 이 값을 따르고, `--bar-fg` 도 같은 요소에서 해석되므로
+       폴백→팔레트 전환이 글자·배경·캐럿이 한 덩어리로 움직인다. */
+    color: var(--bar-fg);
     /* Spotlight 유사 느낌(§1) — 반투명 배경 위에 블러. */
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
