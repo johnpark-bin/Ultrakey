@@ -1023,20 +1023,35 @@
       <p class="hint" id="general-transfer-hint"></p>
       <p id="general-transfer-result" hidden></p>
 
-      <!-- ⭐ 이슈 #47 — 진단 섹션 경계(구분선만 추가, 기존 헤딩 유지). -->
+      <!-- ⭐ 이슈 #77 — Advanced 접이식 섹션. 트레이 메뉴 `Advanced ▸` 에 있던
+           Synthesize Caps Lock Remap 과 기존 진단 섹션(Event Viewer·로그 폴더
+           버튼)이 여기로 이동했다. 접힘 상태는 저장하지 않는다(세션 상태 —
+           F-15 "부재 = 기본값", 신규 저장 키 없음). -->
       <hr />
+      <details id="general-advanced">
+        <summary id="general-advanced-summary"></summary>
 
-      <!-- ⭐ F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창. 이 버튼은 `open_event_viewer`
-           커맨드로 그 창을 연다(`docs/spec/event-viewer.md` §3.1). -->
-      <h2 class="group" id="general-diagnostics-heading"></h2>
-      <div class="row">
-        <button id="open-event-viewer-btn"></button>
-        <!-- ⭐ 이슈 #47 — 로그 폴더 열기 버튼(`open_log_folder` 커맨드). Event
-             Viewer 와 같은 진단 버튼이라 같은 .row 에 둔다(transfer 의
-             export/import 한 행 2버튼 선례와 동일). -->
-        <button id="open-log-folder-btn"></button>
-      </div>
-      <p class="hint" id="general-event-viewer-hint"></p>
+        <!-- ⭐ 이슈 #77 — synthesize 래핑 스위치. 기존 data-key 위임 경로
+             (`settings_set` → `settings_set_preset` → `apply_preset_setting` 의
+             `PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP` 분기 → `reconfigure_engine`)를
+             그대로 타므로 별도 리스너가 필요 없다. -->
+        <label class="checkbox-row">
+          <input type="checkbox" id="synthesize-caps-remap" data-key="presets.synthesizeCapsLockRemap" />
+          <span id="synthesize-caps-remap-label"></span>
+        </label>
+        <p class="hint warn" id="synthesize-caps-remap-why"></p>
+
+        <!-- ⭐ F-18 Event Viewer(이슈 #39 Phase 3) — 별도 창. 이 버튼은 `open_event_viewer`
+             커맨드로 그 창을 연다(`docs/spec/event-viewer.md` §3.1). -->
+        <div class="row">
+          <button id="open-event-viewer-btn"></button>
+          <!-- ⭐ 이슈 #47 — 로그 폴더 열기 버튼(`open_log_folder` 커맨드). Event
+               Viewer 와 같은 진단 버튼이라 같은 .row 에 둔다(transfer 의
+               export/import 한 행 2버튼 선례와 동일). -->
+          <button id="open-log-folder-btn"></button>
+        </div>
+        <p class="hint" id="general-event-viewer-hint"></p>
+      </details>
 
     </section>
   </main>
@@ -1275,9 +1290,14 @@ if (!tauri || !tauri.core) {
     $("general-transfer-hint").textContent = t("settings.general.transfer.hint");
 
     // ⭐ 이슈 #39 Phase 3 — Event Viewer.
-    $("general-diagnostics-heading").textContent = t("settings.general.diagnostics");
     $("open-event-viewer-btn").textContent = t("settings.general.event_viewer");
     $("general-event-viewer-hint").textContent = t("settings.general.event_viewer.hint");
+
+    // ⭐ 이슈 #77 — Advanced 접이식 섹션(`<summary>` 가 헤딩을 겸한다 — D4 "헤딩
+    // 제거"로 `settings.general.diagnostics` 키는 삭제) + synthesize 체크박스·위험 고지.
+    $("general-advanced-summary").textContent = t("settings.general.advanced");
+    $("synthesize-caps-remap-label").textContent = t("settings.general.advanced.synthesize_caps_remap");
+    $("synthesize-caps-remap-why").textContent = t("settings.general.advanced.synthesize_caps_remap.why");
 
     // ⭐ 이슈 #47 — 섹션 헤딩 2개(신규)+ 로그 폴더 버튼. 기존 transfer·diagnostics
     // 헤딩 배선과 같은 방식으로 카탈로그에서 채운다.
@@ -2439,6 +2459,10 @@ if (!tauri || !tauri.core) {
     $("p-quick-duration").value = String(p.quickPressDurationMs);
     $("p-quick-duration-value").textContent =
       tf("settings.presets.quick_press_duration.value", [p.quickPressDurationMs]);
+
+    // ⭐ 이슈 #77 — synthesize 스위치(General 탭 Advanced 안). 저장 키가
+    // `presets.*` 이므로 이 렌더의 상태 소스는 `state.presets` 다.
+    $("synthesize-caps-remap").checked = p.synthesizeCapsLockRemap;
 
     // ② 숨김 2종.
     renderHiddenNote("presets-caps-alias", state.capsLockAliasActive,

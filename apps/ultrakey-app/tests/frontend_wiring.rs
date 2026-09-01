@@ -815,11 +815,12 @@ fn main_rs_의_menu_점_리터럴은_다섯_카탈로그_모두에_있다() {
 }
 
 /// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
-/// `Settings…` · `Check for Updates…`(F-13) · `About` · `Advanced ▸ (Synthesize Caps
-/// Lock Remap / Relaunch)` · `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을
-/// 전부 갖추고 있는지 이름만으로 재확인한다. `Purchase`(F-12) 만 실수로 다시
-/// 들어오면(범위 밖) 이 테스트가 아니라 코드 리뷰에서 걸러야 하지만, 적어도
-/// 필수 항목이 빠지는 회귀는 여기서 잡는다.
+/// `Settings…` · `Check for Updates…`(F-13) · `About` · `Advanced ▸ (Relaunch)` ·
+/// `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을 전부 갖추고 있는지
+/// 이름만으로 재확인한다. `Purchase`(F-12) 만 실수로 다시 들어오면(범위 밖) 이
+/// 테스트가 아니라 코드 리뷰에서 걸러야 하지만, 적어도 필수 항목이 빠지는 회귀는
+/// 여기서 잡는다. ⭐ 이슈 #77 — `menu.advanced.synthesize_caps_remap` 은 이 목록에서
+/// 빠졌다(Synthesize 는 설정 화면 General 탭 Advanced 로 이동, D2).
 #[test]
 fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
     let main_rs = read_main_rs();
@@ -829,7 +830,6 @@ fn main_rs_가_정상_메뉴의_필수_항목_id를_전부_선언한다() {
         "menu.check_for_updates",
         "menu.about",
         "menu.advanced",
-        "menu.advanced.synthesize_caps_remap",
         "menu.advanced.relaunch",
         "menu.quit",
         "menu.unauthorized.authorize",
@@ -976,38 +976,180 @@ fn bundle_icon_목록의_파일이_전부_존재한다() {
     }
 }
 
-/// ⭐ 이슈 #19 증상 B 의 회귀 방지 — `Synthesize Caps Lock Remap` 메뉴 항목이
-/// **저장만 하고 끝나지 않는지**를 본다.
+/// ⭐ 이슈 #77 — synthesize 토글의 "엔진 반영" 의도가 **설정 화면 경로**로 유지됨을
+/// 단언한다. 트레이 메뉴의 `Synthesize Caps Lock Remap` 항목(과 그 전용 토글 함수
+/// `on_menu_toggle_synthesize_caps_lock_remap`)은 제거됐고(D2), 설정 화면 체크박스가
+/// 기존 `settings_set` → `settings_set_preset` → `apply_preset_setting` 경로를 타므로
+/// 이 테스트는 그 경로가 끝까지 `reconfigure_engine`(경로 B 재적용)에 닿는지를 본다.
 ///
-/// 이전 구현은 `SettingsStore::set` 만 부르고 `AppState::presets`(탭 스레드가 보는
-/// 정본)도, `Engine::reconfigure`(경로 B 재적용)도 건드리지 않았다. 그래서 이 항목을
-/// 눌러도 `caps lock → F18` 커널 매핑이 그대로 남았다 — 실측 로그가 토글 직후의 경로 B
-/// 재적용을 `count=1` 로 기록한다. `architecture.md` §6.1 이 이 스위치에 부여한 역할은
-/// "켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다" 이므로, 엔진 반영이 없으면 스위치가
-/// 제 역할을 못 한다.
-///
-/// ⚠️ 정적 텍스트 검사다 — 이 파일의 다른 테스트들과 같은 한계를 갖는다(호출이
-/// 존재한다는 것만 확인하고 실제 실행 순서까지는 보지 않는다). 그래도 "저장만 하는
-/// 핸들러로 되돌아가는" 회귀는 정확히 잡는다.
+/// ⚠️ 이는 이슈 #19 증상 B 의 회귀 방지였던 테스트(`Synthesize Caps Lock Remap`
+/// 메뉴 토글이 저장만 하고 엔진을 건드리지 않던 결함)의 후속이다. 엔진 반영은
+/// 이제 체크박스 → `settings_set_preset` 경로가 책임지므로, 여기서는 (1) `apply_preset_`
+/// `setting` 에 `PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP` 분기가 있고 (2) 그 분기를 부르는
+/// `settings_set_preset` 이 본문에서 `reconfigure_engine` 을 호출함을 정적으로 확인한다.
+/// ⚠️ 정적 텍스트 검사다 — 이 파일의 다른 테스트들과 같은 한계를 갖는다.
 #[test]
-fn synthesize_caps_lock_remap_토글이_엔진에도_반영된다() {
+fn synthesize_토글의_설정_경로가_엔진까지_반영된다() {
     let main_rs = read_main_rs();
-    let start = main_rs
-        .find("fn on_menu_toggle_synthesize_caps_lock_remap")
-        .expect("on_menu_toggle_synthesize_caps_lock_remap 이 없다");
-    // 다음 최상위 `fn ` 선언 전까지를 이 함수의 본문으로 본다.
-    let rest = &main_rs[start..];
-    let end = rest[1..].find("\nfn ").map(|i| i + 1).unwrap_or(rest.len());
-    let body = &rest[..end];
 
+    // (1) apply_preset_setting 의 본문 — synthesize 분기가 presets 정본을 바꾼다.
+    let ap_start = main_rs
+        .find("fn apply_preset_setting")
+        .expect("apply_preset_setting 이 없다");
+    let ap_rest = &main_rs[ap_start..];
+    let ap_end = ap_rest[1..]
+        .find("\nfn ")
+        .map(|i| i + 1)
+        .unwrap_or(ap_rest.len());
+    let apply_body = &ap_rest[..ap_end];
     assert!(
-        body.contains("reconfigure_engine"),
-        "메뉴 토글이 reconfigure_engine 을 부르지 않는다 — 경로 B 매핑이 설정과 어긋난 채 남는다"
+        apply_body.contains("PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP"),
+        "apply_preset_setting 에 PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP 분기가 없다"
     );
     assert!(
-        body.contains("synthesize_caps_lock_remap = next"),
-        "메뉴 토글이 AppState::presets 정본을 갱신하지 않는다 — 탭 스레드가 옛 값을 계속 본다"
+        apply_body.contains("presets.synthesize_caps_lock_remap = parse(value, key)?"),
+        "apply_preset_setting 이 synthesize 값을 presets 정본에 반영하지 않는다"
     );
+
+    // (2) settings_set_preset 의 본문 — presets 변경이 reconfigure_engine(force_reset)
+    // 까지 도달한다. 이 함수는 presets.* 변경 후 무조건 force_reset=true 로
+    // reconfigure_engine 을 부르므로(§3.1 실측 1), 설정 화면 체크박스 하나로
+    // 이전 메뉴 토글과 같은 엔진 반영이 완결된다.
+    let sp_start = main_rs
+        .find("fn settings_set_preset")
+        .expect("settings_set_preset 이 없다");
+    let sp_rest = &main_rs[sp_start..];
+    let sp_end = sp_rest[1..]
+        .find("\nfn ")
+        .map(|i| i + 1)
+        .unwrap_or(sp_rest.len());
+    let set_preset_body = &sp_rest[..sp_end];
+    assert!(
+        set_preset_body.contains("validate_and_apply_preset"),
+        "settings_set_preset 이 apply_preset_setting 을 부르지 않는다"
+    );
+    assert!(
+        set_preset_body.contains("reconfigure_engine"),
+        "settings_set_preset 이 reconfigure_engine 을 부르지 않는다 — \
+         경로 B 매핑이 설정과 어긋난 채 남는다"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 이슈 #77 — 설정 화면 Advanced 섹션(`<details id="general-advanced">`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 이슈 #77 — `Synthesize Caps Lock Remap` 체크박스가 활성 컨트롤로 배선됐는지
+/// 본다: `id="synthesize-caps-remap"` + `data-key="presets.synthesizeCapsLockRemap"`
+/// (기존 위임 경로 그대로), disabled 가 아니다.
+#[test]
+fn settings_html의_synthesize_체크박스가_활성이다() {
+    let html = read_settings_html();
+
+    let input_needle = r#"id="synthesize-caps-remap""#;
+    let input_pos = html
+        .find(input_needle)
+        .unwrap_or_else(|| panic!("settings.html 에 id=\"synthesize-caps-remap\" 컨트롤이 없다"));
+    let tag_end = html[input_pos..]
+        .find('>')
+        .map(|i| input_pos + i)
+        .unwrap_or_else(|| panic!("id=\"synthesize-caps-remap\" 의 <input> 태그가 닫히지 않았다"));
+    let tag = &html[input_pos..tag_end];
+    assert!(
+        !tag.contains("disabled"),
+        "id=\"synthesize-caps-remap\" 체크박스가 disabled 다 — 활성 컨트롤로 출하해야 한다"
+    );
+    assert!(
+        html.contains(r#"data-key="presets.synthesizeCapsLockRemap""#),
+        "'synthesize-caps-remap' 체크박스에 data-key=\"presets.synthesizeCapsLockRemap\" 가 없다 — \
+         settings_set → settings_set_preset 경로와 엮이지 않는다"
+    );
+    assert!(
+        html.contains(r#"id="synthesize-caps-remap-why""#),
+        "id=\"synthesize-caps-remap-why\" 위험 고지 문단이 없다"
+    );
+}
+
+/// 이슈 #77 — Advanced 섹션이 `<details id="general-advanced">` 로 구현됐고
+/// **기본 접힘**(`open` 속성 부재)이다. 접힘 상태는 저장하지 않는다(세션 상태 —
+/// 신규 저장 키 없음, D1).
+#[test]
+fn settings_html의_advanced_details가_기본_접힘이다() {
+    let html = read_settings_html();
+
+    let details_needle = r#"<details id="general-advanced">"#;
+    let details_pos = html
+        .find(details_needle)
+        .unwrap_or_else(|| panic!("settings.html 에 <details id=\"general-advanced\"> 가 없다"));
+    let open_attr_in_open_tag = html[details_pos..details_pos + details_needle.len() + 1]
+        .contains("open");
+    assert!(
+        !open_attr_in_open_tag,
+        "<details id=\"general-advanced\"> 에 open 속성이 있다 — 기본 접힘으로 출하해야 한다"
+    );
+    assert!(
+        html.contains(r#"<summary id="general-advanced-summary">"#),
+        "<summary id=\"general-advanced-summary\"> 가 없다 — <summary> 가 섹션 헤딩을 겸한다(D4)"
+    );
+}
+
+/// 이슈 #77 — 이동의 결과가 정적 마크업에서 남아 있지 않다: (1) 진단
+/// `#general-diagnostics-heading`(h2.group)은 `<summary>` 로 대체, (2) 트레이 메뉴
+/// `menu.advanced.synthesize_caps_remap` 은 main.rs 에서 완전히 제거(복제 아님).
+#[test]
+fn 이동_결과_구_위치에_남은게_없다() {
+    let html = read_settings_html();
+    assert!(
+        !html.contains(r#"id="general-diagnostics-heading""#),
+        "settings.html 에 #general-diagnostics-heading 이 남아 있다 — Advanced <summary> 로 대체해야 한다"
+    );
+    // 진단 버튼은 제거가 아니라 **이동**이므로 그대로 있어야 한다.
+    for id in ["open-event-viewer-btn", "open-log-folder-btn"] {
+        assert!(
+            html.contains(&format!(r#"id="{id}""#)),
+            "settings.html 에 <button id=\"{id}\"> 가 없다 — 진단 버튼은 Advanced 안으로 이동"
+        );
+    }
+
+    let main_rs = read_main_rs();
+    assert!(
+        !main_rs.contains("menu.advanced.synthesize_caps_remap"),
+        "src/main.rs 에 menu.advanced.synthesize_caps_remap 이 남아 있다 — 트레이 항목은 \
+         복제가 아니라 제거해야 한다(D2)"
+    );
+}
+
+/// 이슈 #77 — 신규 키 3개(`settings.general.advanced.*`)가 5개 카탈로그 모두에
+/// 있고, 삭제 키 2개(`menu.advanced.synthesize_caps_remap`·`settings.general.
+/// diagnostics`)가 5개 카탈로그 모두에 없다. 카탈로그 간 키 집합 동일성은
+/// `ultrakey-i18n` 이 전체에 대해 검증하므로, 여기서는 이번 이슈의 키만 좁혀 본다.
+#[test]
+fn 이슈_77_신규키는_다섯_카탈로그_모두에_있고_삭제키는_모두에_없다() {
+    let added: &[&str] = &[
+        "settings.general.advanced",
+        "settings.general.advanced.synthesize_caps_remap",
+        "settings.general.advanced.synthesize_caps_remap.why",
+    ];
+    let removed: &[&str] = &[
+        "menu.advanced.synthesize_caps_remap",
+        "settings.general.diagnostics",
+    ];
+
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        for k in added {
+            assert!(
+                keys.contains(*k),
+                "{locale}.json 에 신규 키 \"{k}\" 가 없다"
+            );
+        }
+        for k in removed {
+            assert!(
+                !keys.contains(*k),
+                "{locale}.json 에 삭제 키 \"{k}\" 가 아직 남아 있다"
+            );
+        }
+    }
 }
 
 // ⭐ F-17(per-device-settings.md) — `Keyboards` 탭 재발 방지 테스트.
@@ -2039,6 +2181,8 @@ fn general_view가_login_item_status를_읽는다() {
 /// A-4·B-3 — 이번 회차가 5개 카탈로그 전부에 새로 넣은 키 13개(export/import 8개 +
 /// Event Viewer 5개). 위임 지시서의 수용 기준이 "키 집합이 정확히 같아야 한다"라
 /// 기존 `NEW_KEYS_FOR_ISSUE_39`(D6, 앞선 회차)와 별도 목록으로 명시적으로 잡는다.
+/// ⭐ 이슈 #77 — `settings.general.diagnostics`(진단 헤딩 키)는 여기서 제외했다.
+/// Advanced `<summary>` 가 헤딩을 겸하면서 키가 삭제됐다(계획 §2 D4·D6).
 const NEW_KEYS_FOR_ISSUE_39_PHASE_2_3: &[&str] = &[
     "settings.general.transfer",
     "settings.general.export",
@@ -2048,7 +2192,6 @@ const NEW_KEYS_FOR_ISSUE_39_PHASE_2_3: &[&str] = &[
     "settings.general.import.done",
     "settings.general.import.absent_devices",
     "settings.general.import.failed",
-    "settings.general.diagnostics",
     "settings.general.event_viewer",
     "settings.general.event_viewer.hint",
     "eventviewer.notice.no_permission",
@@ -2137,6 +2280,10 @@ fn settings_html_에_export_import_이벤트뷰어_버튼이_있고_커맨드를
 /// ⭐ 이슈 #47 — General 탭이 `<hr />` 4개 + 섹션 헤딩 4개로 묶인다(계획 §2 D1):
 /// 언어(무헤딩) → Startup & menu bar → License → 설정 파일 → 진단.
 ///
+/// ⭐ 이슈 #77(D4) — 진단 `#general-diagnostics-heading`(h2.group)은 제거됐고
+/// Advanced `<details>` 의 `<summary>` 가 그 헤딩을 겸한다. `<details>` 는 `<hr />`
+/// 다음에 들어오므로 `<hr />` 개수 4 단언은 그대로 성립한다.
+///
 /// hr 카운트는 **panel-general 스코프로 한정**한다 — 전체 HTML 에서 세면 다른
 /// 탭 수정(Presets·Hyperkey 의 hr)에 취약하다. 또 스코프 추출 후 HTML 주석을
 /// 제거하고 센다(이 줄 위 한국어 주석 안의 `<hr />` 산문이 카운트를 흔들 수
@@ -2164,7 +2311,6 @@ fn general_탭에_섹션_헤딩과_구분선이_있다() {
         "general-startup-heading",
         "general-license-heading",
         "general-transfer-heading",
-        "general-diagnostics-heading",
     ] {
         assert!(
             html.contains(&format!("id=\"{id}\"")),

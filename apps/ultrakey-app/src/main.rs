@@ -103,7 +103,6 @@ mod menu_ids {
     pub const CHECK_FOR_UPDATES: &str = "menu.check_for_updates";
     pub const ABOUT: &str = "menu.about";
     pub const ADVANCED: &str = "menu.advanced";
-    pub const SYNTHESIZE_CAPS_REMAP: &str = "menu.advanced.synthesize_caps_remap";
     pub const RELAUNCH: &str = "menu.advanced.relaunch";
     pub const QUIT: &str = "menu.quit";
     pub const AUTHORIZE: &str = "menu.unauthorized.authorize";
@@ -464,6 +463,8 @@ struct PresetsView {
     shift_delete_to_forward: bool,
     paste_without_formatting: PasteWithoutFormattingView,
     home_end_on_lines: bool,
+    /// ⭐ 이슈 #77 — General 탭 Advanced 섹션의 체크박스가 이 값을 렌더한다.
+    synthesize_caps_lock_remap: bool,
 }
 
 fn presets_view(p: &PresetSettings) -> PresetsView {
@@ -502,6 +503,7 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
             trigger: serde_variant_name(&p.paste_without_formatting.trigger),
         },
         home_end_on_lines: p.home_end_on_lines,
+        synthesize_caps_lock_remap: p.synthesize_caps_lock_remap,
     }
 }
 
@@ -4950,7 +4952,6 @@ fn build_normal_menu(
     catalog: &Catalog,
     front_app: Option<&AppIdentity>,
     front_app_disabled: bool,
-    synth_caps_checked: bool,
 ) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
     let ignore_item = CheckMenuItem::with_id(
         handle,
@@ -4994,14 +4995,6 @@ fn build_normal_menu(
         None::<&str>,
     )?;
 
-    let synth_caps_item = CheckMenuItem::with_id(
-        handle,
-        menu_ids::SYNTHESIZE_CAPS_REMAP,
-        catalog.get(menu_ids::SYNTHESIZE_CAPS_REMAP),
-        true,
-        synth_caps_checked,
-        None::<&str>,
-    )?;
     // `.app` 번들 밖(`tauri dev`)에서는 `open -n -b <bundle-id>` 로 재실행할 대상
     // 자체가 없다 — 항목을 비활성화한다(위임 지시서).
     let relaunch_enabled = bundle::is_running_from_app_bundle();
@@ -5012,12 +5005,14 @@ fn build_normal_menu(
         relaunch_enabled,
         None::<&str>,
     )?;
+    // ⭐ 이슈 #77 — Synthesize Caps Lock Remap 은 설정 화면 General 탭의
+    // Advanced 섹션으로 이동했다. `Advanced ▸` 서브메뉴에는 Relaunch 만 남는다.
     let advanced_menu = Submenu::with_id_and_items(
         handle,
         menu_ids::ADVANCED,
         catalog.get(menu_ids::ADVANCED),
         true,
-        &[&synth_caps_item, &relaunch_item],
+        &[&relaunch_item],
     )?;
 
     let sep_bottom = PredefinedMenuItem::separator(handle)?;
@@ -5068,14 +5063,6 @@ fn build_unauthorized_menu(
     Menu::with_items(handle, &[&status_item, &authorize_item])
 }
 
-/// `presets.synthesizeCapsLockRemap` 의 현재 값 — 기본값은 꺼짐(§7 판정: 원본
-/// 디버깅용 스위치를 추정으로 켤 이유가 없다).
-fn synthesize_caps_lock_remap_enabled(store: &SettingsStore) -> bool {
-    store
-        .get(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
-        .unwrap_or(false)
-}
-
 /// 트레이(`NSStatusItem`)를 만들고 `AppState` 에 손잡이를 채운다. `setup()` 안에서
 /// 한 번만 불린다.
 fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result<()> {
@@ -5100,14 +5087,13 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
     let icon = tauri::image::Image::from_bytes(icon_bytes)?;
 
     let store = state.store.lock().unwrap();
-    let synth_caps_checked = synthesize_caps_lock_remap_enabled(&store);
     let hide_menu_bar_icon: bool = store
         .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
         .unwrap_or(false);
     drop(store);
 
     let (normal_menu, ignore_item) =
-        build_normal_menu(handle, catalog, None, false, synth_caps_checked)?;
+        build_normal_menu(handle, catalog, None, false)?;
     let unauthorized_menu = build_unauthorized_menu(handle, catalog)?;
 
     let state_for_events = state.clone();
@@ -5176,15 +5162,12 @@ fn apply_tray_menu_for_permission(handle: &tauri::AppHandle, state: &Arc<AppStat
 fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let catalog = state.catalog.load_full();
     let catalog = catalog.as_ref();
-    let store = state.store.lock().unwrap();
-    let synth_caps_checked = synthesize_caps_lock_remap_enabled(&store);
-    drop(store);
 
     // ⛔ 최전면 앱 이름은 여기서 다시 조회하지 않는다 — `refresh_ignore_menu_item`
     // 이 그 일을 전담한다. 새 `ignore_item` 을 조립한 뒤 곧바로 그 함수를 한 번
     // 더 불러 실제 최전면 앱 라벨로 채운다.
     let (normal_menu, ignore_item) =
-        match build_normal_menu(handle, catalog, None, false, synth_caps_checked) {
+        match build_normal_menu(handle, catalog, None, false) {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(error = %e, "failed to rebuild tray normal menu after a language change");
@@ -5227,7 +5210,6 @@ fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuE
         menu_ids::IGNORE_APP => on_menu_ignore_app(state),
         menu_ids::SETTINGS | menu_ids::ABOUT => show_settings_window(app),
         menu_ids::CHECK_FOR_UPDATES => on_menu_check_for_updates(app, state),
-        menu_ids::SYNTHESIZE_CAPS_REMAP => on_menu_toggle_synthesize_caps_lock_remap(state),
         menu_ids::RELAUNCH => on_menu_relaunch(app, state),
         menu_ids::QUIT => on_menu_quit(app, state),
         menu_ids::AUTHORIZE => show_modal(app),
@@ -5266,91 +5248,6 @@ fn refresh_ignore_menu_item(state: &Arc<AppState>) {
     let _ = item.set_text(ignore_menu_text(&catalog, front_app.as_ref()));
     let _ = item.set_enabled(front_app.is_some());
     let _ = item.set_checked(disabled);
-}
-
-/// `Synthesize Caps Lock Remap` 클릭 — `presets.synthesizeCapsLockRemap` 를
-/// 토글한다. ⚠️ 이 값을 실제로 읽어 경로 B 설치 여부를 바꾸는 쪽은 F-08(프리셋)
-/// 소관이다 — 이 메뉴 항목은 `SettingsStore` 에 값을 쓰고 읽는 것까지만 한다
-/// (위임 지시서). muda 는 클릭 시 항목의 체크 상태를 먼저 스스로 뒤집은 뒤에
-/// 이벤트를 보내므로(objc2 macOS 백엔드 관찰), 여기서 다시 `set_checked` 를
-/// 부를 필요가 없다 — 저장 값만 그 새 상태와 맞춰 주면 된다.
-fn on_menu_toggle_synthesize_caps_lock_remap(state: &Arc<AppState>) {
-    let next = {
-        let store = state.store.lock().unwrap();
-        !synthesize_caps_lock_remap_enabled(&store)
-    };
-
-    // ⭐ 1) 메모리 정본 갱신 + 2) 엔진 반영 (2026-08-30, 이슈 #19 / 증상 B).
-    //
-    // **이전 구현은 `SettingsStore` 에만 값을 썼다.** 위임 지시서가 "이 값을 실제로
-    // 읽어 경로 B 설치 여부를 바꾸는 쪽은 F-08 소관" 이라고 경계를 그었던 것을,
-    // "메뉴는 저장만 한다"로 좁게 구현한 결과다. 그래서 이 항목을 눌러도
-    // `AppState::presets`(탭 스레드가 실제로 보는 정본)와 `EngineConfig::
-    // caps_lock_alias` 가 그대로였고, **경로 B 커널 매핑이 토글과 어긋난 채 남았다.**
-    //
-    // 실측 근거(이슈 #19 로그): `05:39:52 Synthesize Caps Lock Remap 토글됨 value=true`
-    // 직후인 `05:40:49` 의 경로 B 재적용이 여전히 `count=1` 이었다 — 토글이 매핑을
-    // 전혀 바꾸지 못했다는 뜻이다. `architecture.md` §6.1 이 이 스위치에 부여한 역할
-    // ("켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다")이 성립하지 않았다.
-    //
-    // ⚠️ 락을 겹쳐 잡지 않는다 — `reconfigure_engine` 은 `state.engine` 을 잡으므로
-    // `store`/`presets` 잠금을 놓은 뒤에 부른다.
-    let presets_snapshot = {
-        let mut presets = match state.presets.lock() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to lock presets source of truth; could not apply toggle");
-                return;
-            }
-        };
-        presets.synthesize_caps_lock_remap = next;
-        *presets
-    };
-    let hyperkey_snapshot = match state.hyperkey.lock() {
-        Ok(h) => h.clone(),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to lock hyperkey source of truth; could not apply toggle");
-            return;
-        }
-    };
-    let korean_snapshot = match state.korean.lock() {
-        Ok(k) => *k,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to lock korean source of truth; could not apply toggle");
-            return;
-        }
-    };
-    let seek_snapshot = match state.seek.lock() {
-        Ok(s) => s.clone(),
-        Err(e) => {
-            tracing::error!(error = %e, "failed to lock seek source of truth; could not apply toggle");
-            return;
-        }
-    };
-    // `force_reset = true` — alias 가 바뀌면 추적 키 집합(F18 ↔ caps lock)이 통째로
-    // 바뀌므로, 규칙 변경과 같은 이유로 stuck modifier 위험이 있다(D-D).
-    if let Err(e) = reconfigure_engine(
-        state,
-        &hyperkey_snapshot,
-        &presets_snapshot,
-        &korean_snapshot,
-        &seek_snapshot,
-        true,
-    ) {
-        tracing::error!(error = %e, "failed to apply Synthesize Caps Lock Remap to the engine");
-    }
-
-    // 3) 저장.
-    {
-        let mut store = state.store.lock().unwrap();
-        if let Err(e) = store.set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &next) {
-            tracing::error!(error = %e, "failed to save presets.synthesizeCapsLockRemap");
-        }
-    }
-    tracing::info!(
-        value = next,
-        "Synthesize Caps Lock Remap toggled; applied to engine and path B"
-    );
 }
 
 /// `Relaunch` 클릭 — 현재 실행 파일을 `open -n -b <bundle-id>` 로 새로 띄우고
@@ -6834,7 +6731,11 @@ mod tests {
         let presets_json = obj["presets"].as_object().unwrap();
         assert!(presets_json.contains_key("capsLockRemap"));
         assert!(presets_json.contains_key("quickPressDurationMs"));
-        assert!(!presets_json.contains_key("synthesizeCapsLockRemap"));
+        // ⭐ 이슈 #77 — General 탭 Advanced 섹션의 synthesize 체크박스가 이 값을
+        // 렌더한다(`$("synthesize-caps-remap").checked = state.presets.
+        // synthesizeCapsLockRemap`). 설정 화면은 카탈로그 부재 = 기본값(꺼짐)을
+        // 이 경로로 직접 받는다 — camelCase 필드로 실려야 한다.
+        assert_eq!(presets_json["synthesizeCapsLockRemap"], false);
 
         let preset_options_json = obj["presetOptions"].as_object().unwrap();
         assert!(preset_options_json.contains_key("capsRemapTargets"));
@@ -6962,20 +6863,28 @@ mod tests {
         );
     }
 
-    // synthesize_caps_lock_remap_enabled() — 부재 = 기본값(꺼짐), 저장된 값이 있으면 그대로.
+    // `presets.synthesizeCapsLockRemap` — 부재 = 기본값(꺼짐), 저장된 값이 있으면 그대로.
+    // ⭐ 이슈 #77 — 메뉴 전용 헬퍼 `synthesize_caps_lock_remap_enabled` 는 (메뉴
+    // 항목과 함께) 제거됐다. 저장 키 자체는 살아있고(설정 화면 체크박스가
+    // `settings_set_preset` 경로로 쓴다), 이 테스트는 키의 불변 계약(부재 = 기본값)
+    // 을 `SettingsStore::get` 직접 단언으로 보존한다.
     #[test]
-    fn synthesize_caps_lock_remap_enabled_defaults_to_false() {
+    fn synthesize_caps_lock_remap_defaults_to_false() {
         let store = SettingsStore::in_memory();
-        assert!(!synthesize_caps_lock_remap_enabled(&store));
+        assert!(!store
+            .get::<bool>(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
+            .unwrap_or(false));
     }
 
     #[test]
-    fn synthesize_caps_lock_remap_enabled_reflects_stored_value() {
+    fn synthesize_caps_lock_remap_reflects_stored_value() {
         let mut store = SettingsStore::in_memory();
         store
             .set(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP, &true)
             .unwrap();
-        assert!(synthesize_caps_lock_remap_enabled(&store));
+        assert!(store
+            .get::<bool>(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
+            .unwrap_or(false));
     }
 
     // menu_ids 상수들이 서로 다르다 — 오타로 두 메뉴 항목이 같은 id 를 갖는 회귀를 막는다.
@@ -6987,7 +6896,6 @@ mod tests {
             menu_ids::CHECK_FOR_UPDATES,
             menu_ids::ABOUT,
             menu_ids::ADVANCED,
-            menu_ids::SYNTHESIZE_CAPS_REMAP,
             menu_ids::RELAUNCH,
             menu_ids::QUIT,
             menu_ids::AUTHORIZE,
