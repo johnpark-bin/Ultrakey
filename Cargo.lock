@@ -4355,6 +4355,7 @@ dependencies = [
  "axuielement",
  "crossbeam-channel",
  "global-hotkey",
+ "objc2",
  "objc2-app-kit",
  "serde",
  "serde_json",
