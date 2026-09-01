@@ -831,9 +831,9 @@ M1 에는 이 엔진이 설치하는 경로 B 규칙이 **0개**여서 위 1·3 
 | # | 조작 | 기대 |
 | :--- | :--- | :--- |
 | 1 | caps lock 프리셋을 하나 켠 뒤 `hidutil property --get UserKeyMapping` | `Src=30064771129`, `Dst=30064771181` 이 **나타난다** |
-| 2 | ⭐ 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 을 **켠다**, 그리고 다시 조회 | ⭐ **그 매핑이 즉시 사라진다.** 앱을 다시 띄울 필요가 없다 |
+| 2 | ⭐ 설정 창 `General` 탭 → 최하단 `Advanced` 접이식을 펼치고 `Synthesize Caps Lock Remap` 을 **켠다**(이슈 #77 — 트레이 메뉴엔 이 항목이 없다), 그리고 다시 조회 | ⭐ **그 매핑이 즉시 사라진다.** 앱을 다시 띄울 필요가 없다 |
 | 3 | 다시 **끈다**, 조회 | 매핑이 다시 나타난다 |
-| 4 | 매핑이 걸린 채로 앱을 `kill -9` → `Synthesize Caps Lock Remap` 이 켜진 상태로 재실행 | 시작 시 재조정이 **우리 매핑을 걷어낸다**(부록 A #1). 로그: `우리가 설치한 D-1 매핑만 제거했다` |
+| 4 | 매핑이 걸린 채로 앱을 `kill -9` → 설정 화면에서 `Synthesize Caps Lock Remap` 이 켜진 상태로 재실행 | 시작 시 재조정이 **우리 매핑을 걷어낸다**(부록 A #1). 로그: `우리가 설치한 D-1 매핑만 제거했다` |
 | 5 | ⭐ 사용자가 직접 건 **다른** 매핑(예: `hidutil property --set` 로 넣은 임의 쌍)이 함께 있는 상태에서 4 를 반복 | ⛔ **그 매핑은 그대로 남아 있어야 한다**(부록 A #3). 우리 서명과 일치하는 항목만 사라진다 |
 | 6 | 앱 정상 종료 후 조회 | 우리 매핑은 없고 남의 매핑은 남아 있다 |
 
@@ -1077,7 +1077,7 @@ kd key="(" code=KeyA kc=65 shift=false
 | 2 | 아이콘 클릭 | `Ignore <최전면 앱>` · 구분선 · `Settings…` · `About` · `Advanced ▸` · `Quit Ultrakey` |
 | 3 | 다른 앱을 최전면으로 바꾸고 메뉴를 다시 연다 | `Ignore …` 라벨이 **그 앱 이름으로 갱신**된다 |
 | 4 | `Settings…` | 환경설정 창이 열린다 |
-| 5 | `Advanced ▸` | `Synthesize Caps Lock Remap` · `Relaunch` 두 항목 |
+| 5 | `Advanced ▸` | `Relaunch` 한 항목만(이슈 #77 — Synthesize 는 설정 화면으로 이동했다) |
 
 ### 7-b. 앱별 비활성화
 
@@ -1152,6 +1152,22 @@ kd key="(" code=KeyA kc=65 shift=false
 
 ⚠️ **"뷰어가 꺼져 있을 때 비용 0"은 단위 테스트가 지킨다** — `trace.rs` 의 `viewer_off_and_env_off_means_no_trace`.
 실기기에서 "느려지지 않았다"를 눈으로 확인하는 것은 의미 있는 측정이 아니므로 그렇게 적지 않는다.
+
+### 7-i. ⭐ Advanced 접이식 섹션 + Synthesize 토글의 설정 화면 경로 (이슈 #77)
+
+> 이슈 #77 — Synthesize Caps Lock Remap 과 진단 툴(Event Viewer·로그 폴더)이 `General` 탭
+> 최하단 `Advanced` 접이식 섹션으로 이동했다. 트레이 메뉴 `Advanced ▸` 에는 제거됐다.
+> 저장 키(`presets.synthesizeCapsLockRemap`)·경로 B 설치/해제 시맨틱은 **불변**이다 —
+> `A-bis` 의 `hidutil property --get UserKeyMapping` 대조가 그대로 검증한다.
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 설정 창 `General` 탭 최하단 | `Advanced` 가 **접혀 있다**(기본 접힘). 마커가 `▲` 상태 |
+| 2 | `Advanced` 를 펼친다 | `Synthesize Caps Lock Remap` 체크박스 + **위험 고지 문구**(class hint warn) + `Open Event Viewer`·`Open Log Folder` 버튼 2개가 나타난다 |
+| 3 | (링크) `A-bis` #1~#4 | 체크박스 켬/끔이 `hidutil` 매핑을 즉시 설치/제거한다 — **설정 화면 경로가 이전 메뉴 토글과 동일하게 엔진에 반영된다**(토글 방향: 켜면 매핑 **제거**·경로 A 만, 끄면(기본) 재설치) |
+| 4 | `Open Event Viewer`·`Open Log Folder` | Advanced 안에 있어도 기존과 동일하게 동작한다(7-h) |
+| 5 | 설정 창을 닫았다 다시 연다 | `Advanced` 접힘 상태는 **유지되지 않는다**(기본 접힘으로 복귀 — 접힘 상태는 저장하지 않는다, D1). `synthesizeCapsLockRemap` 값은 유지된다 |
+| 6 | 트레이 메뉴 `Advanced ▸` | `Relaunch` 만 있다(이슈 #77 — synthesize 항목 제거) |
 
 ## 📌 실측 결과 (2026-08-31, 이슈 #39 / General 탭 확장)
 

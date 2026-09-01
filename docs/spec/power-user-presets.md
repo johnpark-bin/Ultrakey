@@ -219,7 +219,9 @@ F-08 의 16개 규칙 각각은 "물리 키코드 조합을 감지하면 정해�
 유지" 를 조건으로 하므로, 경로 A 만으로는 **7종 전부가 실기기에서 성립하지 않는다.**
 이 구현은 `architecture.md` §6.1 **결정 D-1** 로 이를 푼다 — caps lock 의존 규칙이 하나라도
 켜지면 경로 B 로 `caps lock → F18` 커널 매핑을 설치하고, 중재기가 F18 을 caps lock 으로
-되돌려 판정한다. **되돌리는 수단**은 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 이다.
+되돌려 판정한다. **되돌리는 수단**은 설정 화면 `General` 탭 최하단 `Advanced` 섹션의
+`Synthesize Caps Lock Remap` 체크박스다(⭐ 이슈 #77 — 메뉴바 `Advanced ▸` 에서 설정 화면으로
+이동. 트레이 항목은 제거되고 이 체크박스가 유일한 표면이다. README 갈라짐 표 이탈 **D9**).
 
 ### 9.2 남은 질문
 

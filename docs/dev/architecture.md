@@ -238,8 +238,10 @@ M2 1차 실측이 확정한 사실: **caps lock 은 누를 때만 `flagsChanged`
 >   하나라도 켜짐, 또는 hyper/meh/bleh 소스 키가 caps lock.
 > - **경로 C 와 충돌하지 않는다**: "진짜 caps lock 토글"(F-08.8/9/10)은 키 합성이 아니라
 >   `IOHIDSetModifierLockState` 로 내므로, caps lock 키가 F18 로 리매핑돼 있어도 그대로 동작한다.
-> - **되돌릴 수단을 남긴다**: 메뉴바 `Advanced ▸ Synthesize Caps Lock Remap` 을 재현한다
->   (§6.7). 켜면 경로 B 를 설치하지 않고 경로 A 만 쓴다 — 래칭 문제는 남지만, 다른 HID 계층
+> - **되돌릴 수단을 남긴다**: 설정 화면 `General` 탭 `Advanced` 섹션의 `Synthesize Caps
+>   Lock Remap` 체크박스(⭐ 이슈 #77 — 메뉴바 `Advanced ▸` 에서 설정 화면으로 이동.
+>   상태는 [이탈 D9](spec/README.md#-원본과-갈라지는-지점-divergence)). 켜면 경로 B 를
+>   설치하지 않고 경로 A 만 쓴다 — 래칭 문제는 남지만, 다른 HID 계층
 >   도구와 충돌하는 환경에서 사용자가 커널 매핑을 끌 수 있어야 한다.
 >   ⭐ `menu-bar-and-lifecycle.md` §3.3 이 이 항목을 "기각(1차 릴리스 범위 밖)" 으로 판정하며
 >   "필요해지면 F-08 이 재검토" 라고 남겼는데, D-1 이 커널 매핑을 제품 기본 경로로 올렸으므로
@@ -381,7 +383,7 @@ F-08 §8 이 "두 구성이 동시에 성립해야 한다"를 **수용 기준으
 
 | 항목 | 결정 |
 | :--- | :--- |
-| 메뉴 구성 | `Ignore <앱>` · (구분선) · `Settings…` · `About` · `Advanced ▸ (Synthesize Caps Lock Remap / Relaunch)` · `Quit Ultrakey`. `Purchase`(F-12)·`Check for Updates…`(F-13)는 **범위 밖이라 넣지 않는다** — 자리만 비운다 |
+| 메뉴 구성 | `Ignore <앱>` · (구분선) · `Settings…` · `About` · `Advanced ▸ (Relaunch)` · `Quit Ultrakey`. ⭐ 이슈 #77 — `Synthesize Caps Lock Remap` 은 설정 화면 `General` 탭 `Advanced` 섹션으로 이동했다(트레이 제거, [이탈 D9](spec/README.md#-원본과-갈라지는-지점-divergence)). `Purchase`(F-12)·`Check for Updates…`(F-13)는 **범위 밖이라 넣지 않는다** — 자리만 비운다 |
 | `Advanced` 하위 | 로깅 뷰어 6종은 명세대로 **기각**. `Relaunch After Wake`/`Delay …`/`Relaunch on Keyboard Connected` 는 이미 엔진이 자동으로 하는 일이라 사용자 노출 스위치를 두지 않는다 — 수동 `Relaunch` 하나만 자가 진단 수단으로 남긴다(§3.3 판단 그대로) |
 | `unauthorizedMenu` | 권한 없음 상태에서 메뉴 전체를 2항목(`상태 안내`(비활성) · `권한 허용…`)으로 교체 |
 | `Launch on login` | macOS 13+ `SMAppService.mainApp`. macOS 12 는 `~/Library/LaunchAgents` plist 폴백. **원본의 헬퍼 앱(`SuperkeyLauncher.app`) + `SMLoginItemSetEnabled` 패턴은 기각**(§7 기각한 대안 3 이 이미 그 방향을 제시했다) — 헬퍼 번들을 하나 더 서명·배포·핑퐁 관리해야 하는데 얻는 것이 없다. 등록 실패는 **상한 있는 재시도**(0.2s 간격 5회)로 흡수하고 실패를 사용자에게 알린다 |

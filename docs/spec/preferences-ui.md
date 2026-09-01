@@ -108,6 +108,7 @@
 | 키캡/제스처 일러스트 | Hyperkey(선택된 소스 키, 트랙패드 영역), General(좌측 앱 로고) | 현재 선택 값을 반영하는 순수 표시 요소. 클릭 상호작용 없음 |
 | **ⓘ 정보 팝오버 버튼** | Seek 3개(제목 옆·`Seek using macOS accessibility` 옆·`Change click modes with modifier keys` 옆), Hyperkey 1개(제목 옆) | ⭐ 실재하는 UI 컴포넌트다(실측: AX 트리 + `Info.storyboardc`). 컨트롤러: `SeekInfoViewController`·`SeekAccessibilityViewController`·`ClickModesInfoViewController`·`HyperkeyInfoViewController`. **F-09 는 팝오버의 배치(어느 항목 옆에 붙는가)와 컴포넌트 종류만 소유한다. 팝오버 안의 설명 문구 자체는 각 항목을 소유하는 명세(F-01~F-04, F-05)가 소유한다** — 원문 전문은 app-bundle-analysis.md §5.2 참조 |
 | **버튼** | General: `v1.66 (66)`·`Remove Oldest Activation`·`Purchase` | ⭐ `v1.66 (66)` 은 정적 텍스트가 아니라 **버튼**임이 확정됐다(실측: AX 트리) — 클릭 시 동작은 About 창 오픈으로 추정되나 `(미확정)`. `Purchase` 는 강조색(accent color) 버튼 |
+| **접이식 섹션** (`<details>`/`<summary>`) 🧩 | General 탭 최하단: `Advanced`(이슈 #77) | ⭐ **신규 구조 요소 타입.** `<details>` 는 저장소에서 첫 사용이다 — 기존 선례는 `#about`(`hidden` 속성 + 버튼 토글, 설정 창)뿐이었다. 동작 규칙: ① **기본 접힘**(`open` 속성 부재)으로 출하한다 ② **접힘 상태는 저장하지 않는다**(세션 상태 — F-15 "부재 = 기본값", 신규 저장 키 0개) ③ `<summary>` 가 그룹 헤딩을 겸한다(접이식 안에 `h2.group` 을 다시 두어 이중 헤딩을 만들지 않는다). ⚠️ 이 타입은 **한 컨트롤의 값이 다른 컨트롤의 노출을 결정**하는 §3.8 종속 표현 3종(① dimmed·② 숨김·③ 문장 중간 삽입)과 **다르다** — Advanced 는 어떤 설정 값에도 종속하지 않는 **사용자 조작 disclosure 위젯**이므로 §3.8 에 추가하지 않고 이 카탈로그의 구조 요소로 등재한다 |
 
 ### 3.3 창 생명주기
 
@@ -299,6 +300,12 @@
 ⭐ **"실재하지 않음"이 확인된 항목 — 이전 판이 추정했으나 전부 없다**: **언어 선택 팝업 · 권한 상태 표시(Accessibility/Screen Recording/Input Monitoring 배지) · 라이선스 키 입력 텍스트 필드 · `Reset to defaults` 버튼.** 이전 판 §4.4 표의 8개 행 중 이 4개는 AX 트리에 대응 항목이 없음을 직접 확인했다(실측: AX 트리, app-bundle-analysis.md §6.4) — 조용히 삭제하지 않고 "확인 결과 부재"로 여기 기록한다. 특히 **권한 상태 표시가 General 탭에 없다**는 것은 `F-11`(permissions-onboarding.md)이 짚어야 할 사실이다 — 권한 상태는 온보딩 모달이나 다른 경로로만 노출되고, 환경설정 창에는 상시 표시되지 않는다.
 
 **조건부 항목**: `Relaunch on wake`(`wakeRelaunchCheckbox` / `wakeRelaunchStackView`) — nib 에는 있으나 기본 상태에서 보이지 않는다. 표시 조건 `(미확정)` → §9.
+
+**⭐ 클론의 `Advanced` 접이식 섹션 (이슈 #77 신설 — 원본에 없는 클론 구성)**: 위 표는 **원본의 실측**이다. 클론의 General 탭은 그 위에 **최하단 `Advanced`** 를 하나 더 둔다(배치 순서: … → 설정 파일 → **Advanced**). 구성:
+
+- **`<details id="general-advanced">`**(§3.2 "접이식 섹션" 구조 요소) — 기본 접힘, `open` 속성 없이 출하, 접힘 상태 비영속(세션 상태).
+- 안에는 ① **`Synthesize Caps Lock Remap` 체크박스**(`presets.synthesizeCapsLockRemap` — 저장 키·엔진 계약은 불변, D5) + 그 아래 **위험 고지 paragraph**(`class="hint warn"`). 이 체크박스는 트레이 메뉴 `Advanced ▸ Synthesize Caps Lock Remap` 을 **제거한 뒤** 이곳이 유일한 표면이다(README 갈라짐 표 이탈 D9). 위험 고지의 방향: **기본(OFF) 상태에서 캡스락 의존 기능 활성 시 커널 HID 매핑(caps lock→F18)이 전역 설치**되고, 이 옵션을 켜면 그 매핑을 제거하고 이벤트 합성(경로 A)만 쓴다. 켬의 트레이드오프는 caps lock 래칭 한계(`key-remapping-engine.md` §5 #20)로 캡스락 기반 기능이 불안정해질 수 있다는 것.
+- ② **기존 진단 툴**(`#open-event-viewer-btn`·`#open-log-folder-btn` + `general-event-viewer-hint`, 이슈 #39 Phase 3·#47)을 **Advanced 안으로 이동**. 버튼·커맨드(`open_event_viewer`·`open_log_folder`)·이벤트 리스너·i18n 키는 그대로 두고 DOM 위치만 옮긴다. 기존 `#general-diagnostics-heading`(h2.group)은 제거 — `<summary>` 가 헤딩을 겸한다(`settings.general.diagnostics` i18n 키 삭제).
 
 ## 5. 엣지 케이스와 실패 모드
 
