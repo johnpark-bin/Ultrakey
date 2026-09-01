@@ -35,6 +35,7 @@ pub mod screen_capture;
 pub mod screen_recording;
 pub mod screens;
 pub mod secure_input;
+pub mod single_instance;
 pub mod text_input_source;
 pub mod trace_ring;
 pub mod vision_ocr;

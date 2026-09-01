@@ -69,6 +69,7 @@ use ultrakey_platform::bundle;
 use ultrakey_platform::fn_state;
 use ultrakey_platform::hid_device;
 use ultrakey_platform::login_item;
+use ultrakey_platform::single_instance::{self, ShowSettingsObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 use ultrakey_presets::{
     ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
@@ -1667,6 +1668,11 @@ struct AppState {
     /// 해지되므로 앱 생애주기 내내 들고 있어야 한다 — 값 자체는 읽지 않는다.
     #[allow(dead_code)]
     system_event_observer: Mutex<Option<SystemEventObserver>>,
+    /// ⭐ 이슈 #68 — 두 번째 프로세스의 "설정창 띄워라" 분산 알림 구독.
+    /// `system_event_observer` 와 같은 규약: 드롭되면 구독이 해지되므로 앱
+    /// 생애주기 내내 들고 있어야 하고, 값 자체는 읽지 않는다. `setup()` 이 채운다.
+    #[allow(dead_code)]
+    show_settings_observer: Mutex<Option<ShowSettingsObserver>>,
     // ── 이슈 #32 Phase 1: 설정 창 크기 영속(F-15 규약) ──────────────────────
     /// 우리가 방금 `resize_settings_window()` 로 프로그램적으로 넣은 논리 크기.
     /// `on_settings_window_resized` 가 이 값과 같은 `Resized` 이벤트를 "사용자가
@@ -3864,9 +3870,16 @@ fn main() {
     // 띄워 볼 수도, 렌더링 지연을 잴 수도 없다.
     if !overlay_spike::enabled() && !overlay_demo::enabled() && bundle::other_instance_running() {
         tracing::warn!(
-            "another instance with the same bundle id is already running; exiting \
-             without installing a CGEventTap (F-10 §5 item 1)"
+            "another instance with the same bundle id is already running; asking it to open \
+             the settings window and exiting without installing a CGEventTap (F-10 §5 item 1, \
+             issue #68)"
         );
+        // ⭐ 이슈 #68 — 조용히 죽는 대신 기존 인스턴스에게 설정창을 띄우라고
+        // 신호를 보낸다. 이 지점은 Tauri·트레이·엔진보다 **앞**이므로 이
+        // 프로세스가 `CGEventTap` 을 만들 일은 없다(§5 항목 1 유지). 신호는
+        // 발행-소멸형이라 기존 인스턴스가 이미 죽었으면 아무도 받지 않는다 —
+        // 그 상태에서 이 프로세스가 그냥 끝나는 것이 정확한 동작이다.
+        single_instance::notify_existing_instance_to_show_settings();
         return;
     }
 
@@ -3914,6 +3927,7 @@ fn main() {
         normal_menu: Mutex::new(None),
         unauthorized_menu: Mutex::new(None),
         system_event_observer: Mutex::new(None),
+        show_settings_observer: Mutex::new(None),
         last_applied_window_size: Mutex::new(None),
         window_size_debouncer: Mutex::new(None),
         event_viewer_buffer: Mutex::new(VecDeque::new()),
@@ -4128,6 +4142,13 @@ fn main() {
                 tracing::error!(error = %e, "failed to initialize menu bar (NSStatusItem)");
             }
             setup_front_app_tracking(app.handle(), &state);
+
+            // ⭐ 이슈 #68 — 두 번째 프로세스의 "설정창 띄워라" 분산 알림 구독.
+            // 수신 콜백은 알림 센터의 관례상 메인 스레드에서 불리지만, 창 조작은
+            // `on_main_thread` 헬퍼가 다시 메인 스레드로 큐잉하므로 어느 스레드에서
+            // 와도 안전하다. `show()`/`set_focus()` 는 창이 이미 보일 때 멱등하다 —
+            // "이미 떠 있으면 중복 띄우지 않는다"가 구조적으로 성립한다.
+            setup_show_settings_observer(app.handle(), &state);
 
             // ⭐ F-13 — 부팅 시점 자동 확인 상태 동기화 + 업데이트 재시작 전 정리 훅.
             // General 탭 체크박스가 이 미러를 그린다(정본은 Sparkle). 이벤트 콜백은
@@ -4606,6 +4627,16 @@ fn hide_modal(handle: &tauri::AppHandle) {
 /// 클릭으로만 연다.** 그때까지는 이 함수가 유일한 진입점이다.
 fn show_settings_window(handle: &tauri::AppHandle) {
     on_main_thread(handle, "settings", "show_settings", |w| {
+        // ⭐ 이슈 #68 — 이미 보이는 창을 다시 `show()` 하지 않는다. 두 번째
+        // 프로세스의 재실행 신호(이슈 #68)도 이 함수로 흘러오므로, "이미 떠
+        // 있으면 중복 띄우지 않는다"(체크리스트 2)가 이 분기 하나로 성립한다.
+        // 숨겨져 있지 않으면(보이거나 최소화돼 있거나) 포커스만 시도해 사용자를
+        // 그 창으로 데려간다.
+        if matches!(w.is_visible(), Ok(true)) {
+            tracing::info!("settings window is already visible; only requesting focus");
+            let _ = w.set_focus();
+            return;
+        }
         let _ = w.show();
         let _ = w.set_focus();
     });
@@ -5340,6 +5371,19 @@ fn setup_front_app_tracking(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         }
     }));
     *state.system_event_observer.lock().unwrap() = Some(observer);
+}
+
+/// 이슈 #68 — 두 번째 프로세스가 보내는 "설정창 띄워라" 분산 알림 구독.
+/// `AppState::show_settings_observer` 에 손잡이를 보관해 앱 생애주기 내내
+/// 살려 둔다(드롭되면 구독이 해지된다 — `setup_front_app_tracking` 과 같은 규약).
+fn setup_show_settings_observer(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let handle_for_signal = handle.clone();
+    let observer =
+        single_instance::observe_show_settings_requests(Box::new(move || {
+            tracing::info!("show-settings request from a second instance received");
+            show_settings_window(&handle_for_signal);
+        }));
+    *state.show_settings_observer.lock().unwrap() = Some(observer);
 }
 
 /// `NSWorkspaceDidActivateApplicationNotification` 수신 — 게이트를 갱신하고
