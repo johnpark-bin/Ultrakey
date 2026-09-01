@@ -192,10 +192,29 @@
   .fkey-item { margin-bottom: 2px; }
 
   /* ⭐ 이슈 #46 — 그룹 제목 행(복사 버튼·상태 뱃지를 제목 옆에 붙인다). 새 색을
-     하드코딩하지 않고 기존 규약(currentColor 기반 color-mix)만 쓴다. */
+      하드코딩하지 않고 기존 규약(currentColor 기반 color-mix)만 쓴다. */
   .group-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .group-title-row h2.group { margin: 4px 0; }
   .group-title-row .badge { margin-left: 0; }
+
+  /* ⭐ 이슈 #69 K1 — 컨텍스트 헤더. 우측 패인이 지금 어느 대상(공통/개별)의
+     설정인지 최상단에 고정 표시한다. 공통 계층일 때는 공통 소속임을, 디바이스
+     계층일 때는 제품명을 보여 준다. 패인 폭이 좁아 들여쓰기만으로 계층을
+     구분하기 어렵다는 이슈 #69 지적의 정면 대응이다. */
+  .keyboards-context {
+    margin: 0 0 10px;
+    padding: 6px 10px;
+    border-left: 3px solid color-mix(in srgb, currentColor 35%, transparent);
+    background: color-mix(in srgb, currentColor 7%, transparent);
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  /* ⭐ 이슈 #69 K1 — 상태 뱃지의 소속 강도. 상속 중(공통 따름)은 옅게, 이
+     키보드 전용 값이 있으면 굵게 — 같은 pill 모양이라 위치·형식은 안 바뀌고
+     강도만 계층을 따라간다(새 색 없이 currentColor 농도만 다르다). */
+  .badge.state-inherited { opacity: .75; }
+  .badge.state-override { font-weight: 700; }
 
   /* 충돌 대화상자 오버레이 — 창 안에서만 뜨는 모달. */
   #conflict-overlay {
@@ -746,22 +765,30 @@
         ></div>
 
         <div class="keyboards-detail-pane">
+          <!-- ⭐ 이슈 #69 K1 — 컨텍스트 헤더. 우측 패인이 지금 **어느 대상**의
+               설정을 보여 주는지(공통 계층인가, 어느 키보드인가)를 패인 최상단에
+               고정 표시한다. 공통/개별이 같은 표현 양식을 공유해 발생한 식별
+               문제의 첫 단서는 "지금 무엇을 고치는가"이기 때문이다. 텍스트는
+               renderKeyboardsContextHeader() 가 선택 대상에 따라 채운다. -->
+          <p class="keyboards-context" id="keyboards-context-header"></p>
+
           <!-- 그룹 1 — 키 변환 세트(기능 1, §3.4). 가변 길이 목록 편집기(§3.4.1).
                ⭐ 이슈 #46 — 제목 행에 상태 뱃지 + 복사 버튼을 붙인다(§4.3): 뱃지는
                ③ inline(상속/오버라이드/끔 상태 라벨), 복사 버튼은 ① dimmed(복사할
-               것이 없으면 disabled 유지). 기존 id·구조는 전부 그대로다. -->
+               것이 없으면 disabled 유지). 기존 id·구조는 전부 그대로다.
+               ⭐ 이슈 #69 K3 — 복귀 버튼을 목록 아래에서 **제목 행으로** 올렸다:
+               복사(계층 스냅샷)와 복귀(상속 복귀)는 같은 "계층 조작" 버튼군이라
+               한 선상에 모여야 하고, 목록 아래의 `+ 항목 추가` 옆에 있으면 행
+               조작 버튼과 층위가 섞여 보였다(이슈 #69 K3). -->
           <div class="group-title-row">
             <h2 class="group" id="keyboards-keyremap-heading"></h2>
             <span class="badge" id="keyboards-keyremap-status-badge" hidden></span>
+            <button id="keyboards-keyremap-revert-btn" type="button" hidden></button>
             <button id="keyboards-keyremap-copy-btn" type="button" disabled></button>
           </div>
           <div id="keyboards-keyremap-list"></div>
           <p class="hint" id="keyboards-keyremap-empty"></p>
           <p class="hint" id="keyboards-keyremap-inherited" hidden></p>
-          <!-- ⭐ 이슈 #46 — 상속 복귀(이슈 #46, 계획 D4). 디바이스 계층에
-               keyRemap.rows 키가 존재할 때만 표시되는 ② 숨김 버튼 — 부재(이미
-               상속 중)면 개념이 성립하지 않으므로 노드를 만들지 않는다. -->
-          <button id="keyboards-keyremap-revert-btn" type="button" hidden></button>
           <button id="keyboards-keyremap-add-btn"></button>
 
           <hr />
@@ -770,10 +797,32 @@
                번역하지 않는다, populateSourceSelects 의 같은 규약) + 선택 팝업
                (이슈 #31 ② — 목적지 카탈로그 313종) + 동작 미확인 힌트 호스트.
                ⭐ 이슈 #46 — 제목 행에 복사 버튼을 붙인다(기능 2 도 같은 복사
-               버튼 라벨을 쓴다). -->
+               버튼 라벨을 쓴다).
+               ⭐ 이슈 #69 K2 — 제목 행에 **기능 2 상속 복귀 버튼**을 새로 둔다.
+               팝업의 `--- (공통 설정을 따름)` 선택지가 이미 한 F-키씩의 복귀
+               수단이지만(§3.7.2), 복사(그룹 단위 스냅샷)의 역조작은 그룹 단위여야
+               한다 — 디바이스 계층의 functionKeys.f1~f12 명시적 키 전부를 삭제해
+               상속으로 돌아간다. 노출 조건은 기능 1 복귀 버튼과 같은 ② 숨김
+               규약(명시적 키가 1개 이상일 때만).
+               ⭐ 이슈 #69 K4 — 제목 행 아래에 Function Keys 템플릿 행(팝업 + 적용
+               버튼)을 둔다. 맥 미디어키 세트 / F키 표준 세트 2종 — 사전 정의된
+               템플릿 선택이지 임의 커스텀 리매핑 개방이 아니다. 디바이스 선택
+               중에만 보인다(공통 계층은 템플릿의 용처가 아니다 — §1 이 기능의
+               존재 이유는 디바이스별 차등). -->
           <div class="group-title-row">
             <h2 class="group" id="keyboards-functionkeys-heading"></h2>
+            <!-- ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지(기능 1 뱃지와 같은 ③
+                 inline 규약). 공통에 Value 인 F-키가 있을 때만 뜬다. -->
+            <span class="badge" id="keyboards-functionkeys-status-badge" hidden></span>
+            <button id="keyboards-functionkeys-revert-btn" type="button" hidden></button>
             <button id="keyboards-functionkeys-copy-btn" type="button" disabled></button>
+          </div>
+          <div class="row fkey-template-row" id="keyboards-functionkeys-template-row" hidden>
+            <label>
+              <span id="keyboards-functionkeys-template-label"></span>
+              <select id="keyboards-functionkeys-template-select"></select>
+            </label>
+            <button id="keyboards-functionkeys-template-apply-btn" type="button"></button>
           </div>
           <div id="keyboards-functionkeys-list">
             <div class="fkey-item">
@@ -1148,6 +1197,13 @@ if (!tauri || !tauri.core) {
     $("keyboards-keyremap-copy-btn").textContent = t("preferences.keyboards.copy.button");
     $("keyboards-functionkeys-copy-btn").textContent = t("preferences.keyboards.copy.button");
     $("keyboards-keyremap-revert-btn").textContent = t("preferences.keyboards.keyRemap.revertToCommon");
+    $("keyboards-functionkeys-revert-btn").textContent = t("preferences.keyboards.keyRemap.revertToCommon");
+    // ⭐ 이슈 #69 K4 — Function Keys 템플릿 행. 팝업 접근성 라벨 + 적용 버튼.
+    // 템플릿 2종의 이름(populateFunctionKeyTemplates 가 채운다)은 카탈로그 키라
+    // 여기서 재배선할 필요가 없다 — 언어 변경 시 populateFunctionKeyTemplates()
+    // 가 다시 불린다(renderFunctionKeysGroup 경유).
+    $("keyboards-functionkeys-template-label").textContent = t("preferences.keyboards.functionKeys.templates.label");
+    $("keyboards-functionkeys-template-apply-btn").textContent = t("preferences.keyboards.functionKeys.templates.apply");
     $("confirm-cancel").textContent = t("common.cancel");
     $("confirm-continue").textContent = t("preferences.keyboards.copy.confirmContinue");
 
@@ -1416,9 +1472,26 @@ if (!tauri || !tauri.core) {
     currentDevice = id;
     highlightSelectedDevice();
     if (currentPerDevice) {
+      // ⭐ 이슈 #69 K1 — 패인 선택이 바뀌면 컨텍스트 헤더도 함께 갈린다.
+      renderKeyboardsContextHeader(currentPerDevice, currentDevice);
       renderKeyRemapGroup(currentPerDevice, currentDevice);
       renderFunctionKeysGroup(currentPerDevice, currentDevice);
     }
+  }
+
+  // ⭐ 이슈 #69 K1 — 컨텍스트 헤더. 우측 패인이 지금 어느 대상의 설정을
+  // 보여 주는지 패인 최상단에 고정 표시한다. 공통 계층이면 `For all devices`
+  // 카탈로그 문구를, 디바이스면 제품명(고유명사 — 번역하지 않는다,
+  // populateDeviceList 의 같은 규약)을 그대로 쓴다.
+  function renderKeyboardsContextHeader(perDevice, device) {
+    let name;
+    if (device === "all") {
+      name = t("preferences.keyboards.devicePicker.forAllDevices");
+    } else {
+      const d = perDevice.devices.find((d) => d.id === device);
+      name = d ? d.name : device;
+    }
+    $("keyboards-context-header").textContent = name;
   }
 
   // macOS Function Keys 상태 표시줄(§3.5.1) — 읽기 전용. 우리는 이 값을 쓰지 않는다.
@@ -1733,6 +1806,16 @@ if (!tauri || !tauri.core) {
   // 상속, 값 존재 = 오버라이드, null = 끔(§3.3). 'For all devices' 선택 중에는
   // 공통 계층에 상태 개념이 없으므로 숨긴다. 기존 keyRemap-inherited 힌트(편집
   // 시 물질화 설명)와 역할이 다르다 — 뱃지는 압축 상태 라벨일 뿐이다.
+  // ⭐ 이슈 #69 K1 — 뱃지에 소속 강도 클래스를 더한다: 상속 중은 옅게
+  // (state-inherited), 이 키보드 전용 값이 있으면 굵게(state-override).
+  // 끔(null)도 디바이스 계층의 명시적 상태라 override 쪽 강도를 쓴다.
+  function setKeyboardsStatusBadge(badge, textKey, override) {
+    badge.textContent = t(textKey);
+    badge.hidden = false;
+    badge.classList.remove("state-inherited", "state-override");
+    badge.classList.add(override ? "state-override" : "state-inherited");
+  }
+
   function renderKeyRemapStatusBadge(perDevice, device) {
     const badge = $("keyboards-keyremap-status-badge");
     if (device === "all") {
@@ -1741,16 +1824,51 @@ if (!tauri || !tauri.core) {
     }
     const key = keyRemapRowsKey(device);
     const hasKey = Object.prototype.hasOwnProperty.call(perDevice.values, key);
-    let textKey;
     if (!hasKey) {
-      textKey = "preferences.keyboards.status.inherited";
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.inherited", false);
     } else if (perDevice.values[key] === null) {
-      textKey = "preferences.keyboards.status.off";
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.off", true);
     } else {
-      textKey = "preferences.keyboards.status.override";
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.override", true);
     }
-    badge.textContent = t(textKey);
-    badge.hidden = false;
+  }
+
+  // ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지. F-키 12개가 각각 3상태(부재=상속 /
+  // 문자열=전용 / null=끔)라 그룹 단위로는 4상태로 단순화한다:
+  //   공통 Value 키 중 상속 중이 ≥1 이고 전용 키가 0      → 상속됨(옅게)
+  //   전용 키(문자열 또는 null)가 1~11                    → 일부 전용(굵게)
+  //   전용 키가 12 전부                                    → 이 키보드 전용 설정(굵게)
+  //   공통에 Value 인 F-키가 0(복사 원천 없음)             → 숨김(상태 개념 성립 안 함)
+  //   'For all devices' 선택 중                            → 숨김(§3.7.3, 기능 1 뱃지와 같음)
+  // null(표준 F-키로 끔)도 §3.3 기준 명시적 디바이스 값이므로 "전용"에 센다.
+  function renderFunctionKeysStatusBadge(perDevice, device) {
+    const badge = $("keyboards-functionkeys-status-badge");
+    if (device === "all") {
+      badge.hidden = true;
+      return;
+    }
+    const commonHasValue = commonFunctionKeysHasValue(perDevice);
+    if (!commonHasValue) {
+      badge.hidden = true;
+      return;
+    }
+    let inheritedCount = 0;
+    let overrideCount = 0;
+    for (const fk of KEYBOARDS_FN_KEYS) {
+      const deviceKey = functionKeyStorageKey(device, fk);
+      if (Object.prototype.hasOwnProperty.call(perDevice.values, deviceKey)) {
+        overrideCount += 1;
+      } else {
+        inheritedCount += 1;
+      }
+    }
+    if (overrideCount === 0) {
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.inherited", false);
+    } else if (inheritedCount > 0) {
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.mixed", true);
+    } else {
+      setKeyboardsStatusBadge(badge, "preferences.keyboards.status.override", true);
+    }
   }
 
   // ⭐ 이슈 #46 — 기능 1 복사/복귀 버튼 상태.
@@ -1786,6 +1904,125 @@ if (!tauri || !tauri.core) {
     }
     copyBtn.hidden = false;
     copyBtn.disabled = !commonFunctionKeysHasValue(perDevice);
+  }
+
+  // ⭐ 이슈 #69 K2 — 기능 2 상속 복귀 버튼(② 숨김). 디바이스 계층에
+  // functionKeys.f1~f12 명시적 키(문자열=전용 또는 null=끔)가 1개 이상 있을
+  // 때만 표시한다 — 전부 부재(이미 상속 중)면 되돌릴 대상이 없다(§3.7.2 의
+  // 기능 1 버튼과 같은 규약). 'For all devices' 선택 중에도 숨긴다.
+  function renderFunctionKeysRevertControl(perDevice, device) {
+    const revertBtn = $("keyboards-functionkeys-revert-btn");
+    if (device === "all") {
+      revertBtn.hidden = true;
+      return;
+    }
+    const hasAnyDeviceKey = KEYBOARDS_FN_KEYS.some((fk) =>
+      Object.prototype.hasOwnProperty.call(
+        perDevice.values,
+        functionKeyStorageKey(device, fk)
+      )
+    );
+    revertBtn.hidden = !hasAnyDeviceKey;
+  }
+
+  // ⭐ 이슈 #69 K4 — Function Keys 템플릿 2종. 사전 정의된 세트를 이 디바이스
+  // 계층의 F-키 12개 저장 키에 기록한다(새 저장 키 없음 — §3.7 원칙).
+  //   macMediaKeys : 맥 내장 키보드의 F1~F12 각인 어휘를 destinations 카탈로그
+  //                  id 로 조인한 세트. 밝기·Mission Control·Launchpad 는 벤더
+  //                  page 목적지라 적용 후 동작 미확인 힌트가 그대로 뜬다
+  //                  (§3.1.3 (c) — "빼기가 아니라 알리기"). 미디어 계열은
+  //                  실측(Measured) 등급이다.
+  //   standardFKeys: F1~F12 전부 null(명시적 끔 = 표준 F-키, §3.5 선택지) —
+  //                  시나리오 D("이 디바이스만 끈다")의 F-키 전체 판본.
+  const FUNCTION_KEY_TEMPLATES = {
+    macMediaKeys: {
+      f1: "appleKeyboard.brightness_down",
+      f2: "appleKeyboard.brightness_up",
+      f3: "appleKeyboard.mission_control",
+      f4: "appleKeyboard.launchpad",
+      f5: "consumer.rewind",
+      f6: "consumer.play_or_pause",
+      f7: "consumer.scan_previous_track",
+      f8: "consumer.scan_next_track",
+      f9: "consumer.mute",
+      f10: "consumer.volume_decrement",
+      f11: "consumer.volume_increment",
+      f12: "consumer.eject",
+    },
+    standardFKeys: {
+      f1: null, f2: null, f3: null, f4: null, f5: null, f6: null,
+      f7: null, f8: null, f9: null, f10: null, f11: null, f12: null,
+    },
+  };
+
+  function populateFunctionKeyTemplates() {
+    const select = $("keyboards-functionkeys-template-select");
+    select.innerHTML = "";
+    for (const [value, labelKey] of [
+      ["macMediaKeys", "preferences.keyboards.functionKeys.templates.macMediaKeys"],
+      ["standardFKeys", "preferences.keyboards.functionKeys.templates.standardFKeys"],
+    ]) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = t(labelKey);
+      select.append(opt);
+    }
+  }
+
+  // 템플릿 적용이 기존 디바이스 전용 값을 실제로 바꾸는가(§3.7.1 의
+  // copyNeedsConfirm 과 동일 판정). 디바이스 키 부재(상속 중)인 키는 템플릿이
+  // 물질화하는 대상이라 "바꾼다"에 센다 — 상속 값을 갈아치우는 것이므로.
+  function templateNeedsConfirm(template) {
+    if (!currentPerDevice || currentDevice === "all") return false;
+    for (const fk of KEYBOARDS_FN_KEYS) {
+      const deviceKey = functionKeyStorageKey(currentDevice, fk);
+      const wanted = template[fk];
+      if (!Object.prototype.hasOwnProperty.call(currentPerDevice.values, deviceKey)) {
+        if (wanted !== null) return true;
+        continue;
+      }
+      if (currentPerDevice.values[deviceKey] !== wanted) return true;
+    }
+    return false;
+  }
+
+  let pendingTemplate = null;
+
+  async function applyFunctionKeyTemplate(templateName) {
+    const template = FUNCTION_KEY_TEMPLATES[templateName];
+    if (!template || !currentPerDevice || currentDevice === "all") return;
+    if (templateNeedsConfirm(template)) {
+      pendingTemplate = { templateName };
+      $("confirm-title").textContent = t("preferences.keyboards.copy.confirmTitle");
+      $("confirm-body").textContent = tf(
+        "preferences.keyboards.copy.confirmBody",
+        [t("preferences.keyboards.group.functionKeys.title")]
+      );
+      $("confirm-overlay").hidden = false;
+      $("confirm-continue").focus();
+      return;
+    }
+    await commitFunctionKeyTemplate(template);
+  }
+
+  // 템플릿 기록 — 각 F-키를 개별 저장 키에 기록한다(§3.3·§3.5 저장 규약 그대로,
+  // 새 저장 키 없음). null 은 명시적 끔(sentinel)이다. 저장 후 renderState 가
+  // 상태 전체를 다시 그린다(F-15 write-through 규약).
+  async function commitFunctionKeyTemplate(template) {
+    try {
+      let state = null;
+      for (const fk of KEYBOARDS_FN_KEYS) {
+        const key = functionKeyStorageKey(currentDevice, fk);
+        if (template[fk] === null) {
+          state = await invoke("settings_set", { key, value: null });
+        } else {
+          state = await invoke("settings_set", { key, value: template[fk] });
+        }
+      }
+      if (state) renderState(state);
+    } catch (err) {
+      showFatal("Failed to save setting: " + String(err));
+    }
   }
 
   // ⭐ 이슈 #46 — 복사 확인 판정(계획 §4.4). "복사가 기존 디바이스 전용 값을
@@ -1858,6 +2095,8 @@ if (!tauri || !tauri.core) {
 
   function hideConfirmOverlay() {
     pendingCopy = null;
+    // ⭐ 이슈 #69 K4 — 템플릿 확인 흐름도 같은 오버레이를 쓰므로 함께 초기화한다.
+    pendingTemplate = null;
     pendingDeactivation = false;
     // ⭐ F-12 — 비활성화 확인에 쓴 위험 버튼 스타일·라벨을 복사 확인 기본값으로
     // 되돌린다(재사용하는 오버레이라 다음 사용을 위해 초기화한다).
@@ -1980,6 +2219,14 @@ if (!tauri || !tauri.core) {
     }
     // ⭐ 이슈 #46 — 기능 2 복사 버튼 활성/숨김.
     renderFunctionKeysCopyControl(perDevice, device);
+    // ⭐ 이슈 #69 K2 — 기능 2 상속 복귀 버튼(② 숨김).
+    renderFunctionKeysRevertControl(perDevice, device);
+    // ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지.
+    renderFunctionKeysStatusBadge(perDevice, device);
+    // ⭐ 이슈 #69 K4 — 템플릿 행. 디바이스 선택 중에만 보인다(공통 계층은
+    // 템플릿의 용처가 아니다 — §1 이 기능의 존재 이유는 디바이스별 차등).
+    populateFunctionKeyTemplates();
+    $("keyboards-functionkeys-template-row").hidden = device === "all";
   }
 
   function renderKeyboardsTab(state) {
@@ -1996,6 +2243,9 @@ if (!tauri || !tauri.core) {
     // 그 뒤로는 refreshMacosFnStateBadge() 의 폴링이 디바이스 선택과 무관하게
     // 갱신한다.
     renderMacosFnStateBadge(perDevice.fnStateIsStandard);
+    // ⭐ 이슈 #69 K1 — 컨텍스트 헤더(공통/개별 식별). 두 그룹 렌더와 함께
+    // 선택 대상이 바뀔 때마다 다시 그린다.
+    renderKeyboardsContextHeader(perDevice, currentDevice);
     renderKeyRemapGroup(perDevice, currentDevice);
     renderFunctionKeysGroup(perDevice, currentDevice);
   }
@@ -2037,10 +2287,21 @@ if (!tauri || !tauri.core) {
   // 복사 확인 오버레이의 취소/계속. 복귀는 기존 `commitUnset`(키 삭제 =
   // settings_unset 경로)을 그대로 재사용한다 — 백엔드 변경 없이 키만
   // `keyRemapRowsKey(currentDevice)` 로 바꾼다(계획 D4).
+  // ⭐ 이슈 #69 K2 — 기능 2 복귀 버튼도 같은 `commitUnset` 경로를 쓴다. 디바이스
+  // 계층의 functionKeys.f1~f12 명시적 키 전부를 삭제해 상속으로 돌아간다(§3.7.2).
   $("keyboards-keyremap-copy-btn").addEventListener("click", runKeyRemapCopy);
   $("keyboards-functionkeys-copy-btn").addEventListener("click", runFunctionKeysCopy);
   $("keyboards-keyremap-revert-btn").addEventListener("click", () => {
     commitUnset(keyRemapRowsKey(currentDevice));
+  });
+  $("keyboards-functionkeys-revert-btn").addEventListener("click", () => {
+    for (const fk of KEYBOARDS_FN_KEYS) {
+      commitUnset(functionKeyStorageKey(currentDevice, fk));
+    }
+  });
+  // ⭐ 이슈 #69 K4 — 템플릿 적용 버튼.
+  $("keyboards-functionkeys-template-apply-btn").addEventListener("click", () => {
+    applyFunctionKeyTemplate($("keyboards-functionkeys-template-select").value);
   });
   $("confirm-cancel").addEventListener("click", hideConfirmOverlay);
   $("confirm-continue").addEventListener("click", async () => {
@@ -2050,6 +2311,15 @@ if (!tauri || !tauri.core) {
       pendingDeactivation = false;
       hideConfirmOverlay();
       await runDeactivation();
+      return;
+    }
+    // ⭐ 이슈 #69 K4 — 템플릿 적용 확인 흐름(복사 확인과 같은 전용 오버레이
+    // 재사용 — 계획 D7 의 "순수 프런트 상태" 판본).
+    const template = pendingTemplate;
+    pendingTemplate = null;
+    hideConfirmOverlay();
+    if (template) {
+      await commitFunctionKeyTemplate(FUNCTION_KEY_TEMPLATES[template.templateName]);
       return;
     }
     const copy = pendingCopy;

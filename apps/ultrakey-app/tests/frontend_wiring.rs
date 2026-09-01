@@ -1200,6 +1200,193 @@ fn settings_html_에_keyboards_탭_복사_복귀_상태_컨트롤이_있다() {
     }
 }
 
+/// ⭐ 이슈 #69 K1 — 컨텍스트 헤더(공통/개별 식별). 우측 패인 최상단에 현재
+/// 선택 대상 이름을 고정 표시하는 DOM 슬롯과 렌더 배선이 있다. 공통/개별이
+/// 같은 표현 양식을 공유해 발생한 식별 문제의 첫 단서다.
+#[test]
+fn settings_html_에_keyboards_컨텍스트_헤더가_배선돼_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"id="keyboards-context-header""#),
+        "settings.html 에 컨텍스트 헤더(id=\"keyboards-context-header\")가 없다"
+    );
+    let f = extract_js_function(&html, "function renderKeyboardsContextHeader(");
+    assert!(
+        f.contains("preferences.keyboards.devicePicker.forAllDevices"),
+        "컨텍스트 헤더가 공통 계층 문구(forAllDevices)를 쓰지 않는다"
+    );
+    assert!(
+        f.contains("d.name"),
+        "컨텍스트 헤더가 디바이스 제품명(고유명사)을 쓰지 않는다"
+    );
+    // 패인 선택이 바뀔 때도 헤더가 갈린다.
+    let sel = extract_js_function(&html, "function selectDevice(");
+    assert!(
+        sel.contains("renderKeyboardsContextHeader"),
+        "selectDevice() 가 컨텍스트 헤더를 다시 그리지 않는다 — 디바이스를 바꿔도 \
+         헤더가 이전 대상 이름으로 남는다(이슈 #69 K1)"
+    );
+}
+
+/// ⭐ 이슈 #69 K1 — 뱃지 소속 강도(state-inherited/state-override)가 배선돼
+/// 있다. 상속 중은 옅게, 이 키보드 전용은 굵게 — 같은 pill 모양으로 강도만
+/// 계층을 따라간다.
+#[test]
+fn keyboards_상태_뱃지에_소속_강도_클래스가_배선돼_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains("state-inherited") && html.contains("state-override"),
+        "settings.html 에 뱃지 소속 강도 클래스(state-inherited/state-override)가 없다"
+    );
+    let f = extract_js_function(&html, "function setKeyboardsStatusBadge(");
+    assert!(
+        f.contains("classList.add"),
+        "setKeyboardsStatusBadge() 가 소속 강도 클래스를 붙이지 않는다"
+    );
+}
+
+/// ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지. DOM 슬롯 + 4상태 판정
+/// (상속/일부 전용/전부 전용/숨김)이 배선돼 있다.
+#[test]
+fn settings_html_에_keyboards_기능2_상태_뱃지가_배선돼_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"id="keyboards-functionkeys-status-badge""#),
+        "settings.html 에 기능 2 상태 뱃지(id=\"keyboards-functionkeys-status-badge\")가 없다"
+    );
+    let f = extract_js_function(&html, "function renderFunctionKeysStatusBadge(");
+    assert!(
+        f.contains("preferences.keyboards.status.mixed"),
+        "기능 2 뱃지가 status.mixed(일부 전용) 키를 쓰지 않는다"
+    );
+    assert!(
+        f.contains("commonFunctionKeysHasValue"),
+        "기능 2 뱃지가 공통 Value 유무(복사 원천)를 보지 않는다 — 원천이 없으면 \
+         상태 개념이 성립하지 않아 숨겨야 한다(이슈 #69 K1-2)"
+    );
+}
+
+/// ⭐ 이슈 #69 K2 — 기능 2 상속 복귀 버튼. DOM 슬롯 + ② 숨김 조건(디바이스
+/// 계층에 functionKeys.* 명시적 키가 1개 이상일 때만) + `settings_unset` 경로.
+#[test]
+fn settings_html_에_keyboards_기능2_복귀_버튼이_배선돼_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains(r#"id="keyboards-functionkeys-revert-btn""#),
+        "settings.html 에 기능 2 복귀 버튼(id=\"keyboards-functionkeys-revert-btn\")이 없다"
+    );
+
+    let f = extract_js_function(&html, "function renderFunctionKeysRevertControl(");
+    assert!(
+        f.contains("KEYBOARDS_FN_KEYS.some"),
+        "기능 2 복귀 버튼이 F-키 12개 명시적 키 유무를 보지 않는다(② 숨김 조건)"
+    );
+
+    let handler_at = html
+        .find(r#"keyboards-functionkeys-revert-btn").addEventListener("click""#)
+        .expect("기능 2 복귀 버튼 클릭 핸들러가 없다");
+    let handler = &html[handler_at..handler_at + 400];
+    assert!(
+        handler.contains("commitUnset(functionKeyStorageKey(currentDevice, fk))"),
+        "기능 2 복귀가 settings_unset 경로(commitUnset)를 쓰지 않는다(§3.7.2)"
+    );
+}
+
+/// ⭐ 이슈 #69 K3 — 기능 1 복귀 버튼이 그룹 제목 행에 있다. 목록 아래가 아니라
+/// 뱃지·복사 버튼과 같은 선상에 있어야 한다(§3.7.2 (a)).
+#[test]
+fn keyboards_기능1_복귀_버튼은_그룹_제목_행에_있다() {
+    let html = read_settings_html();
+    let title_row_at = html
+        .find(r#"id="keyboards-keyremap-heading""#)
+        .expect("기능 1 그룹 제목이 없다");
+    let list_at = html
+        .find(r#"id="keyboards-keyremap-list""#)
+        .expect("기능 1 목록 컨테이너가 없다");
+    let revert_at = html
+        .find(r#"id="keyboards-keyremap-revert-btn""#)
+        .expect("기능 1 복귀 버튼이 없다");
+
+    assert!(
+        title_row_at < revert_at && revert_at < list_at,
+        "기능 1 복귀 버튼이 그룹 제목 행 밖(목록 아래 등)에 있다 — 정책 조작 \
+         버튼군(뱃지·복귀·복사)은 한 선상에 모여야 한다(이슈 #69 K3)"
+    );
+}
+
+/// ⭐ 이슈 #69 K4 — Function Keys 템플릿. DOM 슬롯(팝업 + 적용 버튼)과
+/// 템플릿 2종의 F-키 매핑이 배선돼 있다(§3.7.4).
+#[test]
+fn settings_html_에_keyboards_기능2_템플릿이_배선돼_있다() {
+    let html = read_settings_html();
+    for id in [
+        "keyboards-functionkeys-template-row",
+        "keyboards-functionkeys-template-select",
+        "keyboards-functionkeys-template-apply-btn",
+    ] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "settings.html 에 Function Keys 템플릿 컨트롤(id=\"{id}\")이 없다"
+        );
+    }
+
+    // 템플릿 표 — §3.7.4 의 12개 목적지 id(맥 미디어키 세트)와 null 12개(표준).
+    let f = extract_js_function(&html, "const FUNCTION_KEY_TEMPLATES");
+    for dest_id in [
+        "appleKeyboard.brightness_down",
+        "appleKeyboard.brightness_up",
+        "appleKeyboard.mission_control",
+        "appleKeyboard.launchpad",
+        "consumer.rewind",
+        "consumer.play_or_pause",
+        "consumer.scan_previous_track",
+        "consumer.scan_next_track",
+        "consumer.mute",
+        "consumer.volume_decrement",
+        "consumer.volume_increment",
+        "consumer.eject",
+    ] {
+        assert!(
+            f.contains(dest_id),
+            "맥 미디어키 세트에 목적지 {dest_id} 가 없다(§3.7.4 표)"
+        );
+    }
+    assert!(
+        f.contains("standardFKeys"),
+        "F키 표준 세트 템플릿이 없다(§3.7.4 표)"
+    );
+
+    // 적용 흐름 — 디바이스 계층의 개별 저장 키에 settings_set 으로 기록한다
+    // (새 저장 키 없음, §3.7 원칙).
+    let apply_fn = extract_js_function(&html, "async function commitFunctionKeyTemplate(");
+    assert!(
+        apply_fn.contains(r#"invoke("settings_set""#),
+        "템플릿 적용이 settings_set 경로를 쓰지 않는다 — 새 저장 키가 생긴다(§3.7)"
+    );
+    assert!(
+        apply_fn.contains("functionKeyStorageKey(currentDevice, fk)"),
+        "템플릿 적용이 디바이스 계층 F-키 저장 키에 기록하지 않는다"
+    );
+}
+
+/// ⭐ 이슈 #69 K4 — 템플릿 행은 디바이스 선택 중에만 보인다(공통 계층은
+/// 템플릿의 용처가 아니다 — §1 이 기능의 존재 이유는 디바이스별 차등).
+#[test]
+fn keyboards_기능2_템플릿_행은_디바이스_선택중에만_보인다() {
+    let html = read_settings_html();
+    let f = extract_js_function(&html, "function renderFunctionKeysGroup(");
+    let row_at = f
+        .find("keyboards-functionkeys-template-row")
+        .expect("템플릿 행 갱신 코드가 renderFunctionKeysGroup 에 없다");
+    let hidden_at = f[row_at..]
+        .find("hidden = device === \"all\"")
+        .expect("템플릿 행에 ② 숨김 조건(device === \"all\")이 없다");
+    assert!(
+        hidden_at > 0,
+        "도달하지 않는다 — 위 find 가 이미 검사했다"
+    );
+}
+
 /// ⭐ 이슈 #46 — 복사 커맨드가 프런트 invoke 와 백엔드 등록 양쪽에 배선돼 있다
 /// (계획 §6.3): settings.html 이 `settings_copy_common_to_device` 를 부르고,
 /// main.rs 에 커맨드 선언과 `generate_handler!` 등록이 존재한다.
@@ -1293,7 +1480,7 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
     );
 }
 
-/// 명세 §4.1 표의 41개 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 40개)가
+/// 명세 §4.1 표의 신규 키(탭 라벨 1개 + `preferences.keyboards.*` 나머지)가
 /// en.json·ko.json 양쪽에 전부 있다. ⚠️ 탭 라벨 키만 명세 제안(`preferences.tabs.
 /// keyboards.title`) 대신 기존 코드베이스 관례(`settings.tab.<탭>`)를 따라
 /// `settings.tab.keyboards` 로 잡았다 — settings.html 의 근거 주석 참고.
@@ -1306,8 +1493,12 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
 /// 존재하는데 이 테스트 목록에만 없던 것: `keyRemap.inheritedFromCommon` ·
 /// `macosStatus.on/off/unknown`)를 같은 패스에 보충하고, 복사·복귀·상태 표시
 /// 신규 8개를 더한다 — 29 + 4 + 8 = 41(계획 §4.5 "테스트 영향").
+///
+/// ⭐ 이슈 #69 — 상태 뱃지 `status.mixed`(기능 2 그룹 뱃지의 "일부 전용")와
+/// Function Keys 템플릿 4개(`templates.label/.macMediaKeys/.standardFKeys/
+/// .apply`)를 더한다 — 41 + 5 = 46.
 #[test]
-fn keyboards_탭_신규_i18n_키_41개가_en_ko_양쪽에_있다() {
+fn keyboards_탭_신규_i18n_키_46개가_en_ko_양쪽에_있다() {
     let en = flatten_catalog(&read_en_catalog());
     let ko = flatten_catalog(&read_ko_catalog());
 
@@ -1358,11 +1549,18 @@ fn keyboards_탭_신규_i18n_키_41개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.status.inherited",
         "preferences.keyboards.status.override",
         "preferences.keyboards.status.off",
+        // ⭐ 이슈 #69 K1-2 — 기능 2 그룹 뱃지의 "일부 전용" 상태.
+        "preferences.keyboards.status.mixed",
+        // ⭐ 이슈 #69 K4 — Function Keys 템플릿 4개.
+        "preferences.keyboards.functionKeys.templates.label",
+        "preferences.keyboards.functionKeys.templates.macMediaKeys",
+        "preferences.keyboards.functionKeys.templates.standardFKeys",
+        "preferences.keyboards.functionKeys.templates.apply",
     ];
     assert_eq!(
         KEYS.len(),
-        41,
-        "이 목록 자체가 41개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+        46,
+        "이 목록 자체가 46개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
     );
 
     let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();
