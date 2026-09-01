@@ -19,6 +19,8 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 
 이 계층의 가장 중요한 제약은 **하위 앱의 포커스를 빼앗지 않아야 한다**는 것이다 — 사용자는 Seek 를 띄운 상태에서도 원래 작업 중이던 앱에 키보드 포커스가 남아 있다고 인지하며(검색 바는 자체 텍스트 입력을 받지만 이는 F-01 이 라우팅하는 이벤트로 처리되지, macOS 차원의 키 윈도우 전환으로 처리되지 않는다), 오버레이가 열렸다고 해서 대상 앱이 배경으로 밀려나거나 다른 창이 활성화되는 일이 없어야 한다.
 
+> ⛔ **한글 조합 입력(IME)은 이 오버레이의 범위 밖이다.** `canBecomeKey = false`(이 절의 핵심 제약 — 하위 앱 포커스 유지)와 IME 조합 버퍼 요구가 정면 충돌한다. `canBecomeKey = true` 로 바꾸면 오버레이가 키 윈도우가 되어 하위 앱이 포커스를 잃고, `false` 를 유지한 채 IME 를 쓰려면 Rust 쪽 한글 자모 결합 엔진이 따로 필요하다. 한/영 키 전환은 F-01(세션 라우팅)이 원본 통과로 복구한다(이슈 #76, `seek-activation-and-session.md` §3.1 한/영 키 예외). 한글 조합 자체는 후속 작업으로 분리되어 있다.
+
 ### 1.1 ⭐ 신규 확정 — 오버레이는 창 여러 개로 구성된 복합체다 (실측: 번들 심볼 · defaults)
 
 번들 분석(`app-bundle-analysis.md` §4.7, §2.1)에서 확인된 내부 타입·defaults 키가 위 3가지 확정 사실을 구조 수준에서 재구성한다. 내부 타입: `OverlayWindow` / `Superkey.OverlayWindow` / `overlayWindows`(복수) / `overlayUI` / `EntryBarWindow` / `EntryBarWindowController` / `EntryBarViewController` / `EntryOutlineView` / `EntryBarTableRowView` / `EntrySearchButton` / `EntrySearchButtonCell` / `ClickablePlaceholderView` / `AutoGrowingTextField` / `RSWidthHuggingTextField` / `RSHeightHuggingTextField` / `RSDimensionHuggingTextField` / `transparentWindow` / `EntryBarDelegate` / `EntryBarMatches` / `EntryBarOptions`.

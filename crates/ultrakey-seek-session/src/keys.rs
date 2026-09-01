@@ -244,4 +244,17 @@ mod tests {
         };
         assert_eq!(classify(&ev, Some('a'), false), SessionKey::Ignore);
     }
+
+    // ── ⭐ 이슈 #76 — 한/영 키(0x68) 방어 테스트 ──────────────────────────────────
+
+    /// ⭐ 계약 방어 — 한/영 키(`JIS_KANA`)는 세션 중 계층 1 에서 원본 그대로 통과되므로
+    /// `SeekKey` 로 여기까지 도달하지 않는다(`docs/spec/seek-activation-and-session.md`
+    /// §3.1 한/영 키 예외). 그래도 계약 위반(예: 통과 분기가 정규화 경로를 벗어남) 시
+    /// 조용히 `Ignore` 로 떨어지는 것을 고정한다. `typed = None` 이면 이미 `Ignore`
+    /// 경로로 떨어지므로 구현 변경은 없다 — 테스트만 추가한다.
+    #[test]
+    fn jis_kana_key_down_without_typed_char_is_ignored() {
+        let ev = key_down(KeyCode::JIS_KANA, EventFlags::NONE);
+        assert_eq!(classify(&ev, None, false), SessionKey::Ignore);
+    }
 }

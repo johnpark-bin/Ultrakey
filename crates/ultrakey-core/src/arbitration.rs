@@ -341,6 +341,19 @@ impl Arbiter {
             if !ev.kind.is_key() {
                 return Outcome::pass(Layer::SeekSession);
             }
+            // ⭐ 이슈 #76 — 한/영 키(`0x68` = `JIS_KANA`)만 예외로 원본 그대로 통과시킨다
+            // (`seek-activation-and-session.md` §3.1 한/영 키 예외). 입력 소스 전환을
+            // macOS 기본 동작에 맡기기 위해서다. KeyDown/KeyUp/FlagsChanged 어느 모양으로
+            // 도착해도, modifier 동반 여부와 무관하게 통과시킨다. 이 예외는 F-16.2(`한/영
+            // 키로 입력 소스 변경`) 설정·앱 제외 게이트와 무관하다(D5) — F-16.2 는 계층
+            // 3 에 있어 세션 중에는 계층 1 이 먼저다. 한자 키(`0x66` = `JIS_EISU`)는
+            // 예외가 아니다 — 계속 소비한다(D4).
+            //
+            // ⚠️ 분기 위치는 `ev.kind.is_key()` 통과 판정 **뒤**에 둔다 — 한/영 예외와
+            // 마우스 통과가 겹치지 않게. 나머지 키 소비는 그대로 유지한다.
+            if ev.keycode == KeyCode::JIS_KANA {
+                return Outcome::pass(Layer::SeekSession);
+            }
             let mut out = Outcome::consume(Layer::SeekSession);
             out.push_effect(Effect::SeekKey(InputEvent { kind, ..*ev }));
             return out;
@@ -1617,6 +1630,170 @@ mod tests {
             [Effect::SeekTriggerUp(EventFlags::CAPS_LOCK)],
             "SeekKey 가 아니라 SeekTriggerUp 이어야 한다"
         );
+    }
+
+    // ── ⭐ 이슈 #76 — 세션 중 한/영 키(`0x68`) 원본 통과 (T1~T8) ────────────────────────
+    // `docs/plan/issue-76-seek-searchbar-ime.md` §4 의 T1~T8 을 그대로 고정한다.
+
+    /// T1 — 세션 활성 + `JIS_KANA` KeyDown(modifier 없음) → `Pass`. 소비하지 않고
+    /// `SeekKey` 효과도 내지 않는다 — 원본 이벤트가 그대로 하위 앱으로 전달된다.
+    #[test]
+    fn session_active_passes_jis_kana_key_down() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.emitted().is_empty(), "합성 이벤트를 내면 안 된다");
+        assert!(out.effects().is_empty(), "SeekKey 효과를 내면 안 된다");
+    }
+
+    /// T2 — 세션 활성 + `JIS_KANA` KeyUp → `Pass`. KeyDown 과 같은 경로 — 한/영 키는
+    /// 모멘터리 키라 down/up 이 한 쌍으로 통과되어야 한다(D3).
+    #[test]
+    fn session_active_passes_jis_kana_key_up() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_up(KeyCode::JIS_KANA, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T3 — 세션 활성 + `JIS_KANA` **FlagsChanged** → `Pass`. korean-input.md §3.2 의
+    /// "도착 이벤트 종류를 가정하지 않는다"/"두 모양 모두 재현" 절차 — macOS 가 한/영
+    /// 키를 KeyDown 이 아니라 FlagsChanged 로 보내는 환경이어도 원본 그대로 통과한다.
+    #[test]
+    fn session_active_passes_jis_kana_flags_changed() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::JIS_KANA, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T4 — 회귀 방지: 세션 활성 + `ANSI_A` KeyDown 은 **여전히** `Consume` + `SeekKey`.
+    /// 예외는 한/영 키 하나뿐이다.
+    #[test]
+    fn session_active_still_consumes_other_keys() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        match out.effects()[0] {
+            Effect::SeekKey(ev) => {
+                assert_eq!(ev.kind, EventKind::KeyDown);
+                assert_eq!(ev.keycode, KeyCode::ANSI_A);
+            }
+            other => panic!("SeekKey 가 아니다: {other:?}"),
+        }
+    }
+
+    /// T5 — 한자 키(`0x66` = `JIS_EISU`)는 **통과하지 않는다** — 계속 `Consume` +
+    /// `SeekKey`. 예외는 한/영 키 하나뿐이다(D4).
+    #[test]
+    fn session_active_consumes_jis_eisu_key() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        match out.effects()[0] {
+            Effect::SeekKey(ev) => {
+                assert_eq!(ev.kind, EventKind::KeyDown);
+                assert_eq!(ev.keycode, KeyCode::JIS_EISU);
+            }
+            other => panic!("SeekKey 가 아니다: {other:?}"),
+        }
+    }
+
+    /// T6 — 세션 활성 + 마우스 이벤트 → `Pass`. 기존 동작 유지 — 한/영 예외 분기가
+    /// `ev.kind.is_key()` 통과 판정 **뒤**에 있어 마우스 통과와 겹치지 않는다.
+    #[test]
+    fn session_active_still_passes_mouse_events() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let click = InputEvent {
+            kind: EventKind::LeftMouseDown,
+            keycode: KeyCode(0),
+            flags: EventFlags::NONE,
+            autorepeat: false,
+        };
+        let out = arb.arbitrate(&cfg, &click, GateSnapshot { seek_active: true, ..Default::default() }, Millis(0));
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T7 — 세션 **비활성** + `JIS_KANA` KeyDown → 기존 경로(D5). F-16.2 가 꺼져 있으면
+    /// (기본) 통과, 켜져 있으면 계층 3 발화 — 이 함수는 세션 게이트만 본다.
+    #[test]
+    fn session_inactive_jis_kana_takes_existing_path() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.layer(), Layer::Passthrough, "세션 밖에서는 통과 경로여야 한다");
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// T8 — 세션 활성 + `JIS_KANA` + modifier(⌘) 실림 → `Pass`. 상급 리뷰 확정(D3):
+    /// modifier 동반 여부와 무관하게 통과한다(§5.1 명세 문구).
+    #[test]
+    fn session_active_passes_jis_kana_with_modifier() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::JIS_KANA, EventFlags::COMMAND),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+
+        // FlagsChanged 모양 + shift modifier 로도 동일한지 함께 고정한다.
+        let fc_out = arb.arbitrate(
+            &cfg,
+            &flags_changed(KeyCode::JIS_KANA, EventFlags::SHIFT),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(10),
+        );
+        assert_eq!(fc_out.disposition(), Disposition::Pass);
+        assert!(fc_out.effects().is_empty());
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
