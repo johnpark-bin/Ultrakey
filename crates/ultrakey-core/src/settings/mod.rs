@@ -100,6 +100,13 @@ pub struct EngineConfig {
     /// 원장 키는 **제외** — 그건 설정이 아니라 `ultrakey-engine::path_b` 의 소유권
     /// 원장이다). `Default` 는 빈 맵이다.
     pub per_device_values: std::collections::BTreeMap<String, serde_json::Value>,
+    /// ⭐ K9(이슈 #73, D-K18) — `modifier 키와 함께 누른 문자 키를 영어 소문자로 입력`
+    /// 옵션. `false`(기본)면 K9 판정 경로를 아예 건너뛴다 — 기존 동작과 완전히 같다.
+    /// 규칙 테이블(`RuleTable`)에 넣지 않는 이유: K9 은 트리거 키 하나가 정해진 규칙이
+    /// 아니라 **"눌린 modifier 상태 + 문자 키 도착"이라는 판정식**이라(`korean.rs`
+    /// `lowercase_action_for`) 규칙 열거가 아니라 판정기가 조건 플래그로 읽는 모양이
+    /// 맞다(`caps_lock_alias` 와 같은 자리다).
+    pub korean_modifier_lowercase: bool,
 }
 
 #[cfg(test)]

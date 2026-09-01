@@ -19,4 +19,5 @@ pub mod apps;
 pub mod settings;
 
 pub use apps::default_excluded_bundle_ids;
+pub use apps::{normalize_bundle_id, resolve_excluded_bundle_ids};
 pub use settings::KoreanSettings;

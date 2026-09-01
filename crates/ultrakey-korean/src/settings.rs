@@ -34,6 +34,12 @@ pub struct KoreanSettings {
     /// ⚠️ **기본값 `true`** — F-16 항목 중 유일하게 부재가 켜짐을 뜻한다(명세 §4.2 각주).
     #[serde(default = "default_disable_in_remote_desktop")]
     pub disable_in_remote_desktop: bool,
+    /// ⭐ K9(이슈 #73, D-K18) — `modifier 키와 함께 누른 문자 키를 영어 소문자로
+    /// 입력`. 기본 ☐. ⭐ 원본 SuperKey 에 없는 클론 고유 확장이다(명세 §3.7) —
+    /// 이 필드가 규칙을 내는 게 아니라 중재기(KoreanInput 계층 앞)의 **행동 옵션**이라
+    /// `to_rules` 가 아니라 `EngineConfig` 쪽 플래그로 흘러간다.
+    #[serde(default)]
+    pub modifier_key_types_lowercase: bool,
 }
 
 fn default_disable_in_remote_desktop() -> bool {
@@ -48,6 +54,7 @@ impl Default for KoreanSettings {
             hanja_key_converts_hanja: false,
             won_key_types_backtick: false,
             disable_in_remote_desktop: true,
+            modifier_key_types_lowercase: false,
         }
     }
 }
@@ -75,6 +82,9 @@ impl KoreanSettings {
             disable_in_remote_desktop: store
                 .get(keys::KOREAN_DISABLE_IN_REMOTE_DESKTOP)
                 .unwrap_or(true),
+            modifier_key_types_lowercase: store
+                .get(keys::KOREAN_MODIFIER_KEY_TYPES_LOWERCASE)
+                .unwrap_or_default(),
         }
     }
 
@@ -283,8 +293,44 @@ mod tests {
             hanja_key_converts_hanja: true,
             won_key_types_backtick: true,
             disable_in_remote_desktop: true,
+            modifier_key_types_lowercase: false,
         };
         let rules = s.to_rules();
         assert_eq!(rules.len(), 4, "F-16.1~F-16.4 네 규칙 전부가 나와야 한다: {rules:?}");
+    }
+
+    // ── ⭐ K9(이슈 #73, D-K18) — modifier+문자키 영어 소문자 변환 ─────────────────
+
+    /// K9 옵션은 기본 꺼짐이다(부재 = `false`).
+    #[test]
+    fn k9_defaults_to_off() {
+        assert!(!KoreanSettings::default().modifier_key_types_lowercase);
+        let store = SettingsStore::in_memory();
+        assert!(!KoreanSettings::from_store(&store).modifier_key_types_lowercase);
+    }
+
+    /// K9 옵션을 켜면 저장소에서 `true` 로 읽힌다.
+    #[test]
+    fn k9_reads_explicit_true() {
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(keys::KOREAN_MODIFIER_KEY_TYPES_LOWERCASE, &true)
+            .expect("in-memory store 는 실패하지 않는다");
+        assert!(KoreanSettings::from_store(&store).modifier_key_types_lowercase);
+    }
+
+    /// ⭐ K9 는 규칙 테이블에 영향을 주지 않는다 — 켜도 `to_rules()` 결과가 같다.
+    /// 이 옵션은 중재기의 행동 플래그(D-K18)이지 규칙이 아니기 때문이다.
+    #[test]
+    fn k9_does_not_change_to_rules() {
+        let off = KoreanSettings {
+            shift_space_switches_input_source: true,
+            ..KoreanSettings::default()
+        };
+        let on = KoreanSettings {
+            modifier_key_types_lowercase: true,
+            ..off
+        };
+        assert_eq!(off.to_rules(), on.to_rules());
     }
 }

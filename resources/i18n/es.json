@@ -239,5 +239,13 @@
   "preferences.keyboards.functionKeys.category.applicationLaunchKeys": "Teclas de inicio de aplicaciones",
   "preferences.keyboards.functionKeys.category.guiApplicationControlKeys": "Teclas de control de aplicaciones GUI",
   "preferences.keyboards.functionKeys.category.remoteControlButtons": "Botones de control remoto",
-  "preferences.keyboards.functionKeys.category.others": "Otros"
+  "preferences.keyboards.functionKeys.category.others": "Otros",
+  "settings.korean.excluded.group": "Aplicaciones en las que omitir el manejo de teclas coreanas",
+  "settings.korean.excluded.rowPlaceholder": "com.example.App",
+  "settings.korean.excluded.addRow": "Añadir aplicación",
+  "settings.korean.excluded.removeRow": "Quitar aplicación",
+  "settings.korean.excluded.emptyList": "No se omitirá ninguna aplicación — Ultrakey maneja las teclas coreanas en todas las aplicaciones.",
+  "settings.korean.excluded.reset": "Volver a la lista predeterminada",
+  "settings.korean.modifier_lowercase": "Escribir en minúsculas inglesas al pulsar una letra con un modificador",
+  "settings.korean.modifier_lowercase.hint": "Cuando un atajo de modifier+letra se rompe con la entrada coreana, reconoce la letra como minúscula inglesa. No interviene en combinaciones con ⌘·⌃ (atajos de aplicaciones) ni en bloqueo de mayúsculas."
 }

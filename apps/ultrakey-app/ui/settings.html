@@ -117,8 +117,14 @@
   /* ③ 문장 중간 삽입 렌더러 — 라벨 문장 뒤에 체크박스 여럿이 한 줄로 이어진다.
      `Caps lock + [팝업] = ◀▼▲▶` 류의 정본 사례는 Presets 탭(범위 밖)에만 있으므로
      여기서는 이 레이아웃 클래스만 재사용 가능하게 마련해 둔다. */
-  .inline-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .inline-row label { display: inline-flex; align-items: center; gap: 4px; }
+   .inline-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+   .inline-row label { display: inline-flex; align-items: center; gap: 4px; }
+
+  /* ⭐ K5(이슈 #73) — 원격 데스크톱 제외 목록 편집기의 행. F-17 의 가변 목록
+     편집기(buildKeyRemapRow)와 같은 컨트롤 유형이라 배치도 같은 자리다 — 입력이
+     남는 공간을 채우고 삭제 버튼은 고정 폭. */
+  .korean-excluded-row-inner input[type="text"] { flex: 1 1 260px; font: inherit; }
+  .keyremap-row-remove { flex: none; }
 
   .warnings p { margin: 4px 0; }
 
@@ -662,6 +668,30 @@
       </div>
       <p class="hint" id="korean-remote-desktop-hint"></p>
 
+      <!-- ⭐ K5(이슈 #73, D-K17) — 제외 대상 목록 편집기. §3.5 의 "목록 편집 UI 를
+           두지 않는다" 결정을 이슈 #73 이 뒤집었다. 가변 길이 목록 편집기(F-17
+           §3.4.1 의 Keyboards 탭 기능 1 과 같은 컨트롤 유형) — 행 하나 = 번들 ID
+           문자열. 저장 값은 배열 통째로(korean.excludedBundleIds), 부재 = 기본
+           12종. -->
+      <h2 class="group" id="korean-excluded-heading"></h2>
+      <div id="korean-excluded-list"></div>
+      <p class="hint" id="korean-excluded-empty" hidden></p>
+      <div class="row">
+        <button id="korean-excluded-add-btn" type="button"></button>
+        <button id="korean-excluded-reset-btn" type="button" hidden></button>
+      </div>
+
+      <hr />
+
+      <!-- ⭐ K9(이슈 #73, D-K18) — modifier+문자키 → 영어 소문자 옵션. -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-modifier-lowercase" data-key="korean.modifierKeyTypesLowercase" />
+          <span id="korean-modifier-lowercase-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-modifier-lowercase-hint"></p>
+
       <hr />
 
       <!-- §3.6 행동 기반 진단 + §7 오른쪽 command 안내. 어느 항목에도 종속되지
@@ -1174,6 +1204,14 @@ if (!tauri || !tauri.core) {
     $("korean-won-backtick-hint").textContent = t("settings.korean.won_backtick.hint");
     $("korean-remote-desktop-label").textContent = t("settings.korean.remote_desktop");
     $("korean-remote-desktop-hint").textContent = t("settings.korean.remote_desktop.hint");
+    // ⭐ K5(이슈 #73) — 제외 대상 목록 편집기 헤딩·버튼. 행 입력의 placeholder 는
+    // renderKoreanExcludedList 가 동적으로 채운다(행마다 만들어지므로).
+    $("korean-excluded-heading").textContent = t("settings.korean.excluded.group");
+    $("korean-excluded-add-btn").textContent = t("settings.korean.excluded.addRow");
+    $("korean-excluded-reset-btn").textContent = t("settings.korean.excluded.reset");
+    // ⭐ K9(이슈 #73) — modifier+문자키 → 영어 소문자 옵션.
+    $("korean-modifier-lowercase-label").textContent = t("settings.korean.modifier_lowercase");
+    $("korean-modifier-lowercase-hint").textContent = t("settings.korean.modifier_lowercase.hint");
     $("korean-not-working-hint").textContent = t("settings.korean.not_working.hint");
     $("korean-right-command-hint").textContent = t("settings.korean.right_command.hint");
 
@@ -2435,6 +2473,119 @@ if (!tauri || !tauri.core) {
     $("conflict-overlay").hidden = true;
   }
 
+  // ⭐ K5(이슈 #73, D-K17) — 원격 데스크톱 클라이언트 제외 목록 편집기.
+  //
+  // 저장 규약(명세 §3.5 정정): `korean.excludedBundleIds` = 번들 ID 문자열 배열.
+  // **부재(백엔드 `excludedBundleIds: null`) = 기본 12종** — 그때는 기본 목록을
+  // 편집기에 채워 보여주고, 사용자가 행 하나라도 건드리는 순간 그 화면 목록 전체가
+  // 오버라이드로 굳는다(Keyboards 탭의 "물려받은 목록을 편집하면 전용 배열로
+  // 굳는다"와 같은 패턴). ⛔ 병합하지 않는다 — 편집기가 보여주는 행 전체가 저장
+  // 값이다. "기본 목록으로 되돌리기" 버튼은 이 오버라이드 키 자체를 지운다
+  // (부재 = 기본). 저장 값은 정규화(공백 제거·빈 행 제외·중복 제거)한 뒤 보낸다 —
+  // 백엔드 `resolve_excluded_bundle_ids` 와 같은 규칙(그 함수가 정본).
+  function koreanExcludedRowsOf(korean) {
+    return Array.isArray(korean.excludedBundleIds)
+      ? korean.excludedBundleIds.slice()
+      : (korean.defaultExcludedBundleIds || []).slice();
+  }
+
+  function koreanExcludedIsOverride(korean) {
+    return Array.isArray(korean.excludedBundleIds);
+  }
+
+  // 화면의 완성된 행(비지 않은 입력)을 저장 배열로 수집한다. 빈 행은 저장하지
+  // 않는다 — §3.4.1 항목 4(가변 목록 편집기의 빈 행 미저장 규약)를 그대로 따른다.
+  // 중복 제거·공백 제거는 백엔드(`resolve_excluded_bundle_ids`)가 또 하지만, 화면과
+  // 게이트를 즉시 일치시키기 위해 여기서도 같은 규칙을 적용한다.
+  function collectKoreanExcludedRows() {
+    const rows = [];
+    const seen = new Set();
+    for (const input of $("korean-excluded-list").querySelectorAll("input[type=text]")) {
+      const trimmed = input.value.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      rows.push(trimmed);
+    }
+    return rows;
+  }
+
+  function saveKoreanExcludedRows() {
+    const rows = collectKoreanExcludedRows();
+    if (rows.length === 0) {
+      // 0행 = 명시적 빈 오버라이드("아무 앱도 제외하지 않음")다 — D-K17: 빈 배열도
+      // 저장 값이다(부재와 다르다). 단, 화면에 행이 남아 있으면 그것은 "지우는
+      // 중"이지 "전부 지웠다"가 아니므로 아직 저장하지 않는다(이슈 #31 ① 의 세
+      // 번째 방어선과 같은 방어 — 행을 × 로 전부 지우면 이 경로로 온다).
+      const domRowCount = $("korean-excluded-list").querySelectorAll(".korean-excluded-row").length;
+      if (domRowCount > 0) return;
+    }
+    commit("korean.excludedBundleIds", rows);
+  }
+
+  // 행 하나 — [텍스트 입력] + 삭제 버튼. placeholder 는 카탈로그에서 온다.
+  function buildKoreanExcludedRow(value) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "korean-excluded-row";
+
+    const row = document.createElement("div");
+    // ⚠️ 공백이 든 className 문자열 리터럴은 하드코딩 영어 문장 탐지기에 걸린다 —
+    // classList.add 로 토큰을 나눠 넣어 그 오탐을 피한다(buildKeyRemapRow 의 같은 규약).
+    row.classList.add("row", "korean-excluded-row-inner");
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "korean-excluded-input";
+    input.placeholder = t("settings.korean.excluded.rowPlaceholder");
+    input.value = value;
+    input.spellcheck = false;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "keyremap-row-remove";
+    removeBtn.textContent = "×";
+    removeBtn.setAttribute("aria-label", t("settings.korean.excluded.removeRow"));
+    removeBtn.addEventListener("click", () => {
+      wrapper.remove();
+      saveKoreanExcludedRows();
+    });
+
+    row.append(input, removeBtn);
+    wrapper.append(row);
+    return wrapper;
+  }
+
+  function renderKoreanExcludedList(korean) {
+    const list = $("korean-excluded-list");
+    const rows = koreanExcludedRowsOf(korean);
+
+    // ⭐ 편집 중인 행을 재렌더로 지우지 않는다 — 이슈 #31 ② 와 같은 억제 판정.
+    // 저장 응답으로 renderState 가 다시 불릴 때, 저장소의 값(정규화된 배열)과 화면의
+    // 완성된 행 집합이 같으면 다시 만들지 않는다 — 방금 쓴 값이 그대로 돌아온 것이기
+    // 때문이다. 다르면(외부 변경·import·되돌리기) 목록을 새로 만든다.
+    const rendered = Array.from(list.querySelectorAll(".korean-excluded-input")).map((el) => el.value.trim()).filter((v) => v.length > 0);
+    const same = rendered.length === rows.length && rendered.every((v, i) => v === rows[i]);
+    if (!same) {
+      list.innerHTML = "";
+      for (const row of rows) {
+        list.append(buildKoreanExcludedRow(row));
+      }
+    }
+    // 빈 목록 안내는 화면에 실제로 있는 행 기준(위와 같은 이유).
+    const domRowCount = list.querySelectorAll(".korean-excluded-row").length;
+    $("korean-excluded-empty").hidden = domRowCount > 0;
+    // 되돌리기 버튼은 오버라이드가 존재할 때만 뜬다 — 부재는 이미 기본 목록이므로
+    // 되돌릴 대상이 없다(② 숨김, F-17 복귀 버튼과 같은 규약).
+    $("korean-excluded-reset-btn").hidden = !koreanExcludedIsOverride(korean);
+  }
+
+  // 행 추가·삭제·내용 변경 각각이 저장 1회다(F-15 §3.1.1 — 컨트롤 단위 즉시
+  // write-through, F-17 §3.4.1 의 행 단위 해석과 같다).
+  function addKoreanExcludedRow() {
+    $("korean-excluded-list").append(buildKoreanExcludedRow(""));
+    const inputs = $("korean-excluded-list").querySelectorAll(".korean-excluded-input");
+    if (inputs.length > 0) inputs[inputs.length - 1].focus();
+  }
+
   // ② 숨김 — trackpad.enabled 가 꺼지면 두 체크박스 행을 DOM 에서 완전히
   // 제거한다(display:none 이 아니다). ① dimmed(트랙패드 팝업 자체는 이 함수가
   // 다루지 않는다 — 트랙패드 영역 팝업은 dimmed 대상이 아니라 항상 조작 가능하다)
@@ -2641,12 +2792,15 @@ if (!tauri || !tauri.core) {
     // renderKeyboardsTab() 내부가 방어한다(위 정의 주석 참고).
     renderKeyboardsTab(state);
 
-    // F-16 — 1단계 3개(실제 반영)와 2단계 2개(값은 존재하지만 disabled — D-K8).
+    // F-16 — 5개 체크박스(2단계로 전부 활성, D-K14) + ⭐ K9 옵션(이슈 #73).
     $("korean-shift-space").checked = state.korean.shiftSpaceSwitchesInputSource;
     $("korean-han-eng").checked = state.korean.hanEngSwitchesInputSource;
     $("korean-hanja").checked = state.korean.hanjaKeyConvertsHanja;
     $("korean-won-backtick").checked = state.korean.wonKeyTypesBacktick;
     $("korean-remote-desktop").checked = state.korean.disableInRemoteDesktop;
+    $("korean-modifier-lowercase").checked = state.korean.modifierKeyTypesLowercase;
+    // ⭐ K5(이슈 #73) — 제외 대상 목록 편집기.
+    renderKoreanExcludedList(state.korean);
 
     // F-10 — 실제로 동작하는 항목들(자동 업데이트는 F-13 으로 활성, F-12 라이선스 컨트롤만 비활성).
     $("launch-on-login").checked = state.general.launchOnLogin;
@@ -2813,6 +2967,22 @@ if (!tauri || !tauri.core) {
   $("p-quick-duration").addEventListener("input", (ev) => {
     $("p-quick-duration-value").textContent =
       tf("settings.presets.quick_press_duration.value", [Number(ev.target.value)]);
+  });
+
+  // ⭐ K5(이슈 #73) — 제외 목록 편집기의 배선. 행 추가 버튼·되돌리기 버튼·행 입력의
+  // change(포커스를 잃을 때 저장 1회 — F-17 §3.4.1 "행의 from/to 변경이 저장 1회"와
+  // 같은 규약). 빈 행은 저장되지 않으므로 입력 도중에 쓰지 않는다.
+  $("korean-excluded-add-btn").addEventListener("click", addKoreanExcludedRow);
+  $("korean-excluded-list").addEventListener("change", (ev) => {
+    if (ev.target && ev.target.classList.contains("korean-excluded-input")) {
+      saveKoreanExcludedRows();
+    }
+  });
+  // 되돌리기 = 오버라이드 키 삭제(부재 = 기본 12종, D-K17). `settings_set` 에
+  // null 을 보낸다 — `commit` 경로에서 null 은 그대로 저장되고 `KoreanView` 는
+  // `excludedBundleIds: null` 로 되돌려 주므로, 화면이 기본 목록으로 다시 그려진다.
+  $("korean-excluded-reset-btn").addEventListener("click", () => {
+    commit("korean.excludedBundleIds", null);
   });
 
   $("conflict-cancel").addEventListener("click", async () => {

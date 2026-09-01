@@ -239,5 +239,13 @@
   "preferences.keyboards.functionKeys.category.applicationLaunchKeys": "Application launch keys",
   "preferences.keyboards.functionKeys.category.guiApplicationControlKeys": "GUI application control keys",
   "preferences.keyboards.functionKeys.category.remoteControlButtons": "Remote control buttons",
-  "preferences.keyboards.functionKeys.category.others": "Others"
+  "preferences.keyboards.functionKeys.category.others": "Others",
+  "settings.korean.excluded.group": "Apps to skip Korean key handling",
+  "settings.korean.excluded.rowPlaceholder": "com.example.App",
+  "settings.korean.excluded.addRow": "Add app",
+  "settings.korean.excluded.removeRow": "Remove app",
+  "settings.korean.excluded.emptyList": "No apps will be skipped — Ultrakey handles Korean keys in every app.",
+  "settings.korean.excluded.reset": "Revert to default list",
+  "settings.korean.modifier_lowercase": "Type lowercase English when a letter is typed with a modifier",
+  "settings.korean.modifier_lowercase.hint": "When a modifier+letter shortcut is broken by Korean input, types the letter as lowercase English instead. ⌘ and ⌃ combinations (app shortcuts) and caps lock are never touched."
 }

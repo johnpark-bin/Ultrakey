@@ -50,8 +50,10 @@
 ///   넣는 것 자체가 무의미하다.
 /// - **Remmina / TigerVNC** — macOS 앱 번들이 없거나 확인되지 않았다.
 ///
-/// 목록에 없는 클라이언트를 쓰는 사용자는 메뉴바의 `Ignore <앱>`(F-10)으로
-/// 대응한다 — 명세 §3.5 가 이미 정한 절충이고, 그 한계는 §9#6 이 승계한다.
+/// ⭐ **K5(이슈 #73, D-K17) 갱신** — 이 기본 목록은 이제 *출고 기본값*일 뿐이다.
+/// 사용자가 `Korean` 탭에서 목록을 편집하면 그 오버라이드가 이 목록을 **통째로
+/// 대체**한다([`resolve_excluded_bundle_ids`]). UI 는 이 목록을 **노출**한다 —
+/// 명세 §3.5 의 "목록 편집 UI 를 두지 않는다" 결정은 이슈 #73 이 뒤집었다(§3.5).
 pub fn default_excluded_bundle_ids() -> &'static [&'static str] {
     &[
         "com.apple.ScreenSharing",
@@ -69,9 +71,108 @@ pub fn default_excluded_bundle_ids() -> &'static [&'static str] {
     ]
 }
 
+/// ⭐ K5(이슈 #73, D-K17) — 저장된 사용자 오버라이드 목록과 기본 목록을 병합해
+/// 게이트에 실제로 주입할 최종 목록을 낸다.
+///
+/// **병합 규칙 — "오버라이드는 완전 대체다"**:
+/// - `override_ids` 가 `None`(저장 키 부재) → 기본 목록을 그대로 쓴다(F-15 "부재 =
+///   기본값").
+/// - `Some(list)` → **기본 목록을 무시하고** 그 값 그대로 쓴다. 빈 배열도 "아무 앱도
+///   제외하지 않음"이라는 **명시적 값**이다 — 사용자가 기본 항목을 전부 지운 의도를
+///   존중한다. 병합(합집합)이 아니라 대체인 근거: 사용자가 기본 항목 하나를 지웠는데
+///   되살아나면 "제거" 조작이 동작하지 않는 것이고, "리스트 하나 = 원자적 단위"라는
+///   저장 계층의 성질(per-device-settings.md §3.4)과 맞물린다.
+/// - 저장 값 안의 중복·공백은 정규화해 제거한다(손으로 settings.json 을 고친 경우의
+///   방어 — 결정론적 순서를 위해 **첫 등장 순서**를 유지한다).
+///
+/// ⛔ 이 함수는 판정을 하지 않는다 — 최전면 앱 매칭은 `AppGateController` 소관이다.
+/// 여기는 `Vec<String>` 조립(정규화)만 한다.
+pub fn resolve_excluded_bundle_ids(override_ids: Option<&[String]>) -> Vec<String> {
+    let Some(ids) = override_ids else {
+        return default_excluded_bundle_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let trimmed = id.trim();
+        if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+/// 저장 후보가 되기 전에 행 하나를 정규화한다 — UI 쪽에서도 같은 규칙(공백 제거·
+/// 비어 있으면 저장 안 함)을 쓰지만, 이 함수가 정본이다(단일 출처).
+pub fn normalize_bundle_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── ⭐ K5(이슈 #73, D-K17) — 오버라이드 목록 병합 ─────────────────────────────
+
+    #[test]
+    fn resolve_without_override_returns_the_built_in_defaults() {
+        assert_eq!(
+            resolve_excluded_bundle_ids(None),
+            default_excluded_bundle_ids()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(resolve_excluded_bundle_ids(None).len(), 12);
+    }
+
+    /// 오버라이드가 있으면 기본 목록을 **통째로 대체**한다 — 병합하지 않는다(D-K17).
+    #[test]
+    fn resolve_with_override_replaces_defaults_entirely() {
+        let ov = vec!["com.example.MyClient".to_string()];
+        let resolved = resolve_excluded_bundle_ids(Some(&ov));
+        assert_eq!(resolved, vec!["com.example.MyClient".to_string()]);
+        assert!(!resolved.contains(&"com.apple.ScreenSharing".to_string()));
+    }
+
+    /// 빈 배열은 "아무 앱도 제외하지 않음"이라는 명시적 의도다 — 기본 목록으로 되돌리지
+    /// 않는다. 사용자가 전부 지웠다면 그것이 의도다.
+    #[test]
+    fn resolve_with_empty_override_yields_empty_list() {
+        let empty: Vec<String> = Vec::new();
+        assert!(resolve_excluded_bundle_ids(Some(&empty)).is_empty());
+    }
+
+    /// 중복 제거는 **첫 등장 순서를 유지**한다(결정론) — 뒤에 온 중복이 앞을 밀어내지
+    /// 않는다.
+    #[test]
+    fn resolve_dedupes_preserving_first_occurrence_order() {
+        let input = vec![
+            "com.b".to_string(),
+            "com.a".to_string(),
+            "com.b ".to_string(), // 뒤의 것(공백 포함)이 앞의 것과 같아야 한다
+            "  ".to_string(),     // 공백만 — 버려진다
+        ];
+        let resolved = resolve_excluded_bundle_ids(Some(&input));
+        assert_eq!(resolved, vec!["com.b".to_string(), "com.a".to_string()]);
+    }
+
+    /// 저장 후보 정규화 — 공백 제거, 빈 값은 None.
+    #[test]
+    fn normalize_bundle_id_trims_and_rejects_empty() {
+        assert_eq!(normalize_bundle_id("  com.x.Y  "), Some("com.x.Y".to_string()));
+        assert_eq!(normalize_bundle_id("   "), None);
+        assert_eq!(normalize_bundle_id(""), None);
+    }
 
     #[test]
     fn has_exactly_12_entries() {

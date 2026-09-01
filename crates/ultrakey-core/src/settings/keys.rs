@@ -117,6 +117,17 @@ pub const KOREAN_WON_KEY_TYPES_BACKTICK: &str = "korean.wonKeyTypesBacktick";
 /// ⚠️ **기본값 ☑(부재 = `true`)** — 다른 F-16 항목과 반대 방향이다(명세 §4.2 각주,
 /// D-K9). 구현·리뷰 양쪽에서 놓치기 쉬운 지점이라 여기서도 명시해 둔다.
 pub const KOREAN_DISABLE_IN_REMOTE_DESKTOP: &str = "korean.disableInRemoteDesktop";
+/// ⭐ K5(이슈 #73, D-K17) — 원격 데스크톱 클라이언트 기본 제외 목록의 **사용자
+/// 오버라이드**. 부재 = 앱에 내장된 기본 12종(`ultrakey_korean::apps::
+/// default_excluded_bundle_ids`)을 그대로 쓴다. 존재하면(빈 배열 포함) **기본 목록을
+/// 통째로 대체한다** — 병합하지 않는다(per-device-settings.md §3.4 "배열은 병합이
+/// 아니라 통째 교체"와 같은 근거: "리스트 하나 = 원자적 단위"). 값은 번들 ID
+/// 문자열의 JSON 배열이다.
+pub const KOREAN_EXCLUDED_BUNDLE_IDS: &str = "korean.excludedBundleIds";
+/// ⭐ K9(이슈 #73, D-K18) — `modifier 키와 함께 누른 문자 키를 영어 소문자로
+/// 입력` — 체크박스. 기본값 ☐(부재 = `false`). 원본 SuperKey 에 없는 클론 고유
+/// 확장이다(명세 §3.7).
+pub const KOREAN_MODIFIER_KEY_TYPES_LOWERCASE: &str = "korean.modifierKeyTypesLowercase";
 
 // ── F-03 Seek 오버레이(`seek-overlay-ui.md` §3.4, 이슈 #34) ──
 //
@@ -234,6 +245,8 @@ pub fn all() -> &'static [&'static str] {
         KOREAN_HANJA_KEY_CONVERTS_HANJA,
         KOREAN_WON_KEY_TYPES_BACKTICK,
         KOREAN_DISABLE_IN_REMOTE_DESKTOP,
+        KOREAN_EXCLUDED_BUNDLE_IDS,
+        KOREAN_MODIFIER_KEY_TYPES_LOWERCASE,
         SEEK_SEARCH_BAR_X,
         SEEK_SEARCH_BAR_Y,
         SEEK_TOGGLE_SHORTCUT_CODE,
