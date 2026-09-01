@@ -72,7 +72,6 @@
   "settings.hyperkey.mouse.hint": "Scroll 을 켜면 ⌘+스크롤을 확대/축소로 예약해 둔 앱에서 오작동할 수 있다.",
   "settings.hyperkey.trackpad.label": "트랙패드 가장자리를 쓸어 hyper 켜기:",
   "settings.hyperkey.trackpad.hint": "선택한 영역에서 손가락 하나를 살짝 밀어 넣으면 켜지고, 떼면 해제된다.",
-  "settings.hyperkey.trackpad.unimplemented": "⚠️ 제스처 인식은 아직 만들지 않았다(F-06 · M5). 값은 저장되지만 지금은 동작하지 않는다.",
   "settings.hyperkey.trackpad.change_icon": "켜져 있는 동안 메뉴바 아이콘 바꾸기",
   "settings.hyperkey.trackpad.haptic": "트리거될 때 햅틱 피드백 주기",
   "settings.hyperkey.area.top_left": "왼쪽 위",

@@ -72,7 +72,6 @@
   "settings.hyperkey.mouse.hint": "Activar Desplazamiento puede dispararse por error en apps que reservan ⌘+desplazamiento para el zoom.",
   "settings.hyperkey.trackpad.label": "Activar hyper con un deslizamiento desde el borde del trackpad:",
   "settings.hyperkey.trackpad.hint": "Desliza un dedo ligeramente hacia dentro desde el área que elijas abajo; levántalo para soltar hyper.",
-  "settings.hyperkey.trackpad.unimplemented": "⚠️ El reconocimiento de gestos aún no se ha implementado (F-06, M5). Este valor se guarda, pero por ahora no tiene efecto.",
   "settings.hyperkey.trackpad.change_icon": "Cambiar el icono de la barra de menús mientras está activo",
   "settings.hyperkey.trackpad.haptic": "Dar respuesta háptica al activarse",
   "settings.hyperkey.area.top_left": "Arriba a la izquierda",

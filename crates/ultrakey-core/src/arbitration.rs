@@ -39,6 +39,17 @@ pub struct GateSnapshot {
     /// ⭐ D-K2 — 한국어 입력기 활성 판정(`korean.rs`). `Unknown` 이 기본값이자
     /// fail-closed 다: 판정 불가 상태에서 한국어 전용 규칙은 발화하지 않는다.
     pub korean_ime: KoreanImeState,
+    /// ⭐ F-06 — 트랙패드 제스처가 hyper 를 요청 중인가(`trackpad-hyper-gesture.md` §3.4).
+    /// 트랙패드 리스너가 `Engaged` 로 전이하는 동안만 `true` 다. 물리 키 소스와는
+    /// 별개 소스이며, 이 값은 "hyper 요청"만 담당하고 실제 `EventFlags` 합성은
+    /// 기존 계층 2 경로(`active_synth_flags` 에 hyper 규칙 flags 를 OR)로 흡수된다.
+    /// `Default` 는 `false` — 리스너가 없어도(비공개 API 격하) 기존 동작과 완전히 같다.
+    pub trackpad_hyper_active: bool,
+    /// ⭐ F-06 — 트랙패드 제스처가 진행 중(프리즈 임계 도달, `trackpad-hyper-gesture.md`
+    /// §3.2.1)이어서 **마우스 이동 이벤트를 소비해야 하는가**. 제스처 접촉이 낸 커서 이동이
+    /// 일반 커서 이동으로 오인되는 것을 막는 §8 마지막 수용 기준의 구현이다.
+    /// ⚠️ 소비 대상은 `MouseMoved` 뿐이다 — 클릭·드래그·휠은 소비하지 않는다.
+    pub trackpad_freeze_cursor: bool,
 }
 
 /// 이 이벤트를 최종적으로 어떻게 흘려보낼 것인가.
@@ -103,6 +114,9 @@ pub enum Layer {
     /// `SimpleRemap` 앞. 계층 3 안에서 `RuleId::Preset` 이 `RuleId::Korean` 보다 먼저
     /// 평가되므로(`rules.rs`), F-08.4 같은 Preset 조합이 F-16 규칙보다 항상 이긴다.
     KoreanInput,
+    /// F-06 트랙패드 제스처 프리즈(`trackpad-hyper-gesture.md` §3.2.1) — 제스처 진행
+    /// 중 마우스 이동 이벤트를 소비하는 자리. 계층 1 앞의 게이트성 소비다.
+    TrackpadFreeze,
     SimpleRemap,
     Passthrough,
 }
@@ -332,12 +346,21 @@ impl Arbiter {
             return out;
         }
 
+        // ⭐ F-06 프리즈(`trackpad-hyper-gesture.md` §3.2.1·§8 마지막 항목) — 트랙패드
+        // 제스처가 진행 중(프리즈 임계 도달)이면 마우스 이동 이벤트를 소비한다. 접촉
+        // 하나만 있는 상태에서 시스템이 내는 `MouseMoved` 는 사실상 그 접촉이 낸 커서
+        // 이동뿐이므로, 이 소비가 다른 입력을 막지 않는다. 클릭·드래그·휠은 소비하지
+        // 않는다 — 제스처 중에도 클릭은 의도일 수 있다(§3.4 `Click/Drag` 체크박스 계열).
+        if gates.trackpad_freeze_cursor && kind == EventKind::MouseMoved {
+            return Outcome::consume(Layer::TrackpadFreeze);
+        }
+
         // 계층 2/3 통합 소스 키 핸들러(architecture.md §6.4 P1) — 추적 키(hyper/meh/bleh
         // 소스 또는 프리셋 액션 소스) 자신의 이벤트는 이 핸들러 하나가 결정한다.
         let is_tracked = cfg.rules.modifier_rule_for(ev.keycode).is_some()
             || cfg.rules.source_actions_for(ev.keycode).is_some();
         if is_tracked && (kind == EventKind::KeyDown || kind == EventKind::KeyUp) {
-            return self.handle_tracked_key_event(cfg, ev, kind, now);
+            return self.handle_tracked_key_event(cfg, ev, kind, gates, now);
         }
 
         // 이하는 추적 대상이 아닌 키(또는 마우스 이벤트)의 경로다.
@@ -350,7 +373,7 @@ impl Arbiter {
         }
 
         // 계층 3: Preset 조합. 트리거가 이 키이고 hold 조건이 성립하면 발화.
-        if self.evaluate_combo_rules(cfg, ev, kind, &mut out) {
+        if self.evaluate_combo_rules(cfg, ev, kind, gates, &mut out) {
             return out;
         }
 
@@ -369,7 +392,13 @@ impl Arbiter {
 
         // 계층 2 의 "유지" 효과: hyper/meh/bleh 가 Active 인 동안 다른 키/마우스 이벤트에
         // modifier 를 얹는다(§3-b 계층 2 행, hyperkey.md §3.2 Active 행).
-        let active = self.state.active_synth_flags();
+        // ⭐ F-06 — 트랙패드 제스처 소스(`gates.trackpad_hyper_active`)도 같은 자리에서
+        // hyper 규칙 flags 를 OR 한다. 두 소스(물리 키 + 트랙패드)가 동시에 활성이어도
+        // 비트마스크 OR 이므로 중복·모순이 생기지 않는다(hyperkey.md §3.4 병합).
+        let mut active = self.state.active_synth_flags();
+        if gates.trackpad_hyper_active {
+            active |= Self::trackpad_hyper_flags(cfg);
+        }
         if !active.is_empty() {
             if ev.kind.is_key() {
                 out.layer = Layer::HyperModifier;
@@ -471,6 +500,7 @@ impl Arbiter {
         cfg: &EngineConfig,
         ev: &InputEvent,
         kind: EventKind,
+        gates: GateSnapshot,
         now: Millis,
     ) -> Outcome {
         // ⭐ 원본을 소비할 것인가, 통과시킬 것인가 (2026-08-30, 이슈 #19 증상 C).
@@ -489,7 +519,9 @@ impl Arbiter {
                 // 뒤 Consume 한다. F-08.10(`Shift + caps lock = caps lock`)이 F-08.2(quick
                 // press caps lock)를 무효화하는 것이 이 규칙의 구현이다(R3/v1.62).
                 let mut out = Outcome::consume(Layer::PresetCombo);
-                if let Some(rule) = self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode) {
+                if let Some(rule) =
+                    self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode, gates.trackpad_hyper_active)
+                {
                     self.fire_combo(cfg, &rule, ev, &mut out);
                     return out;
                 }
@@ -764,12 +796,15 @@ impl Arbiter {
         cfg: &EngineConfig,
         ev: &InputEvent,
         kind: EventKind,
+        gates: GateSnapshot,
         out: &mut Outcome,
     ) -> bool {
         if kind != EventKind::KeyDown {
             return false;
         }
-        if let Some(rule) = self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode) {
+        if let Some(rule) =
+            self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode, gates.trackpad_hyper_active)
+        {
             self.fire_combo(cfg, &rule, ev, out);
             true
         } else {
@@ -779,16 +814,40 @@ impl Arbiter {
 
     /// `rules`(이미 `RuleId` 오름차순으로 정렬돼 주어진다고 전제 — architecture.md §6.4
     /// 서두) 중 트리거가 `key` 이고 hold 조건이 성립하는 첫 규칙을 찾는다.
-    fn find_matching_combo(&self, rules: &[ComboRule], key: KeyCode) -> Option<ComboRule> {
+    /// `rules`(이미 `RuleId` 오름차순으로 정렬돼 주어진다고 전제 — architecture.md §6.4
+    /// 서두) 중 트리거가 `key` 이고 hold 조건이 성립하는 첫 규칙을 찾는다.
+    fn find_matching_combo(
+        &self,
+        rules: &[ComboRule],
+        key: KeyCode,
+        trackpad_hyper: bool,
+    ) -> Option<ComboRule> {
         rules
             .iter()
             .copied()
-            .find(|r| r.trigger == key && self.hold_condition_met(r.hold))
+            .find(|r| r.trigger == key && self.hold_condition_met(r.hold, trackpad_hyper))
+    }
+
+    /// ⭐ F-06 — 트랙패드 소스가 합성할 hyper 조합 flags. 규칙 테이블의 `ModifierKind::
+    /// Hyper` 슬롯의 flags(`include_shift_in_hyper` 가 반영된 값)를 그대로 쓴다 —
+    /// 트랙패드 소스가 내는 hyper 는 물리 키 소스의 hyper 와 **항상 같은 비트마스크**다.
+    /// hyper 규칙이 없으면(하이퍼 슬롯이 꺼져 있으면) `NONE` — fail-closed 다.
+    fn trackpad_hyper_flags(cfg: &EngineConfig) -> EventFlags {
+        cfg.rules
+            .modifier_rules
+            .iter()
+            .find(|r| r.kind == ModifierKind::Hyper)
+            .map(|r| r.flags)
+            .unwrap_or(EventFlags::NONE)
     }
 
     /// P3 — 정본 눌림 테이블(`is_pressed`)·논리 hyper 신호(`is_kind_active`)로만 판정한다.
     /// `ev.flags` 의 modifier 비트로 판정하지 않는다.
-    fn hold_condition_met(&self, cond: HoldCondition) -> bool {
+    ///
+    /// ⭐ F-06 — `HyperActive` 는 트랙패드 제스처 소스도 OR 한다(R4/P8 논리 hyper 신호의
+    /// 두 번째 소스). 소스 키가 눌려 있지 않아도 트랙패드 제스처가 hyper 를 들고 있으면
+    /// `Hyper + delete = forward delete`(F-08.12) 같은 조합이 발화해야 한다.
+    fn hold_condition_met(&self, cond: HoldCondition, trackpad_hyper: bool) -> bool {
         match cond {
             HoldCondition::Key(k) => self.state.is_pressed(k),
             HoldCondition::EitherShift => {
@@ -797,7 +856,9 @@ impl Arbiter {
             HoldCondition::EitherCommand => {
                 self.state.is_pressed(KeyCode::LEFT_COMMAND) || self.state.is_pressed(KeyCode::RIGHT_COMMAND)
             }
-            HoldCondition::HyperActive => self.state.is_kind_active(ModifierKind::Hyper),
+            HoldCondition::HyperActive => {
+                self.state.is_kind_active(ModifierKind::Hyper) || trackpad_hyper
+            }
         }
     }
 

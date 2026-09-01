@@ -72,7 +72,6 @@
   "settings.hyperkey.mouse.hint": "Turning on Scroll can misfire in apps that reserve ⌘+scroll for zooming.",
   "settings.hyperkey.trackpad.label": "Trigger hyper with a trackpad edge swipe:",
   "settings.hyperkey.trackpad.hint": "Slide one finger in slightly from the area you pick below; lift it to release hyper.",
-  "settings.hyperkey.trackpad.unimplemented": "⚠️ Gesture recognition isn't built yet (F-06, M5). This value is saved but has no effect for now.",
   "settings.hyperkey.trackpad.change_icon": "Change menu bar icon while engaged",
   "settings.hyperkey.trackpad.haptic": "Give haptic feedback when triggered",
   "settings.hyperkey.area.top_left": "Top left",

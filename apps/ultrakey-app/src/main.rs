@@ -92,6 +92,9 @@ mod overlay_spike;
 /// ⭐ F-01 — Seek 활성화·세션 워커(이슈 #38). `docs/spec/
 /// seek-activation-and-session.md` 를 코드로 옮긴다.
 mod seek;
+/// ⭐ F-06 — 트랙패드·Magic Mouse hyper 제스처 리스너(이슈 #63).
+/// `docs/spec/trackpad-hyper-gesture.md` 를 코드로 옮긴다.
+mod trackpad;
 
 mod menu_ids {
     pub const IGNORE_APP: &str = "menu.ignore_app";
@@ -1632,6 +1635,10 @@ struct AppState {
     /// Seek 워커(`seek.rs`)로 신호를 보내는 채널. 엔진이 아직 시작되지 않았으면
     /// (권한 대기 중) `None` — `send_seek_signal` 이 조용히 버린다.
     seek_tx: Mutex<Option<crossbeam_channel::Sender<seek::SeekSignal>>>,
+    /// ⭐ F-06 — 트랙패드 제스처 리스너(`trackpad.rs`). 엔진 시작 시점에 뜨고,
+    /// 설정 변경·종료 때 이 손잡이로 통신한다. 비공개 API 로드 실패 시 `thread`
+    /// 가 없는 손잡이(격하)가 된다.
+    trackpad: Mutex<Option<trackpad::TrackpadListener>>,
     /// ⭐ `Toggle Seek with shortcut:` 전역 단축키 등록기. **메인 스레드에서 만들고
     /// 앱 생애주기 내내 살려 둔다** — `global-hotkey` 크레이트 문서가 "macOS 에서는
     /// 메인 스레드의 실행 중인 이벤트 루프 위에서 만들어야 한다"고 명시한다
@@ -1841,9 +1848,52 @@ fn reconfigure_engine(
             engine.force_reset_state();
         }
     }
+    drop(engine_guard);
+    if let Err(e) = reconfigure_trackpad(state, hyperkey) {
+        tracing::warn!(error = %e, "failed to reconfigure the trackpad gesture listener");
+    }
     // 엔진이 아직 없으면(권한 대기 중) 건너뛴다 — 다음 `Engine::start` 가 이미
     // 갱신된 `state.hyperkey`/`state.presets`/`state.korean`/`state.seek` 으로
     // 조립되므로 이 변경이 유실되지 않는다.
+    Ok(())
+}
+
+/// ⭐ F-06 — `hyperkey.trackpad.*` 변경을 리스너에 반영한다(이슈 #63).
+///
+/// - 끄는 변경이면 리스너가 Engaged 를 즉시 강제 해제한다(§5 항목 12) —
+///   설정 변경이 상태 머신에 즉시 반영되어야 stuck hyper 를 막을 수 있다.
+/// - 리스너가 아직 없는데 설정이 켜졌고 엔진이 살아 있으면, 여기서 리스너를
+///   새로 띄운다(엔진 시작 시점에 꺼져 있던 경우를 흡수한다).
+/// - 비공개 API 격하(스레드 없음)면 조용히 무시된다 — 게이트는 `Off` 유지.
+fn reconfigure_trackpad(state: &Arc<AppState>, hyperkey: &HyperkeySettings) -> Result<(), String> {
+    let want = hyperkey.trackpad.enabled && hyperkey.hyper.enabled;
+    let mut slot = state.trackpad.lock().map_err(|e| e.to_string())?;
+    match slot.as_ref() {
+        Some(listener) => {
+            listener.reconfigure(trackpad::TrackpadRuntimeConfig {
+                enabled: want,
+                area: hyperkey.trackpad.area,
+            });
+        }
+        None => {
+            if want {
+                let shared = state
+                    .engine
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.as_ref().map(ultrakey_engine::Engine::shared));
+                if let Some(shared) = shared {
+                    *slot = Some(trackpad::spawn(
+                        &shared,
+                        trackpad::TrackpadRuntimeConfig {
+                            enabled: true,
+                            area: hyperkey.trackpad.area,
+                        },
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2082,6 +2132,13 @@ fn prepare_engine_for_update_restart(state: &Arc<AppState>) {
         engine.force_reset_state();
         engine.shutdown();
         tracing::info!("engine cleaned up before Sparkle update relaunch");
+    }
+    // ⭐ F-06 — 리스너도 함께 정리한다(게이트 `Off` 보장, §8).
+    if let Ok(mut trackpad) = state.trackpad.lock() {
+        if let Some(listener) = trackpad.take() {
+            listener.shutdown();
+            tracing::info!("trackpad gesture listener cleaned up before update relaunch");
+        }
     }
 }
 
@@ -3848,6 +3905,7 @@ fn main() {
         korean: Mutex::new(KoreanSettings::default()),
         seek: Mutex::new(SeekSettings::default()),
         seek_tx: Mutex::new(None),
+        trackpad: Mutex::new(None),
         global_hotkey_manager: Mutex::new(None),
         global_hotkey_registered: Mutex::new(None),
         load_notice: Mutex::new(None),
@@ -4256,7 +4314,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             });
             let tx = seek::spawn(
                 handle.clone(),
-                shared,
+                shared.clone(),
                 surface_state,
                 seek_config,
                 click_settings,
@@ -4265,6 +4323,20 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                 persist_origin,
             );
             *state.seek_tx.lock().unwrap() = Some(tx);
+
+            // ⭐ F-06 — 트랙패드 제스처 리스너 기동(이슈 #63). 엔진이 살아 있어야
+            // `SharedState.trackpad` 게이트가 존재한다. 비공개 API 로드 실패 시
+            // 리스너 스스로 격하된다(다른 기능 무영향, §8). 설정이 꺼져 있으면
+            // 스레드를 띄우지 않는다 — 꺼진 설정에 스레드가 놀 필요가 없다.
+            let hyperkey_started = state.hyperkey.lock().unwrap().clone();
+            if hyperkey_started.trackpad.enabled && hyperkey_started.hyper.enabled {
+                let runtime = trackpad::TrackpadRuntimeConfig {
+                    enabled: true,
+                    area: hyperkey_started.trackpad.area,
+                };
+                *state.trackpad.lock().unwrap() =
+                    Some(trackpad::spawn(&shared, runtime));
+            }
         }
         Err(e) => tracing::error!(error = %e, "failed to start engine"),
     }
@@ -5113,8 +5185,21 @@ fn setup_front_app_tracking(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let handle_for_events = handle.clone();
     let state_for_events = state.clone();
     let observer = observe_system_events(Box::new(move |ev| {
-        if let SystemEvent::FrontAppChanged(ident) = ev {
-            on_front_app_changed(&handle_for_events, &state_for_events, ident);
+        match ev {
+            SystemEvent::FrontAppChanged(ident) => {
+                on_front_app_changed(&handle_for_events, &state_for_events, ident);
+            }
+            // ⭐ F-06(§5 항목 7) — 절전 복귀 직후 `MTDevice` 핸들이 만료했을
+            // 가능성(비공개 API 라 문서화되지 않았다, §9 #7)에 대비해 리스너 세션을
+            // 전부 다시 만든다. 리스너가 없으면(격하·비활성) 조용히 무시된다.
+            SystemEvent::DidWake => {
+                if let Ok(guard) = state_for_events.trackpad.lock() {
+                    if let Some(listener) = guard.as_ref() {
+                        listener.restart_sessions();
+                    }
+                }
+            }
+            _ => {}
         }
     }));
     *state.system_event_observer.lock().unwrap() = Some(observer);

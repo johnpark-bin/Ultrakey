@@ -274,6 +274,9 @@ pub fn layer_to_code(layer: Layer) -> u8 {
         // 깨졌다 — 기존 5개 코드를 재배치하지 않기 위해 새 코드 6을 뒤에 붙인다.
         // 다음 작업(F-16 배선)이 실제 게이트를 연결한다.
         Layer::KoreanInput => 6,
+        // ⭐ F-06 — 트랙패드 프리즈 소비 자리(`trackpad-hyper-gesture.md` §3.2.1).
+        // 코드 7은 F-16(6) 뒤에 붙인다 — 기존 코드 재배치 금지(위 주석과 같은 이유).
+        Layer::TrackpadFreeze => 7,
     }
 }
 
@@ -286,6 +289,7 @@ pub fn layer_from_code(code: u8) -> Option<Layer> {
         4 => Layer::SimpleRemap,
         5 => Layer::Passthrough,
         6 => Layer::KoreanInput,
+        7 => Layer::TrackpadFreeze,
         _ => return None,
     })
 }
@@ -299,6 +303,7 @@ fn layer_name(code: u8) -> &'static str {
         Some(Layer::SimpleRemap) => "SimpleRemap",
         Some(Layer::Passthrough) => "Passthrough",
         Some(Layer::KoreanInput) => "KoreanInput",
+        Some(Layer::TrackpadFreeze) => "TrackpadFreeze",
         None => "Unknown",
     }
 }
