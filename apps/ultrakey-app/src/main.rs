@@ -57,7 +57,7 @@ use ultrakey_core::perdevice::{
 };
 use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
-use ultrakey_engine::{Engine, EngineEvent};
+use ultrakey_engine::{Engine, EngineEvent, TapState};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::{Catalog, Locale};
 use ultrakey_korean::KoreanSettings;
@@ -4210,20 +4210,115 @@ fn main() {
 }
 
 /// 권한 상태에 따라 엔진을 켜거나 모달을 띄운다.
+///
+/// ⭐ **이슈 #65 Phase 1 리뷰 결정 2** — `Granted`(엔진 시작)·`Denied`/`OutOfSync`/
+/// `Unknown`(엔진 정지) 양쪽 모두 `run_on_main_thread` 로 큐잉한다(`queue_engine_start`/
+/// `queue_engine_stop`, 기존 `on_main_thread` 헬퍼와 같은 패턴). 이 콜백은
+/// `ultrakey-permission-poll` 스레드(백그라운드 폴링)나 `ultrakey-tap` 스레드
+/// (`EngineEvent::TapLost` 경유, 교정 3)에서 불릴 수 있는데, `start_engine_if_needed`
+/// 가 호출하는 `Engine::start` → `SystemHooks::start` 는 메인 스레드 호출을
+/// 요구한다(`system_hooks.rs` 모듈 문서, 위반 시 `debug_assert!` 로 소리 낸다) —
+/// `Granted` 쪽은 이미 이 전제를 어기고 있었다(이번 조사에서 확인). 큐잉만 하고
+/// 즉시 반환하므로(`AppHandle::run_on_main_thread` 계약) 폴링/탭 스레드가 메인
+/// 스레드를 기다리며 블록되는 일은 없다 — `show_modal`/`hide_modal`/
+/// `apply_tray_menu_for_permission` 이 이미 같은 방식으로 안전하다.
+///
+/// 두 클로저는 같은 메인 스레드 이벤트 루프 큐에 순서대로 들어가므로, `Denied` →
+/// `Granted` 가 빠르게 연달아 와도 정지 클로저가 시작 클로저보다 먼저 실행되는
+/// 순서가 보존된다.
 fn on_permission_transition(handle: &tauri::AppHandle, state: &Arc<AppState>, to: PermissionState) {
     tracing::info!(?to, "on_permission_transition entered");
-    match to {
-        PermissionState::Granted => {
-            hide_modal(handle);
-            start_engine_if_needed(handle, state);
-            // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 생겼으니 권한이 생겼다고 창을
-            // 자동으로 띄우지 않는다(과거 M2 1차 임시 조치를 걷어낸다 — 원래
-            // 계획대로다). 대신 트레이 메뉴를 정상 메뉴로 되돌린다(§3.1).
-            apply_tray_menu_for_permission(handle, state, true);
+    if should_stop_engine_for(to) {
+        show_modal(handle);
+        apply_tray_menu_for_permission(handle, state, false);
+        queue_engine_stop(handle, state);
+    } else {
+        hide_modal(handle);
+        // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 생겼으니 권한이 생겼다고 창을
+        // 자동으로 띄우지 않는다(과거 M2 1차 임시 조치를 걷어낸다 — 원래
+        // 계획대로다). 대신 트레이 메뉴를 정상 메뉴로 되돌린다(§3.1).
+        apply_tray_menu_for_permission(handle, state, true);
+        queue_engine_start(handle, state);
+    }
+}
+
+/// `on_permission_transition` 이 엔진을 정지해야 하는 상태인지 — 순수 함수(이슈 #65
+/// Phase 1 리뷰 "테스트 요구"). `Granted` 만 엔진을 살려 둔다: `Denied` 는 권한 상실
+/// 그 자체, `OutOfSync`/`Unknown` 은 살아있는 탭이 있을 수 없는 상태라 방어적으로
+/// 함께 정지한다(엔진이 이미 없으면 `queue_engine_stop` 이 멱등하게 아무 일도 하지
+/// 않는다).
+fn should_stop_engine_for(state: PermissionState) -> bool {
+    !matches!(state, PermissionState::Granted)
+}
+
+/// `start_engine_if_needed` 를 메인 스레드에 큐잉만 하고 즉시 반환한다(교정 2 문서
+/// 참고 — 호출 스레드가 메인 스레드를 기다리지 않는다).
+fn queue_engine_start(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let handle_for_closure = handle.clone();
+    let state_for_closure = state.clone();
+    let dispatched = handle.run_on_main_thread(move || {
+        start_engine_if_needed(&handle_for_closure, &state_for_closure);
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "failed to queue engine start on the main thread");
+    }
+}
+
+/// `stop_engine` 을 메인 스레드에 큐잉만 하고 즉시 반환한다.
+fn queue_engine_stop(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let state_for_closure = state.clone();
+    let dispatched = handle.run_on_main_thread(move || {
+        stop_engine(&state_for_closure);
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "failed to queue engine stop on the main thread");
+    }
+}
+
+/// ⭐ 이슈 #65 Phase 1 리뷰 교정 — 권한을 잃으면(또는 `OutOfSync`/`Unknown`) 엔진
+/// 전체(탭 스레드·워치독·시스템 훅·지연 스케줄러)를 정리한다.
+///
+/// **`state.engine` 슬롯을 반드시 비워야 한다** — 그래야 다음 `Granted` 전이가
+/// `start_engine_if_needed` 를 통해 완전히 새 `Engine` 을 만들 수 있다. 교정 전에는
+/// (a) 탭 스레드 자신의 FSM 이 권한 상실을 감지해 내부 탭만 내려놔도 `state.engine`
+/// 슬롯은 죽은 탭을 담은 채 계속 `Some` 이었고, (b) `start_engine_if_needed` 는
+/// `slot.is_some()` 이면 즉시 `return` 하므로 — 권한을 재부여해도 **앱을 재시작하기
+/// 전까지 리매핑이 영구히 돌아오지 않았다**(이슈 #65 Phase 1 진단이 이 워크트리에서
+/// 추가로 확정한 사실).
+///
+/// ⚠️ **`Engine::shutdown()` 을 메인 스레드에서 join 해도 안전한 이유** — 이 함수는
+/// 탭 스레드에 `EngineCommand::Shutdown` 을 보내고 `run_loop.stop()` 을 부른 뒤
+/// join 한다(`engine.rs::Engine::shutdown`). 탭 스레드의 런루프는 이 호출 시점에
+/// 이미 자유롭다: 트램폴린의 연속 재활성화 예산이 시간이 아니라 연속 소비로만
+/// 소진되므로(교정 1) 폭주는 최대 `REENABLE_MAX_CONSECUTIVE`(5)회 즉시 핑퐁으로
+/// 끝나고, 이후에는 탭이 이미 해체됐거나(교정 2, `handle_recover_tap` 이 재생성을
+/// 시도하지 않는다) 정상 서비스 중이다 — 어느 경우든 명령 큐(`drain_commands`)가
+/// 굶주려 있지 않다. `prepare_engine_for_update_restart`(§5-10)가 같은
+/// "lock → take → shutdown" 패턴으로 이미 이 join 을 실사용하고 있어 별도 위험이
+/// 추가되지 않는다.
+fn stop_engine(state: &Arc<AppState>) {
+    let mut slot = match state.engine.lock() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to acquire engine lock while stopping the engine");
+            return;
         }
-        PermissionState::Denied | PermissionState::OutOfSync | PermissionState::Unknown => {
-            show_modal(handle);
-            apply_tray_menu_for_permission(handle, state, false);
+    };
+    if let Some(engine) = slot.take() {
+        drop(slot);
+        // ⭐ 종료 전 stuck modifier 해소 — `prepare_engine_for_update_restart` 와
+        // 동일한 이유(§5-10): 하이퍼키/조합 modifier 를 누른 채 권한을 잃었을 수
+        // 있다.
+        engine.force_reset_state();
+        engine.shutdown();
+        tracing::info!("engine stopped after permission loss");
+    }
+    // ⭐ F-06 — 트랙패드 리스너도 함께 정리한다(`prepare_engine_for_update_restart`
+    // 와 동일한 이유, §8).
+    if let Ok(mut trackpad) = state.trackpad.lock() {
+        if let Some(listener) = trackpad.take() {
+            listener.shutdown();
+            tracing::info!("trackpad gesture listener cleaned up after permission loss");
         }
     }
 }
@@ -4347,7 +4442,17 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
 /// 온다 — 모듈 문서의 "블록하지 마라" 계약이 특히 무겁게 적용되는 자리다).
 fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: EngineEvent) {
     match event {
-        EngineEvent::TapStateChanged(s) => tracing::info!(state = ?s, "tap state changed"),
+        EngineEvent::TapStateChanged(s) => {
+            tracing::info!(state = ?s, "tap state changed");
+            if s == TapState::Active {
+                // ⭐ 이슈 #65 Phase 1 리뷰 교정 3 — 그동안 호출자가 하나도 없어
+                // 사문화돼 있던 `PermissionMonitor::report_tap_created()` 를
+                // 여기 배선한다. `OutOfSync`(권한은 있는데 탭을 만들 수 없던 상태)
+                // 에서 회복하는 유일한 경로(§2 S4 항목 5)가 이걸로 실제로
+                // 연결된다.
+                report_tap_created(state);
+            }
+        }
         EngineEvent::NotTrusted => {
             // 권한이 없어 탭을 못 연 것은 정상 경로다 — F-11 온보딩이 처리한다.
             tracing::info!("no permission; handing off to onboarding modal");
@@ -4358,10 +4463,15 @@ fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: Engi
             tracing::error!("tap creation failed despite confirmed permission; exiting process");
             show_modal(handle);
         }
-        EngineEvent::NeedsRelaunch => {
-            // §5#17 — 재활성화·재생성이 반복 실패. M1 은 로그만 남긴다(자동 재실행은
-            // F-10/M2 의 `AppRelauncher` 소관).
-            tracing::error!("tap recovery failed repeatedly; the app may need to be relaunched");
+        EngineEvent::TapLost => {
+            // ⭐ 이슈 #65 Phase 1 리뷰 교정 2·3 — 탭이 살아있던 중 권한 상실(또는
+            // 트램폴린의 연속 재활성화 예산 소진)로 해체됐다. 이 엔진은 스스로
+            // 재생성을 시도하지 않는다 — 권한 모델에 이관해 `Denied`/`OutOfSync`
+            // 를 판정하게 하고, 그 전이가 `on_permission_transition` 을 거쳐
+            // `queue_engine_stop` 으로 이어진다(그 시점에 `state.engine` 슬롯이
+            // 비워져야 다음 `Granted` 가 완전히 새 `Engine` 을 만들 수 있다).
+            tracing::warn!("tap was dismantled after repeated immediate re-disable or permission loss; handing off to the permission monitor");
+            report_tap_lost(state);
         }
         EngineEvent::SeekOpenRequested => send_seek_signal(state, seek::SeekSignal::OpenRequested),
         EngineEvent::SeekTriggerDown => send_seek_signal(state, seek::SeekSignal::TriggerDown),
@@ -4382,6 +4492,33 @@ fn send_seek_signal(state: &Arc<AppState>, signal: seek::SeekSignal) {
     if let Ok(guard) = state.seek_tx.lock() {
         if let Some(tx) = guard.as_ref() {
             let _ = tx.send(signal);
+        }
+    }
+}
+
+/// ⭐ 이슈 #65 Phase 1 리뷰 교정 3 — `EngineEvent::TapLost` 를 권한 모델에 이관한다.
+/// `PermissionMonitor::report_tap_create_failed()` 는 호출 시점의
+/// `AXIsProcessTrusted()` 로 `Denied`(권한이 실제로 없다)/`OutOfSync`(권한은 있는데
+/// 탭이 살 수 없다)를 가른다(`model.rs` §3.3). 이 함수는 탭 스레드에서 불릴 수
+/// 있으므로(`on_engine_event` 의 "블록하지 마라" 계약) 락을 짧게만 쥐고, 실제 전이
+/// 통지는 `on_transition` 콜백(=`on_permission_transition`, 내부적으로 전부
+/// 큐잉만 한다)에 위임한다.
+fn report_tap_lost(state: &Arc<AppState>) {
+    if let Ok(guard) = state.monitor.lock() {
+        if let Some(monitor) = guard.as_ref() {
+            monitor.report_tap_create_failed();
+        }
+    }
+}
+
+/// ⭐ 이슈 #65 Phase 1 리뷰 교정 3 — 탭이 `Active` 로 전이할 때마다 부른다.
+/// `PermissionMonitor::report_tap_created()` 는 `OutOfSync` 에서 회복하는 유일한
+/// 경로다(§2 S4 항목 5) — 이 배선이 없으면 그 경로는 죽어 있는 API 로 남는다(이슈
+/// #65 Phase 1 리뷰가 지적한 사실).
+fn report_tap_created(state: &Arc<AppState>) {
+    if let Ok(guard) = state.monitor.lock() {
+        if let Some(monitor) = guard.as_ref() {
+            monitor.report_tap_created();
         }
     }
 }
@@ -5392,6 +5529,15 @@ fn general_set_hide_menu_bar_icon(state: State<'_, Arc<AppState>>, on: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 이슈 #65 Phase 1 리뷰 "테스트 요구" — `Granted` 만 엔진을 살려 둔다.
+    #[test]
+    fn should_stop_engine_for_only_keeps_the_engine_alive_when_granted() {
+        assert!(!should_stop_engine_for(PermissionState::Granted));
+        assert!(should_stop_engine_for(PermissionState::Denied));
+        assert!(should_stop_engine_for(PermissionState::OutOfSync));
+        assert!(should_stop_engine_for(PermissionState::Unknown));
+    }
 
     /// `is_known_tab` 이 6개 탭을 전부 알고, 모르는 이름은 거부한다.
     #[test]

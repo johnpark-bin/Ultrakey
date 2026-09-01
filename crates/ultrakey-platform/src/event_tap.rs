@@ -5,20 +5,132 @@
 //! 단순 매핑이지만, 나중에 어느 한쪽이 바뀌어도 고칠 지점이 한 곳이다.
 //!
 //! ⭐ **탭 비활성화(`kCGEventTapDisabledByTimeout`/`ByUserInput`) 통지는
-//! 트램폴린이 콜백 호출과 무관하게 항상 먼저 `CGEventTapEnable` 로
-//! 복구한다.** `key-remapping-engine.md` §8 수용 기준이 "예외 없이" 재활성화를
-//! 요구하므로, 이 재활성화 자체를 엔진 콜백의 반환값에 의존시키지 않는다 —
-//! 콜백을 등록하는 시점에는 아직 `EventTap` 자신이 만들어지지 않아 엔진이
-//! 자기 참조를 캡처할 수 없다는 부트스트랩 문제도 함께 피한다. 다만
-//! `EventKind::TapDisabledByTimeout`/`TapDisabledByUserInput` 변형이 존재하는
-//! 것은 엔진의 탭 생명주기 FSM(`ultrakey-engine::tap`)이 이 사건을 관찰해야
-//! 한다는 뜻이므로, 재활성화 뒤에도 평소처럼 콜백을 호출해 알린다 — 다만
-//! 콜백의 반환값(`TapAction`)은 무시하고 항상 원본 이벤트를 그대로 돌려준다
-//! (`ultrakey-engine` 의 별도 1Hz 워치독 폴링은 여전히 `is_enabled()` 로 이
+//! 트램폴린이 콜백 호출과 무관하게 먼저 `CGEventTapEnable` 로 복구를 시도한다
+//! — [`REENABLE_MAX_CONSECUTIVE`] 예산이 남아 있는 동안만.** `key-remapping-engine.md`
+//! §8 수용 기준의 "예외 없이 재활성화를 시도한다"는 이 예산 안에서 지킨다(이슈 #65
+//! Phase 1 리뷰 교정 1 — 문구 자체도 갱신 대상). 이 재활성화 자체를 엔진 콜백의
+//! 반환값에 의존시키지 않는다 — 콜백을 등록하는 시점에는 아직 `EventTap` 자신이
+//! 만들어지지 않아 엔진이 자기 참조를 캡처할 수 없다는 부트스트랩 문제도 함께
+//! 피한다. 다만 `EventKind::TapDisabledByTimeout`/`TapDisabledByUserInput` 변형이
+//! 존재하는 것은 엔진의 탭 생명주기 FSM(`ultrakey-engine::engine`)이 이 사건을
+//! 관찰해야 한다는 뜻이므로, 재활성화 시도 여부와 무관하게 평소처럼 콜백을 호출해
+//! 알린다 — 다만 콜백의 반환값(`TapAction`)은 무시하고 항상 원본 이벤트를 그대로
+//! 돌려준다(`ultrakey-engine` 의 별도 1Hz 워치독 폴링은 여전히 `is_enabled()` 로 이
 //! 크레이트 밖에서 독립적으로 동작한다).
 
 use crate::event::CgEventRef;
 use ultrakey_core::event::EventKind;
+
+/// 연속 즉시 재활성화 예산 — 트램폴린 하나(=[`macos_impl::EventTap`] 인스턴스 하나)의
+/// 생애주기 동안 유지되는 상태다.
+///
+/// ⭐ **이슈 #65 Phase 1 리뷰 교정 1.** 최초 구현(commit 7031351)은 이 예산을 "1초
+/// 창" 으로 시간 리셋했다 — 권한이 계속 없는 동안 매초 예산이 다시 채워져, `(a)`
+/// `handle_recover_tap` 이 스스로 부르는 재활성화(당시)가 한 번이라도 새 비활성화
+/// 통지를 재점화하면 그 통지가 다시 최대치(5회)까지 mach-속도 핑퐁을 허용하는 구멍이
+/// 있었다(§65 진단 "가설 (b)"). Phase 1 초안은 이를 "탭 인스턴스 생애주기 1회분"으로
+/// 고치자고 제안했으나, 리뷰가 지적한 대로 그러면 **장기 실행에서 오탐한다** — 며칠
+/// 켜 둔 앱에서 정상적인 `kCGEventTapDisabledByTimeout` 이 드문드문 5번만 누적돼도
+/// 건강한 탭을 해체하게 된다. 그래서 리셋 트리거를 시간도, 생애주기 1회분도 아닌
+/// **"트램폴린에 실제(비활성화 통지가 아닌) 이벤트가 도달했다는 사실"**로 확정한다 —
+/// 그 순간 탭이 실제로 살아서 이벤트를 통과시키고 있음이 증명되기 때문이다. 폭주
+/// 중에는 탭이 즉시 다시 꺼져 실제 이벤트가 하나도 통과하지 못하므로, 이 카운터는
+/// 폭주가 계속되는 한 **절대** 리셋되지 않는다 — "연속 N회 즉시 재비활성화"가 정확히
+/// 폭주의 정의다.
+///
+/// 플랫폼 FFI 와 무관한 순수 로직이라 `#[cfg(target_os = "macos")]` 밖에 둔다 — 이
+/// 값이 그동안 `unsafe extern "C-unwind" fn` 트램폴린 안에 직접 박혀 있어 유닛
+/// 테스트가 불가능했던 것이, 이 버그가 세 차례 완화에도 재발하며 테스트로 잡히지
+/// 않은 이유 중 하나였다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReenableBudget {
+    consecutive_disables: u32,
+}
+
+/// 1초 창이 아니라 **연속** 허용 횟수다(리뷰 교정 1 — 이름 자체가 시간 개념이 빠졌음을
+/// 반영한다). 사용자 설정(`Timings`)과 분리된, 물리적 mach-속도 핑퐁을 막기 위한 낮은
+/// 고정 안전값이다 — 이 값의 역할은 정책이 아니라 "최악의 경우 몇 번의 즉시 핑퐁을
+/// 허용할 것인가"라는 물리적 상한이라 사용자가 조정할 이유가 없다.
+pub(crate) const REENABLE_MAX_CONSECUTIVE: u32 = 5;
+
+impl ReenableBudget {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// 비활성화 통지 하나를 예산에서 소비한다. 반환값이 `true` 면 아직 예산 안이라
+    /// `CGEventTapEnable` 재시도를 해도 된다.
+    pub(crate) fn note_disable(&mut self) -> bool {
+        self.consecutive_disables += 1;
+        self.consecutive_disables <= REENABLE_MAX_CONSECUTIVE
+    }
+
+    /// 실제(비활성화 아닌) 이벤트가 탭을 통과했다 — 탭이 살아있다는 증거이므로
+    /// 연속 카운터를 리셋한다. **시간은 이 예산을 리셋하지 않는다 — 오직 이 사실만.**
+    pub(crate) fn note_real_event(&mut self) {
+        self.consecutive_disables = 0;
+    }
+
+    /// 예산이 소진됐는가 — `handle_recover_tap` 이 탭을 해체할지 판단하는 신호다.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.consecutive_disables > REENABLE_MAX_CONSECUTIVE
+    }
+}
+
+#[cfg(test)]
+mod reenable_budget_tests {
+    use super::*;
+
+    #[test]
+    fn allows_attempts_up_to_the_limit() {
+        let mut b = ReenableBudget::new();
+        for _ in 0..REENABLE_MAX_CONSECUTIVE {
+            assert!(b.note_disable(), "한도 안에서는 재시도를 허용해야 한다");
+        }
+        assert!(!b.is_exhausted());
+    }
+
+    /// ⭐ 이번 회귀의 핵심 방지 테스트 — 한도를 넘으면 **시간이 아무리 지나도** 계속
+    /// 거부한다(이 타입에는 애초에 시간이라는 입력 자체가 없다).
+    #[test]
+    fn denies_forever_once_exhausted_no_matter_how_many_more_disables_arrive() {
+        let mut b = ReenableBudget::new();
+        // 정확히 한도만큼은 허용된다 — 한도를 넘는 1회가 소진을 확정한다.
+        for _ in 0..=REENABLE_MAX_CONSECUTIVE {
+            b.note_disable();
+        }
+        assert!(b.is_exhausted());
+        for _ in 0..1000 {
+            assert!(!b.note_disable(), "소진된 뒤에는 계속 거부해야 한다");
+        }
+        assert!(b.is_exhausted());
+    }
+
+    /// 실제 이벤트 1건이 예산을 리셋한다 — 탭이 살아있다는 증거이기 때문이다.
+    #[test]
+    fn a_single_real_event_resets_the_budget() {
+        let mut b = ReenableBudget::new();
+        for _ in 0..=REENABLE_MAX_CONSECUTIVE {
+            b.note_disable();
+        }
+        assert!(b.is_exhausted());
+
+        b.note_real_event();
+        assert!(!b.is_exhausted());
+        for _ in 0..REENABLE_MAX_CONSECUTIVE {
+            assert!(b.note_disable(), "리셋된 뒤에는 다시 한도만큼 허용해야 한다");
+        }
+    }
+
+    /// 새 인스턴스(= 새 탭)는 항상 신선한 예산으로 시작한다 — `EventTap::create()` 가
+    /// 새 `CallbackContext` 를 만들 때만 예산이 새로 생긴다는 설계를 보장한다.
+    #[test]
+    fn a_new_instance_always_starts_fresh() {
+        let b = ReenableBudget::new();
+        assert!(!b.is_exhausted());
+        assert_eq!(b, ReenableBudget::default());
+    }
+}
 
 /// 탭 생성 실패 사유.
 ///
@@ -64,8 +176,9 @@ mod macos_impl {
         CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventTapProxy, CGEventType,
     };
-    use std::time::{Duration, Instant};
     use ultrakey_core::event::EventKind;
+
+    use super::ReenableBudget;
 
     /// 콜백 하나가 호출될 때마다 주어지는, 탭 자신을 가리키는 불투명 핸들.
     ///
@@ -85,18 +198,11 @@ mod macos_impl {
         mach_port: RefCell<Option<CFRetained<CFMachPort>>>,
         /// ⭐ 즉시 재활성화 **차단기**(circuit breaker) 상태 — 아래
         /// [`trampoline`] 의 "재활성화 폭주" 주석 참고. 트램폴린은 항상 같은
-        /// 탭 스레드에서 직렬로만 실행되므로 `Cell` 로 충분하다.
-        reenable_window_start: Cell<Option<Instant>>,
-        reenable_count: Cell<u32>,
+        /// 탭 스레드에서 직렬로만 실행되므로 `Cell` 로 충분하다. 예산의 리셋
+        /// 규칙은 [`super::ReenableBudget`] 문서 참고 — 시간이 아니라 실제
+        /// 이벤트 통과로만 리셋된다(이슈 #65 Phase 1 리뷰 교정 1).
+        reenable_budget: Cell<ReenableBudget>,
     }
-
-    /// 차단기 창 길이와 그 안에서 허용할 즉시 재활성화 횟수.
-    ///
-    /// 정상적인 `kCGEventTapDisabledByTimeout` 은 아주 드물게 한 번씩 온다 —
-    /// 1초에 몇 번씩 연속으로 오는 것은 "재활성화해도 즉시 다시 꺼진다"는
-    /// 뜻이고, 그 상황에서 계속 재활성화하면 아래 주석의 폭주가 된다.
-    const REENABLE_WINDOW: Duration = Duration::from_secs(1);
-    const REENABLE_MAX_PER_WINDOW: u32 = 5;
 
     fn build_event_mask() -> u64 {
         // keyDown/keyUp/flagsChanged 는 항상 필요하다(§3-b 전 계층의 입력).
@@ -189,23 +295,22 @@ mod macos_impl {
             // 커서만 움직이며(WindowServer 가 직접 그린다), **로그는 한 줄도 남지
             // 않는다**(커맨드 소스가 굶어서). 실측 증상이 정확히 이것이었다.
             //
-            // ⚠️ 그래서 §8 수용 기준("예외 없이 재활성화를 시도한다")은 **창 안에서만**
-            // 지킨다. 정상적인 `TapDisabledByTimeout` 은 드물게 한 번씩 오므로 이
-            // 상한에 걸리지 않는다. 상한을 넘으면 재활성화를 멈추고 엔진 FSM 에
-            // 맡긴다 — 꺼진 탭은 이벤트를 막지 않으므로 **그 순간 시스템 입력이
-            // 즉시 정상으로 돌아온다**. 이후 복구는 `RecoverTap`/`RecreateTap` 이
-            // 권한을 확인해 가며 처리한다.
-            let now = Instant::now();
-            let window_expired = match ctx.reenable_window_start.get() {
-                Some(started) => now.duration_since(started) > REENABLE_WINDOW,
-                None => true,
-            };
-            if window_expired {
-                ctx.reenable_window_start.set(Some(now));
-                ctx.reenable_count.set(0);
-            }
-            ctx.reenable_count.set(ctx.reenable_count.get() + 1);
-            if ctx.reenable_count.get() <= REENABLE_MAX_PER_WINDOW {
+            // ⚠️ 그래서 §8 수용 기준("예외 없이 재활성화를 시도한다")은 **예산 안에서만**
+            // 지킨다(이슈 #65 Phase 1 리뷰 교정 1 — 예산은 시간 창이 아니라 연속
+            // 소비다, `super::ReenableBudget` 참고). 정상적인 `TapDisabledByTimeout`
+            // 은 드물게 한 번씩 오고 그 사이사이 실제 이벤트가 예산을 리셋하므로 이
+            // 상한에 걸리지 않는다. 상한을 넘으면(=권한이 없는 동안 재활성화해도
+            // 실제 이벤트가 단 하나도 통과하지 못하고 즉시 다시 꺼지는 상태가
+            // 계속됨) 재활성화를 멈추고 엔진 FSM 에 맡긴다 — 꺼진 탭은 이벤트를
+            // 막지 않으므로 **그 순간 시스템 입력이 즉시 정상으로 돌아온다**. 이후
+            // 복구는 `RecoverTap` 이 권한을 확인해 가며 처리하되, 예산이 소진된
+            // 탭은 재활성화가 아니라 **해체**로 이어진다 — 재생성 에스컬레이션은
+            // stale `AXIsProcessTrusted()` 상황에서 재생성마다 예산이 다시 채워져
+            // 더 느린 폭주가 되므로 채택하지 않는다(Phase 1 리뷰 교정 2).
+            let mut budget = ctx.reenable_budget.get();
+            let should_reenable = budget.note_disable();
+            ctx.reenable_budget.set(budget);
+            if should_reenable {
                 if let Some(port) = ctx.mach_port.borrow().as_ref() {
                     CGEvent::tap_enable(port, true);
                 }
@@ -218,6 +323,13 @@ mod macos_impl {
             }
             return event.as_ptr();
         }
+
+        // ⭐ 실제(비활성화 아닌) 이벤트가 여기까지 도달했다 — 탭이 살아서 이벤트를
+        // 통과시키고 있다는 증거이므로 연속 재활성화 예산을 리셋한다(이슈 #65
+        // Phase 1 리뷰 교정 1). 시간은 이 예산을 리셋하지 않는다 — 오직 이 사실만.
+        let mut budget = ctx.reenable_budget.get();
+        budget.note_real_event();
+        ctx.reenable_budget.set(budget);
 
         // 0-a: 자기 합성 이벤트 마커 확인 — 무한 루프 방지(§5 엣지 12).
         // SAFETY: `event` 는 콜백 인자로 받은, 이 호출 동안 유효한 이벤트다.
@@ -263,8 +375,7 @@ mod macos_impl {
             let boxed = Box::new(CallbackContext {
                 callback,
                 mach_port: RefCell::new(None),
-                reenable_window_start: Cell::new(None),
-                reenable_count: Cell::new(0),
+                reenable_budget: Cell::new(ReenableBudget::new()),
             });
             let ctx_ptr = Box::into_raw(boxed);
 
@@ -359,6 +470,23 @@ mod macos_impl {
         pub fn health_probe(&self) -> Option<TapHealthProbe> {
             self.mach_port.as_ref().map(|p| TapHealthProbe(p.clone()))
         }
+
+        /// ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — 트램폴린의 연속 재활성화 예산
+        /// ([`ReenableBudget`])이 소진됐는가. `engine.rs` 의 `handle_recover_tap`
+        /// 이 이 신호("탭이 즉시 다시 꺼진다는 사실 자체")로 탭을 해체할지
+        /// 판단한다 — `AXIsProcessTrusted()` 하나에만 의존하지 않기 위함이다
+        /// (그 값이 회수 직후 순간적으로 stale `true` 를 돌려줄 수 있다는 것이
+        /// 이슈 #65 Phase 1 진단의 결론이었다).
+        pub fn reenable_budget_exhausted(&self) -> bool {
+            match self.ctx {
+                // SAFETY: `ctx` 는 `create()` 에서 `Box::into_raw` 로 만든 뒤 이
+                // `EventTap` 이 배타 소유해 온, 살아있는 동안 항상 유효한 포인터다
+                // (트램폴린과 동일한 근거, 이 파일 상단 모듈 문서 참고). 이 조회는
+                // `Cell<ReenableBudget>::get()` 하나뿐이라 부작용이 없다.
+                Some(ptr) => unsafe { (*ptr.as_ptr()).reenable_budget.get() }.is_exhausted(),
+                None => false,
+            }
+        }
     }
 
     /// [`EventTap::health_probe`] 가 반환하는, 다른 스레드에서 안전하게 폴링할 수 있는
@@ -445,6 +573,9 @@ mod stub_impl {
             match self.0 {}
         }
         pub fn health_probe(&self) -> Option<TapHealthProbe> {
+            match self.0 {}
+        }
+        pub fn reenable_budget_exhausted(&self) -> bool {
             match self.0 {}
         }
     }
