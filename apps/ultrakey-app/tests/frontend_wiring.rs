@@ -42,6 +42,13 @@ fn read_eventviewer_html() -> String {
         .unwrap_or_else(|e| panic!("ui/eventviewer.html 을 읽지 못했다({path:?}): {e}"))
 }
 
+/// F-03 Seek 검색 바(이슈 #67) — 오버레이 검색 바 HTML.
+fn read_searchbar_html() -> String {
+    let path = manifest_dir().join("ui/overlay-searchbar.html");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("ui/overlay-searchbar.html 을 읽지 못했다({path:?}): {e}"))
+}
+
 fn read_en_catalog() -> serde_json::Value {
     // resources/ 는 이 워크트리에서 다른 세션이 동시에 작업 중이라 손대지 않는다
     // — 여기서는 읽기만 한다. 경로는 워크스페이스 루트 기준(`i18n` 크레이트가
@@ -1919,4 +1926,68 @@ fn main_rs의_프리셋_한국어_규칙_라벨_키가_카탈로그에_실재한
             "{locale}.json 에 없는, main.rs 의 규칙 라벨 카탈로그 키: {missing:?}"
         );
     }
+}
+
+// ⭐ F-03(이슈 #67) — 검색 바 글자색 재발 방지 테스트.
+//
+// 이번 결함의 본질: `applyPalette()` 는 `#root` 요소에만 CSS 변수를 inline 으로
+// 세팅하는데, 글자색 `color: var(--bar-fg)` 선언이 `html, body` 쪽에 있었다.
+// `var()` 는 선언이 붙은 요소 기준으로 해석되므로 JS 가 갱신한 값이 글자색에
+// 닿지 않고, 첫 페인트용 폴백(흰색)이 영원히 쓰였다 — 라이트 테마에서 흰 배경
+// 위 흰 글자가 됐다(다크에서는 폴백 흰색이 다크 팔레트와 우연히 같아
+// 정상처럼 보였다). 아래 두 테스트가 "글자색 선언은 #root 에, JS 매핑은
+// bar_fg 를 갱신한다"는 쌍을 지킨다.
+
+/// 검색바 HTML 에서 `selector` 로 시작하는 CSS 규칙 본문(`{ ... }` 내부)을
+/// 찾는다. 이 파일의 방어적 스캔 스타일과 같은 원리의 최소 추출기다.
+fn css_rule_body(html: &str, selector: &str) -> Option<String> {
+    let pos = html.find(selector)?;
+    let brace = html[pos..].find('{')?;
+    let end = html[pos + brace..].find('}')?;
+    Some(html[pos + brace + 1..pos + brace + end].to_string())
+}
+
+/// ⭐ 이슈 #67 — 글자색 `color: var(--bar-fg)` 는 `#root` 규칙 안에 있어야 한다.
+///
+/// `applyPalette()` 가 `root.style.setProperty("--bar-fg", …)` 로 갱신하는
+/// 변수가 실제 텍스트에 닿으려면, 그 변수를 쓰는 `color` 선언이 **그 요소
+/// 자신(또는 자손)** 에 붙어 있어야 한다. `html, body` 로 돌아가면 폴백이
+/// 영원히 쓰인다(위 파일 헤더 주석의 결함 재발).
+#[test]
+fn searchbar의_글자색_선언은_root_규칙_안에_있다() {
+    let html = read_searchbar_html();
+
+    let root_rule = css_rule_body(&html, "#root {")
+        .unwrap_or_else(|| panic!("overlay-searchbar.html 에 #root 규칙이 없다"));
+    assert!(
+        root_rule.contains("color: var(--bar-fg)") || root_rule.contains("color:var(--bar-fg)"),
+        "overlay-searchbar.html 의 #root 규칙이 color: var(--bar-fg) 를 선언하지 \
+         않는다. 글자색 선언을 html, body 로 옮기면 applyPalette() 가 갱신한 값이 \
+         닿지 않아 첫 페인트 폴백(흰색)이 영원히 쓰인다 — 이슈 #67 의 결함 그대로다."
+    );
+
+    // html/body 규칙 쪽에는 글자색 선언이 없어야 한다 — 있으면 #root 가 없는
+    // 텍스트가 폴백 계보를 따라 흰 글자로 남는 경로가 다시 생긴다.
+    let body_rule = css_rule_body(&html, "html, body {")
+        .unwrap_or_else(|| panic!("overlay-searchbar.html 에 html, body 규칙이 없다"));
+    assert!(
+        !body_rule.contains("var(--bar-fg)"),
+        "overlay-searchbar.html 의 html, body 규칙이 var(--bar-fg) 를 쓴다 — \
+         JS 가 #root 에만 세팅하는 값이 이 자리에는 닿지 않는다(이슈 #67)."
+    );
+}
+
+/// ⭐ 이슈 #67 — JS 매핑이 실제로 `bar_fg` 를 `--bar-fg` 로 갱신하는지.
+///
+/// 팔레트 전달(이벤트)이 정상이어도 매핑 키가 어긋나면 같은 증상이 난다.
+/// `SearchBarFrame.palette` 는 serde 기본(스네이크 케이스)으로 직렬화되므로
+/// 키는 `bar_fg` 다.
+#[test]
+fn searchbar의_apply_팔레트는_bar_fg를_갱신한다() {
+    let html = read_searchbar_html();
+    assert!(
+        html.contains("bar_fg: \"--bar-fg\""),
+        "overlay-searchbar.html 의 PALETTE_VAR_MAP 에 bar_fg → --bar-fg 매핑이 \
+         없다 — SearchBarFrame.palette.bar_fg 가 검색바 글자색에 반영되지 않는다"
+    );
 }

@@ -115,6 +115,19 @@ mod tests {
         assert_ne!(light.label_bg, dark.label_bg);
     }
 
+    /// ⭐ 이슈 #67 — 검색 바 글자색은 라이트에서 검정(#1A1A1A), 다크에서 흰색
+    /// 계열(#F5F5F5)로 고정돼야 한다. 라이트에서 흰 글자가 그려진 결함의 회귀
+    /// 방지: 웹뷰 CSS 폴백(`overlay-searchbar.html` 의 `--bar-fg: #ffffff`)이
+    /// 팔레트 전달 실패를 덮어 보이는 일이 없게, 양쪽 값을 여기서도 고정한다.
+    #[test]
+    fn bar_fg_is_dark_on_light_and_light_on_dark() {
+        let light = Palette::for_appearance(Appearance::Light);
+        let dark = Palette::for_appearance(Appearance::Dark);
+        assert_eq!(light.bar_fg, "#1A1A1A");
+        assert_eq!(dark.bar_fg, "#F5F5F5");
+        assert_ne!(light.bar_fg, dark.bar_fg);
+    }
+
     /// 선택 강조색은 명세 §4.2 표대로 라이트/다크 공통 `#0A84FF` 다.
     #[test]
     fn selected_stroke_is_same_across_appearances() {
