@@ -65,7 +65,21 @@ impl PermissionModel {
     /// §2 S1(최초 미부여 → 부여)과 §2 S3(런타임 취소, `Granted` → `Denied`)를
     /// 동일한 규칙으로 처리한다 — `trusted` 하나만으로 목표 상태가 정해지므로
     /// 별도 분기가 필요 없다.
+    ///
+    /// ⭐ **PR #66 검수 반영 — `OutOfSync` 가드.** `OutOfSync` 는 §2 S4·§3.3 이
+    /// 규정하는 **sticky 진단 상태**다 — 진단 화면에서 사용자의 리셋·재시작 또는
+    /// 수동 절차로만 벗어난다(`observe_tap_created` 가 그 유일한 탈출구, 아래
+    /// 참고). 이 가드가 없으면, 권한은 여전히 `true`인데 탭을 만들 수 없는
+    /// 상태에서 배경 폴링의 `observe_trusted(true)` 가 곧바로 `Granted` 로 되돌려
+    /// "5초마다 엔진 재기동 → 새 탭 → 재활성화 예산 소진(5회 핑퐁) → 해체 →
+    /// `OutOfSync` → 폴링 → `Granted`" 저속 순환이 생긴다(시스템을 멈추지는
+    /// 않지만 스펙 위반이자 로그 소음·불필요한 탭 생성 반복이다). `trusted ==
+    /// false` 는 이 가드에서 제외한다 — 권한을 껐다 켜는 것이 곧 §3.3 수동 복구
+    /// 절차 (b)의 시작이므로 `Denied` 로의 전이는 열어 둔다.
     pub fn observe_trusted(&mut self, trusted: bool) -> Option<PermissionTransition> {
+        if trusted && self.state == PermissionState::OutOfSync {
+            return None;
+        }
         let target = if trusted {
             PermissionState::Granted
         } else {
@@ -90,6 +104,8 @@ impl PermissionModel {
     }
 
     /// 탭 생성에 성공했다 — `OutOfSync` 진단에서 회복되는 유일한 경로(§2 S4 항목 5).
+    /// ⭐ **폴링(`observe_trusted(true)`)으로는 `OutOfSync` 를 벗어나지 않는다** —
+    /// 위 `observe_trusted` 의 가드가 그것을 막는다. 이 함수만이 그 탈출구다.
     pub fn observe_tap_created(&mut self) -> Option<PermissionTransition> {
         self.move_to(PermissionState::Granted)
     }
@@ -222,6 +238,50 @@ mod tests {
             transition,
             Some(PermissionTransition {
                 from: PermissionState::OutOfSync,
+                to: PermissionState::Granted,
+            })
+        );
+        assert_eq!(model.state(), PermissionState::Granted);
+    }
+
+    /// ⭐ PR #66 검수 반영 — 폴링(`observe_trusted(true)`)만으로는 `OutOfSync` 를
+    /// 벗어나지 못하고 그 자리에 머문다(sticky, §2 S4·§3.3).
+    #[test]
+    fn out_of_sync_stays_put_on_trusted_polling() {
+        let mut model = PermissionModel::new();
+        model.observe_trusted(true);
+        model.observe_tap_create_failed(true);
+        assert_eq!(model.state(), PermissionState::OutOfSync);
+
+        assert_eq!(model.observe_trusted(true), None);
+        assert_eq!(model.state(), PermissionState::OutOfSync);
+    }
+
+    /// ⭐ PR #66 검수 반영 — `trusted == false` 는 `OutOfSync` 가드에서 제외된다.
+    /// 권한을 껐다 켜는 것이 §3.3 수동 복구 절차 (b)의 시작이므로, `OutOfSync` →
+    /// `Denied` → `Granted` 왕복은 정상적으로 열려 있어야 한다.
+    #[test]
+    fn out_of_sync_can_still_be_escaped_by_toggling_permission_off_and_on() {
+        let mut model = PermissionModel::new();
+        model.observe_trusted(true);
+        model.observe_tap_create_failed(true);
+        assert_eq!(model.state(), PermissionState::OutOfSync);
+
+        let denied = model.observe_trusted(false);
+        assert_eq!(
+            denied,
+            Some(PermissionTransition {
+                from: PermissionState::OutOfSync,
+                to: PermissionState::Denied,
+            })
+        );
+        assert_eq!(model.state(), PermissionState::Denied);
+
+        let granted = model.observe_trusted(true);
+        assert_eq!(
+            granted,
+            Some(PermissionTransition {
+                from: PermissionState::Denied,
                 to: PermissionState::Granted,
             })
         );
