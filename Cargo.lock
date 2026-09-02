@@ -4349,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "axuielement",
@@ -4384,7 +4384,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-click"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ultrakey-core",
  "ultrakey-seek",
@@ -4392,7 +4392,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "serde",
@@ -4403,7 +4403,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "crossbeam-channel",
@@ -4419,7 +4419,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-hyperkey"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4428,7 +4428,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-i18n"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4437,7 +4437,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-korean"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4446,7 +4446,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-layout"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "thiserror 2.0.20",
@@ -4457,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-license"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -4465,7 +4465,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-overlay"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -4475,7 +4475,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-permissions"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "crossbeam-channel",
@@ -4488,7 +4488,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axuielement",
  "block2",
@@ -4510,7 +4510,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-presets"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4519,7 +4519,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-seek"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "tracing",
@@ -4528,7 +4528,7 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-seek-session"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",

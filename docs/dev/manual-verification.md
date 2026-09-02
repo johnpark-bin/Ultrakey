@@ -2940,3 +2940,60 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 > 보고 **'이전보다 현대적이다'**라고 판정한다". 라이트/다크 양쪽에서 위 표의 각 행이
 > 충족되면 이 항목으로 한다. P0 전제(컨트롤 id·저장 키·카탈로그 키·invoke 배선 무변경)는
 > 자동 회귀가 이미 지킨다.
+
+---
+
+## 항목 18 — F-09 설정 창 닫기 → 숨김 · 재열기 (이슈 #88)
+
+> 근거 명세: `../spec/preferences-ui.md` §3.3(클론 결정 ⛔ 블록 — D1 2026-09-02, 이슈 #88) ·
+> `../spec/menu-bar-and-lifecycle.md` §5 항목 14
+> 계획: `../plan/issue-88-settings-window-hide-on-close.md` §4(이 절이 그 M1~M9 를 옮긴 것)
+>
+> **이 이슈의 핵심**: 설정 창은 닫기(빨간 stoplight 버튼·`⌘W`)를 **파괴**가 아니라
+> **숨김(hide)** 으로 전환해 앱 종료까지 상주한다(D1). 수정 전에는 한 번 닫으면
+> `on_main_thread` 가 `None` 분기 에러를 남기고 다시 열 수 없었다. 이 절은 그 수정이
+> **실제로 재열림이 되는가**를 운전 조건에서 확인한다.
+
+### 자동 검증 — 여기서 다시 확인하지 않는다
+
+아래는 `cargo test --workspace`(+ `cargo clippy --workspace --all-targets -- -D warnings`)가
+이미 검증한다. 특히 `settings_window_default_matches_tauri_conf` 는 이 이슈에서 **무변경**
+통과여야 한다 — `tauri.conf.json` 의 설정 창 선언이 상주 전제라 그렇다.
+
+- 설정 창이 `visible:false` 로 static 선언돼 있음(창 라벨·기본 크기) — `frontend_wiring.rs`
+- ⭐ **신규 단위 테스트는 없다** — `wire_settings_window_lifecycle` 의 핵심(창 닫기 → `CloseRequested`
+  → 숨김)은 **Tauri 창 라이브 타입**에 붙는 이벤트라 단위 테스트 범위 밖이다. 판정은 아래 수동 절차가
+  소유한다(테스트 없음 근거, 명세 §8 수용 기준 주석 참조).
+
+### 사전 준비
+
+```sh
+./scripts/build-signed.sh        # 서명된 universal .app (§0 — 반드시 open 으로)
+open <경로>/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+⚠️ 다른 Ultrakey 인스턴스가 떠 있으면 새 빌드가 즉시 종료된다(단일 인스턴스, F-10 §5 항목 1).
+먼저 `pgrep -lf 'Ultrakey.app/Contents/MacOS'` 로 확인하고 종료한다.
+
+### M1~M9 수동 절차
+
+| # | 시나리오 | 조작 | 기대 결과 | 판정 근거 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1** | 이슈 본문 1 (빨간 버튼 닫기 → 재열기) | 메뉴바 `Settings…` 로 설정 창을 연 뒤 빨간 stoplight 버튼으로 닫고, 다시 `Settings…` 클릭 | ⭐ **정상 재열림.** 로그에 `settings window close requested; hiding instead of destroying (D1, issue #88)` 이 한 번 남고 `window not found` 에러가 **없다**. 재열 때 `show settings` 후 `is_visible=Ok(true)` | D1 — 창이 파괴되지 않고 숨김만 |
+| **M2** | `⌘W` 닫기 → 메뉴 Settings… | 설정 창 포커스 상태에서 `⌘W` 로 닫고, 메뉴바 `Settings…` 재클릭 | ⭐ `⌘W` 도 같은 `CloseRequested` 경로를 태는지 확인 — M1 과 같은 로그(숨김) + 재열림 정상 | 계획 리스크 R2 `(추정 → 실측)`. 다른 경로면 해당 배선 점검 |
+| **M3** | 보이는 상태에서 Settings… 재선택 | 설정 창이 **열려 있는 채**로 메뉴바 `Settings…` 재클릭 | **중복 창 없음.** 새 창이 생기지 않고 포커스만 이동(기존 창이 최전면). 로그 `settings window is already visible; only requesting focus` | F-09 §3.3 다중 인스턴스 방지 — 클론 동작 확정 |
+| **M4** | 이슈 #68 (앱 실행 중 재실행) | 앱이 떠 있는 상태에서 `<앱>.app` 을 다시 `open -n`(또는 Finder 에서 재실행) | 두 번째 프로세스가 즉시 종료되고, **첫 인스턴스의 설정 창이 열리거나 포커스된다** (창이 숨겨져 있었으면 열림, 떠 있었으면 포커스) | D4 — 재실행 신호는 `show_settings_window` 로 흐르고, 창 상주로 항상 열린다 |
+| **M5** | 이슈 본문 2 (About 메뉴) | 메뉴바 `About` 클릭 | 현행대로 **설정 창이 열린다**(숨김이었다면 재열림 포함). About 독립 창은 #87 소관 — 이 절은 현행 동작 회귀만 본다 | D5 — 현행(ABOUT → 설정 창 열기) 유지 + 상주 복구 |
+| **M6** | 크기 영속과 함께 | 창 크기를 드래그로 바꾼 뒤 닫고, 다시 연다 | 크기가 **유지**되고 `ui.windowWidth`/`ui.windowHeight` 가 디바운스 400ms 뒤 기록·다음 재열에 복원된다. 항목 9-b(§9-b)의 기존 동작 그대로 | D3 — 상주라 기존 크기 영속 배선 무변경 |
+| **M7** | JS 세션 유지 | `General` 탭(또는 아무 탭)을 연 상태에서 닫고 다시 연다 | **같은 탭**이 유지된다(부팅 시 마지막 탭 복원과 달리, 닫기 왕복에 리셋이 없다) | D1 근거 ④ — 상주 시 웹뷰 JS 세션 유지 |
+| **M8** | Quit (회귀) | 설정 창이 열린 상태(또는 숨겨진 상태)에서 메뉴바 `Quit Ultrakey` | 정상 종료 — 프로세스 종료, 경로 B 매핑 정리. ⛔ **숨김 처리(`prevent_close`)가 `Quit` 을 막지 않는다**(프로그램적 `app.exit()` 경로는 `CloseRequested` 를 거치지 않는다) | `ExitRequested` `code: Some` 분기 — 종료 진행 |
+| **M9** | 권한 모달 회귀 (범위 밖) | 권한 미부여 상태(또는 `tccutil reset ...` 후)에서 온보딩 모달을 띄우고 닫았다 다시 연다 | 기존 동작 유지 — 모달은 파괴·재생성 정책이 그대로라도 변하지 않는다(이 이슈 스코프 밖, 후속 이슈 후보 D7) | D7 — 설정 창과 별개 창, 회귀 없음 확인 |
+
+### ⚠️ 이 절차로 확인할 수 없는 것
+
+- **`⌘W` 의 실제 키 합성이 정확히 `CloseRequested` 를 발생시키는가** — M2 가 그 자리다.
+  `⌘W` 가 다른 경로(예: Event Viewer 내부 처리)를 타면 해당 배선을 별도 점검한다.
+- **원본 SuperKey 의 닫기 동작(숨김 vs 파괴)** — 클론 결정과 무관한 원본 관찰로, `preferences-ui.md` §9 질문 14 로 남겼다.
+- **숨겨진 창의 WKWebView 메모리 상주량** — 계획 리스크 R4 `(추정)` 수십 MB. Accessory 상주 특성상 허용
+  판단. 심각해지면 hide→destroy 전환을 이슈로 재오픈한다.
