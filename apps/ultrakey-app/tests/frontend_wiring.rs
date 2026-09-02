@@ -424,6 +424,11 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // ⭐ 이슈 #46 — `settings_copy_common_to_device` invoke 실패 진단 문구.
         // 위 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
         "Failed to copy settings: ",
+        // ⭐ UXR-07 — 탭 페이드의 `prefers-reduced-motion` 미디어 쿼리 문자열.
+        // 사용자 대면 문장이 아니라 CSS Media Queries API 인자라 카탈로그를 탈
+        // 필요가 없다 — 허용 목록에 없으면 오탐이 나 "난독화"(문자열 분할)를
+        // 유도하므로, 리터럴을 그대로 두도록 허용 목록에 근거와 함께 추가한다.
+        "(prefers-reduced-motion: reduce)",
     ];
 
     let html = read_settings_html();

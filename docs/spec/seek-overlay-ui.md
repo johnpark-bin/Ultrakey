@@ -190,7 +190,7 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 
 ⚠️ **원본 SuperKey 의 값은 하나도 실측되지 않았다.** Seek 를 실제로 발동시켜 오버레이를 관찰하려면 Screen Recording 권한 프롬프트와 전체 화면 캡처가 뒤따르며, 조사 시점에 관찰 이득 대비 부작용이 크다고 판단해 시도하지 않았다(`app-bundle-analysis.md` §8 항목 3). 따라서 원본 색·두께·애니메이션은 여전히 전부 `(추정)` 이다.
 
-⭐ **클론 출고값 — 구현이 정본 (2026-09-02, UXR-11 명세 따라잡기)**: 이 표의 값은 **추정이 아니라 구현 `crates/ultrakey-overlay/src/palette.rs:66-80` 의 라이트 팔레트 출고값**(이슈 #67 `bar_fg` 포함)으로 확정한다 — 회귀 테스트 4종(`light_and_dark_palettes_differ` · `bar_fg_is_dark_on_light_and_light_on_dark` · `selected_stroke_is_same_across_appearances` · `thickness_and_animation_constants_match_spec_table`)이 그 값을 고정한다. 라이트 팔레트 원값: highlight `rgba(255,214,0,0.35)` · selected `rgba(10,132,255,0.28)`·stroke `#0A84FF` · line `#0A84FF` · label `#1A1A1A`/`rgba(255,255,255,0.85)` · **bar `rgba(255,255,255,0.72)`·`bar_fg #1A1A1A`** · border 1/2pt · line 1.5pt · animation 120ms. 다크는 같은 파일의 `Appearance::Dark`(81행~) 가 정본이다. **외관 판정은 세션 시작 시 `is_dark_appearance()`**(`apps/ultrakey-app/src/seek.rs:144`) 이며 **한 세션 안에서 고정**된다(`ultrakey-overlay/src/session.rs:48,67` — `OverlaySession.appearance`).
+⭐ **클론 출고값 — 구현이 정본 (2026-09-02, UXR-11 명세 따라잡기)**: 이 표의 값은 **추정이 아니라 구현 `crates/ultrakey-overlay/src/palette.rs:66-80` 의 라이트 팔레트 출고값**(이슈 #67 `bar_fg` 포함)으로 확정한다 — 회귀 테스트 4종(`light_and_dark_palettes_differ` · `bar_fg_is_dark_on_light_and_light_on_dark` · `selected_stroke_is_same_across_appearances` · `thickness_and_animation_constants_match_spec_table`)이 그 값을 고정한다. 라이트 팔레트 원값: highlight `rgba(255,214,0,0.35)`·stroke `rgba(191,149,0,0.9)` · selected `rgba(10,132,255,0.28)`·stroke `#0A84FF` · line `#0A84FF` · label `#1A1A1A`/`rgba(255,255,255,0.85)` · **bar `rgba(255,255,255,0.72)`·`bar_fg #1A1A1A`** · border 1/2pt · line 1.5pt · animation 120ms. 다크는 같은 파일의 `Appearance::Dark`(81행~) 가 정본이고 highlight_stroke 는 `rgba(255,214,0,0.9)` 다. **외관 판정은 세션 시작 시 `is_dark_appearance()`**(`apps/ultrakey-app/src/seek.rs:144`) 이며 **한 세션 안에서 고정**된다(`ultrakey-overlay/src/session.rs:48,67` — `OverlaySession.appearance`).
 
 **단서(실측: 번들 문자열, 존재만 — 값 단정 불가)**: 실행 파일에 `findHighlightColor` · `systemYellowColor` · `blueOnBlack` · `crosshairCursor` · `crosshairsTemplate` · `NSVisualEffectMaterial` 문자열/심볼이 있다. 이름으로 미루어 하이라이트가 노랑 계열(`systemYellowColor`)이거나 다크 배경 대비용 색(`blueOnBlack`)일 가능성, 십자선 커서(`crosshairCursor`/`crosshairsTemplate`)를 어딘가에 쓸 가능성, 반투명 재질(`NSVisualEffectMaterial`)을 오버레이 배경에 쓸 가능성을 시사하지만 **어느 것도 값으로 확정되지 않는다.** 아래 표의 클론 출고값(노랑 계열)이 `systemYellowColor` 라는 단서와 방향성이 우연히 일치하지만, 이것이 원본 Seek 하이라이트에 쓰이는 색이라는 근거는 아니다 — 원본 값은 여전히 `(추정)` 이다.
 
@@ -198,6 +198,7 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 | :--- | :--- | :--- |
 | 비선택 매치 하이라이트 색상(라이트) | 반투명 노랑 `rgba(255, 214, 0, 0.35)` | 구현 정본(UXR-11). Spotlight/브라우저 찾기 기능류의 관행적 하이라이트 색 |
 | 비선택 매치 하이라이트 색상(다크) | 반투명 노랑 `rgba(255, 214, 0, 0.45)`, 배경 대비 보정 | 구현 정본 — 다크모드에서 채도를 살짝 올려 대비 유지 |
+| 비선택 매치 하이라이트 테두리 색상(라이트/다크) | 라이트 `rgba(191, 149, 0, 0.9)` · 다크 `rgba(255, 214, 0, 0.9)` | 구현 정본 — 채움색보다 테두리를 또렷하게 |
 | 선택 매치 강조 색상(라이트/다크 공통) | 불투명에 가까운 파랑 계열 `#0A84FF` (시스템 accent 색과 정렬) | 구현 정본 — macOS 표준 강조색과의 시각적 일관성 |
 | 하이라이트 테두리 두께 | 2pt (선택), 1pt (비선택) | 구현 정본 — 저배율 디스플레이에서도 인지 가능한 최소 두께 |
 | 연결선 두께 | 1.5pt | 구현 정본 — 하이라이트 테두리보다 얇게, 선이 콘텐츠를 가리지 않도록 |

@@ -2986,8 +2986,7 @@ if (!tauri || !tauri.core) {
   // 죽은 정적 렌더에서도 패널은 CSS 기본 opacity 1 로 즉시 보인다(④).
   function revealTabPanel(panel) {
     const reduceMotion =
-      window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion:" + String.fromCharCode(32) + "reduce)").matches;
+      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduceMotion) return;
     panel.style.opacity = "0";
     if (panel.getBoundingClientRect) panel.getBoundingClientRect(); // reflow 강제

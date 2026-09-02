@@ -98,7 +98,7 @@
 ⭐⭐ **현대화 — 선택 상태·탭 전환 규약 (이슈 #79, UXR-01·UXR-07·UXR-04)**:
 
 - **선택 상태의 색 온도 (UXR-01)**: 사이드바 선택 탭(`button[aria-selected="true"]`)과 Keyboards 디바이스 선택 행(`[role="option"][aria-selected="true"]`)의 채움을 `currentColor 14%` → **`color-mix(in srgb, Highlight 12~16%, transparent)`** 로 바꾼다 — hover(8% currentColor)와 선택이 **색 온도로도 구분**된다. `Highlight` 는 시스템 강조색 키워드라 테마별 자산이 없고 라이트/다크에서 accent 색이 자동으로 따라온다(기존 `color-scheme: light dark` 골격 그대로). `aria-selected`·`data-tab`·컨트롤 id·`font-weight` 는 **무변경** — CSS 선택기 값만 바뀐다.
-- **탭 전환 패널 페이드 (UXR-07)**: 탭을 바꾸면 패널이 **90~110ms opacity 페이드 인**으로 나타난다. `[hidden]`(display:none) 에서 transition 이 동작하지 않으므로, `hidden` 해제 후 requestAnimationFrame 1프레임 뒤 `.tabpanel-visible` 클래스를 붙인다. `prefers-reduced-motion` 시 페이드 0ms(즉시) — 오버레이의 감소 모션 관례와 같은 취지. ⚠️ `activateTab` 의 탭 화이트리스트·persist·`settings_set_tab` invoke·hidden 토글 로직은 **그대로** — 표시 타이밍의 클래스 부착만 추가한다(정적 HTML 폴백 유지, 기본 표시 상태 = opacity 1).
+- **탭 전환 패널 페이드 (UXR-07)**: 탭을 바꾸면 패널이 **90~110ms opacity 페이드 인**으로 나타난다. `[hidden]`(display:none) 에서는 transition 이 켜지지 않으므로, `hidden` 해제 직후 패널에 인라인 `opacity: 0` 을 세팅하고 reflow 를 강제한 뒤 `requestAnimationFrame` 1프레임에서 인라인 opacity 를 제거해 `transition: opacity 110ms` 가 페이드 인되도록 한다. `prefers-reduced-motion` 시 페이드 0ms(즉시) — 오버레이의 감소 모션 관례와 같은 취지. ⚠️ 정적 HTML 폴백 유지(기본 표시 상태 = opacity 1). `activateTab` 의 탭 화이트리스트·persist·`settings_set_tab` invoke·hidden 토글 로직은 **그대로** — 표시 타이밍의 인라인 처리만 추가한다.
 - **섹션/그룹 헤딩 대비 (UXR-04)**: 준수 세부는 §3.2 의 "대비 정책" 참조 — `h2.group` 은 대문자 변환 없이 캡션 헤딩으로, `color-mix(in srgb, currentColor 55%, transparent)` 대비(§3.2).
 
 ### 3.2 컨트롤 타입 카탈로그
