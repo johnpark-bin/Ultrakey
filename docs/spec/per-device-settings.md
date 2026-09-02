@@ -598,7 +598,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 | # | 질문 | 현재 처리 | 확인 방법 |
 | :--- | :--- | :--- | :--- |
-| 1 | Apple VID 서드파티 키보드와 진짜 Apple 내장 키보드가 PID 로 구분되는가 | `(미확정)` — 검증 기기(`Mac16,11`)에 내장 키보드가 없어 확인 불가(스파이크 S-4). 이슈 #86 이 확장 probe(`keyboard_list_probe` 이중 매칭 비교)와 판정 절차(수동 검증 C-1)를 더했으나 실기기 확보 전 `(미확정)` 유지 | 내장 키보드가 있는 Mac 에서: ① `cargo run -p ultrakey-platform --example keyboard_list_probe` 로 내장 키보드의 원시 덤프(RegistryID·VID/PID·Built-In) 기록 ② 확인 방법 ① 의 `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 같은 VID/PID 대조 ③ 외장 키보드에만 `--matching {VID,PID} --set` 으로 눈에 띄는 매핑 설치 ④ 내장 키보드에서 같은 키를 눌러 바뀌지 않는지 확인 ⑤ 빈 배열로 복원(스파이크 §5 절차 그대로) |
+| 1 | Apple VID 서드파티 키보드와 진짜 Apple 내장 키보드가 PID 로 구분되는가 | `(미확정)` — 검증 기기(`Mac16,11`)에 내장 키보드가 없어 확인 불가(스파이크 S-4). 이슈 #86 이 확장 probe(`keyboard_list_probe` 이중 매칭 비교)와 판정 절차(수동 검증 C-1)를 더했으나 실기기 확보 전 `(미확정)` 유지 | 내장 키보드가 있는 Mac 에서: ① `cargo run -p ultrakey-platform --example keyboard_list_probe` 로 내장 키보드의 원시 덤프(RegistryID·VID/PID·Built-In) 기록 ② `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 같은 VID/PID 대조 ③ 외장 키보드에만 `--matching {VID,PID} --set` 으로 눈에 띄는 매핑 설치 ④ 내장 키보드에서 같은 키를 눌러 바뀌지 않는지 확인 ⑤ 빈 배열로 복원(스파이크 §5 절차 그대로) |
 | 2 | 동일 모델 2대(같은 VID+PID)가 실제로 하나로 보이는가, 그리고 그 체감이 사용자에게 어떻게 인지되는가 | `(미확정)` — 한계로 명시했으나 실측하지 않았다 | 같은 모델 키보드 2대를 동시에 연결하고 `hidutil list --matching {VID,PID}` 로 RegistryID 가 몇 줄 나오는지 확인, 각각에 다른 매핑을 걸어보고 실제로 구분되는지 관찰 |
 | 3 | `RegistryID`/`LocationID` 가 재부팅·포트 변경에 걸쳐 안정적인가(설정 키로 쓸 수 있는지) | `(미확정)` | 같은 디바이스를 재부팅 전후, 포트를 바꿔가며 연결해 `RegistryID`/`LocationID` 값이 유지되는지 로그 비교 |
 | 4 | macOS Function Keys 토글이 꺼져 있을 때 F-키 단독 입력이 어떤 usage 로 도착하는가 | `(미확정)` — 스파이크 S-9 는 토글이 켜진 상태만 관찰했다 | 시스템 설정에서 토글을 끈 뒤, F-키 각각을 눌러 도착하는 usage 를 로그로 관찰(브라우저 프로브 또는 자체 진단 로그) |
