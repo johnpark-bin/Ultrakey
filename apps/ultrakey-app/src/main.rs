@@ -4193,6 +4193,9 @@ fn main() {
             // ⭐ 이슈 #32 Phase 1 — 설정 창 크기 복원 + 디바운스 저장 배선. 저장소를
             // `state.store` 로 옮긴 바로 다음(위 줄)이라야 저장된 크기를 읽을 수 있다.
             wire_window_size_persistence(&handle, &state);
+            // ⭐ 이슈 #88(D1) — 설정 창 닫기(빨간 버튼·`⌘W`)를 숨김으로 전환.
+            // 상주 정책이라 크기 영속 배선(위)과 순서 독립이다.
+            wire_settings_window_lifecycle(&handle);
             let state_for_monitor = state.clone();
 
             // 5-b) ⭐ F-10 메뉴바(`NSStatusItem`) — 정상/`unauthorizedMenu` 두 벌을
@@ -4660,6 +4663,11 @@ fn on_main_thread(
                 );
             }
             None => {
+                // ⭐ 이슈 #88(D1) — `"settings"` 창은 `wire_settings_window_lifecycle`
+                // 가 닫기를 숨김으로 전환하므로 앱이 살아 있는 동안 파괴되지
+                // 않는다. 따라서 이 분기는 정상 경로에서 도달하지 않는 예외
+                // 상황이다(예: 부팅 시 창 생성 실패). **재생성(builder)을 만들지
+                // 않는다** — 상주 정책(D1)이 파괴-재생성보다 최소 변경이다.
                 tracing::error!(window_label, what, "window not found");
             }
         }
@@ -4682,13 +4690,14 @@ fn hide_modal(handle: &tauri::AppHandle) {
     });
 }
 
-/// ⭐ M2 1차(F-09) 임시 조치 — 메뉴바(F-10)가 아직 없어 환경설정 창을 열 다른
-/// 경로가 없다. 그래서 이번 범위에 한해:
-/// - 권한이 `Granted` 로 전이하면(`on_permission_transition`) 여기로 창을 띄운다.
-/// - `RunEvent::Reopen`(Dock 아이콘 재클릭)에서도 여기로 다시 띄운다.
+/// ⭐ 이슈 #88(D1) — 환경설정 창은 **상주**한다(닫으면 파괴되지 않고 숨김).
+/// `wire_settings_window_lifecycle` 이 유일한 닫기 경로(빨간 버튼·`⌘W`)를
+/// `prevent_close()` + `hide()` 로 처리하므로, `on_main_thread` 의 `None` 분기가
+/// 도달하는 것은 설정 창이 파괴됐다는 뜻의 예외 상황이다 — 재생성 코드는
+/// 만들지 않는다(계획 D1: 상주가 재생성보다 최소 변경).
 ///
-/// **F-10 이 `Settings…` 메뉴 항목을 넣으면 이 두 자동 오픈 경로는 걷어내고 메뉴
-/// 클릭으로만 연다.** 그때까지는 이 함수가 유일한 진입점이다.
+/// 메뉴바 `Settings…`·`About`(현행은 같은 창, #87 소관)·이슈 #68 재실행 신호가
+/// 이 함수를 공통으로 탄다.
 fn show_settings_window(handle: &tauri::AppHandle) {
     on_main_thread(handle, "settings", "show_settings", |w| {
         // ⭐ 이슈 #68 — 이미 보이는 창을 다시 `show()` 하지 않는다. 두 번째
@@ -4932,6 +4941,44 @@ fn on_settings_window_resized(
 
     if let Some(debouncer) = state.window_size_debouncer.lock().unwrap().as_ref() {
         debouncer.notify(size);
+    }
+}
+
+/// ⭐ 이슈 #88(D1: 닫기 → 숨김, 창 상시 유지) — 설정 창 `CloseRequested` 배선.
+///
+/// `tauri.conf.json` 에 `visible:false` 로 static 선언된 설정 창은 부팅 시
+/// 생성된다. `CloseRequested` 핸들러가 없으면 사용자가 빨간 버튼·`⌘W` 로 닫는
+/// 순간 창이 **파괴**되고, `show_settings_window` 의 `on_main_thread` 는
+/// `get_webview_window("settings")` 이 `None` 을 받아 에러 로그만 남긴 채 끝나서
+/// "닫았다가 다시 열 수 없는" 상태가 된다(이슈 #88 이 드러낸 결함).
+///
+/// 여기서 닫기를 파괴가 아니라 숨김으로 전환해 창 인스턴스를 앱 종료까지 상주
+/// 시킨다. 상주가 주는 것(계획 D1 근거): ① 파괴-재생성(builder) 코드가 원천적으로
+/// 필요 없다 — `show_settings_window` 의 재열림 로직은 창 존재만 전제한다. ② 위
+/// `wire_window_size_persistence` 의 크기 영속 배선(디바운스 저장 스레드 포함)이
+/// setup() 1회 배선 그대로 살아 있다. ③ 이슈 #68(앱 재실행 → 설정 창)도 별도
+/// 수정 없이 해결된다 — 창이 항상 존재하므로 항상 열린다. ④ 탭·스크롤 등의
+/// 웹뷰 JS 세션이 유지된다.
+///
+/// `get_webview_window("settings")` 가 `Some` 이면 배선하고, `None` 이면 에러
+/// 로그를 남긴다 — 위 `wire_window_size_persistence` 의 None 분기와 같은 처우.
+fn wire_settings_window_lifecycle(handle: &tauri::AppHandle) {
+    match handle.get_webview_window("settings") {
+        Some(window) => {
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    tracing::info!(
+                        "settings window close requested; hiding instead of destroying (D1, issue #88)"
+                    );
+                    api.prevent_close();
+                    let _ = window_for_close.hide();
+                }
+            });
+        }
+        None => {
+            tracing::error!("settings window not found; could not wire up close-to-hide lifecycle");
+        }
     }
 }
 
