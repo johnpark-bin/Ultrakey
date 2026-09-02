@@ -4180,7 +4180,8 @@ fn main() {
         window_size_debouncer: Mutex::new(None),
         event_viewer_buffer: Mutex::new(VecDeque::new()),
         auto_update_checks: ArcSwap::new(Arc::new(false)),
-        // F-12 — 부팅 시 Keychain 어댑터 + no-op provider 로 상태 머신을 조립한다.
+        // F-12 — 부팅 시 저장소 어댑터(빌드 분기: 파일 또는 Keychain, 이슈 #99)
+        // + no-op provider 로 상태 머신을 조립한다.
         license_controller: license::LicenseController::boot(),
     });
 

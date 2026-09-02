@@ -55,7 +55,7 @@ Ultrakey 는 macOS 유틸리티 **SuperKey**(https://superkey.app/)의 Rust/Taur
 | **F-09** | 환경설정 UI | [`preferences-ui.md`](preferences-ui.md) | Rust 바인딩 | F-15, 전 기능의 설정 소유 | 중 |
 | **F-10** | 메뉴바 상주 · 앱 수명주기 · **앱별 비활성화** | [`menu-bar-and-lifecycle.md`](menu-bar-and-lifecycle.md) | Rust 바인딩 | F-11, F-07 | 하 |
 | **F-11** | 권한 온보딩과 복구 | [`permissions-onboarding.md`](permissions-onboarding.md) | Rust 바인딩 | — | 중 |
-| **F-12** | 라이선싱과 트라이얼 (Paddle Classic) | [`licensing-and-trial.md`](licensing-and-trial.md) | 순수 Rust (+ Keychain·Security 바인딩) | — | 하 |
+| **F-12** | 라이선싱과 트라이얼 (Paddle Classic) | [`licensing-and-trial.md`](licensing-and-trial.md) | 순수 Rust (+ Keychain·Security 바인딩 — 정식 서명 빌드 한정. 개발 빌드는 파일 저장으로 분기, §3.5 개정·이슈 #99) | — | 하 |
 | **F-13** | 자동 업데이트 (Sparkle 2.x) | [`auto-update.md`](auto-update.md) | Rust 바인딩 (`Sparkle.framework`) | F-10 | 중 |
 | **F-14** | 현지화와 키보드 입력 소스 독립성 | [`localization-and-input-sources.md`](localization-and-input-sources.md) | Rust 바인딩 | F-07 (입력 소스), 전 UI (현지화) | 중 |
 | **F-15** ⭐ | 설정 저장 모델과 무결성 (충돌 감지 · 클라우드 동기화) | [`settings-store-and-integrity.md`](settings-store-and-integrity.md) | 순수 Rust | — | 하 |
@@ -258,7 +258,7 @@ F-17 키보드별 설정    ── F-07(경로 B) · F-09 · F-15 위에 선다.
 ### M4 — 배포 (F-13 → F-12)
 
 15. **F-13 자동 업데이트** — Sparkle appcast·EdDSA. ⚠️ 신·구 앱의 **서명 주체가 같아야 TCC 권한이 유지**된다
-16. **F-12 라이선싱** — 상태 머신과 추상 인터페이스까지. ⭐ 원본은 **Paddle Classic** 이며 자체 코드 서명 검증을 병용한다 — 개발 중 자체 서명에서 막히지 않게 우회 가능한 형태로 설계한다
+16. **F-12 라이선싱** — 상태 머신과 추상 인터페이스까지. ⭐ 원본은 **Paddle Classic** 이며 자체 코드 서명 검증을 병용한다 — 개발 중 자체 서명에서 막히지 않게 우회 가능한 형태로 설계한다. ⭐ 이슈 #99 로 저장소가 빌드 분기한다(개발 빌드 = 파일 저장, 정식 서명 = Keychain — `licensing-and-trial.md` §3.5 개정)
 
 ### M5 — 마무리와 선택 기능 (F-14(A) → F-06)
 

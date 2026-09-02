@@ -9,6 +9,10 @@ repository.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+# ⭐ 이슈 #99 — `FileStore`(개발/자체 서명 빌드의 파일 저장소)가 트라이얼 기록·
+# 라이선스 캐시를 JSON 으로 직렬화한다. Keychain 저장소의 `kSecValueData` 바이트와
+# 동일한 포맷(serde_json)을 써 두 저장소가 바이트 호환된다.
+serde_json = { workspace = true }
 # 요청/응답 계약(§3.3)의 오류 표시용. 자체 타입으로 감싸지 않고 그대로 쓴다.
 thiserror = { workspace = true }
 

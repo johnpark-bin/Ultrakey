@@ -31,3 +31,10 @@ jobs:
         run: cargo test --workspace
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # ⭐ 이슈 #99 — 라이선스 저장소 빌드 분기(명세 §3.5 개정). 위 두 게이트는 기본
+      # (파일 저장) 빌드만 보므로, 정식 서명 릴리즈가 쓰는 `keychain-store` 분기도
+      # 여기서 컴파일·린트해 릴리즈 태그 푸시 전에 깨진 분기를 잡아낸다.
+      - name: cargo check (keychain-store 분기)
+        run: cargo check -p ultrakey-app --features keychain-store
+      - name: cargo clippy (keychain-store 분기)
+        run: cargo clippy -p ultrakey-app --features keychain-store -- -D warnings

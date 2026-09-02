@@ -44,6 +44,9 @@ jobs:
         run: cargo test --workspace
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # ⭐ 이슈 #99 — 정식 서명 릴리즈 분기(`keychain-store` feature)도 컴파일 검증.
+      - name: cargo check (keychain-store 분기)
+        run: cargo check -p ultrakey-app --features keychain-store
 
   build:
     name: universal build + DMG (서명 게이트)
@@ -98,7 +101,17 @@ jobs:
           fi
           echo "signed=${SIGNED}" >> "$GITHUB_OUTPUT"
           echo "notarized=${NOTARIZED}" >> "$GITHUB_OUTPUT"
-          tauri build --target universal-apple-darwin
+          # ⭐ 이슈 #99 — 저장소 빌드 분기(명세 §3.5 개정). 정식 서명 빌드(서명 시크릿
+          # 존재 = Developer ID, code-signing.md §8 계약)만 `keychain-store` feature 로
+          # Keychain 저장. 미서명 릴리즈는 개발 빌드와 같이 파일 저장으로 빌드해
+          # 키체인 로그인 프롬프트가 남지 않게 한다.
+          FEATURES_ARG=""
+          if [ "$SIGNED" = "true" ]; then
+            FEATURES_ARG="--features keychain-store"
+          fi
+          # FEATURES_ARG 는 feature 활성 시에만 두 단어로 분리돼야 하므로 의도적으로
+          # 따옴표 없이 전개한다.
+          tauri build --target universal-apple-darwin ${FEATURES_ARG}
           # ── 서명: build-signed.sh 의 방식을 그대로 재현 ──
           if [ "$SIGNED" = "true" ]; then
             KEYCHAIN=ultrakey-sign.keychain-db
