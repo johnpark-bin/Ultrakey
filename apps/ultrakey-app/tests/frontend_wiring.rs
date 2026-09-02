@@ -2438,3 +2438,68 @@ fn searchbar의_apply_팔레트는_bar_fg를_갱신한다() {
          없다 — SearchBarFrame.palette.bar_fg 가 검색바 글자색에 반영되지 않는다"
     );
 }
+
+// ============================================================================
+// 이슈 #79 — UI/UX 1차 현대화(P0) 재발 방지 테스트.
+//
+// P0 전제(컨트롤 id·저장 키·카탈로그 키·invoke 배선 무변경)는 이 파일의 기존
+// 테스트 전부가 이미 지킨다. 여기서는 **새로 들어간 시각 규약 자체**가 다시
+// 사라지거나 후퇴하는 회귀만 잡는다 — 정적 스캔이라 "효과"가 아니라 "배선 존재"
+// 를 검증하는 최소 단언이다.
+// ============================================================================
+
+/// UXR-01 — 선택 상태 표현이 시스템 강조색(Highlight) tint 를 쓴다. 사이드바
+/// 탭과 Keyboards 디바이스 목록 둘 다에서 회색(currentColor)으로 후퇴하면 잡는다.
+#[test]
+fn settings_html_의_선택_상태는_highlight_tint를_쓴다() {
+    let html = read_settings_html();
+
+    let sidebar_rule = css_rule_body(&html, ".sidebar button[aria-selected=\"true\"] {")
+        .unwrap_or_else(|| panic!("settings.html 에 .sidebar button[aria-selected=true] 규칙이 없다"));
+    assert!(
+        sidebar_rule.contains("Highlight"),
+        "사이드바 선택 상태가 Highlight(CSS 시스템 강조색) tint 를 쓰지 않는다 — \
+         currentColor 회색으로 후퇴하면 hover 와 구분이 약해진다(UXR-01)"
+    );
+
+    let pane_rule = css_rule_body(&html, ".keyboards-device-pane [role=\"option\"][aria-selected=\"true\"] {")
+        .unwrap_or_else(|| panic!("settings.html 에 디바이스 목록 선택 상태 규칙이 없다"));
+    assert!(
+        pane_rule.contains("Highlight"),
+        "Keyboards 디바이스 목록 선택 상태가 Highlight tint 를 쓰지 않는다(UXR-01)"
+    );
+}
+
+/// UXR-06 — `#seek-not-configured` 가 일반 부제가 아니라 `hint warn`(경고
+/// 표현)으로 마크업되어 있다. `renderSeek()` 의 hidden 토글(id·문구 무변경)을
+/// 건드리지 않으므로, 클래스만 확인하면 충분하다.
+#[test]
+fn settings_html_의_seek_미설정_경고는_warn_클래스를_가진다() {
+    let html = read_settings_html();
+    let needle = r#"<p class="hint warn" id="seek-not-configured""#;
+    assert!(
+        html.contains(needle),
+        "settings.html 의 #seek-not-configured 가 class=\"hint warn\" 이 아니다 — \
+         활성화 경로 부재 알림이 일반 부제로 후퇴하면 구분이 사라진다(UXR-06)"
+    );
+}
+
+/// UXR-07 — 탭 패널 페이드 인의 배선(rAF + 인라인 opacity 0 → 지움)과
+/// 감소 모션 대응이 남아 있는지. `activateTab` 의 invoke·hidden 토글 무변경은
+/// `최초_렌더는_탭을_저장하지_않는다` 등 기존 테스트가 이미 지킨다.
+#[test]
+fn settings_html_에_탭_전환_페이드_배선이_있다() {
+    let html = read_settings_html();
+    assert!(
+        html.contains("function revealTabPanel("),
+        "settings.html 에 탭 페이드 헬퍼(revealTabPanel)가 없다(UXR-07)"
+    );
+    assert!(
+        html.contains("requestAnimationFrame"),
+        "settings.html 의 탭 페이드가 requestAnimationFrame 을 쓰지 않는다(UXR-07)"
+    );
+    assert!(
+        html.contains("prefers-reduced-motion: reduce"),
+        "settings.html 의 탭 페이드가 감소 모션 대응(prefers-reduced-motion)을 갖지 않는다(UXR-07)"
+    );
+}

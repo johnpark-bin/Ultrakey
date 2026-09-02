@@ -74,8 +74,12 @@ const canvas = document.getElementById("hl-canvas");
 const ctx = canvas.getContext("2d");
 
 // 팔레트 기본값 — Rust 가 항상 완전한 palette 를 보낸다는 전제지만,
-// 필드 누락 시에도 화면이 새하얗게/새까맣게 죽지 않도록 §4.2 의 제안
-// 기본값을 그대로 폴백으로 둔다.
+// 필드 누락 시에도 화면이 새하얗게/새까맣게 죽지 않도록 폴백을 둔다.
+// ⭐ 여기 값은 **다크 단일** 폴백이다(실제 출고값은 라이트/다크 별도).
+// 출고값의 정본은 `crates/ultrakey-overlay/src/palette.rs:66-80` —
+// UXR-11 "명세 따라잡기"로 구현(정본)과 명세
+// `docs/spec/seek-overlay-ui.md §4.2` 가 함께 확정됐다(이슈 #67 bar_fg 포함).
+// Rust 가 항상 완전한 팔레트를 보내므로 폴백이 실제로 그려질 일은 없다.
 const PALETTE_FALLBACK = {
   highlight_fill: "rgba(255, 214, 0, 0.35)",
   highlight_stroke: "rgba(255, 214, 0, 0.9)",
