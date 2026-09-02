@@ -64,7 +64,7 @@
   "settings.seek.change_click_modes_with_modifiers": "修飾キーでクリックモードを切り替える",
   "settings.seek.change_click_modes_with_modifiers.hint": "この設定をオフにすると、修飾キーがクリックに適用されます",
   "settings.seek.search_language.label": "検索言語",
-  "settings.seek.search_language.hint": "英語は常に検索します。他の言語を1つ追加すると、検索バーは実際のテキスト入力欄になり、入力メソッド(IME)で組み立てた文字と画面の該当言語のテキストで照合します。",
+  "settings.seek.search_language.hint": "英語は常に検索します。他の言語を1つ追加すると、検索バーは実際のテキスト入力欄になり、入力メソッド(IME)で組み立てた文字と画面の該当言語のテキストで照合します。 言語を追加すると、画面を読み取って(OCR)結果が見つかるまでの時間が長くなります。",
   "settings.seek.search_language.option.en": "英語のみ",
   "settings.seek.search_language.option.ko": "英語 + 한국어",
   "settings.seek.search_language.option.zh": "英語 + 中文",

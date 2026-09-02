@@ -365,8 +365,17 @@ function render(payload) {
   }
 
   const total = payload.total_matches || 0;
-  if (total <= 0) {
-    counter.textContent = "없음";
+  if (payload.detecting) {
+    // ⭐(이슈 #102) — 검출(OCR·AX)이 아직 진행 중. 0 매치는 "검색 완료 +
+    // 0개"라는 확정이 아니라 "아직 화면을 다 읽지 못했다"는 뜻이다 —
+    // "없음"으로 읽히면 "프로그램이 동작하지 않는다"는 오독이 된다
+    // (한국어 OCR 은 최대 약 3.1s). 검출은 디스플레이별 증분(S-6)이므로
+    // 매치가 이미 일부 도착했어도 검출 완료 전까지 이 문구를 유지한다
+    // — 도착한 매치 집합은 잠정적이다(정본: docs/spec/seek-overlay-ui.md
+    // §3.7).
+    counter.textContent = "찾는 중…";
+  } else if (total <= 0) {
+    counter.textContent = "없음"; // 검출 완료 후의 확정 0
   } else if (typeof payload.selected_index === "number") {
     counter.textContent = (payload.selected_index + 1) + " / " + total;
   } else {

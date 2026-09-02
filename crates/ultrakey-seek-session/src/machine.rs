@@ -1576,6 +1576,69 @@ mod tests {
         assert_eq!(bar.matches[0].text, "검색기록");
     }
 
+    /// ⭐(이슈 #102) — "영어+한글(인풋 박스) 모드에서 OCR 동안 멈춘 듯" 시나리오의
+    /// 순수 로직 재현. 사용자가 제안한 "검출 완료 시 검색 트리거"는 **이미 증분
+    /// 방식으로 실현**되어 있다: 검출 진행 중(Opening) 입력된 쿼리는 버퍼링되고,
+    /// 후보가 도착하면 OCR 총 완료를 기다리지 않고 **즉시** 그 쿼리로 필터링된다.
+    /// 검출 중에는 `detecting == true`(카운터 "찾는 중…" 분기)가 유지되다가
+    /// `finish_detection` 후 false + Querying 전이로 마무리된다. ⚠️ 기존
+    /// `set_query_external_during_opening_buffers_and_filters`(T10-b)는 기본
+    /// 설정(인풋 박스 꺼짐)이므로, 여기서는 `input_box_mode: true` 래칭을 함께
+    /// 고정한다(카운터 분기의 웹뷰가 input_box 여부와 무관하게 동작해야 하므로).
+    #[test]
+    fn issue102_query_during_detection_triggers_incrementally_and_finish_flips_detecting() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            input_box_mode: true,
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        // ① 세션 개시 — 검출 진행 중 + 인풋 박스 모드 래칭(이슈 #93 §3.1).
+        let bar0 = machine.overlay().unwrap().search_bar_frame();
+        assert!(bar0.detecting, "검출 진행 중 — 카운터 '찾는 중…' 분기");
+        assert!(bar0.input_mode, "인풋 박스 모드가 개시부터 래칭돼야 한다");
+        assert_eq!(bar0.total_matches, 0);
+
+        // ② 검출 중 사용자 입력("설정" — IME 조합 → 100ms debounce 뒤 SetQuery).
+        let effects = machine.set_query_external("설정".to_string());
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert_eq!(machine.state(), SessionState::Opening, "검출 전엔 Opening 유지");
+        let bar1 = machine.overlay().unwrap().search_bar_frame();
+        assert!(bar1.detecting);
+        assert_eq!(bar1.total_matches, 0);
+
+        // ③ 후보 도착 → 검출 완료를 기다리지 않고 즉시 버퍼된 쿼리로 필터
+        // (증분 트리거). "Search" 는 쿼리 "설정"에 매치되지 않는다.
+        let _ = machine.ingest_display(
+            1,
+            vec![
+                candidate("설정", 0.0),
+                candidate("설정 화면", 100.0),
+                candidate("Search", 200.0),
+            ],
+        );
+        let bar2 = machine.overlay().unwrap().search_bar_frame();
+        assert_eq!(bar2.total_matches, 2, "증분 트리거 — 버퍼된 쿼리로 즉시 필터링");
+        assert!(bar2.detecting, "아직 검출 진행 중 — '찾는 중…' 유지(잠정 매치)");
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        // ④ 검출 완료 — detecting=false + Opening→Querying 전이(버퍼된 쿼리 있음).
+        let effects = machine.finish_detection();
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert_eq!(machine.state(), SessionState::Querying, "버퍼된 쿼리가 있으므로 Ready 가 아니라 Querying");
+        let bar3 = machine.overlay().unwrap().search_bar_frame();
+        assert!(!bar3.detecting, "검출 완료 — 카운터 '없음'/'k / n' 확정 분기");
+        assert_eq!(bar3.total_matches, 2);
+    }
+
     /// 외부 쿼리를 비우면 Backspace 분기와 같은 결(빈 채 Querying)이 되고 매치
     /// 0 개로 돌아간다.
     #[test]
