@@ -67,6 +67,29 @@ fn has_browser_command_modifier(flags: &EventFlags) -> bool {
     flags.contains(EventFlags::COMMAND) || flags.contains(EventFlags::CONTROL)
 }
 
+/// ⭐(이슈 #101) — **시스템 입력 소스 전환 단축키**(⌃Space·⌃⌥Space 등)인가.
+///
+/// [`is_input_box_pass_key`] 의 ⌘/⌃ 소비 판정에 걸리기 **전에** 계층 1 게이트가 이
+/// 조합을 가른다 — ⌃Space 는 앱 단축키가 아니라 **시스템(Carbon HIToolbox)** 이
+/// 처리하는 입력 소스 전환 단축키라, 소비하면 전환 자체가 발화할 기회를 잃는다.
+/// 인풋 박스 모드에서 검색 바가 키 윈도우일 때도 통과시키면 시스템이 처리한다
+/// (플랜 §3 D1, 이슈 #101).
+///
+/// 판정: `SPACE` + ⌃ 실림 + ⌘ 미실림.
+/// - ⌃Space(이전 입력 소스)·⌃⌥Space(입력 메뉴의 다음 소스) — macOS 기본 단축키 2종과
+///   사용자 지정 ⌃계열 단축키를 커버한다.
+/// - ⛔ ⌘ 가 실리면 제외 — ⌘Space(Spotlight) 등은 종전대로 소비(앱 단축키 보호 원칙).
+/// - ⇧ 는 가리지 않는다 — 제한을 새로 만들지 않으며, 시스템이 처리하지 않는 ⌃⇧Space 는
+///   통과해도 키 윈도우(우리 오버레이)에서 무해하다.
+/// - ⚠️ 설정된 세션 토글 단축키와 일치하는 경우는 호출자가 이 함수 **다음**에 가드해야
+///   한다 — 통과시키면 재입력 토글(세션 닫기)이 죽는다(플랜 §3 D1).
+#[must_use]
+pub fn is_input_source_switch_shortcut(ev: &InputEvent) -> bool {
+    ev.keycode == KeyCode::SPACE
+        && ev.flags.contains(EventFlags::CONTROL)
+        && !ev.flags.contains(EventFlags::COMMAND)
+}
+
 /// ⇧⌃⌥⌘ 중 하나라도 실려 있는가 — `;` 순환 판정의 "modifier 부재" 조건.
 fn has_any_modifier(flags: &EventFlags) -> bool {
     flags.contains(EventFlags::SHIFT)
@@ -250,5 +273,79 @@ mod tests {
         ] {
             assert!(!is_printable_keycode(kc), "{kc:?}");
         }
+    }
+
+    // ── ⭐(이슈 #101, 플랜 §4 S1~S6) — 시스템 입력 소스 전환 단축키 판정 ──────────────
+
+    /// S1 — ⌃Space(일반 CONTROL + device 좌측 control 비트, macOS 실제 모양) → true.
+    /// 값은 `flags.rs` 상수가 아니라 macOS 헤더 리터럴(0x40000 | 0x1) — 검증 하네스 관례.
+    #[test]
+    fn control_space_is_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x0004_0001));
+        assert!(is_input_source_switch_shortcut(&e));
+    }
+
+    /// S2 — ⌃⌥Space(0x40000 | 0x1 | 0x80000) → true. "입력 메뉴의 다음 소스" 기본 단축키.
+    #[test]
+    fn control_option_space_is_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x000C_0001));
+        assert!(is_input_source_switch_shortcut(&e));
+    }
+
+    /// S2-b(리뷰 #2-a) — ⌃⇧Space → true. ⇧ 는 가리지 않는 결정을 고정한다.
+    #[test]
+    fn control_shift_space_is_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x0006_0001));
+        assert!(is_input_source_switch_shortcut(&e));
+    }
+
+    /// S2-c(리뷰 #2-c) — **우측** control 로 ⌃Space(0x40000 | 0x2000) → true.
+    /// 좌/우 control 이 같은 일반 비트를 공유하므로 device 비트가 달라도 판정은 같다.
+    #[test]
+    fn control_space_with_right_device_bit_is_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x0004_2000));
+        assert!(is_input_source_switch_shortcut(&e));
+    }
+
+    /// S2-d — ⌃Space + caps lock 잠금 비트(0x10000) → true. 잠금 상태는 판정을 흔들지 않는다.
+    #[test]
+    fn control_space_with_caps_lock_bit_is_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x0005_0001));
+        assert!(is_input_source_switch_shortcut(&e));
+    }
+
+    /// S3 — ⌘Space → false(앱 단축키 보호 — Spotlight 등은 계속 소비).
+    #[test]
+    fn command_space_is_not_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags::COMMAND);
+        assert!(!is_input_source_switch_shortcut(&e));
+    }
+
+    /// S4 — ⌘⌃Space → false(COMMAND 가드가 CONTROL 보다 우선).
+    #[test]
+    fn command_control_space_is_not_input_source_switch() {
+        let e = ev(KeyCode::SPACE, EventFlags(0x0014_0009));
+        assert!(!is_input_source_switch_shortcut(&e));
+    }
+
+    /// S5 — ⌃ 없는 Space 변형(무modifier·⇧·⌥) → false.
+    #[test]
+    fn space_without_control_is_not_input_source_switch() {
+        for flags in [
+            EventFlags::NONE,
+            EventFlags::SHIFT,
+            EventFlags::ALTERNATE,
+            EventFlags::SHIFT | EventFlags::ALTERNATE,
+        ] {
+            let e = ev(KeyCode::SPACE, flags);
+            assert!(!is_input_source_switch_shortcut(&e), "{flags:?}");
+        }
+    }
+
+    /// S6 — ⌃ 이지만 SPACE 가 아닌 키(⌃A) → false. 판정은 keycode 로 한정된다.
+    #[test]
+    fn control_without_space_is_not_input_source_switch() {
+        let e = ev(KeyCode::ANSI_A, EventFlags::CONTROL);
+        assert!(!is_input_source_switch_shortcut(&e));
     }
 }
