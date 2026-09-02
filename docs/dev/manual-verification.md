@@ -199,6 +199,7 @@ cargo test --workspace
 | 앱 게이트 판정 | `ultrakey-core` `gate` 테스트 |
 | 레이아웃 역방향 테이블 구축 (가짜 레이아웃 주입) | `ultrakey-layout` 테스트 |
 | 문자열 카탈로그 ko/en 키 집합 동일성 | `ultrakey-i18n` 테스트 |
+| ⭐ 이슈 #87 — About 라우팅 분리·`show_about_window`·About 커맨드 등록·`about.*` 키 5언어·settings.html `#about` 제거/`#version-btn` About 열기·`AppMeta.app_path` | `frontend_wiring.rs` `이슈87`/`about_` 테스트 |
 
 ---
 
@@ -1195,6 +1196,31 @@ kd key="(" code=KeyA kc=65 shift=false
 | `tray set_visible called` | **우리 코드 개입** — `source=boot`/`toggle` 필드로 트리거 출처를 알 수 있다 | **Bartender 단독 동작** |
 | `tray set_menu replaced` | 그 시각과 깜빡임 시각의 **시간적 상관**을 보라 — 상관이 없으면 H2·H3 기각 | — |
 | `tray status_item snapshot` (`debug` 전용) | ⭐ 숨김 구간에 `status_item_exists=false` 면 **NSStatusItem 제거**, `true` 면 **숨김 처리** — H1/H4 판정의 핵심 재료 | — |
+
+### 7-k. ⭐ About 정보 창 (이슈 #87)
+
+> 이슈 #87 — 트레이 메뉴 `About`·설정 창의 버전 버튼(`#version-btn`)은 **독립 About 창**
+> (`ui/about.html`)을 연다(설정 창 General 탭이 아니다). 정본: `plan/issue-87-about-window.md`
+> D1~D6(URL 3종은 레포 URL 로 확정, §9 #1). 업데이트 확인은 F-13 `check_for_updates`
+> 커맨드(=`on_menu_check_for_updates` 래퍼)를, 링크는 `open_external_url`(브라우저 위임)을 쓴다.
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 트레이 메뉴 `About` | **별도 정보 창**이 뜬다(설정 창이 아니다) |
+| 2 | 정보 행 | 앱 이름 `Ultrakey` · 버전 `v{0}`(`settings.general.version` 템플릿) · 제작자 `John Park` · 웹사이트·연락·이슈 등록 링크 · 앱 설치 위치 · 로그 파일 위치 |
+| 3 | 링크 행 라벨 · 값 | 웹사이트 라벨/연결·연락 라벨/연결·이슈 등록 라벨/연결 전부 레포(`https://github.com/johnpark-bin/Ultrakey`)로 간다. 라벨 2종(`GitHub`·`GitHub Issues`)은 **번역되지 않는다**(고유 브랜드, §9 #1) |
+| 4 | 링크 클릭 | WebView 내부 네비게이션이 아니라 시스템 기본 브라우저가 열린다 |
+| 5 | `Check for Updates…` 클릭(.app 번들) | Sparkle 표준 업데이트 확인 대화상자가 뜬다(진행·결과 표시는 Sparkle 이 소유 — D4) |
+| 6 | ⭐ 앱 번들 밖(`tauri dev`)에서 열기 | 업데이트 버튼이 **비활성**이고 `about.outside_bundle` 안내가 보인다. 앱 설치 위치 행도 같은 안내로 대체된다 |
+| 7 | 설정 창 `General` 탭 | 상단 About 행(번들 ID·로그 경로·설정 파일 경로)이 **없다**(`#about` 블록 제거). 버전 버튼은 **유지**되고 클릭 시 About 창을 연다 |
+| 8 | `General` 탭 `Advanced` 접이식 펼침 | 진단 버튼(`Open Event Viewer`·`Open Log Folder`) 아래 **번들 ID·설정 파일 경로** 행이 있다(로그 위치는 About 창으로 이동 — D3) |
+| 9 | About 창 닫기(빨간 stoplight 버튼·`⌘W`) | 창이 **숨겨진다**(#88 상주 정책 — 파괴 아님). 트레이 `About` 다시 클릭 시 **같은 창이 최전면으로** 온다 |
+| 10 | `General` 탭 언어 팝업으로 5개 언어 전환 후 About 창 열기 | About 창 라벨이 각 언어로 표시된다. `GitHub`·`GitHub Issues` 만 브랜드라 변하지 않는다 |
+| 11 | ⭐ **About 창을 연 채로**(`General` 탭) 언어를 바꾼다 | **즉시 반영** — 정보 행 라벨·타이틀바(`about.title`)가 새 언어로 바뀐다(#88 상주라 새로 열 필요 없다). About 창을 닫았다 다시 열어도 그 언어가 유지된다 |
+
+> ⚠️ **자동 테스트 없는 근거**: 창 생성·숨김 상주 배선(`WebviewWindowBuilder` +
+> `CloseRequested → prevent_close + hide`)은 Tauri 창 라이브 타입에 붙는 런타임
+> 동작이라 `frontend_wiring.rs` 가 정적으로는 배선 존재를, 이 절이 실제 표시를 검증한다.
 
 ## 📌 실측 결과 (2026-08-31, 이슈 #39 / General 탭 확장)
 

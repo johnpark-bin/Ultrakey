@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "about",
+  "description": "⭐ 이슈 #87 상급 리뷰 #1 — 상주 About 창이 언어 변경(카탈로그 교체) 때 Rust 가 emit 하는 refresh 이벤트를 받으려면 core:event 의 listen 이 필요하다. Tauri v2 는 이 capability 가 없으면 plugin:event|listen 을 ACL 로 막는다(overlay.json 의 같은 주석 근거 — 실제로 막힌 경험이 있다). 대상은 about 창 하나로 한정한다: 설정 창(settings)·권한 모달(permissions)에도 주지 않는다.",
+  "windows": [
+    "about"
+  ],
+  "permissions": [
+    "core:event:default"
+  ]
+}

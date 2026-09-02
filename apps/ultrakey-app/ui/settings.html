@@ -153,9 +153,9 @@
     font-size: 12px;
   }
 
-  #about { margin: 6px 0 14px; padding: 8px 12px; border-radius: 6px;
+  #general-path-info { margin: 10px 0 2px; padding: 8px 12px; border-radius: 6px;
     background: color-mix(in srgb, currentColor 6%, transparent); }
-  #about p { margin: 2px 0; word-break: break-all; }
+  #general-path-info p { margin: 2px 0; word-break: break-all; }
 
   /* ⭐ 이슈 #47 — 로그인 시 실행 행의 버전 버튼을 우측 끝으로 정렬한다(원본
      실측 "첫 행 우측", preferences-ui.md §4.4). .row 가 flex 이므로
@@ -999,20 +999,16 @@
           <input type="checkbox" id="launch-on-login" data-key="general.launchOnLogin" />
           <span id="launch-on-login-label"></span>
         </label>
-        <!-- ⭐ §9 #12(v1.66 (66) 버튼의 클릭 동작)를 클론이 여기서 결정으로 채운다:
-             클릭하면 About 정보(번들 ID·로그 경로·설정 파일 경로)를 펼친다. -->
+        <!-- ⭐ ⭐ §9 #2(이슈 #87) — 버전 버튼은 **유지**하되 About 창을 여는
+             버튼으로 바뀌었다. 원본 버전 버튼은 실측 버튼이고 About 창 오픈이
+             추정(preferences-ui.md §9 Q12)이었는데, 이슈 #87 의 독립 About 창
+             신설이 그 추정 방향을 해소한다(#version-btn 클릭 → open_about_window). -->
         <button id="version-btn"></button>
       </div>
       <p class="hint why" id="launch-on-login-why"></p>
       <!-- ⭐ B-4(이슈 #39, §3.5-a) — `launchOnLoginStatus` 가 `requires-approval`
            일 때만 보이는 안내 행(다른 탭의 renderHiddenNote 와 같은 "② 숨김" 패턴). -->
       <div id="launch-on-login-requires-approval"></div>
-
-      <div id="about" hidden>
-        <p><span id="about-bundle-id-label"></span>: <span id="about-bundle-id"></span></p>
-        <p><span id="about-log-path-label"></span>: <span id="about-log-path"></span></p>
-        <p><span id="about-settings-path-label"></span>: <span id="about-settings-path"></span></p>
-      </div>
 
       <div class="row">
         <!-- ⭐ F-13 — 자동 업데이트 스위치. 원본 실측 그대로의 라벨
@@ -1114,6 +1110,16 @@
           <button id="open-log-folder-btn"></button>
         </div>
         <p class="hint" id="general-event-viewer-hint"></p>
+
+        <!-- ⭐ 이슈 #87 — About 창 신설로 General 탭 상단의 `#about` 블록이
+             사라졌다. 번들 ID·설정 파일 경로 행(About 창에는 로그 위치·설치 위치가
+             가고)은 진단 성격이라 이 Advanced 섹션 진단 버튼 아래로 **이동**(제거
+             아님)한다. 값 채우기(`renderGeneral`)·라벨 배선(`applyStrings`)은
+             그대로 — DOM 위치만 바뀌었다. -->
+        <div id="general-path-info">
+          <p><span id="about-bundle-id-label"></span>: <span id="about-bundle-id"></span></p>
+          <p><span id="about-settings-path-label"></span>: <span id="about-settings-path"></span></p>
+        </div>
       </details>
 
     </section>
@@ -1384,8 +1390,9 @@ if (!tauri || !tauri.core) {
     // "구현 안 됨" 배지 문구를 자리표시자로 재사용한다.
     $("menu-bar-icon-opt").textContent = badgeText;
 
+    // ⭐ 이슈 #87 — 로그 위치 행은 About 창으로 이동해 여기 없다. 남은 두 행은
+    // Advanced 섹션으로 이동했어도 key 는 그대로다.
     $("about-bundle-id-label").textContent = t("settings.general.about.bundle_id");
-    $("about-log-path-label").textContent = t("settings.general.about.log_path");
     $("about-settings-path-label").textContent = t("settings.general.about.settings_path");
   }
 
@@ -2915,8 +2922,9 @@ if (!tauri || !tauri.core) {
 
   function renderGeneral(meta) {
     $("version-btn").textContent = tf("settings.general.version", [meta.version]);
+    // ⭐ 이슈 #87 — About 창 신설로 로그 위치 행은 설정 창에서 빠졌다(About 창으로
+    // 이동). 남은 번들 ID·설정 파일 경로 행은 Advanced 섹션에 있다.
     $("about-bundle-id").textContent = meta.bundleId;
-    $("about-log-path").textContent = meta.logPath;
     $("about-settings-path").textContent = meta.settingsFileExists && meta.settingsPath
       ? meta.settingsPath
       : t("settings.general.about.settings_absent");
@@ -3118,9 +3126,12 @@ if (!tauri || !tauri.core) {
     }
   });
 
+  // ⭐ ⭐ §9 #2(이슈 #87) — 버전 버튼이 About 정보를 펼치던 것을 버리고 **About
+  // 창을 연다**(원본 실측 버튼의 클릭 동작 추정 방향 — preferences-ui.md §9 Q12).
   $("version-btn").addEventListener("click", () => {
-    const about = $("about");
-    about.hidden = !about.hidden;
+    invoke("open_about_window").catch((err) => {
+      showFatal("Failed to open the About window: " + String(err));
+    });
   });
 
   // ⭐ 이슈 #39 Phase 2(A-1·A-2) — 대화상자는 Rust 쪽(`settings_export` 커맨드)

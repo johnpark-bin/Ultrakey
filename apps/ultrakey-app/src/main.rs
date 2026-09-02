@@ -47,7 +47,7 @@ use arc_swap::ArcSwap;
 use objc2::MainThreadMarker;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
-use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
 
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
@@ -1320,6 +1320,12 @@ fn build_settings_state(
 struct AppMeta {
     version: String,
     bundle_id: String,
+    /// ⭐ 이슈 #87 — About 창의 "앱 설치 위치" 행. `.app` 번들 경로를 유도한 값이며,
+    /// 번들 밖(`tauri dev`)에서는 `None` — 프런트가 `about.outside_bundle` 로 대체한다.
+    app_path: Option<String>,
+    /// 제작자 이름 — `package_info().authors` 가 비어 있으면(워크스페이스에
+    /// `authors` 필드 없음) 하드코딩 폴백 "John Park" 을 쓴다(`plan/issue-87` §9 #4).
+    author: String,
     log_path: String,
     settings_path: Option<String>,
     settings_file_exists: bool,
@@ -1343,10 +1349,40 @@ fn log_file_path_display() -> String {
         .unwrap_or_default()
 }
 
+/// `PackageInfo` 의 제작자 필드 — Cargo.toml 의 `[package] authors` 다. 워크스페이스에
+/// 그 필드가 없어 비어 있는 문자열이 오는 것이 기본이라, 비면 하드코딩 "John Park"
+/// 을 폴백으로 쓴다(`plan/issue-87-about-window.md` §9 #4 — `(추정)` 이었다가 구현
+/// 시 폴백 확정).
+fn app_author(app: &tauri::AppHandle) -> String {
+    let authors = app.package_info().authors.trim();
+    if authors.is_empty() {
+        "John Park".to_string()
+    } else {
+        authors.to_string()
+    }
+}
+
+/// `.app` 번들 경로 — `current_exe()`(`<App>.app/Contents/MacOS/<binary>`)의 상위
+/// 3 디렉터리를 걸어 올라가 유도한다. 번들 밖(`tauri dev` → `target/debug/<binary>`)
+/// 은 의미 있는 경로가 아니므로 `None` 이 되고, About 창 프런트가 `about.outside_
+/// bundle` 안내로 대체한다(`plan/issue-87-about-window.md` §5 항목 2).
+fn app_bundle_path() -> Option<String> {
+    if !bundle::is_running_from_app_bundle() {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.as_path();
+    // Contents/MacOS/<binary> → Contents → <App>.app
+    let app_dir = dir.parent()?.parent()?.parent()?;
+    Some(app_dir.display().to_string())
+}
+
 fn build_app_meta(app: &tauri::AppHandle, store: &SettingsStore) -> AppMeta {
     AppMeta {
         version: app.package_info().version.to_string(),
         bundle_id: app.config().identifier.clone(),
+        app_path: app_bundle_path(),
+        author: app_author(app),
         log_path: log_file_path_display(),
         settings_path: store.path().map(|p| p.display().to_string()),
         settings_file_exists: store.path().map(|p| p.exists()).unwrap_or(false),
@@ -1827,6 +1863,64 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     }
 }
 
+/// 이슈 #87 — About 창 부트스트랩. 설정 창과 달리 설정 상태·언어 목록은 필요 없다
+/// (정보 행 + 업데이트 버튼뿐) — 카탈로그 + `AppMeta` + 번들 여부만 실어 보낸다.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AboutBootstrap {
+    locale: String,
+    strings: BTreeMap<String, String>,
+    meta: AppMeta,
+    /// `.app` 번들 밖(`tauri dev`)에서는 `Check for Updates…` 버튼을 비활성화하고
+    /// 설치 위치 행을 `about.outside_bundle` 안내로 대체한다(F-13 과 같은 기준,
+    /// `menu-bar-and-lifecycle.md` §3.3 의 메뉴 항목 비활성과 동일).
+    outside_bundle: bool,
+}
+
+/// 이슈 #87 — `about.html` 이 `invoke` 하는 부트스트랩 커맨드.
+#[tauri::command]
+fn about_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) -> AboutBootstrap {
+    let catalog = state.catalog.load_full();
+    let store = state.store.lock().unwrap();
+    let meta = build_app_meta(&app, &store);
+    drop(store);
+
+    tracing::info!("about_bootstrap command invoked");
+
+    AboutBootstrap {
+        locale: catalog.locale().code().to_string(),
+        strings: catalog.entries(),
+        meta,
+        outside_bundle: !bundle::is_running_from_app_bundle(),
+    }
+}
+
+/// 이슈 #87 — About 창의 `Check for Updates…` 버튼. 얇은 래퍼일 뿐이다 — 실제
+/// 업데이트 확인은 F-13 의 `on_menu_check_for_updates` 가 그대로 담당하고, 진행·
+/// 결과(있음/최신/오류) 표시는 Sparkle 표준 UI 에 위임한다(`auto-update.md` §2
+/// 시나리오 3). `about.html` 은 번들 밖에서 버튼을 비활성화하지만, 메뉴 항목과
+/// 같은 근거로 방어적으로 한 번 더 확인한다.
+#[tauri::command]
+fn check_for_updates(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) {
+    on_menu_check_for_updates(&app, state.inner());
+}
+
+/// 이슈 #87 — About 창의 웹사이트·연락·이슈 링크. WebView 안에서 네비게이션하지
+/// 않고(`open_keyboard_settings` 의 관례, 이슈 #31) 시스템 기본 브라우저로 연다.
+/// 열 URL 은 `about.html` 이 자기 코드 상수로 고정해 보내는 것뿐이므로 앞 쪽에서
+/// http(s) 만 허용해 어뷰징을 방지한다.
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("refusing to open non-http(s) url: {url}"));
+    }
+    if bundle::open_url(&url) {
+        Ok(())
+    } else {
+        Err(format!("failed to open url: {url}"))
+    }
+}
+
 /// ⭐ A-4 — 언어 선택 팝업의 선택지. `Locale::all()` 순서를 그대로 따른다
 /// (en·ko·zh·es·ja). "System" 항목은 여기 없다 — 그것은 카탈로그 키
 /// (`settings.general.language.system`)로 번역되는 유일한 항목이라 프런트가
@@ -2025,6 +2119,10 @@ fn settings_set_general_language(
 
     state.catalog.store(Arc::new(new_catalog));
     rebuild_tray_menu(app, state);
+
+    // ⭐ 이슈 #87 상급 리뷰 #1 — 카탈로그가 바뀌었으므로 상주 About 창 내용·타이틀바를
+    // 즉시 갱신한다(열려 있지 않으면 아무 일도 하지 않는다 — 열릴 때 새 카탈로그를 탐).
+    notify_about_catalog_changed(app, state);
 
     current_settings_state(state)
 }
@@ -2629,6 +2727,10 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     state.catalog.store(Arc::new(new_catalog));
 
     rebuild_tray_menu(app, state);
+
+    // ⭐ 이슈 #87 상급 리뷰 #1 — import 로 카탈로그가 교체됐으므로(언어가 바뀌었는지
+    // 여부와 무관하게 방어적으로) 상주 About 창도 갱신한다(열려 있지 않으면 무연산).
+    notify_about_catalog_changed(app, state);
     Ok(())
 }
 
@@ -2887,6 +2989,92 @@ fn eventviewer_clear(state: State<'_, Arc<AppState>>) {
     if let Ok(mut buf) = state.event_viewer_buffer.lock() {
         buf.clear();
     }
+}
+
+// ============================================================================
+// 이슈 #87 — About 정보 창. `plan/issue-87-about-window.md` — D1(별도 `about.html`
+// + Event Viewer 빌더 패턴)·D5(메뉴 라우팅 분리)·#88 정책(닫아도 숨김 상주).
+// ============================================================================
+
+const ABOUT_WINDOW_LABEL: &str = "about";
+
+/// ⭐ 이슈 #87 상급 리뷰 #1 — 상주 About 창의 언어 변경 스테일니스 수정.
+///
+/// About 창은 #88 정책(닫아도 `hide` 상주, 파괴·재생성 없음)이라, 열어 본 적이
+/// 있는 채로 언어를 바꾸면 생성 시 부트스트랩된 문자열·타이틀바가 **앱 재시작까지
+/// 이전 언어로 남는다**(설정 창은 언어 변경 주체라 스스로 재부트스트랩하지만 About
+/// 창에는 그 경로가 없다). 카탈로그가 교체되는 두 시점 — 언어 선택(`settings_set_
+/// general_language`)과 설정 import 교체(`reload_settings_after_replace`) — 에서
+/// 이 함수를 호출해 About 창에 갱신 이벤트를 보낸다.
+///
+/// - 네이티브 타이틀바는 여기서 `set_title`(새 카탈로그의 `about.title`)로 직접
+///   갱신한다(Rust 쪽이 카탈로그를 쥐고 있어 가장 저렴하다).
+/// - 창 내용(정보 행 라벨·번들 여부)은 `about.html` 이 `catalog-changed` 를
+///   `listen` 하여 `about_bootstrap` 을 다시 부르고 다시 그린다.
+/// - 창이 아직 없으면 아무 일도 하지 않는다 — 열릴 때 부트스트랩이 새 카탈로그를
+///   타므로 빈 구간이 없다.
+const CATALOG_CHANGED_EVENT: &str = "catalog-changed";
+
+fn notify_about_catalog_changed(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) else {
+        return;
+    };
+    let catalog = state.catalog.load_full();
+    let _ = window.set_title(catalog.get("about.title"));
+    let _ = window.emit(CATALOG_CHANGED_EVENT, ());
+    tracing::info!("about window notified of catalog change");
+}
+
+/// 트레이 메뉴 `About`·설정 창의 버전 버튼(`#version-btn`)이 여는 독립 정보 창.
+///
+/// Event Viewer(`open_event_viewer`)와 같은 동적 생성 패턴을 그대로 따른다 —
+/// `tauri.conf.json` 에 정적 선언하지 않고, 이미 열려 있으면 새로 만들지 않고
+/// 최전면으로 올린다. ⭐ #88 정책 — 설정 창과 같은 "닫으면 `prevent_close()` +
+/// `hide()` 로 숨겨 상주" 배선을 건다(닫았다가 다시 열 수 없는 기존 결함을
+/// 재현하지 않는다).
+fn show_about_window(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    if let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let catalog = state.catalog.load_full();
+    let title = catalog.get("about.title").to_string();
+    match tauri::WebviewWindowBuilder::new(
+        app,
+        ABOUT_WINDOW_LABEL,
+        tauri::WebviewUrl::App("about.html".into()),
+    )
+    .title(title)
+    .inner_size(420.0, 360.0)
+    .resizable(false)
+    .center()
+    .build()
+    {
+        Ok(window) => {
+            let window_for_close = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    tracing::info!(
+                        "about window close requested; hiding instead of destroying (issue #88 policy)"
+                    );
+                    api.prevent_close();
+                    let _ = window_for_close.hide();
+                }
+            });
+            tracing::info!("about window opened");
+        }
+        Err(e) => tracing::error!(error = %e, "failed to open about window"),
+    }
+}
+
+/// `settings.html` General 탭의 버전 버튼(`#version-btn`) — ⭐ 이슈 #87(#9 상급
+/// 리뷰 #2)으로 클릭 동작이 "About 정보 펼치기"에서 **About 창 열기**로 바뀌었다.
+/// 트레이 메뉴 `ABOUT` 분기와 같은 경로(`show_about_window`)를 공유한다.
+#[tauri::command]
+fn open_about_window(app: tauri::AppHandle, state: State<'_, Arc<AppState>>) {
+    show_about_window(&app, state.inner());
 }
 
 // ============================================================================
@@ -4039,6 +4227,11 @@ fn main() {
             open_event_viewer,
             eventviewer_poll,
             eventviewer_clear,
+            // ── 이슈 #87 — 독립 About 정보 창 ─────────────────────────────
+            about_bootstrap,
+            open_about_window,
+            check_for_updates,
+            open_external_url,
             // ── F-12 라이선싱(이슈 #59) — General 탭 UI 백엔드 ──────────────
             license_state,
             license_activate,
@@ -4696,8 +4889,8 @@ fn hide_modal(handle: &tauri::AppHandle) {
 /// 도달하는 것은 설정 창이 파괴됐다는 뜻의 예외 상황이다 — 재생성 코드는
 /// 만들지 않는다(계획 D1: 상주가 재생성보다 최소 변경).
 ///
-/// 메뉴바 `Settings…`·`About`(현행은 같은 창, #87 소관)·이슈 #68 재실행 신호가
-/// 이 함수를 공통으로 탄다.
+/// 메뉴바 `Settings…`·이슈 #68 재실행 신호가 이 함수를 공통으로 탄다. ⭐ 이슈
+/// #87 — `About` 은 더 이상 여기로 오지 않는다(`show_about_window` 로 분리).
 fn show_settings_window(handle: &tauri::AppHandle) {
     on_main_thread(handle, "settings", "show_settings", |w| {
         // ⭐ 이슈 #68 — 이미 보이는 창을 다시 `show()` 하지 않는다. 두 번째
@@ -5038,6 +5231,9 @@ fn build_normal_menu(
     // 중이라, "General 탭으로 자동 전환 + About 섹션 자동 펼침"까지는 여기서
     // 배선하지 않았다 — 사용자가 창이 열리면 General 탭과 버전 버튼을 직접
     // 눌러야 한다. 후속 과제로 남긴다(최종 보고 참고).
+    // ⭐⭐ 2026-09-02 정정(이슈 #87) — 사용자 피드백("About 이 설정 창을 연다")이
+    // 이 결정을 뒤집었다. About 은 이제 **독립 정보 창**(`ui/about.html` +
+    // `show_about_window`)을 연다. 위 주석은 결정 내역의 역사 기록으로 남긴다.
     let about_item = MenuItem::with_id(
         handle,
         menu_ids::ABOUT,
@@ -5336,7 +5532,10 @@ fn handle_menu_event(app: &tauri::AppHandle, state: &Arc<AppState>, event: MenuE
     // 꺼내 쓰면 `AsRef` 구현 다중화로 인한 타입 추론 모호성 여지가 없다.
     match event.id().0.as_str() {
         menu_ids::IGNORE_APP => on_menu_ignore_app(state),
-        menu_ids::SETTINGS | menu_ids::ABOUT => show_settings_window(app),
+        // ⭐ 이슈 #87 — About 이 설정 창을 여는 라우팅(`SETTINGS | ABOUT`)을 분리
+        // 했다. 이제 About 은 독립 정보 창(`show_about_window`)을 연다.
+        menu_ids::SETTINGS => show_settings_window(app),
+        menu_ids::ABOUT => show_about_window(app, state),
         menu_ids::CHECK_FOR_UPDATES => on_menu_check_for_updates(app, state),
         menu_ids::RELAUNCH => on_menu_relaunch(app, state),
         menu_ids::QUIT => on_menu_quit(app, state),

@@ -42,6 +42,13 @@ fn read_eventviewer_html() -> String {
         .unwrap_or_else(|e| panic!("ui/eventviewer.html 을 읽지 못했다({path:?}): {e}"))
 }
 
+/// ⭐ 이슈 #87 — 독립 About 정보 창 HTML.
+fn read_about_html() -> String {
+    let path = manifest_dir().join("ui/about.html");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("ui/about.html 을 읽지 못했다({path:?}): {e}"))
+}
+
 /// F-03 Seek 검색 바(이슈 #67) — 오버레이 검색 바 HTML.
 fn read_searchbar_html() -> String {
     let path = manifest_dir().join("ui/overlay-searchbar.html");
@@ -221,14 +228,33 @@ fn extract_script_block(html: &str) -> &str {
     &html[tag_end..end]
 }
 
-/// 한 줄짜리 `// ...` 주석을 잘라낸다(이 파일은 문자열 리터럴 안에 `//` 를 쓰지
-/// 않으므로 줄 단위로 첫 `//` 부터 잘라내는 순수한 방식으로 충분하다).
+/// 한 줄짜리 `// …` 주석을 잘라낸다. ⭐ 2026-09-02(이슈 #87) — 큰따옴표 안의
+/// `//`(예: URL 검증 코드의 `"https://"`)는 주석이 아니다. 큰따옴표를 번갈아
+/// 토글하며 **문자열 바깥**의 `//` 만 잘라낸다(문자열 안 `//` 를 지우면 따옴표
+/// 균형이 깨져 그 뒤 모든 리터럴 추출이 어긋난다).
 fn strip_line_comments(script: &str) -> String {
     script
         .lines()
-        .map(|line| match line.find("//") {
-            Some(idx) => &line[..idx],
-            None => line,
+        .map(|line| {
+            let mut in_string = false;
+            let mut split = None;
+            let mut chars = line.char_indices().peekable();
+            while let Some((i, c)) = chars.next() {
+                match c {
+                    '"' => in_string = !in_string,
+                    '/' if !in_string => {
+                        if let Some(&(_, '/')) = chars.peek() {
+                            split = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match split {
+                Some(idx) => &line[..idx],
+                None => line,
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -421,6 +447,9 @@ fn settings_html_에_하드코딩된_영어_문장이_없다() {
         // 커맨드가 조용히 Ok(()) 로 처리하므로 이 문구는 `open` spawn 실패에만
         // 도달한다.
         "Failed to open the log folder: ",
+        // ⭐ 이슈 #87 — `open_about_window` invoke 실패 진단 문구. 위 항목들과
+        // 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
+        "Failed to open the About window: ",
         // ⭐ 이슈 #46 — `settings_copy_common_to_device` invoke 실패 진단 문구.
         // 위 항목들과 같은 이유(진단 전용, 카탈로그를 못 믿을 수도 있는 경로).
         "Failed to copy settings: ",
@@ -2506,5 +2535,302 @@ fn settings_html_에_탭_전환_페이드_배선이_있다() {
     assert!(
         html.contains("prefers-reduced-motion: reduce"),
         "settings.html 의 탭 페이드가 감소 모션 대응(prefers-reduced-motion)을 갖지 않는다(UXR-07)"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⭐⭐ 이슈 #87 — 독립 About 정보 창(plan/issue-87-about-window.md D1·D3·D5·D6).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 이슈 #87(D5) — 트레이 메뉴 `About` 이 설정 창을 여는 라우팅에서 분리됐다:
+/// `SETTINGS` 는 설정 창, `ABOUT` 은 `show_about_window` 일을 각각 담당하고,
+/// `ABOUT_WINDOW_LABEL`·`show_about_window`·`about.html` 이 존재한다. 이전의
+/// 결합 라우팅(`SETTINGS | ABOUT`)은 사라졌다.
+#[test]
+fn main_rs의_메뉴_라우팅이_settings와_about을_분리한다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("menu_ids::SETTINGS => show_settings_window(app)"),
+        "main.rs 에 SETTINGS → show_settings_window 라우팅이 없다(#87 D5)"
+    );
+    assert!(
+        main_rs.contains("menu_ids::ABOUT => show_about_window(app, state)"),
+        "main.rs 에 ABOUT → show_about_window 라우팅이 없다(#87 D5)"
+    );
+    assert!(
+        !main_rs.contains("menu_ids::SETTINGS | menu_ids::ABOUT"),
+        "main.rs 에 SETTINGS | ABOUT 결합 라우팅이 남아 있다 — About 이 여전히 설정 창을 연다(#87 D5)"
+    );
+    assert!(
+        main_rs.contains("const ABOUT_WINDOW_LABEL: &str = \"about\";"),
+        "main.rs 에 ABOUT_WINDOW_LABEL 상수가 없다(#87 D5)"
+    );
+    assert!(
+        main_rs.contains("fn show_about_window("),
+        "main.rs 에 show_about_window 함수가 없다(#87 D5)"
+    );
+    assert!(
+        main_rs.contains("about.html"),
+        "main.rs 의 show_about_window 가 about.html 을 로드하지 않는다(#87 D1)"
+    );
+}
+
+/// 이슈 #87(D1·#88 정합) — `show_about_window` 는 About 창을 닫으면 파괴하지
+/// 않고 숨긴다(설정 창의 close→hide 상주 정책과 동일). 가드: 이 배선이 없으면
+/// "About 을 닫았다가 다시 열 수 없다"(#88 결함의 재현)로 회귀한다.
+#[test]
+fn about_창이_닫기_시_숨김_상주로_배선된다() {
+    let main_rs = read_main_rs();
+    let about_start = main_rs
+        .find("fn show_about_window(")
+        .expect("main.rs 에 show_about_window 가 없다");
+    let about_body = &main_rs[about_start..];
+    assert!(
+        about_body.contains("CloseRequested"),
+        "show_about_window 의 CloseRequested 배선이 없다(#88 정책)"
+    );
+    assert!(
+        about_body.contains("prevent_close"),
+        "show_about_window 에 prevent_close() 가 없다(#88 정책)"
+    );
+    assert!(
+        about_body.contains(".hide()"),
+        "show_about_window 에 hide() 가 없다(#88 정책)"
+    );
+}
+
+/// 이슈 #87(D3·§9 #2) — General 탭 상단의 `#about` 블록은 제거됐고(로그 위치는
+/// About 창으로, 번들 ID·설정 파일 경로는 Advanced 섹션으로), 버전 버튼
+/// `#version-btn` 은 **유지**하되 `open_about_window` 를 invoke 하는 About 창
+/// 오픈 버튼으로 바뀌었다.
+#[test]
+fn settings_html의_about_블록이_제거되고_버전_버튼은_about_창을_연다() {
+    let html = read_settings_html();
+    assert!(
+        !html.contains(r#"id="about""#) && !html.contains(r#"id="about" "#),
+        "settings.html 에 General 탭 #about 블록이 남아 있다 — About 정보는 About 창으로 이동했다(#87 D3)"
+    );
+    assert!(
+        !html.contains("about-log-path"),
+        "settings.html 에 about-log-path(로그 위치 행)가 남아 있다 — About 창으로 이동했다(#87 D3)"
+    );
+    assert!(
+        html.contains(r#"id="about-bundle-id""#) && html.contains(r#"id="about-settings-path""#),
+        "settings.html 에 번들 ID·설정 파일 경로 행이 없다 — Advanced 로 이동해야 한다(#87 D3)"
+    );
+    assert!(
+        html.contains("general-path-info"),
+        "settings.html Advanced 섹션에 #general-path-info(번들 ID·설정 경로) 블록이 없다(#87 D3)"
+    );
+    assert!(
+        html.contains(r#"id="version-btn""#),
+        "settings.html 의 #version-btn 이 제거됐다 — §9 #2 는 유지다(#87)"
+    );
+    assert!(
+        html.contains(r#"invoke("open_about_window""#),
+        "settings.html 의 #version-btn 리스너가 open_about_window 를 invoke 하지 않는다(#87 §9 #2)"
+    );
+}
+
+/// 이슈 #87(D1·§3.2) — `about.html` 이 존재하고 핵심 커맨드 3종을 invoke 한다.
+/// `open_about_window` 는 settings.html(버전 버튼)이 호출하는 것이므로 여기 목록에
+/// 없다 — 시기가 다르게 배선된 진입점이다.
+#[test]
+fn about_html이_부트스트랩_등_커맨드를_invoke_한다() {
+    let html = read_about_html();
+    for command in ["about_bootstrap", "check_for_updates", "open_external_url"] {
+        assert!(
+            html.contains(&format!("invoke(\"{command}\"")),
+            "ui/about.html 이 invoke(\"{command}\", …) 를 호출하지 않는다"
+        );
+    }
+}
+
+/// ⭐ 이슈 #87 — About 창도 번역 표면이다(카탈로그를 태워 온다). `<script>` 안에
+/// 사용자 대면 영어 문장이 하드코딩되어 있지 않아야 한다 — settings.html 의 같은
+/// 규약을 그대로 따른다. 허용 목록은 부트스트랩 경로가 죽었을 때의 진단 문구
+/// 뿐이다(카탈로그에 기댈 수 없는 최후 수단).
+#[test]
+fn about_html_에_하드코딩된_영어_문장이_없다() {
+    const ALLOWED_DIAGNOSTIC_LITERALS: &[&str] = &[
+        "Failed to load: window.__TAURI__ is unavailable (check withGlobalTauri in tauri.conf.json).",
+        "Failed to load the About window: ",
+        "Failed to open link: ",
+        "Failed to check for updates: ",
+    ];
+
+    let html = read_about_html();
+    let script = extract_script_block(&html);
+    let script_no_comments = strip_line_comments(script);
+
+    let offenders: Vec<String> = extract_double_quoted_literals(&script_no_comments)
+        .into_iter()
+        .filter(|s| s.contains(' '))
+        .filter(|s| !ALLOWED_DIAGNOSTIC_LITERALS.contains(&s.as_str()))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "about.html 의 <script> 안에서 허용 목록 밖의 영어 문장 리터럴을 찾았다: \
+         {offenders:?} — 카탈로그 키를 통해 t()/tf() 로 가져오거나, 정말 진단 전용 \
+         문구라면 ALLOWED_DIAGNOSTIC_LITERALS 에 추가하고 그 근거를 남겨라."
+    );
+}
+
+/// 이슈 #87(D5) — About 창과 관련된 신규 커맨드 4종이 `generate_handler!` 등록
+/// 목록에 전부 있다(선언만 하고 등록 누락하면 프런트 invoke 가 즉시 실패한다 —
+/// `키보드_복사_커맨드가_invoke_배선되어_있다` 패턴).
+#[test]
+fn 이슈87_커맨드가_generate_handler_에_등록되어_있다() {
+    let main_rs = read_main_rs();
+    for command in [
+        "about_bootstrap",
+        "open_about_window",
+        "check_for_updates",
+        "open_external_url",
+    ] {
+        assert!(
+            main_rs.contains(&format!("fn {command}(")),
+            "main.rs 에 {command} 커맨드 선언이 없다"
+        );
+        assert!(
+            main_rs.contains(&format!("{command},")),
+            "generate_handler! 등록 목록에 {command} 가 없다"
+        );
+    }
+}
+
+/// 이슈 #87(D6) — `about.*` 신규 키 10종이 5개 카탈로그 전부에 있고, About 창
+/// 행 값에 쓰는 `settings.general.version` 도 유지된다. ⭐ URL 라벨 3종의 코드
+/// 값(`GitHub`·`GitHub Issues`)도 카탈로그 값과 일치해야 한다(§9 #1 — 번역
+/// 없이 고유 브랜드).
+#[test]
+fn 이슈87의_about_점_키가_다섯_카탈로그_모두에_있다() {
+    let required = [
+        "about.title",
+        "about.app_name",
+        "about.version",
+        "about.author",
+        "about.website",
+        "about.contact",
+        "about.issues",
+        "about.app_path",
+        "about.log_path",
+        "about.outside_bundle",
+        "settings.general.version",
+    ];
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        for key in required {
+            assert!(
+                keys.contains(key),
+                "{locale}.json 에 {key} 키가 없다 (#87 D6)"
+            );
+        }
+        // ⭐ §9 #1 — 웹사이트·연락 라벨은 번역하지 않는다(고유 브랜드). 값은
+        // 카탈로그 프런트가 그대로 그린다(이 테스트의 실측 선언).
+        let catalog = read_catalog(locale);
+        assert_eq!(
+            catalog["about.website"].as_str(),
+            Some("GitHub"),
+            "{locale}.json 의 about.website 가 GitHub 브랜드가 아니다(#87 §9 #1)"
+        );
+        assert_eq!(
+            catalog["about.contact"].as_str(),
+            Some("GitHub Issues"),
+            "{locale}.json 의 about.contact 가 GitHub Issues 브랜드가 아니다(#87 §9 #1)"
+        );
+    }
+}
+
+/// 이슈 #87(D6) — `settings.general.about.log_path` 키는 About 창 키로 재배치
+/// 됐다(`about.log_path`). 흔적만 남기고 지우지 않은 것과 달리, 카탈로그에서는
+/// **실제로 제거**되어야 한다 — 못 쓰이는 키가 남으면 로케일 정합 테스트가
+/// 어긋나진 않아도 drift 가 된다.
+#[test]
+fn 이슈87에서_settings_about_log_path_키가_제거되었다() {
+    for locale in LOCALES {
+        let keys = flatten_catalog(&read_catalog(locale));
+        assert!(
+            !keys.contains("settings.general.about.log_path"),
+            "{locale}.json 에 settings.general.about.log_path 가 남아 있다 — about.log_path 로 재배치했다(#87 D6)"
+        );
+    }
+}
+
+/// 이슈 #87(D3) — `AppMeta` 에 설치 위치 필드(`app_path`)가 있고 그 원천 함수
+/// (`app_bundle_path`)가 존재한다. 카메라 케이스 직렬화(`camelCase`)의 `appPath`
+/// 도 함께 확인한다 — 프런트 `about.html` 이 `meta.appPath` 를 읽는다.
+#[test]
+fn main_rs의_app_meta에_app_path_필드와_원천_함수가_있다() {
+    let main_rs = read_main_rs();
+    assert!(
+        main_rs.contains("fn app_bundle_path("),
+        "main.rs 에 app_bundle_path() 함수가 없다(#87 D3)"
+    );
+    assert!(
+        main_rs.contains("app_path: app_bundle_path()"),
+        "build_app_meta 가 app_path 필드를 app_bundle_path() 로 채우지 않는다(#87 D3)"
+    );
+    assert!(
+        read_about_html().contains("meta.appPath"),
+        "about.html 이 meta.appPath 를 읽지 않는다 — AppMeta 직렬화 이름이 appPath 임이 어긋났다(#87 D3)"
+    );
+}
+
+/// ⭐ 이슈 #87 상급 리뷰 #1 — 상주 About 창의 언어 변경 스테일니스 수정이 배선돼
+/// 있다(#88 상주로 부트스트랩이 창 생성 시 1회뿐이라, 열어 본 채로 언어를 바꾸면
+/// 앱 재시작까지 이전 언어로 남는다):
+///
+/// ① Rust 가 카탈로그 교체 시점 둘(언어 선택·설정 import 교체)에
+///    `notify_about_catalog_changed` 를 부른다(네이티브 타이틀바 `set_title` +
+///    `catalog-changed` emit).
+/// ② `about.html` 이 `catalog-changed` 를 listen 하여 `about_bootstrap` 을 다시
+///    불러 정보 행을 갱신한다.
+/// ③ about 창이 listen 하려면 capability 로 `core:event:default`(listen 포함)가
+///    열려 있어야 한다 — 없으면 ACL 이 막아 이 배선이 통째로 조용히 죽는다
+///    (overlay.json 의 같은 근거).
+#[test]
+fn about_창_언어_변경_즉시_반영_배선이_있다() {
+    let main_rs = read_main_rs();
+    for needle in [
+        "fn notify_about_catalog_changed(",
+        "const CATALOG_CHANGED_EVENT: &str = \"catalog-changed\";",
+        "window.set_title(catalog.get(\"about.title\"))",
+        "window.emit(CATALOG_CHANGED_EVENT, ())",
+        // 언어 선택 경로(settings_set_general_language)와 import 교체 경로
+        // (reload_settings_after_replace) 두 지점에 모두 배선돼 있어야 한다.
+        "notify_about_catalog_changed(app, state);\n\n    current_settings_state(state)",
+        "notify_about_catalog_changed(app, state);\n    Ok(())",
+    ] {
+        assert!(
+            main_rs.contains(needle),
+            "main.rs 에 {needle:?} 이 없다 — About 창 언어 갱신 배선이 빠졌다(이슈 #87 상급 #1)"
+        );
+    }
+
+    let about = read_about_html();
+    assert!(
+        about.contains(r#"listen("catalog-changed""#),
+        "about.html 이 catalog-changed 를 listen 하지 않는다 — 재부트스트랩 경로가 없다(이슈 #87 상급 #1)"
+    );
+
+    let cap_path = manifest_dir().join("capabilities/about.json");
+    let cap_raw = std::fs::read_to_string(&cap_path)
+        .unwrap_or_else(|e| panic!("capabilities/about.json 을 읽지 못했다({cap_path:?}): {e}"));
+    let cap: serde_json::Value = serde_json::from_str(&cap_raw)
+        .unwrap_or_else(|e| panic!("capabilities/about.json 파싱 실패({cap_path:?}): {e}"));
+    assert_eq!(
+        cap["windows"],
+        serde_json::json!(["about"]),
+        "capabilities/about.json 의 windows 가 about 창만 가리키지 않는다(이슈 #87 상급 #1)"
+    );
+    let has_event_listen = cap["permissions"]
+        .as_array()
+        .map(|a| a.iter().any(|p| p == "core:event:default"))
+        .unwrap_or(false);
+    assert!(
+        has_event_listen,
+        "capabilities/about.json 에 core:event:default 가 없다 — about 창 listen 이 ACL 에 막힌다(이슈 #87 상급 #1)"
     );
 }
