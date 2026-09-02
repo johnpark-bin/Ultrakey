@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- ⭐ 이슈 #87 — 독립 About 정보 창. "Ultrakey" 는 브랜드 고유명사라 번역
+     대상이 아니다(eventviewer.html 과 같은 근거). 실제 창 제목(타이틀바)은 Rust 쪽
+     WebviewWindowBuilder 가 카탈로그 `about.title` 로 정한다. -->
+<title>Ultrakey — About</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    background: Canvas;
+    color: CanvasText;
+    overflow: auto;
+  }
+
+  /* ── 브랜드 헤더 ─────────────────────────────────────────────────────── */
+  .brand {
+    padding: 18px 20px 6px;
+  }
+  .brand .name { font-size: 15px; font-weight: 600; }
+
+  /* ── 정보 표 ────────────────────────────────────────────────────────── */
+  dl.info { margin: 0; padding: 0 0 12px; }
+  .row {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 3px 20px;
+  }
+  .row dt {
+    flex: 0 0 auto; min-width: 110px;
+    color: color-mix(in srgb, currentColor 55%, transparent);
+  }
+  .row dd { margin: 0; word-break: break-all; }
+  .row a { color: Highlight; text-decoration: none; }
+  .row a:hover { text-decoration: underline; }
+  .row a:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; border-radius: 3px; }
+  .outside { opacity: .75; }
+
+  /* ⭐ 설치·로그 위치는 파일 경로라 고정 폭으로 보여준다(eventviewer.html 의
+     .mono 와 같은 어휘). */
+  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }
+
+  /* ── 하단 액션 ──────────────────────────────────────────────────────── */
+  .actions {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+    padding: 14px 20px 16px;
+    border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+  .actions button {
+    all: unset; box-sizing: border-box; cursor: pointer; font: inherit;
+    padding: 5px 12px; border-radius: 6px;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  }
+  .actions button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .actions button:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
+  .actions button:disabled { opacity: .45; cursor: default; }
+  .hint { margin: 0; font-size: 12px; opacity: .8; }
+
+  /* ── 치명 오류(부트스트랩 경로가 죽었을 때만) ────────────────────────── */
+  #fatal {
+    padding: 16px 20px;
+  }
+  #fatal[hidden] { display: none; }
+  #fatal p { margin: 0; }
+</style>
+</head>
+<body>
+
+<div id="shell">
+  <header class="brand">
+    <!-- ⭐ 브랜드 고유명사 — 번역하지 않는다. -->
+    <div class="name">Ultrakey</div>
+  </header>
+
+  <dl class="info">
+    <div class="row"><dt id="app-name-label"></dt><dd>Ultrakey</dd></div>
+    <div class="row"><dt id="version-label"></dt><dd id="version"></dd></div>
+    <div class="row"><dt id="author-label"></dt><dd id="author"></dd></div>
+    <div class="row"><dt id="website-label"></dt><dd><a href="#" id="website-link"></a></dd></div>
+    <div class="row"><dt id="contact-label"></dt><dd><a href="#" id="contact-link"></a></dd></div>
+    <div class="row"><dt id="issues-label"></dt><dd><a href="#" id="issues-link"></a></dd></div>
+    <div class="row"><dt id="app-path-label"></dt><dd id="app-path" class="mono"></dd></div>
+    <div class="row"><dt id="log-path-label"></dt><dd id="log-path" class="mono"></dd></div>
+  </dl>
+
+  <footer class="actions">
+    <button id="check-for-updates-btn"></button>
+    <p class="hint" id="outside-bundle" hidden></p>
+  </footer>
+</div>
+
+<div id="fatal" hidden>
+  <p id="fatal-body"></p>
+</div>
+
+<script type="module">
+// ⭐ settings.html 과 같은 방어적 부트스트랩 패턴(index.html 가 최초다) — 백지로
+// 뜨는 실패 모드를 다시 만들지 않는다. window.__TAURI__ 부재·bootstrap 실패·렌더
+// 예외를 전부 잡아 #fatal 에 진단 문구를 낸다.
+//
+// 아래 영어 하드코딩 문구는 D4("문자열은 전부 카탈로그에서")와 충돌하지 않는다 —
+// 카탈로그 자체를 가져오는 경로가 죽었을 때 쓰는 최후 수단이라 카탈로그에 기댈 수
+// 없다(settings.html 의 동일 주석 참고).
+const { invoke } = window.__TAURI__.core;
+
+const $ = (id) => document.getElementById(id);
+
+let STRINGS = {};
+function t(key) {
+  return Object.prototype.hasOwnProperty.call(STRINGS, key) ? STRINGS[key] : key;
+}
+function tf(key, args) {
+  let template = t(key);
+  args.forEach((arg, i) => {
+    template = template.split(`{${i}}`).join(arg);
+  });
+  return template;
+}
+
+function showFatal(reason) {
+  $("shell").hidden = true;
+  $("fatal-body").textContent = reason;
+  $("fatal").hidden = false;
+}
+
+const tauri = window.__TAURI__;
+if (!tauri || !tauri.core) {
+  showFatal("Failed to load: window.__TAURI__ is unavailable (check withGlobalTauri in tauri.conf.json).");
+} else {
+  // ⭐ 이슈 #87 §9 #1 — URL 3종(웹사이트·연락·이슈 등록) 전부 레포 URL 한 곳으로
+  // 연결한다(2026-09-02 호출 세션 확정). 연락 라벨은 "GitHub Issues" 로 표기
+  // (별도 이메일 없음), 각 라벨 값은 카탈로그 키가 아니라 아래 상수다 — 번역하지
+  // 않고 고유 브랜드로 유지한다(§9 #1: `about.website` → `GitHub`·`about.contact`
+  // → `GitHub Issues`).
+  const WEBSITE_URL = "https://github.com/johnpark-bin/Ultrakey";
+  const LINK_IDS = ["website-link", "contact-link", "issues-link"];
+
+  function applyStrings(meta, outsideBundle) {
+    $("app-name-label").textContent = t("about.app_name");
+    $("version").textContent = tf("settings.general.version", [meta.version]);
+    $("version-label").textContent = t("about.version");
+    $("author").textContent = meta.author;
+    $("author-label").textContent = t("about.author");
+
+    // ⭐ §9 #1 — 웹사이트·연락 라벨은 번역하지 않는다(고유 브랜드). 값(`dd`)은
+    // 클릭 가능한 URL 자체를 보여준다.
+    $("website-link").textContent = WEBSITE_URL;
+    $("website-label").textContent = t("about.website");
+    $("contact-link").textContent = WEBSITE_URL;
+    $("contact-label").textContent = t("about.contact");
+    $("issues-link").textContent = WEBSITE_URL;
+    $("issues-label").textContent = t("about.issues");
+
+    $("app-path").textContent = meta.appPath || t("about.outside_bundle");
+    if (!meta.appPath) $("app-path").classList.add("outside");
+    $("app-path-label").textContent = t("about.app_path");
+    $("log-path").textContent = meta.logPath || "—";
+    $("log-path-label").textContent = t("about.log_path");
+
+    // ⭐ F-13 — 번들 밖(`tauri dev`)에서는 확인할 대상 자체가 없다. 메뉴 항목과
+    // 같은 기준으로 비활성화하고 안내 문구를 함께 보여준다(`about.outside_bundle`).
+    $("check-for-updates-btn").textContent = t("menu.check_for_updates");
+    $("check-for-updates-btn").disabled = outsideBundle;
+    $("outside-bundle").textContent = t("about.outside_bundle");
+    $("outside-bundle").hidden = !outsideBundle;
+  }
+
+  async function load() {
+    try {
+      const bootstrap = await invoke("about_bootstrap");
+      STRINGS = bootstrap.strings;
+      applyStrings(bootstrap.meta, bootstrap.outsideBundle);
+      document.title = t("about.title");
+    } catch (err) {
+      showFatal("Failed to load the About window: " + String(err));
+    }
+  }
+
+  for (const id of LINK_IDS) {
+    $(id).addEventListener("click", (e) => {
+      e.preventDefault();
+      invoke("open_external_url", { url: WEBSITE_URL }).catch((err) => {
+        showFatal("Failed to open link: " + String(err));
+      });
+    });
+  }
+
+  $("check-for-updates-btn").addEventListener("click", () => {
+    // ⭐ D4 — 진행·결과 표시는 Sparkle 표준 UI 가 전부 처리한다. 이 버튼은
+    // `check_for_updates` 커맨드(＝F-13 `on_menu_check_for_updates` 래퍼)를 부를
+    // 뿐이다.
+    invoke("check_for_updates").catch((err) => {
+      showFatal("Failed to check for updates: " + String(err));
+    });
+  });
+
+  load();
+}
+</script>
+</body>
+</html>
