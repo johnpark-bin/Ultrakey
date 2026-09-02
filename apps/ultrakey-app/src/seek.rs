@@ -63,7 +63,8 @@ use ultrakey_overlay::renderer::OverlayRenderer;
 use ultrakey_seek::{detect_candidates, CandidateSource, DetectionParams, TextCandidate};
 use ultrakey_seek_session::keys::{classify, SessionKey};
 use ultrakey_seek_session::{
-    ActivationPath, ClickExecutor, ClickSettings, SeekConfig, SeekSessionMachine, SessionEffect,
+    ActivationPath, ClickExecutor, ClickSettings, CloseReason, SeekConfig, SeekSessionMachine,
+    SessionEffect,
 };
 
 use crate::overlay::{
@@ -118,6 +119,14 @@ pub enum SeekSignal {
     /// 은 같은 저장 갱신에서 태어나므로(A6 — 단일 소스 → 단일 신호 원칙)
     /// 함께 실어 보낸다.
     ConfigChanged(SeekConfig, ClickSettings),
+    /// ⭐(이슈 #93) — 웹뷰 `<input>`(인풋 박스 모드)이 조합/입력 후 디바운스해
+    /// 보낸 **완성된 쿼리**. `set_query_external` 로 반영된다 — F-02 검출
+    /// 재실행 없이 이미 캡처된 후보를 필터링만 갱신한다.
+    SetQuery(String),
+    /// ⭐(이슈 #93) — 검색 바 창이 **키 윈도우 자격을 잃었다**(타 앱 클릭 등).
+    /// 인풋 박스 모드에서 문자 통과가 다른 앱으로 누출되는 것을 막기 위해
+    /// 세션을 닫는다(`defocused` — Plan §3 D7, §9 #11).
+    ResignedKey,
     /// 워커를 끝낸다. 지금은 어디서도 보내지 않는다(앱은 프로세스 종료로 끝난다) —
     /// 워커 루프(`run_worker`)를 유한하게 만들 수 있는 신호가 이것뿐이라는 것을
     /// 이음매로 남겨 둔다(향후 유닛 테스트·정상 종료 경로가 쓸 자리).
@@ -126,12 +135,17 @@ pub enum SeekSignal {
 }
 
 /// 워커가 세션 하나 열 때마다 필요한 화면 스냅샷 — 메인 스레드에서만 얻을 수
-/// 있는 값들(`NSScreen`·다크 모드·모션 축소·커서 위치)을 한 번에 담는다.
+/// 있는 값들(`NSScreen`·다크 모드·모션 축소·커서 위치·**최전면 앱**)을 한 번에
+/// 담는다.
 struct ActivationSnapshot {
     displays: Vec<ultrakey_overlay::OverlayDisplay>,
     appearance: ultrakey_overlay::Appearance,
     reduce_motion: bool,
     mouse: Option<(f64, f64)>,
+    /// 세션 열림 시점의 최전면 앱 pid — 다국어(인풋 박스) 세션이 클릭 없이
+    /// 닫힐 때 이 앱으로 포커스를 되돌린다(Plan §3 D7). `None` = 판정 불가
+    /// (포커스 복원은 포기하고 조용히 넘어간다).
+    frontmost_pid: Option<i32>,
 }
 
 /// 메인 스레드에 화면 스냅샷을 부탁하고 결과를 받아온다(`overlay_demo::
@@ -149,11 +163,13 @@ fn snapshot_activation_context(app: &tauri::AppHandle) -> Option<ActivationSnaps
         };
         let reduce_motion = ultrakey_platform::screens::should_reduce_motion();
         let mouse = ultrakey_platform::screens::mouse_location();
+        let frontmost_pid = ultrakey_platform::apps::frontmost_pid();
         let _ = tx.send(ActivationSnapshot {
             displays,
             appearance,
             reduce_motion,
             mouse,
+            frontmost_pid,
         });
     })
     .ok()?;
@@ -185,6 +201,12 @@ struct SeekController {
     generation: u64,
     /// 직전 `activate()` 호출 시각 — `Opened` 효과의 `elapsed_ms` 로그용.
     activation_started: Option<Instant>,
+    /// ⭐(이슈 #93) 현재 세션이 인풋 박스 모드인가(세션 열림 시점 래칭).
+    /// `Closed` 효과에서 게이트 해제·검색 바 NON-activating 복원 여부에 쓴다.
+    active_input_box: bool,
+    /// ⭐(이슈 #93) 현재 세션 열림 시점의 최전면 앱 pid — 클릭 없이 닫힐 때
+    /// 이 앱으로 포커스를 되돌린다(Plan §3 D7).
+    active_frontmost_pid: Option<i32>,
 }
 
 impl SeekController {
@@ -199,6 +221,8 @@ impl SeekController {
             executor,
             generation: 0,
             activation_started: None,
+            active_input_box: false,
+            active_frontmost_pid: None,
         }
     }
 
@@ -234,6 +258,9 @@ impl SeekController {
             snapshot.reduce_motion,
             origin,
         );
+        // ⭐(이슈 #93) — 세션이 실제로 열리는지와 무관하게, 열림 시점의 최전면
+        // 앱을 기록해 둔다(열리지 않았다면 `Closed` 도 없어 버려질 뿐이다).
+        self.active_frontmost_pid = snapshot.frontmost_pid;
         self.apply_effects(effects, env);
     }
 
@@ -241,11 +268,28 @@ impl SeekController {
         for effect in effects {
             match effect {
                 SessionEffect::Opened { path, mode } => {
-                    // ⭐ 탭 스레드가 이 원자값을 읽어 계층 1(세션 활성) 게이트를
+                    // ⚠️ 탭 스레드가 이 원자값을 읽어 계층 1(세션 활성) 게이트를
                     // 판정한다(`SharedState::seek_session_active` 문서 주석).
                     env.shared
                         .seek_session_active
                         .store(true, Ordering::Release);
+
+                    // ⭐(이슈 #93) — 인풋 박스 모드(검색 언어가 명시적 비영어)인가.
+                    // 세션 열림 시점 래칭: 이 비트가 계층 1 의 문자 통과 분기를
+                    // 켠다. `semicolon_cycles` 는 같은 시점에 함께 게시한다(영어
+                    // 세션에서도 `;` 순환 판정에 쓰인다 — `seek_input_box` 가
+                    // 꺼져 있어도 게이트 자체는 무해하다). 전역 단축키 조합도
+                    // 함께 게시해 인풋 박스 모드의 문자 통과에서 **가드**된다
+                    // (단축키로 다시 닫기 가능).
+                    let input_box = self.machine.config().input_box_mode;
+                    self.active_input_box = input_box;
+                    env.shared
+                        .seek_input_box
+                        .store(input_box, Ordering::Release);
+                    env.shared
+                        .seek_semicolon_cycles
+                        .store(self.machine.config().semicolon_cycles, Ordering::Release);
+                    publish_shortcut_gates(&env.shared, &self.machine.config());
 
                     let Some(overlay) = self.machine.overlay() else {
                         continue;
@@ -255,6 +299,15 @@ impl SeekController {
                     let _ = self.renderer.sync_surfaces(&displays);
                     let _ = self.renderer.set_search_bar_origin(origin.0, origin.1);
                     let _ = self.renderer.show();
+
+                    // ⭐(이슈 #93) — 다국어 세션 한정 포커스 핸드오프: 검색 바를
+                    // 키 윈도우로 승격한다(영어 단일 세션은 호출하지 않는다).
+                    if input_box {
+                        // ⚠️ 순서: `show()`(표시) → 승격(키 윈도우). 그 후 JS 의
+                        // `input.focus()` 는 웹뷰 payload(`input_mode=true`)를
+                        // 받은 뒤 실행된다.
+                        crate::overlay::make_search_bar_key_for_input(env.app.clone());
+                    }
 
                     self.generation += 1;
                     spawn_detection(self.generation, env.tx.clone(), (env.ocr_languages)());
@@ -266,6 +319,7 @@ impl SeekController {
                         tracing::warn!(
                             ?path,
                             ?mode,
+                            input_box,
                             elapsed_ms,
                             matches = 0,
                             "seek session opened"
@@ -300,7 +354,42 @@ impl SeekController {
                     env.shared
                         .seek_session_active
                         .store(false, Ordering::Release);
+                    env.shared
+                        .seek_input_box
+                        .store(false, Ordering::Release);
+                    env.shared
+                        .seek_semicolon_cycles
+                        .store(false, Ordering::Release);
+                    env.shared.seek_shortcut_keycode.store(0, Ordering::Release);
+                    env.shared.seek_shortcut_mods.store(0, Ordering::Release);
                     let _ = self.renderer.hide();
+                    // ⭐(이슈 #93) — 인풋 박스 세션이었다면 검색 바를 다시
+                    // NON-activating 으로 복원한다(키 윈도우 자격 반납).
+                    let was_input_box = self.active_input_box;
+                    self.active_input_box = false;
+                    if was_input_box {
+                        crate::overlay::release_search_bar_input(env.app.clone());
+                        // ⭐ D7 — 클릭 확정(Confirmed)이면 **재활성화하지 않는다**:
+                        // F-04 가 이미 클릭 대상 앱을 활성화했다. 그 외(취소·토글
+                        // 재입력·릴리즈)는 이전 최전면 앱으로 포커스를 되돌린다.
+                        // ⚠️ `activate_pid` 는 애초에 다른 스레드에서 불러도 안전한
+                        // AppKit 호출이 아니므로 메인 스레드로 디스패치한다.
+                        if reason != CloseReason::Confirmed {
+                            if let Some(pid) = self.active_frontmost_pid {
+                                let app = env.app.clone();
+                                let _ = app.run_on_main_thread(move || {
+                                    let restored =
+                                        ultrakey_platform::apps::activate_pid(pid);
+                                    tracing::info!(
+                                        pid,
+                                        restored,
+                                        "restored focus to the frontmost app after a non-confirmed input-box session"
+                                    );
+                                });
+                            }
+                        }
+                    }
+                    self.active_frontmost_pid = None;
                     if env.trace {
                         tracing::warn!(?reason, "session ended");
                     } else {
@@ -310,6 +399,19 @@ impl SeekController {
             }
         }
     }
+}
+
+/// ⭐(이슈 #93) — `Toggle Seek with shortcut:` 조합을 `SharedState` 게이트에
+/// 게시한다(인풋 박스 모드의 문자 통과 가드용). 미설정이면 keycode `0` 이 되어
+/// 가드가 무효하다.
+fn publish_shortcut_gates(shared: &Arc<SharedState>, config: &SeekConfig) {
+    let (keycode, mods) = config
+        .global_shortcut
+        .map_or((0u16, 0u64), |(kc, m)| (kc.0, m.0));
+    shared
+        .seek_shortcut_keycode
+        .store(keycode, Ordering::Release);
+    shared.seek_shortcut_mods.store(mods, Ordering::Release);
 }
 
 /// ⛔ 워커 스레드 자신이 검출을 돌리면 안 된다(모듈 문서) — 별도 스레드를 띄운다.
@@ -552,10 +654,20 @@ fn run_worker(
     let trace = std::env::var_os("ULTRAKEY_SEEK_TRACE").is_some();
 
     let renderer: Box<dyn OverlayRenderer + Send> = Box::new(
-        WebviewOverlayRenderer::new(app.clone(), surface_state).on_search_bar_moved({
-            let persist_origin = persist_origin.clone();
-            move |x, y| persist_origin(x, y)
-        }),
+        WebviewOverlayRenderer::new(app.clone(), surface_state)
+            .on_search_bar_moved({
+                let persist_origin = persist_origin.clone();
+                move |x, y| persist_origin(x, y)
+            })
+            // ⭐(이슈 #93) — 검색 바 창이 키 윈도우 자격을 잃으면(Focused(false))
+            // 워커에 알려 인풋 박스 세션을 닫는다(D7 자동 닫힘). 영어 세션에는
+            // 세션이 없거나 이 신호를 무시하는 경로밖에 남지 않아 무해하다.
+            .on_search_bar_resign_key({
+                let tx = tx.clone();
+                move || {
+                    let _ = tx.send(SeekSignal::ResignedKey);
+                }
+            }),
     );
     // ⭐ F-04(이슈 #44) — `NullClickExecutor` 자리를 실 구현으로 교체한다.
     // executor 는 이 워커가 단독 소유하므로 설정은 `configure` 호출로만
@@ -582,6 +694,16 @@ fn run_worker(
             SeekSignal::ConfigChanged(config, click_settings) => {
                 controller.machine.set_config(config);
                 controller.executor.configure(click_settings);
+                // ⭐(이슈 #93) — `seek_semicolon_cycles` 게이트는 머신이 세션
+                // 중 `classify` 에 쓰는 현재 값과 항상 맞춘다(인풋 박스의 `;`
+                // 통과/소비 판정 핀이자, 영어 세션의 순환 판정과도 정합).
+                // 세션 열림 시점에 래칭된 `seek_input_box` 자체는 바꾸지 않는다.
+                let new_config = controller.machine.config();
+                env.shared
+                    .seek_semicolon_cycles
+                    .store(new_config.semicolon_cycles, Ordering::Release);
+                // 전역 단축키 조합도 최신 값을 게시해 가드를 유지한다.
+                publish_shortcut_gates(&env.shared, &new_config);
             }
 
             SeekSignal::DisplaysChanged => {
@@ -619,6 +741,21 @@ fn run_worker(
                 if let Some(kind) = key_kind {
                     log_key_trace(&controller, kind);
                 }
+            }
+
+            // ⭐(이슈 #93) — 다국어(인풋 박스) 세션에서 웹뷰 `<input>` 이
+            // 디바운스해 보낸 완성 쿼리다. 재검출 없이 캡처된 후보를 필터링만
+            // 갱신한다(Plan §3 D5).
+            SeekSignal::SetQuery(query) => {
+                let effects = controller.machine.set_query_external(query);
+                controller.apply_effects(effects, &env);
+            }
+
+            // ⭐(이슈 #93) — 검색 바 창이 키 윈도우 자격을 잃었다(타 앱 클릭).
+            // 인풋 박스 세션은 닫혀 문자 누출을 막는다(Plan §3 D7, §9 #11).
+            SeekSignal::ResignedKey => {
+                let effects = controller.machine.defocused();
+                controller.apply_effects(effects, &env);
             }
 
             SeekSignal::Candidates {

@@ -45,6 +45,11 @@ pub struct SeekSettings {
     /// 유일하게 출고 기본값이 켜진 항목(명세 §4). ☑ 기본값 선례:
     /// `KoreanSettings::disable_in_remote_desktop`(부재 = true 주석 관례).
     pub change_click_modes_with_modifiers: bool,
+    /// ⭐(이슈 #93) `검색 언어` — 값 `"ko"`·`"zh"`·`"ja"`·`"es"`(비영어, 인풋 박스
+    /// 모드) 또는 `"en"`(영어 단일 명시 — OCR 을 로케일과 무관하게 영어로 강제).
+    /// **부재 = 로케일 폴백**(Plan D1·D6, §9 #1~#2): OCR 언어는 `general.language`
+    /// 에서 계산(이슈 #48 의 현행 동작 유지)하고, `input_box_mode` 는 꺼진다.
+    pub search_language: Option<String>,
 }
 
 impl Default for SeekSettings {
@@ -56,6 +61,7 @@ impl Default for SeekSettings {
             semicolon_cycles: false,
             focus_window_before_clicking: false,
             change_click_modes_with_modifiers: true,
+            search_language: None,
         }
     }
 }
@@ -157,6 +163,11 @@ impl SeekSettings {
             change_click_modes_with_modifiers: store
                 .get(keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS)
                 .unwrap_or(true),
+            // ⭐ 부재 = 로케일 폴백(이슈 #93). 빈 문자열은 부재와 같은 취급으로
+            // 정규화한다(UI 가 빈 값을 실수로 보낸 경우 로케일 폴백으로 돌아간다).
+            search_language: store
+                .get::<String>(keys::SEEK_SEARCH_LANGUAGE)
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -180,6 +191,14 @@ impl SeekSettings {
             global_shortcut: self.toggle_shortcut.as_ref().and_then(|s| {
                 ultrakey_core::keycode::from_web_code(&s.code).map(|kc| (kc, s.modifiers))
             }),
+            // ⭐(이슈 #93) 검색 언어가 명시적 비영어일 때만 인풋 박스 모드 —
+            // 부재(로케일 폴백)와 `"en"`(영어 강제)은 모두 `false`(현행 동작 유지).
+            // 이 비트가 세션 중 키 라우팅(계층 1 통과)·포커스 핸드오프·웹뷰 `input`
+            // 전환을 결정한다.
+            input_box_mode: matches!(
+                self.search_language.as_deref(),
+                Some("ko") | Some("zh") | Some("ja") | Some("es")
+            ),
         }
     }
 
@@ -256,12 +275,39 @@ mod tests {
         // Change click modes ☑(Seek 탭 유일).
         assert!(!s.focus_window_before_clicking);
         assert!(s.change_click_modes_with_modifiers);
+        // ⭐(이슈 #93) — 검색 언어 부재 = 로케일 폴백(영어 단일이 아니다).
+        assert_eq!(s.search_language, None);
     }
 
     #[test]
     fn from_store_on_empty_store_matches_default() {
         let store = SettingsStore::in_memory();
         assert_eq!(SeekSettings::from_store(&store), SeekSettings::default());
+    }
+
+    /// ⭐(이슈 #93, T1·T2) — `search_language` 부재 = 로케일 폴백(영어 단일이
+    /// 아니라), 명시 `"en"` = 영어 강제(인풋 박스 아님), 명시 비영어 =
+    /// `input_box_mode` 켜짐. 빈 문자열은 부재로 정규화된다.
+    #[test]
+    fn from_store_search_language_absent_en_and_nonenglish() {
+        let store = SettingsStore::in_memory();
+        assert_eq!(SeekSettings::from_store(&store).search_language, None);
+        assert!(!SeekSettings::from_store(&store).to_config(false).input_box_mode);
+
+        let mut store = SettingsStore::in_memory();
+        store.set(keys::SEEK_SEARCH_LANGUAGE, &"en").unwrap();
+        let settings = SeekSettings::from_store(&store);
+        assert_eq!(settings.search_language.as_deref(), Some("en"));
+        assert!(!settings.to_config(false).input_box_mode);
+
+        store.set(keys::SEEK_SEARCH_LANGUAGE, &"ko").unwrap();
+        let settings = SeekSettings::from_store(&store);
+        assert_eq!(settings.search_language.as_deref(), Some("ko"));
+        assert!(settings.to_config(false).input_box_mode, "비영어 명시 → 인풋 박스");
+
+        // 빈 문자열은 부재와 같은 취급(로케일 폴백으로 정규화).
+        store.set(keys::SEEK_SEARCH_LANGUAGE, &"").unwrap();
+        assert_eq!(SeekSettings::from_store(&store).search_language, None);
     }
 
     #[test]

@@ -16,6 +16,7 @@ pub mod korean;
 pub mod perdevice;
 pub mod quickpress;
 pub mod rules;
+pub mod seek_input_box;
 pub mod settings;
 pub mod time;
 pub mod trackpad;

@@ -48,6 +48,9 @@ pub struct OverlaySession {
     appearance: Appearance,
     reduce_motion: bool,
     detecting: bool,
+    /// ⭐(이슈 #93) 인풋 박스 모드(검색 언어가 명시적 비영어) — `search_bar_frame()`
+    /// 의 `input_mode` 로 웹뷰에 전달된다. 세션 하나에 고정(래칭)된다.
+    input_mode: bool,
     query: String,
     by_display: BTreeMap<u32, Vec<TextCandidate>>,
     extra: Vec<TextCandidate>,
@@ -72,6 +75,7 @@ impl OverlaySession {
             appearance,
             reduce_motion,
             detecting: true,
+            input_mode: false,
             query: String::new(),
             by_display: BTreeMap::new(),
             extra: Vec::new(),
@@ -113,6 +117,13 @@ impl OverlaySession {
         self.query = query.to_string();
         self.selected_index = 0;
         self.recompute_matching();
+    }
+
+    /// ⭐(이슈 #93) 인풋 박스 모드를 켠다 — `search_bar_frame().input_mode` 가
+    /// 웹뷰 `<input>`/`<span>` 표시를 가른다. 세션 하나에 고정되며(래칭) 세션
+    /// 중에 바뀌지 않는다(`SeekConfig::input_box_mode` 래칭과 같은 규약).
+    pub fn set_input_mode(&mut self, enabled: bool) {
+        self.input_mode = enabled;
     }
 
     /// 다음 매치로 선택을 옮긴다(§3.6 트리거: ↑/↓/Tab/`;`). 끝에서 처음으로
@@ -314,6 +325,7 @@ impl OverlaySession {
             total_matches: self.matching.len(),
             palette: Palette::for_appearance(self.appearance),
             detecting: self.detecting,
+            input_mode: self.input_mode,
         }
     }
 

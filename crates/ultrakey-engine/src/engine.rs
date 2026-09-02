@@ -629,6 +629,10 @@ fn on_tap_event(
     let trackpad_phase = st.shared.trackpad.load();
     let gates = GateSnapshot {
         seek_active: st.shared.seek_session_active.load(Ordering::Acquire),
+        seek_input_box: st.shared.seek_input_box.load(Ordering::Acquire),
+        seek_semicolon_cycles: st.shared.seek_semicolon_cycles.load(Ordering::Acquire),
+        seek_shortcut_keycode: st.shared.seek_shortcut_keycode.load(Ordering::Acquire),
+        seek_shortcut_mods: st.shared.seek_shortcut_mods.load(Ordering::Acquire),
         korean_app_excluded: st.shared.gate.is_korean_disabled(),
         korean_ime: st.shared.korean_ime.load(),
         trackpad_hyper_active: trackpad_phase == TrackpadPhase::Engaged,

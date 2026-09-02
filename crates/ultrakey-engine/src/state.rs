@@ -5,7 +5,7 @@
 //! 락 획득 가능성이 있는 자료구조에 접근하는 것은 `docs/dev/architecture.md` §2.2 의
 //! "콜백 안에서 절대 하지 않는 것"을 정면으로 어기는 것이다.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -27,6 +27,16 @@ use ultrakey_layout::LayoutResolver;
 ///   `ultrakey-seek-session`)이 세션을 열고 닫을 때마다 `Engine::shared().
 ///   seek_session_active` 를 직접 `store` 한다. 이 엔진은 콜백 임계 경로에서 이
 ///   원자값을 O(1) 로드만 한다(§3-b 계층 1 "전역 플래그 1개로 확인").
+/// - `seek_input_box` / `seek_semicolon_cycles` — ⭐(이슈 #93) 인풋 박스 모드
+///   게이트. `seek_session_active` 와 같은 주인(Seek 워커)이 **세션 열림/닫힘
+///   시점에 래칭**해 게시한다. 콜백은 계층 1 통과 판정에 이 원자값들을 O(1)
+///   로드만 한다(세션이 비활성이면 통과 분기가 아예 평가되지 않아 기존
+///   동작과 완전히 같다).
+/// - `seek_shortcut_keycode` / `seek_shortcut_mods` — ⭐(이슈 #93) `Toggle Seek
+///   with shortcut:` 조합. 인풋 박스 모드에서 문자 키가 통과되는 동안 이 조합만
+///   **통과시키지 않아** 세션을 단축키로 다시 토글 닫을 수 있게 한다(계층 1 이
+///   Consume 한 뒤 machine 의 `matches_global_shortcut` 재입력 판정을 탄다).
+///   keycode `0` = 미설정(통과 가드 무효).
 /// - `layout` — F-14(B) 레이아웃 테이블. 콜백이 임계 경로에서 읽어야 할 때를 대비해
 ///   `LayoutResolver` 자체가 이미 무잠금 `ArcSwap` 을 내부에 두고 있다(`ultrakey-layout`).
 /// - `korean_ime` — F-16 한국어 입력기 활성 판정(`docs/spec/korean-input.md` §3.3).
@@ -44,6 +54,16 @@ pub struct SharedState {
     pub config: ArcSwap<EngineConfig>,
     pub gate: Arc<AtomicAppGate>,
     pub seek_session_active: AtomicBool,
+    /// ⭐(이슈 #93) 인풋 박스 모드(다국어 검색 언어) — 세션 열림 시점에 Seek
+    /// 워커가 래칭해 게시한다.
+    pub seek_input_box: AtomicBool,
+    /// ⭐(이슈 #93) `seek.semicolonCycle` 값 — 인풋 박스 모드에서 `;` 의
+    /// 통과/소비 판정에 쓰인다(설정 변경 시 워커가 함께 게시).
+    pub seek_semicolon_cycles: AtomicBool,
+    /// ⭐(이슈 #93) `Toggle Seek with shortcut:` 의 물리 keycode(`0` = 미설정).
+    pub seek_shortcut_keycode: AtomicU16,
+    /// ⭐(이슈 #93) 같은 단축키의 modifier 비트마스크(`EventFlags` 비트 관례).
+    pub seek_shortcut_mods: AtomicU64,
     pub layout: Arc<LayoutResolver>,
     pub korean_ime: AtomicKoreanImeGate,
     /// ⭐ F-06 — 트랙패드 제스처 게이트. 리스너 스레드가 게시하고 콜백은 읽기만 한다.
@@ -58,6 +78,10 @@ impl SharedState {
             config: ArcSwap::from_pointee(config),
             gate,
             seek_session_active: AtomicBool::new(false),
+            seek_input_box: AtomicBool::new(false),
+            seek_semicolon_cycles: AtomicBool::new(false),
+            seek_shortcut_keycode: AtomicU16::new(0),
+            seek_shortcut_mods: AtomicU64::new(0),
             layout: Arc::new(LayoutResolver::new()),
             korean_ime: AtomicKoreanImeGate::new(),
             trackpad: Arc::new(AtomicTrackpadPhase::new()),

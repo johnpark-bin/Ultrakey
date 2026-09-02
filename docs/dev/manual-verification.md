@@ -3068,3 +3068,46 @@ tail -f ~/Library/Logs/Ultrakey/ultrakey.log
 - **원본 SuperKey 의 닫기 동작(숨김 vs 파괴)** — 클론 결정과 무관한 원본 관찰로, `preferences-ui.md` §9 질문 14 로 남겼다.
 - **숨겨진 창의 WKWebView 메모리 상주량** — 계획 리스크 R4 `(추정)` 수십 MB. Accessory 상주 특성상 허용
   판단. 심각해지면 hide→destroy 전환을 이슈로 재오픈한다.
+
+## 항목 19 — Seek 다국어 검색 + IME 입력 (이슈 #93)
+
+> ⭐ **계획·명세**: `docs/plan/issue-93-seek-multilingual-ime.md` (§3 D1~D8 · §9 상급 리뷰 반영) ·
+> `seek-activation-and-session.md` §3.1~§3.2 · `seek-overlay-ui.md` §1(정정). 이 항목은 **검색 언어
+> 설정을 명시적 비영어로 둔 다국어(인풋 박스) 세션**의 수동 검증이며, **영어 단일(기본) 구성은 현행
+> 검증 항목(항목 8 등)이 그대로 커버한다.**
+
+### 사전 준비
+
+```sh
+./scripts/build-signed.sh        # 서명된 universal .app (§0 — 반드시 open 으로)
+open <경로>/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+설정 창(`Settings…`) → `Seek` 탭 → `검색 언어` 를 `English + 한국어` 로 바꾼 뒤, 시스템 설정에서
+한국어 입력 소스를 하나 이상 활성화해 둔다(한/영 전환 가능 상태). 로그 추적은 `ULTRAKEY_SEEK_TRACE=1`
+을 환경변수로 두고 실행한다.
+
+### M1~M13 수동 절차
+
+| # | 시나리오 | 조작 | 기대 결과 | 판정 근거 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1** | 인풋 박스 + 한글 조합 | 캡스락 hold 로 세션 열기(또는 단축키). 한글 IME 로 `안녕` 입력 | 검색 바가 실제 `<input>` 으로 표시되고, 자음-음절 조합이 IME 에서 이뤄져 화면에 음절 단위로 반영. 로그 `search bar promoted to key window` 확인 | Plan §3 D2·D3 |
+| **M2** | debounce 후 필터 | `안녕` 입력 후 100ms 멈춤 | 쿼리가 워커 쿼리로 반영되고(`set_query_external`), 화면의 한글 텍스트 후보가 필터링된다. 로그 `detection finished`(한국어 OCR `["ko-KR","en-US"]` ≈ 3.1s) 후 매치 확인 | Plan §3 D5 · §6 M2 |
+| **M3** | 조합 중간 상태 유출 방지 | `ㄱ`(자음만) 입력 후 잠깐 멈춤 → 이어받기 | 자모 중간 상태가 검색어로 전송되지 않는다(`compositionend` 전에는 미전송). 최종 음절만 반영 | Plan §9 #5 · `compositionstart/end` |
+| **M4** | Enter 확정 → 클릭 → 포커스 | 매치가 선택된 상태에서 Enter | 클릭 후 포커스가 F-04 가 활성화한 **대상 앱**에 남는다(이전 앱으로 되돌아가지 않음 — Confirmed 미복원). 로그 `confirmed` → `session ended reason=Confirmed` | Plan §3 D7 (비대칭) |
+| **M5** | Esc 취소 → 포커스 복원 | 매치 없이 Esc | 세션이 닫히고 **이전 최전면 앱**이 재활성화된다. 로그 `restored focus to the frontmost app`. 검색 바는 다시 NON-activating(`can_become_key=false`, 로그 확인) | Plan §3 D7 |
+| **M6** | 영어 단일 회귀 | `검색 언어` 를 `English only`(기본)로 되돌리고 세션 | `<input>` 이 **안 보이고** `<span>` 검색어가 **타자마다 즉시** 갱신된다. 포커스 무변화(이전 앱이 그대로 최전면), `makeKeyAndOrderFront` 경유 로그 없음 | Plan §3 D2 — 기본 동작 유지 |
+| **M7** | ⌘/⌃ 조합 보호 | 인풋 박스 세션 중 `⌘A`·`⌘Q` | 구간 소비 — 검색어에 `a` 가 들어가지 않고, `⌘Q` 로 앱이 **종료되지 않는다**. `⌘A` 는 계층 1 에서 Consume | Plan §3 D4 · §9 #3 |
+| **M8** | 한국어 OCR 지연 중 입력 유실 없음 | 세션 열자마자 바로 `설정` 입력(검출 3.1s 전) | Opening 중 쿼리가 버퍼에 누적되고, 검출 완료 후 즉시 그 쿼리로 필터링된다(유실 없음) | Plan §6 T10-b · §9 #8 |
+| **M9** | 한글 후보 실제 매치 | 화면에 한글 버튼/제목이 있는 상태에서 `한글` 검색 | `["ko-KR","en-US"]` OCR 이 한글 후보를 검출해 매치된다(한국어 OCR 전: 후보 0 였음이 로그로 LIFO 대조) | Plan §6 M9 |
+| **M10** | `;` 순환 설정 켬/끔 | 세션 중 `;` 를 순환 켬/끔 각각에서 입력 | 켬 → 다음 매치 순환(소비) · 끔 → 검색어에 `;`(통과) | Plan §9 #4 · §6 M10 |
+| **M11** | 타 앱 클릭 → 자동 닫힘 | 인풋 박스 세션 중 다른 앱 창 클릭 | 검색 바 `didResignKey` → 세션이 `reason=Defocused` 로 닫히고, 클릭한 앱에 문자가 **누출되지 않는다**. 확정 처리 중(Confirming)에는 닫히지 않음 | Plan §3 D7 · §9 #11 |
+| **M12** | ⌥ 데드키 (스페인어) | `검색 언어` 를 `English + Español` 로 하고 US 배열에서 `⌥+e` → `e` | 웹뷰 인풋이 `é` 로 조합된다(⌥+문자 통과 — 데드키). 검색어에 분리 상태(`´`+`e`)가 남지 않는다 | Plan §9 #3 · §6 M12 |
+| **M13** | Enter-디바운스 경쟁 · 조합 확정 | (가) 마지막 입력 직후 곧바로 Enter, (나) 조합 중 Space/다음 문자 | (가) 직전 쿼리로 확정되는 잔존 경쟁을 관측·기록(리스크 9), (나) 조합이 음절로 굳은 뒤 쿼리 반영. **Enter 로 한글 조합 확정 불가** 엣지(리스크 5)도 함께 확인 | Plan §7 리스크 5·9 · §6 M13 |
+
+### ⚠️ 이 절차로 확인할 수 없는 것
+
+- **원본 SuperKey 의 다국어 검색** — 원본은 영어 단일(`seek-text-detection.md` §5 #10)이라 대조할 원본 동작이 없다(README 갈라짐 표 D10).
+- **중국어·일본어·스페인어 OCR 의 실제 지연·신뢰도** — 한국어(3.1s)만 실측. `seek-ocr-latency-spike.md` 의 방법으로 각 언어 1 회 재현 측정해 `seek-text-detection.md` §3.2.2 `(추정)` 을 갱신한다.
+- **한국어 106키 물리 키보드의 세션 중 한/영 키** — korean-input.md §5 #1 과 같은 기기 제약(이 항목은 온스크린 입력 소스 전환으로 대체해 확인한다).

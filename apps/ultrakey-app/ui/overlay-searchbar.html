@@ -87,14 +87,32 @@
     white-space: nowrap;
     overflow: hidden;
   }
-  /* ⚠️ <input> 을 쓰지 않는다. 이 창은 `canBecomeKey = false` 로 만들어져
-     (§3.2) 실제로 키 윈도우가 될 수 없다 — 즉 <input> 을 둬도 포커스를
-     받지 못해 타이핑이 씹힌다. 타이핑은 F-01 이 CGEventTap 으로 가로채
-     Rust 가 `query` 필드로 밀어 넣는다. 그래서 여기서는 텍스트를 <span>
-     에 그리고, 캐럿은 CSS 애니메이션으로 깜빡임만 흉내 낸다 — 이 캐럿은
-     실제 텍스트 입력 지점이 아니라 "지금 타이핑을 받고 있다"는 순수한
-     시각적 신호다. */
+  /* ⚠️ 기본(영어 단일) 경로는 `<input>` 을 쓰지 않는다. 이 창은 영어 세션에서
+     `canBecomeKey = false` 로 만들어져(§3.2) 실제로 키 윈도우가 될 수 없다 —
+     즉 `<input>` 을 둬도 포커스를 받지 못해 타이핑이 씹힌다. 타이핑은 F-01 이
+     CGEventTap 으로 가로채 Rust 가 `query` 필드로 밀어 넣는다. 그래서 여기서는
+     텍스트를 <span>에 그리고, 캐럿은 CSS 애니메이션으로 깜빡임만 흉내 낸다.
+
+     ⭐(이슈 #93) 다국어(인풋 박스) 세션에서는 이 창이 **키 윈도우로 승격**
+     되고(Rust 측 `make_search_bar_key_for_input`), 이 `<input>` 이 보여
+     macOS IME 로 조합을 받는다 — 그때는 input 이 소스 오브트루스라 Rust 가
+     내려준 `query` 로 값을 되쓰지 않는다(커서·조합 상태 보존). 표시 전환은
+     payload.input_mode 로 가른다. */
   #query-text { white-space: pre; }
+  #query-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--bar-fg);
+    font: inherit;
+    font-weight: 500;
+    padding: 0;
+    caret-color: var(--bar-fg);
+    white-space: pre;
+  }
+  #query-input::placeholder { opacity: .45; }
   #caret {
     display: inline-block;
     width: 1px;
@@ -217,6 +235,9 @@
     <div id="query-wrap">
       <span id="placeholder">Seek</span>
       <span id="query-text"></span><span id="caret"></span>
+      <input type="text" id="query-input" hidden
+             autocomplete="off" autocorrect="off" spellcheck="false"
+             maxlength="200" aria-label="Seek search" />
     </div>
     <div id="counter"></div>
   </div>
@@ -243,10 +264,63 @@ try {
 const $ = (id) => document.getElementById(id);
 const root = $("root");
 const queryText = $("query-text");
+const queryInput = $("query-input");
 const placeholder = $("placeholder");
 const counter = $("counter");
 const detectingTrack = $("detecting-track");
 const matchesEl = $("matches");
+
+// ⭐(이슈 #93) 현재 입력 모드. `payload.input_mode` 로 갱신된다.
+let inputMode = false;
+// IME 조합이 진행 중인가 — 조합 중에는 debounce 전송을 미룬다.
+let composing = false;
+// 최대 100ms 디바운스 타이머(비조합 직입력용 idle 상한).
+let inputDebounceTimer = null;
+// 마지막으로 워커에 보낸 쿼리 — 쿼리가 실제로 바뀌었을 때만 보낸다.
+let lastSentQuery = null;
+
+function sendQueryNow(value) {
+  const q = value.trimStart();
+  if (q === lastSentQuery) return;
+  lastSentQuery = q;
+  const tauri = window.__TAURI__;
+  if (!tauri || !tauri.core) return;
+  // ⚠️ 반환을 기다리지 않는다 — 워커 채널에 밀어 넣기만 하는 sync 커맨드다.
+  tauri.core.invoke("seek_set_query", { query: q }).catch(() => {});
+}
+
+function scheduleQuerySend(value) {
+  if (composing) return; // 조합이 끝나면 compositionend 가 즉시 flush 한다.
+  clearTimeout(inputDebounceTimer);
+  inputDebounceTimer = setTimeout(() => sendQueryNow(value), 100);
+}
+
+function clearQueryInput() {
+  queryInput.value = "";
+  lastSentQuery = null;
+  clearTimeout(inputDebounceTimer);
+}
+
+// 검색 바 창이 실제로 포커스를 받았을 때(WKWebView 가 키 윈도우 승격을 반영)
+// 인풋 박스 모드면 input 을 다시 집중시킨다 — JS 의 focus() 는 창이 아직 키가
+// 아닌 상태에서 호출될 수 있어 잃는 첫 타자를 이 리스너가 구제한다.
+window.addEventListener("focus", () => {
+  if (!inputMode) return;
+  queryInput.focus();
+  queryInput.select();
+});
+
+// ⭐(이슈 #93) input 이벤트 — 조합은 compositionend 가 flush, 비조합은 100ms
+// 디바운스(Plan §3 D5).
+queryInput.addEventListener("compositionstart", () => { composing = true; });
+queryInput.addEventListener("compositionend", () => {
+  composing = false;
+  sendQueryNow(queryInput.value); // 조합이 완성되는 즉시 보낸다.
+});
+queryInput.addEventListener("input", () => {
+  if (composing) return;
+  scheduleQuerySend(queryInput.value);
+});
 
 const PALETTE_VAR_MAP = {
   selected_fill: "--hl-selected-fill",
@@ -271,8 +345,24 @@ function render(payload) {
   applyPalette(payload.palette);
 
   const query = payload.query || "";
-  queryText.textContent = query;
-  placeholder.hidden = query.length > 0;
+  inputMode = !!payload.input_mode;
+
+  // ⭐ 다국어(인풋 박스) 모드에서는 input 이 소스 오브트루스다 — Rust 가 내려준
+  // `query` 로 input.value 를 되쓰지 않는다(커서·IME 조합 상태 보존). 그 대신
+  // span 은 input 자리에 숨기고, placeholder·입력이 보인다.
+  if (inputMode) {
+    queryInput.hidden = false;
+    queryText.hidden = true;
+    placeholder.hidden = true;
+    queryText.textContent = "";
+    if (document.activeElement !== queryInput) queryInput.focus();
+  } else {
+    // 영어(즉시 문자) 경로 — Rust 가 내려준 검색어를 span 에 그린다.
+    queryInput.hidden = true;
+    queryText.hidden = false;
+    queryText.textContent = query;
+    placeholder.hidden = query.length > 0;
+  }
 
   const total = payload.total_matches || 0;
   if (total <= 0) {
@@ -387,6 +477,16 @@ if (!tauri || !tauri.core || !tauri.event) {
     return invoke("overlay_surface_ready", { label: LABEL });
   }).catch((e) => {
     showDiag("overlay-searchbar: 초기화 실패 — " + String(e));
+  });
+
+  // ⭐(이슈 #93) — 세션이 닫혔을 때 Rust(WebviewOverlayRenderer::hide)가 보낸다.
+  // 검색 바 창은 세션 사이 상주하므로, 남아 있던 조합·값·타이머를 전부 치운다.
+  self_.listen("overlay://searchbar-clear", () => {
+    clearQueryInput();
+    composing = false;
+    clearTimeout(inputDebounceTimer);
+  }).catch((e) => {
+    showDiag("overlay-searchbar: 클리어 리스너 실패 — " + String(e));
   });
 }
 </script>

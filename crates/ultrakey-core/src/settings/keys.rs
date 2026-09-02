@@ -167,6 +167,13 @@ pub const SEEK_FOCUS_WINDOW_BEFORE_CLICKING: &str = "seek.focusWindowBeforeClick
 /// "부재 = true" 주석 관례를 그대로 따른다 — `unwrap_or_default()` 를 쓰면
 /// 부재가 `false` 로 읽혀 실측 기본값을 조용히 어기게 된다.
 pub const SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS: &str = "seek.changeClickModesWithModifiers";
+/// ⭐(이슈 #93) `검색 언어` — 값은 `"ko"`·`"zh"`·`"ja"`·`"es"` 또는 영어 단일 명시
+/// `"en"`. ⚠️ **부재 ≠ 빈 문자열과 혼동하지 않는다**: 부재 = `general.language`
+/// 로케일에서 OCR 언어를 계산하는 **기존 동작 유지**(이슈 #48), 명시 `"en"` =
+/// OCR 언어를 `[]`(Vision 기본, 영어)로 **강제**. `input_box_mode`(실제 `<input>`
+/// 사용)는 **명시적 비영어 값(`"ko"`/`"zh"`/`"ja"`/`"es"`)에서만** 켜진다.
+/// (`docs/plan/issue-93-seek-multilingual-ime.md` D1·D6, §9 #1~#2)
+pub const SEEK_SEARCH_LANGUAGE: &str = "seek.searchLanguage";
 
 // ── F-17 키보드별 설정(`per-device-settings.md` §3.3~3.4, D-17-2) —
 // `ultrakey_core::perdevice` 가 소비한다 ──
@@ -254,6 +261,7 @@ pub fn all() -> &'static [&'static str] {
         SEEK_REMAP_KEY,
         SEEK_EXECUTE_ON_CLOSE,
         SEEK_SEMICOLON_CYCLE,
+        SEEK_SEARCH_LANGUAGE,
         SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
         SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS,
         PER_DEVICE_MANAGED,

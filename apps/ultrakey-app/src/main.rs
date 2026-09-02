@@ -1171,6 +1171,11 @@ struct SeekView {
     focus_window_before_clicking: bool,
     /// 저장 키 `seek.changeClickModesWithModifiers`. 출고 기본값 ☑.
     change_click_modes_with_modifiers: bool,
+    /// ⭐(이슈 #93) `검색 언어` — 명시 값(`"ko"`·`"zh"`·`"ja"`·`"es"`·`"en"`).
+    /// **부재(`None`) = 로케일 폴백** — OCR 언어는 `general.language` 에서 계산하고
+    /// 인풋 박스 모드는 꺼진다. UI 는 부재 시 `effective_search_language`(로케일
+    /// 파생) 값을 선택된 것으로 보여준다(Plan §9 #2).
+    search_language: Option<String>,
     /// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 인가(읽기 전용
     /// 표시용).
     quick_press_opens: bool,
@@ -1211,6 +1216,7 @@ fn seek_view(seek: &SeekSettings, quick_press_opens: bool) -> SeekView {
         semicolon_cycles: seek.semicolon_cycles,
         focus_window_before_clicking: seek.focus_window_before_clicking,
         change_click_modes_with_modifiers: seek.change_click_modes_with_modifiers,
+        search_language: seek.search_language.clone(),
         quick_press_opens,
         any_activation_configured: seek
             .to_config(quick_press_opens)
@@ -3582,6 +3588,23 @@ fn apply_seek_setting(
         k if k == keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS => {
             seek.change_click_modes_with_modifiers = parse(value, key)?
         }
+        // ⭐(이슈 #93) `검색 언어` — `null`/빈 문자열은 부재(= 로케일 폴백)로 되돌림.
+        // 허용 값은 `"ko"`·`"zh"`·`"ja"`·`"es"`·`"en"` 뿐 — 그 외 값은 거부하고
+        // `input_box_mode` 를 좌우하는 값이므로 조용히 넘어가지 않게 한다.
+        k if k == keys::SEEK_SEARCH_LANGUAGE => {
+            if value.is_null() {
+                seek.search_language = None;
+            } else {
+                let lang: String = parse(value, key)?;
+                if !matches!(lang.as_str(), "" | "ko" | "zh" | "ja" | "es" | "en") {
+                    return Err(format!(
+                        "알 수 없는 검색 언어 값: {lang:?} — \"ko\"·\"zh\"·\"ja\"·\"es\"·\"en\" 만 허용한다"
+                    ));
+                }
+                // 빈 문자열은 부재와 같은 취급(로케일 폴백).
+                seek.search_language = if lang.is_empty() { None } else { Some(lang) };
+            }
+        }
         _ => return Err(format!("{key} 는 이 커맨드로 바꿀 수 없다")),
     }
     Ok(())
@@ -4240,6 +4263,7 @@ fn main() {
             overlay_spike::overlay_spike_ready,
             overlay::overlay_surface_ready,
             overlay::overlay_select_match,
+            seek_set_query,
         ])
         .setup(move |app| {
             // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
@@ -4685,16 +4709,25 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             // 조립한다(부재 = 기본값 규약은 `SeekSettings::from_store` 쪽이
             // 이미 반영했다).
             let click_settings = click_settings_from_seek(&seek_settings);
-            // ⭐ 이슈 #48 — UI 로케일(`catalog.locale()`)이 곧 OCR 검색 언어
-            // 기준이다. `catalog.load_full()` 은 항상 성공하고
-            // `ocr_recognition_languages()` 가 빈 목록(영어 단일)을 돌려주면
-            // 기존 동작과 동일하다.
+            // ⭐(이슈 #93) — `seek.searchLanguage`(검색 언어)가 **명시**돼 있으면
+            // 그 값이 OCR 언어의 정본이다: 비영어(`"ko"` 등) → `["<lang>-<region>",
+            // "en-US"]`(첫 원소가 인식 언어를 가름, 스파이크 §3), 명시 `"en"` →
+            // `[]`(영어 강제). **부재(키 없음)일 때만** 이슈 #48 의 로케일 폴백
+            // (`catalog.locale()`)을 따른다 (Plan D1·D6, §9 #1~#2).
             let state_for_ocr = state.clone();
             let ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
-                state_for_ocr
-                    .catalog
-                    .load_full()
-                    .locale()
+                let explicit = state_for_ocr
+                    .store
+                    .lock()
+                    .ok()
+                    .and_then(|store| store.get::<String>(keys::SEEK_SEARCH_LANGUAGE));
+                let locale = match explicit.as_deref().and_then(Locale::from_search_language) {
+                    // 명시 값이 없다 → 로케일 폴백(이슈 #48 의 기존 동작).
+                    None => state_for_ocr.catalog.load_full().locale(),
+                    // 명시 값이 있다 → 그 언어로 고정(`"en"` 은 `[]` 을 준다).
+                    Some(locale) => locale,
+                };
+                locale
                     .ocr_recognition_languages()
                     .iter()
                     .map(|s| s.to_string())
@@ -4777,6 +4810,15 @@ fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: Engi
         }
         EngineEvent::SeekKey(ev) => send_seek_signal(state, seek::SeekSignal::Key(ev)),
     }
+}
+
+/// ⭐(이슈 #93) — 다국어(인풋 박스) Seek 세션에서 웹뷰 `<input>` 이 디바운스해
+/// 보낸 **완성된 검색어**를 워커에 전달한다. 워커가 없으면 조용히 버린다
+/// (`send_seek_signal` 과 같은 규약). 제어 키가 아니라 **문자열**이므로 기존
+/// `EngineEvent::SeekKey` 채널을 쓰지 않는다.
+#[tauri::command]
+fn seek_set_query(state: State<'_, Arc<AppState>>, query: String) {
+    send_seek_signal(state.inner(), seek::SeekSignal::SetQuery(query));
 }
 
 /// `AppState.seek_tx` 로 신호를 보낸다 — 워커가 아직 뜨지 않았으면(엔진 시작 전)
@@ -6934,6 +6976,56 @@ mod tests {
                 &mut seek,
                 keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
                 &serde_json::json!("yes"),
+            )
+            .is_err()
+        );
+    }
+
+    // ⭐(이슈 #93) — `seek.searchLanguage` 채택/거부. 인풋 박스 모드를 좌우하는
+    // 값이라 허용 코드가 아니면 조용히 넘어가지 않게 거부한다.
+    #[test]
+    fn apply_seek_setting_search_language_accepts_and_rejects() {
+        let mut seek = SeekSettings::default();
+        assert_eq!(seek.search_language, None);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEARCH_LANGUAGE,
+            &serde_json::json!("ko"),
+        )
+        .unwrap();
+        assert_eq!(seek.search_language.as_deref(), Some("ko"));
+        assert!(seek.to_config(false).input_box_mode);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEARCH_LANGUAGE,
+            &serde_json::json!("en"),
+        )
+        .unwrap();
+        assert_eq!(seek.search_language.as_deref(), Some("en"));
+        assert!(!seek.to_config(false).input_box_mode, "en = 영어 강제(인풋 아님)");
+
+        // null → 부재(로케일 폴백)로 되돌린다.
+        apply_seek_setting(&mut seek, keys::SEEK_SEARCH_LANGUAGE, &serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(seek.search_language, None);
+
+        // 빈 문자열도 부재와 같은 취급.
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEARCH_LANGUAGE,
+            &serde_json::json!(""),
+        )
+        .unwrap();
+        assert_eq!(seek.search_language, None);
+
+        // 허용 코드가 아니면 거부(조용히 무시하지 않는다).
+        assert!(
+            apply_seek_setting(
+                &mut seek,
+                keys::SEEK_SEARCH_LANGUAGE,
+                &serde_json::json!("fr"),
             )
             .is_err()
         );

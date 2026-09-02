@@ -76,6 +76,11 @@ pub struct SearchBarFrame {
     pub palette: Palette,
     /// 검출이 아직 진행 중인가 (S-6 — 후보 0개로 먼저 뜬 상태를 UI 가 알아야 한다).
     pub detecting: bool,
+    /// ⭐(이슈 #93) 인풋 박스 모드 — `true` 면 웹뷰가 `<span id="query-text">`
+    /// 대신 실제 `<input id="query-input">` 를 보여주고 macOS IME 로 조합을
+    /// 받는다(검색 언어가 명시적 비영어일 때만). `false` = 현행 `<span>` 경로.
+    /// 세션 하나에 고정된다.
+    pub input_mode: bool,
 }
 
 /// 검색 바 매치 목록의 행 하나.

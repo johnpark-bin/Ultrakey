@@ -19,7 +19,14 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 
 이 계층의 가장 중요한 제약은 **하위 앱의 포커스를 빼앗지 않아야 한다**는 것이다 — 사용자는 Seek 를 띄운 상태에서도 원래 작업 중이던 앱에 키보드 포커스가 남아 있다고 인지하며(검색 바는 자체 텍스트 입력을 받지만 이는 F-01 이 라우팅하는 이벤트로 처리되지, macOS 차원의 키 윈도우 전환으로 처리되지 않는다), 오버레이가 열렸다고 해서 대상 앱이 배경으로 밀려나거나 다른 창이 활성화되는 일이 없어야 한다.
 
-> ⛔ **한글 조합 입력(IME)은 이 오버레이의 범위 밖이다.** `canBecomeKey = false`(이 절의 핵심 제약 — 하위 앱 포커스 유지)와 IME 조합 버퍼 요구가 정면 충돌한다. `canBecomeKey = true` 로 바꾸면 오버레이가 키 윈도우가 되어 하위 앱이 포커스를 잃고, `false` 를 유지한 채 IME 를 쓰려면 Rust 쪽 한글 자모 결합 엔진이 따로 필요하다. 한/영 키 전환은 F-01(세션 라우팅)이 원본 통과로 복구한다(이슈 #76, `seek-activation-and-session.md` §3.1 한/영 키 예외). 한글 조합 자체는 후속 작업으로 분리되어 있다.
+> ⛔ **한글 조합 입력(IME)은 기본(영어 단일) 구성에서 이 오버레이의 범위 밖이다.** `canBecomeKey = false`(이 절의 핵심 제약 — 하위 앱 포커스 유지)와 IME 조합 버퍼 요구가 정면 충돌한다. `canBecomeKey = true` 로 바꾸면 오버레이가 키 윈도우가 되어 하위 앱이 포커스를 잃고, `false` 를 유지한 채 IME 를 쓰려면 Rust 쪽 한글 자모 결합 엔진이 따로 필요하다. 한/영 키 전환은 F-01(세션 라우팅)이 원본 통과로 복구한다(이슈 #76, `seek-activation-and-session.md` §3.1 한/영 키 예외).
+>
+> ⭐⭐ **정정 (이슈 #93, Plan §3 D2·D3 — 다국어 세션 한정 유예)**: 검색 언어 설정(`seek.searchLanguage`, `docs/spec/preferences-ui.md` Seek 탭 참조)이 **명시적 비영어**(`ko`·`zh`·`ja`·`es`)면 그 세션은 **인풋 박스 모드**로 동작한다 — 검색 바가 실제 `<input>` 이 되어 macOS IME 가 조합하고, **다국어 세션에 한해** 검색 바 창이 키 윈도우 자격을 일시 부여받는다(`NON_ACTIVATING` 등록부 해제 → `makeKeyAndOrderFront`, 세션 종료 시 재등록).
+>
+> - **기본(영어 단일·부재) 구성은 이 절의 원래 계약 그대로다** — `canBecomeKey = false` 유지, 포커스 무변화, 회귀 없음. 위 정정은 **명시적으로 다국어를 선택한 세션에만** 적용된다.
+> - 다국어 세션의 포커스 핸드오프 비용(이전 앱이 활성 상태를 잃음)은 "클릭 없이 닫히면 이전 최전면 앱으로 복원"으로 상쇄한다(F-01 소관, `seek-activation-and-session.md` §3.2 키 상실·닫힘 행). 클릭 확정(Confirmed)은 F-04 가 이미 대상 앱을 활성화하므로 복원하지 않는다.
+> - **입력 소유권 분리**: 글자 입력 = 웹뷰 `<input>`(IME), 세션 제어(Enter·Esc·↑↓·Tab·`;` 순환·`;` 설정) = Rust 상태 머신. 계층 1 게이트가 `Text`/`Backspace`(및 `⌥`+문자 = 데드키) 키를 원본 그대로 통과시키고, `⌘`/`⌃` 조합·제어 키는 계속 소비한다(`seek-activation-and-session.md` §3.1).
+> - **한글 조합 자체는 여전히 범위 밖**이었던 "Rust 자모 결합 엔진"(plan 기각 대안 (d))은 그대로 기각이다 — 다국어 검색은 **실제 IME** 로 해결한다.
 
 ### 1.1 ⭐ 신규 확정 — 오버레이는 창 여러 개로 구성된 복합체다 (실측: 번들 심볼 · defaults)
 
@@ -83,7 +90,7 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 | Dock 아이콘 없음 | 메뉴바 상주 유틸리티 원칙(F-09 와 공유) | ✅ `ActivationPolicy::Accessory` | — |
 | **클릭 통과** (`ignoresMouseEvents`) | 하이라이트·연결선이 그려진 영역이라도 마우스 클릭은 하위 앱으로 전달돼야 함(Seek 의 클릭은 F-04 가 별도로 합성) | ✅ `set_ignore_cursor_events(bool)` | — |
 | ⭐ **전체화면 앱 위에 표시** | S7. 전체화면 앱은 특수 window level 을 쓰므로 일반 `always_on_top` 레벨로는 못 넘어감 | ❌ Tauri 설정에 없음 | **필요** — `ns_window()` 로 얻은 포인터를 `objc2_app_kit::NSWindow` 로 캐스팅해 `setLevel()` 을 전체화면 레벨 이상으로 직접 설정 |
-| ⭐ **활성화하지 않고 표시** (`canBecomeKey = false`, `orderFrontRegardless`) | 이 문서에서 가장 중요한 요구사항 — 하위 앱의 포커스를 빼앗지 않음 | ❌ Tauri 에 없음(부분적) | **필요** — `NSWindow` 서브클래스 없이도 `canBecomeKey`/`canBecomeMain` 은 `NSWindow` 인스턴스의 델리게이트/프로퍼티 오버라이드가 필요할 수 있어 objc2 로 직접 제어. `orderFrontRegardless()` 호출로 키 윈도우 전환 없이 표시 |
+| ⭐ **활성화하지 않고 표시** (`canBecomeKey = false`, `orderFrontRegardless`) | 이 문서에서 가장 중요한 요구사항 — 하위 앱의 포커스를 빼앗지 않음 | ❌ Tauri 에 없음(부분적) | **필요** — `NSWindow` 서브클래스 없이도 `canBecomeKey`/`canBecomeMain` 은 `NSWindow` 인스턴스의 델리게이트/프로퍼티 오버라이드가 필요할 수 있어 objc2 로 직접 제어. `orderFrontRegardless()` 호출로 키 윈도우 전환 없이 표시. ⭐ **예외(이슈 #93)**: 검색 언어가 명시적 비영어인 다국어 세션에서는 검색 바 창만 `NON_ACTIVATING` 등록부에서 일시 해제(`set_can_become_key(true)`)하고 `makeKeyAndOrderFront` 로 키 윈도우 승격 — IME 조합에 필요. 세션 종료 시 재등록(영어 단일 세션은 이 경로를 타지 않는다) |
 | **다중 디스플레이 통합 좌표계** | §3.3 | ❌ 없음 | **필요** — `NSScreen.screens` 순회, union frame 계산 |
 | **`NSWindowCollectionBehavior` 세부 제어** (`.canJoinAllSpaces`, `.fullScreenAuxiliary`, `.stationary`) | 전체화면 Space 로도 따라 들어가되(`.fullScreenAuxiliary`), Space 전환 애니메이션에 오버레이가 딸려 움직이지 않게(`.stationary`) | ❌ 없음 | **필요** — `setCollectionBehavior()` 직접 호출 |
 
@@ -254,6 +261,8 @@ Seek 는 사용자가 타이핑한 문자열을 화면에서 찾아 키보드만
 §3.2 표가 근거다. `decorations`/`transparent`/`always_on_top`/`visible_on_all_workspaces`/`shadow`/클릭 통과/Dock 아이콘 없음은 Tauri v2 설정만으로 충분하다. 그러나 이 문서의 요구사항 중 가장 중요한 두 가지 — **전체화면 앱 위 표시**(window level)와 **활성화하지 않고 표시**(`canBecomeKey`/`orderFrontRegardless`) — 는 Tauri 설정에 없다. 여기에 다중 디스플레이 union frame 계산과 `NSWindowCollectionBehavior` 세부 제어까지 더하면, **Tauri 설정만으로 이 오버레이를 완성하는 것은 불가능**하다고 명확히 결론 내린다.
 
 그러나 이것이 "네이티브 shim 이 필요하다"는 뜻은 아니다. Tauri v2 는 `WebviewWindow::ns_window()` 로 네이티브 `NSWindow` 포인터를 그대로 내주며, 이를 `objc2_app_kit::NSWindow` 로 캐스팅하면 위 네 가지 요구사항 전부를 **Rust 코드 안에서** 처리할 수 있다(§6). 별도 Swift/Objective-C 소스 파일이나 Xcode 프로젝트가 필요하지 않다 — `objc2-app-kit` 은 헤더 자동 생성 Rust 바인딩이다. 따라서 (A) 에 대한 결론은: **오버레이 창은 Tauri 로 생성하되, 표시 방식·레벨·collection behavior·다중 디스플레이 프레임은 반드시 `ns_window()` 를 거쳐 네이티브 `NSWindow` API 로 직접 설정한다.**
+
+> ⭐ **`makeKeyAndOrderFront` 금지 문구의 예외(이슈 #93)**: 이 절 원래 문구는 "`makeKeyAndOrderFront:` 는 절대 부르지 않는다" 였으나 — **다국어(인풋 박스) 세션의 검색 바 창은 예외**다. 그 창만 `NON_ACTIVATING` 등록부에서 해제된 상태에서 `makeKeyAndOrderFront` 로 키 윈도우 승격(즉 §1 정정 블록). **영어 단일 세션과 하이라이트 창에는 그 금지가 그대로 적용된다.**
 
 **(B) 콘텐츠 렌더링: WKWebView 로 충분한지는 조사 노트 P3 가 미확인으로 남겨 확정할 수 없다.**
 

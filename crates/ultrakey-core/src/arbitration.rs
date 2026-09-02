@@ -32,6 +32,22 @@ use crate::time::Millis;
 pub struct GateSnapshot {
     /// 계층 1(Seek 세션 활성, F-01/M3).
     pub seek_active: bool,
+    /// ⭐(이슈 #93) — 세션이 **인풋 박스 모드**(검색 언어가 명시적 비영어)인가.
+    /// 세션 열림 시점에 래칭된다(`false` = 영어 단일 또는 로케일 폴백).
+    /// 켜져 있으면 계층 1 이 [`is_input_box_pass_key`](crate::seek_input_box::
+    /// is_input_box_pass_key) 를 만족하는 키를 원본 그대로 통과시켜 웹뷰
+    /// `<input>` 이 macOS IME 로 조합하게 한다(Plan §3 D4).
+    pub seek_input_box: bool,
+    /// ⭐(이슈 #93) — `seek.semicolonCycle`(저장 키 `seek.semicolonCycle`)
+    /// 의 현재 값. 인풋 박스 모드에서 `;` 의 통과/소비를 가른다(`seek_input_box.rs`
+    /// — 설정 켜짐+무modifier 면 순환, 아니면 통과).
+    pub seek_semicolon_cycles: bool,
+    /// ⭐(이슈 #93) — `Toggle Seek with shortcut:` 의 물리 keycode(`0` = 미설정).
+    /// 인풋 박스 모드에서 문자 키 통과 판정 **앞**에 이 조합을 걸러 세션 재입력
+    /// 토글(정확히는 machine 의 `matches_global_shortcut`)이 살아 있게 한다.
+    pub seek_shortcut_keycode: u16,
+    /// ⭐(이슈 #93) — 같은 단축키의 modifier 비트마스크(`EventFlags` 관례).
+    pub seek_shortcut_mods: u64,
     /// ⭐ D-K3 — 한국어 전용 앱 제외 비트(`docs/spec/korean-input.md` §3.5).
     /// `true` 면 F-16 규칙을 **평가하지 않는다.** F-10 전역 게이트(`gate.rs`)와 달리
     /// hyper/meh/bleh 등 계층 2~5 의 다른 규칙에는 영향을 주지 않는다.
@@ -353,6 +369,34 @@ impl Arbiter {
             // 마우스 통과가 겹치지 않게. 나머지 키 소비는 그대로 유지한다.
             if ev.keycode == KeyCode::JIS_KANA {
                 return Outcome::pass(Layer::SeekSession);
+            }
+            // ⭐(이슈 #93) — 인풋 박스 모드(다국어 검색 언어)에서 문자·backspace
+            // 키(및 ⌥+문자=데드키)를 **원본 그대로 통과**시켜 웹뷰 `<input>` 이
+            // macOS IME 로 조합하게 한다. 나머지(Enter·Esc·↑↓·Tab·`;` 순환·⌘⌃
+            // 조합)는 계속 소비한다 — 세션 컨트롤(순환·확정·취소)이 웹뷰에
+            // 빼앗기지 않고, 다국어 세션 중 우리 앱이 활성이므로 ⌘Q 같은 앱
+            // 단축키가 통과되어 프로세스가 종료되지 않게 한다. 한/영 키 예외
+            // (위)와 마찬가지로 **원본 이벤트 그대로**(환원된 kind 가 아니라)
+            // `Outcome::pass` 한다 — IME 는 KeyDown/KeyUp/FlagsChanged 어느 쪽이든
+            // 받아야 조합·상태가 깨지지 않는다(Plan §9 #4).
+            if gates.seek_input_box
+                && crate::seek_input_box::is_input_box_pass_key(ev, gates.seek_semicolon_cycles)
+            {
+                // ⭐ 전역 단축키(`Toggle Seek with shortcut:`) 조합은 통과시키지
+                // 않는다 — 문자로 새어 들어가면 세션을 단축키로 다시 닫을 수
+                // 없다. 아래로 떨어져 Consume → `SeekKey` → machine 의 재입력
+                // 판정(`matches_global_shortcut`)을 탄다.
+                const SHORTCUT_MOD_MASK: u64 = EventFlags::SHIFT.0
+                    | EventFlags::CONTROL.0
+                    | EventFlags::ALTERNATE.0
+                    | EventFlags::COMMAND.0;
+                let is_shortcut = gates.seek_shortcut_keycode != 0
+                    && ev.keycode.0 == gates.seek_shortcut_keycode
+                    && (ev.flags.0 & SHORTCUT_MOD_MASK)
+                        == (gates.seek_shortcut_mods & SHORTCUT_MOD_MASK);
+                if !is_shortcut {
+                    return Outcome::pass(Layer::SeekSession);
+                }
             }
             let mut out = Outcome::consume(Layer::SeekSession);
             out.push_effect(Effect::SeekKey(InputEvent { kind, ..*ev }));
@@ -1794,6 +1838,204 @@ mod tests {
         );
         assert_eq!(fc_out.disposition(), Disposition::Pass);
         assert!(fc_out.effects().is_empty());
+    }
+
+    // ── ⭐(이슈 #93) — 인풋 박스 모드의 계층 1 문자 통과 (Plan §6 T4~T9·T7-b·T7-c) ──
+
+    fn input_box_gates(semicolon_cycles: bool) -> GateSnapshot {
+        GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: semicolon_cycles,
+            ..Default::default()
+        }
+    }
+
+    /// 세션 비활성이면 인풋 박스 플래그를 켜도 통과 분기가 평가되지 않는다(회귀 없음).
+    #[test]
+    fn inactive_session_ignores_input_box_flag() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
+            GateSnapshot {
+                seek_input_box: true,
+                ..Default::default()
+            },
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::Passthrough);
+        assert_eq!(out.disposition(), Disposition::Pass);
+    }
+
+    /// T4 — 인풋 박스 모드 + 문자 키(modifier 없음) → **Pass**(웹뷰 `<input>` 이
+    /// IME 로 처리).
+    #[test]
+    fn input_box_passes_plain_letter() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
+            input_box_gates(false),
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty(), "SeekKey 를 내면 안 된다");
+    }
+
+    /// T5 — 인풋 박스 모드 + backspace(`DELETE`) → **Pass**(입력 요소가 조합 포함
+    /// 처리).
+    #[test]
+    fn input_box_passes_backspace() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::DELETE, EventFlags::NONE),
+            input_box_gates(false),
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T6 — 인풋 박스 모드 + `RETURN` → **여전히 Consume + SeekKey**(세션 컨트롤).
+    #[test]
+    fn input_box_still_consumes_control_keys() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        for (kc, _label) in [
+            (KeyCode::RETURN, "Enter"),
+            (KeyCode::ESCAPE, "Esc"),
+            (KeyCode::DOWN_ARROW, "Down"),
+            (KeyCode::UP_ARROW, "Up"),
+            (KeyCode::TAB, "Tab"),
+        ] {
+            let out = arb.arbitrate(
+                &cfg,
+                &key_down(kc, EventFlags::NONE),
+                input_box_gates(false),
+                Millis(0),
+            );
+            assert_eq!(out.disposition(), Disposition::Consume, "{_label}");
+            assert_eq!(out.effects().len(), 1, "{_label}");
+            assert!(matches!(out.effects()[0], Effect::SeekKey(_)), "{_label}");
+        }
+    }
+
+    /// T7 — 인풋 박스 모드 + `⌘A`·`⌃A` → **여전히 Consume**(⌘⌃ 조합 보호 —
+    /// 다국어 세션 중 우리 앱이 활성이므로 ⌘Q 로 프로세스가 종료되는 것을 막는다).
+    #[test]
+    fn input_box_consumes_command_and_control_combos() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        for flags in [EventFlags::COMMAND, EventFlags::CONTROL] {
+            let out = arb.arbitrate(
+                &cfg,
+                &key_down(KeyCode::ANSI_A, flags),
+                input_box_gates(false),
+                Millis(0),
+            );
+            assert_eq!(out.disposition(), Disposition::Consume, "{flags:?}");
+            assert_eq!(out.effects().len(), 1);
+        }
+    }
+
+    /// T7-b — 인풋 박스 모드 + `⌥E`(option, 데드키) → **Pass**(스페인어 악센트
+    /// 입력에 필요한 ⌥+문자의 네이티브 의미론 보존).
+    #[test]
+    fn input_box_passes_option_letter_dead_key() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_E, EventFlags::ALTERNATE),
+            input_box_gates(false),
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass, "⌥+문자는 데드키로 통과");
+        assert!(out.effects().is_empty());
+    }
+
+    /// T7-c — 인풋 박스 모드 + **설정된 전역 단축키 조합**(예: ⌥Space 트리거) →
+    /// **여전히 Consume**(machine 의 재입력 토글 판정을 살린다 — 정확히는
+    /// `matches_global_shortcut` 가 닫기로 처리).
+    #[test]
+    fn input_box_consumes_configured_global_shortcut_combo() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: false,
+            seek_shortcut_keycode: KeyCode::SPACE.0,
+            seek_shortcut_mods: EventFlags::ALTERNATE.0,
+            ..Default::default()
+        };
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags::ALTERNATE),
+            gates,
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Consume, "단축키 조합은 통과 금지");
+        assert_eq!(out.effects().len(), 1);
+
+        // 같은 ⌥ 조합이지만 **다른** keycode 는 통과한다(문자).
+        let other = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_B, EventFlags::ALTERNATE),
+            gates,
+            Millis(10),
+        );
+        assert_eq!(other.disposition(), Disposition::Pass);
+    }
+
+    /// ⭐ `;` — 인풋 박스 모드에서 설정 켬(= 순환 소비) vs 끔(= 검색어 통과).
+    #[test]
+    fn input_box_semicolon_follows_cycle_setting() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+
+        // 켬: `;` 는 다음 매치 순환 키로 Consume.
+        let cycle = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_SEMICOLON, EventFlags::NONE),
+            input_box_gates(true),
+            Millis(0),
+        );
+        assert_eq!(cycle.disposition(), Disposition::Consume);
+        assert_eq!(cycle.effects().len(), 1);
+
+        // 끔: `;` 는 그냥 문자로 통과.
+        let text = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_SEMICOLON, EventFlags::NONE),
+            input_box_gates(false),
+            Millis(10),
+        );
+        assert_eq!(text.disposition(), Disposition::Pass);
+        assert!(text.effects().is_empty());
+    }
+
+    /// T8 — 세션 활성 + 인풋 박스 **꺼짐**(영어 단일·`"en"` 강제) + `ANSI_A` →
+    /// **여전히 Consume + SeekKey** — 설정 분기가 영어 단일 동작을 바꾸지 않는다.
+    #[test]
+    fn english_only_still_consumes_letters() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
