@@ -898,12 +898,22 @@ mod tests {
     // (`trace_enabled_is_stable_across_calls` 문서와 같은 전제). 그 전제가 깨지는
     // 실행 환경(환경변수를 설정하고 테스트를 돌리는 경우)에서는 조용히 건너뛴다 —
     // 이 게이트 자체의 로직이 아니라 테스트 격리 문제이기 때문이다.
+    //
+    // ⚠️ 그리고 `VIEWER_ON` 은 **프로세스 전역 `AtomicBool`** 이다 — 아래 세 테스트가
+    // 병렬 실행되면 서로의 `set_viewer_enabled` 호출을 덮어쓴다. `viewer_off_*` 가
+    // `set(false)` 뒤 루프로 `!should_trace` 를 검증하는 사이 `viewer_on_*` 의
+    // `set(true)` 가 끼어들면, env 가 `Off` 인데도 `should_trace(KeyDown)` 이 true 로
+    // 오염되어 실패한다 — CI(병렬 스케줄링이 로컬과 다름)에서 실제로 재현됐다
+    // (이슈 #101 PR — panic: kind=KeyDown). 그래서 셋 다 `VIEWER_TEST_LOCK` 으로
+    // 직렬화한다. 프로덕션 쪽 `AtomicBool` 은 콜백 임계 경로라 손대지 않는다.
+    static VIEWER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// 수용 기준(§8) — 뷰어 off + 환경변수 off 에서 `should_trace()` 가 **모든**
     /// `EventKind` 에 대해 거짓이다. 이것이 "콜백이 추가로 하는 일은 `AtomicBool`
     /// 로드 한 번뿐" 이라는 §2.1 주장의 직접 증거다.
     #[test]
     fn viewer_off_and_env_off_means_no_trace() {
+        let _gate = VIEWER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if trace_scope() != TraceScope::Off {
             return;
         }
@@ -937,6 +947,7 @@ mod tests {
     /// 피해야 한다.
     #[test]
     fn viewer_on_traces_key_events_only() {
+        let _gate = VIEWER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         if trace_scope() != TraceScope::Off {
             return;
         }
@@ -954,6 +965,7 @@ mod tests {
 
     #[test]
     fn set_viewer_enabled_round_trips() {
+        let _gate = VIEWER_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_viewer_enabled(true);
         assert!(viewer_enabled());
         set_viewer_enabled(false);
