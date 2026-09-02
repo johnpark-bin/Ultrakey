@@ -72,7 +72,12 @@ cd "${REPO_ROOT}"
 #   파일(`~/Library/Application Support/Ultrakey/`)이 되어 키체인 로그인 프롬프트가
 #   뜨지 않는다. Keychain 저장(`keychain-store` feature)은 정식 서명 릴리즈 전용 —
 #   `.github/workflows/release.yml` 참조(docs/spec/licensing-and-trial.md §3.5 개정).
-cargo tauri build --target universal-apple-darwin
+# ⭐ `--bundles app` — 이 스크립트가 필요한 산출물은 서명 대상 `.app` 하나뿐이다.
+#   기본값(dmg 포함)으로 두면 번들러의 bundle_dmg.sh 가 Finder AppleScript 로
+#   창을 꾸미다 macOS 26 에서 실패하고(`Can't set statusbar visible ... (-10006)`),
+#   `set -e` 때문에 서명 단계까지 못 간다. 배포용 dmg 는 릴리스 워크플로가 만든다
+#   (.github/workflows/release.yml).
+cargo tauri build --target universal-apple-darwin --bundles app
 
 echo
 echo "== 3. 서명 =="
