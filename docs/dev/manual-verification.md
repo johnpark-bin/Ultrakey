@@ -1296,8 +1296,13 @@ ERROR ultrakey_app: window not found window_label="settings" what="show_settings
 
 | # | 조작 | 기대 |
 | :--- | :--- | :--- |
-| 1 | 앱이 뜬 상태에서 Finder 로 다시 실행 | 두 번째 프로세스가 즉시 종료된다. `ps aux \| grep Ultrakey` 에 하나만 남는다 |
+| 1 | 앱이 뜬 상태에서 `open -n` 으로 **강제로** 두 번째 프로세스를 띄운다 | 두 번째 프로세스가 즉시 종료된다. `ps aux \| grep Ultrakey` 에 하나만 남는다 |
 | 2 | 키를 눌러 본다 | 이벤트가 **두 번 처리되지 않는다** |
+
+> ⚠️ **Finder 재실행은 두 번째 프로세스를 만들지 않는다**(이슈 #92 실측 확정 — LaunchServices 가
+> 실행 중 인스턴스로 `kAEReopenApplication` reopen Apple Event 를 보낸다. `open -n` 은 그 예외로
+> 강제 2번째 프로세스다). "다시 실행하면 설정 창이 열린다"의 검증은 **항목 18 의 M4**(`open`
+> 재실행 → 설정 창)·**M4-a**(`open -n` → 분산 알림 경로)에 절차가 있다.
 
 ---
 
@@ -3048,7 +3053,8 @@ tail -f ~/Library/Logs/Ultrakey/ultrakey.log
 | **M1** | 이슈 본문 1 (빨간 버튼 닫기 → 재열기) | 메뉴바 `Settings…` 로 설정 창을 연 뒤 빨간 stoplight 버튼으로 닫고, 다시 `Settings…` 클릭 | ⭐ **정상 재열림.** 로그에 `settings window close requested; hiding instead of destroying (D1, issue #88)` 이 한 번 남고 `window not found` 에러가 **없다**. 재열 때 `show settings` 후 `is_visible=Ok(true)` | D1 — 창이 파괴되지 않고 숨김만 |
 | **M2** | `⌘W` 닫기 → 메뉴 Settings… | 설정 창 포커스 상태에서 `⌘W` 로 닫고, 메뉴바 `Settings…` 재클릭 | ⭐ `⌘W` 도 같은 `CloseRequested` 경로를 태는지 확인 — M1 과 같은 로그(숨김) + 재열림 정상 | 계획 리스크 R2 `(추정 → 실측)`. 다른 경로면 해당 배선 점검 |
 | **M3** | 보이는 상태에서 Settings… 재선택 | 설정 창이 **열려 있는 채**로 메뉴바 `Settings…` 재클릭 | **중복 창 없음.** 새 창이 생기지 않고 포커스만 이동(기존 창이 최전면). 로그 `settings window is already visible; only requesting focus` | F-09 §3.3 다중 인스턴스 방지 — 클론 동작 확정 |
-| **M4** | 이슈 #68 (앱 실행 중 재실행) | 앱이 떠 있는 상태에서 `<앱>.app` 을 다시 `open -n`(또는 Finder 에서 재실행) | 두 번째 프로세스가 즉시 종료되고, **첫 인스턴스의 설정 창이 열리거나 포커스된다** (창이 숨겨져 있었으면 열림, 떠 있었으면 포커스) | D4 — 재실행 신호는 `show_settings_window` 로 흐르고, 창 상주로 항상 열린다 |
+| **M4** | 이슈 #92 — 실제 재실행 (`open`, Finder 더블클릭) | 앱이 떠 있는 상태에서 `<앱>.app` 을 **`open`**(또는 **Finder 에서 더블클릭**)으로 다시 실행 | ⭐ **두 번째 프로세스가 뜨지 않는다**(`pgrep -lf 'Ultrakey.app/Contents/MacOS'` 에 한 프로세스만 남는다). 기존 인스턴스 로그에 `reopen event received; opening the settings window (issue #92)` → `show settings` 후 `is_visible=Ok(true)`, **설정 창이 열린다**. 이미 열려 있으면 `settings window is already visible; only requesting focus`(중복 창 없음) | ⭐ **실측 확정(이슈 #92)**: LaunchServices 가 실행 중 인스턴스를 감지하고 두 번째 프로세스 대신 `kAEReopenApplication`(reopen) Apple Event 를 그 인스턴스로 보낸다 → tao `applicationShouldHandleReopen:` → `tauri::RunEvent::Reopen` → `show_settings_window`. M2 2차의 "이 이벤트는 Accessory 앱에서 발생하지 않는다"는 주석이 틀렸으며, 그것이 이 이슈의 원인이다 |
+| **M4-a** | 이슈 #68 — 강제 이중 실행 (`open -n`) | 앱이 떠 있는 상태에서 `open -n <앱>.app` | 두 번째 프로세스가 **즉시 종료**(로그 `asking it to open the settings window and exiting`), 기존 인스턴스 로그 `show-settings request from a second instance received` 후 **설정 창이 열린다** | 분산 알림(#68) 경로가 여전히 살아 있음을 확인 — 이 경로는 `open -n`(진짜 두 번째 프로세스)에만 해당하고, **실사용 재실행은 M4 가 담당한다** |
 | **M5** | 이슈 본문 2 (About 메뉴) | 메뉴바 `About` 클릭 | 현행대로 **설정 창이 열린다**(숨김이었다면 재열림 포함). About 독립 창은 #87 소관 — 이 절은 현행 동작 회귀만 본다 | D5 — 현행(ABOUT → 설정 창 열기) 유지 + 상주 복구 |
 | **M6** | 크기 영속과 함께 | 창 크기를 드래그로 바꾼 뒤 닫고, 다시 연다 | 크기가 **유지**되고 `ui.windowWidth`/`ui.windowHeight` 가 디바운스 400ms 뒤 기록·다음 재열에 복원된다. 항목 9-b(§9-b)의 기존 동작 그대로 | D3 — 상주라 기존 크기 영속 배선 무변경 |
 | **M7** | JS 세션 유지 | `General` 탭(또는 아무 탭)을 연 상태에서 닫고 다시 연다 | **같은 탭**이 유지된다(부팅 시 마지막 탭 복원과 달리, 닫기 왕복에 리셋이 없다) | D1 근거 ④ — 상주 시 웹뷰 JS 세션 유지 |

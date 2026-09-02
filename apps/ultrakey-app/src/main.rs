@@ -4480,11 +4480,23 @@ fn main() {
                 }
             }
             tauri::RunEvent::Reopen { .. } => {
-                // ⭐ M2 2차부터: 메뉴바 `Settings…` 가 창을 여는 정식 경로다
-                // (M2 1차 임시 조치였던 자동 오픈은 걷어낸다 — 원래 계획대로).
-                // Accessory 앱은 Dock 아이콘이 없어 이 이벤트가 사실상 발생하지
-                // 않지만(§1), 발생하더라도 로그만 남긴다.
-                tracing::debug!("reopen event received; not auto-opening a window because this is an accessory app");
+                // ⭐ 이슈 #92(실측 확정) — 사용자가 실행 중인 앱을 "다시 실행"하는
+                // 실제 경로(Finder 더블클릭·`open`)는 **두 번째 프로세스를 만들지
+                // 않는다.** macOS LaunchServices 가 이미 실행 중인 인스턴스를
+                // 감지하고 `kAEReopenApplication`(reopen) Apple Event 를 그
+                // 인스턴스로 보낸다 → tao `applicationShouldHandleReopen:` → 여기.
+                // M2 2차가 남긴 주석("Accessory 앱은 Dock 아이콘이 없어 이
+                // 이벤트가 사실상 발생하지 않는다")은 실측으로 **틀렸다** —
+                // `LSUIElement` 액세서리 앱도 재실행(`open`) 시 이 콜백을 받는
+                // 것을 검증 앱으로 확인했다(이슈 #92 원인 확정 단계).
+                // 재실행의 기대 동작("설정 창 열기")은 여기서 처리한다. 이미 보이면
+                // `show_settings_window` 의 `is_visible` 분기가 포커스만 주므로
+                // (이슈 #68 체크리스트 2) 중복 창은 생기지 않는다. 진짜 두 번째
+                // 프로세스가 뜨는 이중 실행(`open -n`)은 `setup_show_settings_observer`
+                // 의 분산 알림 경로(#68)가 계속 담당한다 — 두 경로가 같은
+                // `show_settings_window` 로 수렴한다.
+                tracing::info!("reopen event received; opening the settings window (issue #92)");
+                show_settings_window(app_handle);
             }
             _ => {}
         });
