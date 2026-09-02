@@ -234,6 +234,8 @@
   "preferences.keyboards.functionKeys.templates.macMediaKeys": "Mac 媒体键集 (F1–F12)",
   "preferences.keyboards.functionKeys.templates.standardFKeys": "标准 F 键集 (F1–F12)",
   "preferences.keyboards.functionKeys.templates.apply": "应用",
+  "preferences.keyboards.functionKeys.templates.confirmTitle": "要应用此模板吗？",
+  "preferences.keyboards.functionKeys.templates.confirmBody": "这将把“{0}”当前的功能键设置替换为该模板的全部 12 个键值。",
   "preferences.keyboards.functionKeys.unverifiedHint": "尚未验证此目标的 usage page 能否通过 hidutil 正常工作。",
   "preferences.keyboards.functionKeys.category.disable": "禁用",
   "preferences.keyboards.functionKeys.category.modifierKeys": "修饰键",

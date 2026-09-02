@@ -1683,21 +1683,60 @@ fn settings_html_에_keyboards_기능2_템플릿이_배선돼_있다() {
     );
 }
 
-/// ⭐ 이슈 #69 K4 — 템플릿 행은 디바이스 선택 중에만 보인다(공통 계층은
-/// 템플릿의 용처가 아니다 — §1 이 기능의 존재 이유는 디바이스별 차등).
+/// ⭐ 이슈 #69 K4 + 이슈 #94 — 템플릿 행은 공통("모든 키보드")·디바이스 어느
+/// 선택에서도 보인다. 초판(#69)은 디바이스 선택 중에만 보였는데, 공통에
+/// 적용하면 `perDevice.all.functionKeys.*` 로 기록되어 **이 앱의 기본 펑션키
+/// 세트**가 된다는 것(사용자 요구의 "또 다른 기본 템플릿" — 이슈 #94)을
+/// 사용자가 볼 수 있게 하기 위해서다(§3.7.4 표시 조건).
 #[test]
-fn keyboards_기능2_템플릿_행은_디바이스_선택중에만_보인다() {
+fn keyboards_기능2_템플릿_행은_공통_디바이스_어느_선택에서도_보인다() {
     let html = read_settings_html();
     let f = extract_js_function(&html, "function renderFunctionKeysGroup(");
     let row_at = f
         .find("keyboards-functionkeys-template-row")
         .expect("템플릿 행 갱신 코드가 renderFunctionKeysGroup 에 없다");
     let hidden_at = f[row_at..]
-        .find("hidden = device === \"all\"")
-        .expect("템플릿 행에 ② 숨김 조건(device === \"all\")이 없다");
+        .find("hidden = false")
+        .expect("템플릿 행이 공통 선택 중에도 보이도록(항상 unhide) 설정되어 있지 않다(이슈 #94)");
     assert!(
         hidden_at > 0,
         "도달하지 않는다 — 위 find 가 이미 검사했다"
+    );
+    assert!(
+        !f[row_at..].contains("hidden = device === \"all\""),
+        "템플릿 행에 디바이스 선택 중에만 보이게 하는 숨김 조건이 아직 남아 있다(이슈 #94 §3.7.4 표시 조건 갱신)"
+    );
+}
+
+/// ⭐ 이슈 #94 — 템플릿 적용이 공통 계층("모든 키보드")을 허용한다.
+/// `applyFunctionKeyTemplate`/`templateNeedsConfirm` 에 `currentDevice === "all"`
+/// 가드가 없어야 하고(공통 선택 중에도 적용 가능), `commitFunctionKeyTemplate`
+/// 은 공통 계층의 표준 F-키(null)가 부재 키에 쓰이지 않게 하는 저장 억제 규칙을
+/// 가져야 하며, 확인 대화상자는 템플릿 전용 카피를 써야 한다(§3.7.4).
+#[test]
+fn 키보드_기능2_템플릿_적용이_공통_계층을_허용한다() {
+    let html = read_settings_html();
+
+    let apply_fn = extract_js_function(&html, "async function applyFunctionKeyTemplate(");
+    assert!(
+        !apply_fn.contains("currentDevice === \"all\""),
+        "공통 선택 중 템플릿 적용을 막는 가드가 남아 있다(이슈 #94)"
+    );
+    assert!(
+        apply_fn.contains("templates.confirmTitle") && apply_fn.contains("templates.confirmBody"),
+        "템플릿 전용 확인 카피(templates.confirmTitle/confirmBody)를 쓰지 않는다(이슈 #94)"
+    );
+
+    let confirm_fn = extract_js_function(&html, "function templateNeedsConfirm(");
+    assert!(
+        !confirm_fn.contains("currentDevice === \"all\""),
+        "templateNeedsConfirm 에 공통 선택 중 확인을 생략하는 가드가 남아 있다(이슈 #94)"
+    );
+
+    let commit_fn = extract_js_function(&html, "async function commitFunctionKeyTemplate(");
+    assert!(
+        commit_fn.contains("currentDevice === \"all\" && wanted === null"),
+        "공통 계층의 표준 F-키(null)가 부재 키에 쓰이지 않게 하는 규칙이 없다(이슈 #94)"
     );
 }
 
@@ -1811,8 +1850,11 @@ fn macos_function_keys_패널_딥링크와_폴링이_배선돼_있다() {
 /// ⭐ 이슈 #69 — 상태 뱃지 `status.mixed`(기능 2 그룹 뱃지의 "일부 전용")와
 /// Function Keys 템플릿 4개(`templates.label/.macMediaKeys/.standardFKeys/
 /// .apply`)를 더한다 — 41 + 5 = 46.
+///
+/// ⭐ 이슈 #94 — 템플릿 전용 확인 카피 2개(`templates.confirmTitle/
+/// .confirmBody`)를 더한다 — 46 + 2 = 48.
 #[test]
-fn keyboards_탭_신규_i18n_키_46개가_en_ko_양쪽에_있다() {
+fn keyboards_탭_신규_i18n_키_48개가_en_ko_양쪽에_있다() {
     let en = flatten_catalog(&read_en_catalog());
     let ko = flatten_catalog(&read_ko_catalog());
 
@@ -1870,11 +1912,14 @@ fn keyboards_탭_신규_i18n_키_46개가_en_ko_양쪽에_있다() {
         "preferences.keyboards.functionKeys.templates.macMediaKeys",
         "preferences.keyboards.functionKeys.templates.standardFKeys",
         "preferences.keyboards.functionKeys.templates.apply",
+        // ⭐ 이슈 #94 — 템플릿 전용 확인 카피 2개.
+        "preferences.keyboards.functionKeys.templates.confirmTitle",
+        "preferences.keyboards.functionKeys.templates.confirmBody",
     ];
     assert_eq!(
         KEYS.len(),
-        46,
-        "이 목록 자체가 46개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
+        48,
+        "이 목록 자체가 48개가 아니다 — 명세 §4.1 표와 개수를 다시 맞춰라"
     );
 
     let missing_en: Vec<_> = KEYS.iter().filter(|k| !en.contains(**k)).collect();

@@ -234,6 +234,8 @@
   "preferences.keyboards.functionKeys.templates.macMediaKeys": "맥 미디어키 세트 (F1–F12)",
   "preferences.keyboards.functionKeys.templates.standardFKeys": "F키 표준 세트 (F1–F12)",
   "preferences.keyboards.functionKeys.templates.apply": "적용",
+  "preferences.keyboards.functionKeys.templates.confirmTitle": "이 템플릿을 적용할까요?",
+  "preferences.keyboards.functionKeys.templates.confirmBody": "{0}의 현재 Function Keys 설정을 선택한 템플릿의 12개 키 값으로 교체합니다.",
   "preferences.keyboards.functionKeys.unverifiedHint": "이 목적지의 usage page 가 hidutil 을 통해 실제로 동작하는지는 아직 확인되지 않았습니다.",
   "preferences.keyboards.functionKeys.category.disable": "비활성화",
   "preferences.keyboards.functionKeys.category.modifierKeys": "보조키",
