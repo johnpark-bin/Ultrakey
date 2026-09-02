@@ -305,7 +305,7 @@ Seek 은 **매 키 입력마다** 후보를 다시 필터링해 하이라이트�
 | F-09 | 환경설정 UI | Rust 바인딩 | `tauri` 2.11.5, `tauri-plugin-store`, `objc2-app-kit` 0.3.2 (레코더) | 불필요 |
 | F-10 | 메뉴바 상주와 수명주기 | Rust 바인딩 | `tray-icon` 0.24.2, `smappservice-rs` 0.1.3, `auto-launch` 0.6.0 | 불필요 |
 | F-11 | 권한 온보딩과 복구 | Rust 바인딩 | `axuielement` 0.9.1 (`AXIsProcessTrusted`), `core-graphics` 0.25.0, `IOKit`(수기 선언 — 사전 확인은 **선택**, §0.2 c) | 불필요 |
-| F-12 | 라이선싱과 트라이얼 | 순수 Rust (+ Keychain 은 바인딩) | HTTPS 클라이언트 + `Security.framework` | 불필요 |
+| F-12 | 라이선싱과 트라이얼 | 순수 Rust (+ Keychain 은 바인딩 — 정식 서명 빌드 한정. 개발 빌드는 파일 저장 분기, `licensing-and-trial.md` §3.5 개정·이슈 #99) | HTTPS 클라이언트 + `Security.framework`(정식 서명 빌드) | 불필요 |
 | F-13 | 자동 업데이트 | Rust 바인딩 | `tauri-plugin-sparkle-updater` 0.2.5 (+ `Sparkle.framework` 번들) | 불필요 |
 | F-14 | 현지화와 입력 소스 | Rust 바인딩 | Carbon `HIToolbox` (`UCKeyTranslate`, `TISCopyCurrentKeyboardInputSource`, **`TISCopyCurrentASCIICapableKeyboardLayoutInputSource`**, `LMGetKbdType`) — 수기 선언 | 불필요 |
 | **F-15** | **설정 저장 모델과 무결성** | **순수 Rust** | `tauri-plugin-store` (+ 클라우드 동기화 채택 시 `objc2-foundation` 바인딩) | 불필요 |

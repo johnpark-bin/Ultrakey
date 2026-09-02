@@ -7,6 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# ⭐ 이슈 #99 — 라이선스 저장소 빌드 분기(`licensing-and-trial.md` §3.5 개정).
+# 기본(OFF): 파일 저장(`~/Library/Application Support/Ultrakey/`) — 개발·자체 서명·
+# 미서명 빌드. 키체인 접근 자체가 없어 시스템 로그인 프롬프트가 뜨지 않는다.
+# `keychain-store`(ON): 기존 Keychain 저장 — `release.yml` 이 **서명 시크릿이 있을
+# 때만** 켠다(정식 Apple 서명 빌드 한정). 켜는 곳: `.github/workflows/release.yml`.
+keychain-store = []
+
 [dependencies]
 ultrakey-core = { workspace = true }
 ultrakey-platform = { workspace = true }

@@ -19,6 +19,7 @@
 
 mod clock;
 pub mod decision;
+pub mod file_store;
 pub mod machine;
 pub mod noop;
 mod provider;
@@ -39,5 +40,6 @@ pub use provider::{
     ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse, LicenseKey,
     LicenseProvider, ValidateRequest, ValidateResponse, ValidationStatus,
 };
+pub use file_store::FileStore;
 pub use state::LicenseState;
 pub use store::{CacheStore, InMemoryStore, LicenseCache, TrialClock, TrialRecord, TrialStore};

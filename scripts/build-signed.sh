@@ -68,6 +68,10 @@ cd "${REPO_ROOT}"
 # ⭐ F-13 — Sparkle 프레임워크가 없으면 먼저 내려받는다 (tauri-plugin-sparkle-updater
 #   build.rs 가 컴파일 시점에 프레임워크를 요구한다). 멱등 — 이미 있으면 그대로 둔다.
 ./scripts/fetch-sparkle.sh
+# ⭐ 이슈 #99 — 개발/자체 서명 빌드는 무-feature(기본)로 빌드한다. 라이선스 저장소가
+#   파일(`~/Library/Application Support/Ultrakey/`)이 되어 키체인 로그인 프롬프트가
+#   뜨지 않는다. Keychain 저장(`keychain-store` feature)은 정식 서명 릴리즈 전용 —
+#   `.github/workflows/release.yml` 참조(docs/spec/licensing-and-trial.md §3.5 개정).
 cargo tauri build --target universal-apple-darwin
 
 echo
