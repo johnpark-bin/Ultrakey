@@ -67,9 +67,7 @@ use ultrakey_seek_session::{
     SessionEffect,
 };
 
-use crate::overlay::{
-    default_search_bar_origin, overlay_displays, SurfaceState, WebviewOverlayRenderer,
-};
+use crate::overlay::{overlay_displays, SurfaceState, WebviewOverlayRenderer};
 
 /// 탭 스레드/전역 단축키 포워더 → Seek 워커로 넘어가는 신호.
 ///
@@ -135,13 +133,17 @@ pub enum SeekSignal {
 }
 
 /// 워커가 세션 하나 열 때마다 필요한 화면 스냅샷 — 메인 스레드에서만 얻을 수
-/// 있는 값들(`NSScreen`·다크 모드·모션 축소·커서 위치·**최전면 앱**)을 한 번에
-/// 담는다.
+/// 있는 값들(`NSScreen`·다크 모드·모션 축소·커서 위치·**포커스 디스플레이**·
+/// **최전면 앱**)을 한 번에 담는다.
 struct ActivationSnapshot {
     displays: Vec<ultrakey_overlay::OverlayDisplay>,
     appearance: ultrakey_overlay::Appearance,
     reduce_motion: bool,
     mouse: Option<(f64, f64)>,
+    /// ⭐(이슈 #95) 포커스된 윈도우가 있는 디스플레이(`NSScreen.main`) —
+    /// 검색 바 표시 디스플레이 우선순위(§3.4)의 ② 신호. 마우스가 다른 화면에
+    /// 멈춰 있는 키보드 전용 작업에서도 사용자의 실제 작업 위치를 가리킨다.
+    focused_display: Option<u32>,
     /// 세션 열림 시점의 최전면 앱 pid — 다국어(인풋 박스) 세션이 클릭 없이
     /// 닫힐 때 이 앱으로 포커스를 되돌린다(Plan §3 D7). `None` = 판정 불가
     /// (포커스 복원은 포기하고 조용히 넘어간다).
@@ -163,12 +165,14 @@ fn snapshot_activation_context(app: &tauri::AppHandle) -> Option<ActivationSnaps
         };
         let reduce_motion = ultrakey_platform::screens::should_reduce_motion();
         let mouse = ultrakey_platform::screens::mouse_location();
+        let focused_display = ultrakey_platform::screens::focused_display_id();
         let frontmost_pid = ultrakey_platform::apps::frontmost_pid();
         let _ = tx.send(ActivationSnapshot {
             displays,
             appearance,
             reduce_motion,
             mouse,
+            focused_display,
             frontmost_pid,
         });
     })
@@ -183,8 +187,9 @@ struct WorkerEnv {
     tx: Sender<SeekSignal>,
     /// `ULTRAKEY_SEEK_TRACE=1` — 검증 하네스(위임 지시 4-g #10).
     trace: bool,
-    /// 저장된 검색 바 위치를 읽는다(F-15 "부재 = 기본값"). `None` 이면
-    /// [`default_search_bar_origin`] 이 기본 위치를 정한다.
+    /// 저장된 검색 바 위치를 읽는다(F-15 "부재 = 기본값"). 이 값은 표시
+    /// 디스플레이를 고르지 못하고 `geometry::resolve_search_bar_origin`(§3.4)
+    /// 에서 선택된 디스플레이 기준 상대 오프셋으로만 쓰인다.
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
     /// ⭐ 이슈 #48 — 세션을 열 때마다 현재 UI 로케일에서 계산한
     /// `recognitionLanguages` 목록을 읽는다(메인 스레드의 `catalog` 를 캡처한
@@ -247,8 +252,16 @@ impl SeekController {
             );
             return;
         };
-        let origin = (env.stored_origin)()
-            .unwrap_or_else(|| default_search_bar_origin(&snapshot.displays, snapshot.mouse));
+        // ⭐(이슈 #95) 표시 디스플레이는 매 활성화마다 마우스 → 포커스 →
+        // 주 디스플레이 순위로 새로 정한다(§3.4). 저장된 위치는 디스플레이를
+        // 고르지 못하고 그 디스플레이 **안에서의** 오프셋만 제공한다 —
+        // 저장값이 우선하던 기존 동작이 이슈의 "특정 모니터 고정" 증상.
+        let origin = ultrakey_overlay::geometry::resolve_search_bar_origin(
+            &snapshot.displays,
+            snapshot.mouse,
+            snapshot.focused_display,
+            (env.stored_origin)(),
+        );
 
         self.activation_started = Some(Instant::now());
         let effects = self.machine.activate(

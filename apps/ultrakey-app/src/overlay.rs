@@ -78,6 +78,16 @@ pub struct WebviewOverlayRenderer {
     /// 검색 바 창을 이미 만들었는가.
     bar_created: bool,
     visible: bool,
+    /// ⭐(이슈 #95) 우리가 `set_search_bar_origin` 으로 **프로그램적으로 옮긴
+    /// 목표 위치**(논리 좌표). tao 는 프로그램적 `setFrameOrigin:` 에도
+    /// `windowDidMove:` 를 발화하므로(실측: tao 0.35.3 `window_delegate.rs`),
+    /// 이 셀로 "우리가 시킨 이동"과 "사용자 드래그"를 가른다. `Moved` 가
+    /// 목표와 일치하면 소비(`None`)하고 [`Self::on_bar_moved`] 를 건너뛴다 —
+    /// 세션 열림마다 기본 위치가 설정 파일에 영속화되는 것을 막는다.
+    /// ⚠️ 경쟁(프로그램적 이동 둘이 겹침)에서 최악은 기본 위치 한 번이
+    /// 영속화되는 것이며, 그 값은 §3.4 규칙에서 기본 위치와 같은 오프셋이라
+    /// 동작 차이가 없다.
+    programmed_origin: Arc<Mutex<Option<(f64, f64)>>>,
     /// 사용자가 검색 바를 끌어 옮겼을 때 불린다 — 영속화(F-15)는 호출자 몫이다.
     on_bar_moved: Option<Arc<dyn Fn(f64, f64) + Send + Sync>>,
     /// ⭐(이슈 #93) 검색 바 창이 키 윈도우 자격을 잃었을 때 불린다(Focused(false)
@@ -95,6 +105,7 @@ impl WebviewOverlayRenderer {
             surfaces: HashMap::new(),
             bar_created: false,
             visible: false,
+            programmed_origin: Arc::new(Mutex::new(None)),
             on_bar_moved: None,
             on_resign_key: None,
         }
@@ -131,6 +142,7 @@ impl WebviewOverlayRenderer {
         let (x, y, w, h) = rect;
         let moved_cb = self.on_bar_moved.clone();
         let resign_key_cb = self.on_resign_key.clone();
+        let programmed = self.programmed_origin.clone();
         let dispatched = self.app.run_on_main_thread(move || {
             if app.get_webview_window(&label).is_some() {
                 return;
@@ -183,7 +195,25 @@ impl WebviewOverlayRenderer {
                     let scale = window.scale_factor().unwrap_or(1.0);
                     window.on_window_event(move |event| {
                         if let tauri::WindowEvent::Moved(pos) = event {
-                            cb(f64::from(pos.x) / scale, f64::from(pos.y) / scale);
+                            let x = f64::from(pos.x) / scale;
+                            let y = f64::from(pos.y) / scale;
+                            // ⭐(이슈 #95) 우리가 시킨 이동이면 소비하고
+                            // 영속화 콜백을 건너뛴다(필드 문서 참조).
+                            let is_programmed = {
+                                let mut cell = programmed.lock().unwrap();
+                                match *cell {
+                                    Some((px, py))
+                                        if (px - x).abs() < 0.5 && (py - y).abs() < 0.5 =>
+                                    {
+                                        *cell = None;
+                                        true
+                                    }
+                                    _ => false,
+                                }
+                            };
+                            if !is_programmed {
+                                cb(x, y);
+                            }
                         }
                     });
                 }
@@ -402,6 +432,9 @@ impl OverlayRenderer for WebviewOverlayRenderer {
     }
 
     fn set_search_bar_origin(&mut self, x: f64, y: f64) -> Result<(), RenderError> {
+        // ⭐(이슈 #95) 이 이동은 우리가 시킨 것이다 — 이어질 `Moved` 이벤트가
+        // 영속화되지 않도록 목표 위치를 기록한다(필드 `programmed_origin` 문서).
+        *self.programmed_origin.lock().unwrap() = Some((x, y));
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
             if let Some(w) = app.get_webview_window(SEARCH_BAR_LABEL) {
@@ -561,23 +594,6 @@ pub fn persist_search_bar_origin(store: &mut SettingsStore, x: f64, y: f64) {
     if let Err(e) = store.set(keys::SEEK_SEARCH_BAR_Y, &y) {
         tracing::error!(error = %e, "failed to persist search bar y");
     }
-}
-
-/// ⭐ 최초 기본 위치 — **커서가 있는 디스플레이의 상단부 중앙**(§3.4 제안,
-/// 근거는 Spotlight 의 배치 관행 `(추정)`).
-///
-/// 커서 위치를 못 얻으면 주 디스플레이로 떨어진다.
-#[must_use]
-pub fn default_search_bar_origin(displays: &[OverlayDisplay], mouse: Option<(f64, f64)>) -> (f64, f64) {
-    let target = mouse
-        .and_then(|(mx, my)| ultrakey_overlay::geometry::display_for_point(displays, mx, my))
-        .or_else(|| displays.first());
-    let Some(d) = target else { return (0.0, 0.0) };
-    (
-        d.frame.x + (d.frame.width - SEARCH_BAR_WIDTH_PT) / 2.0,
-        // 화면 상단에서 1/5 지점 — Spotlight 와 비슷한 높이 `(추정)`.
-        d.frame.y + d.frame.height * 0.2,
-    )
 }
 
 // ── 디스플레이 열거 ─────────────────────────────────────────────────────────
