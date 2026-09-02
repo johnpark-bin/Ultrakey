@@ -64,7 +64,7 @@
   "settings.seek.change_click_modes_with_modifiers": "使用修饰键更改点击模式",
   "settings.seek.change_click_modes_with_modifiers.hint": "若关闭此设置,修饰键将应用于点击",
   "settings.seek.search_language.label": "搜索语言",
-  "settings.seek.search_language.hint": "始终会搜索英语。再添加一种语言后,搜索栏会变成真实的文本输入框,可经由输入法(IME)进行组合输入,并只匹配屏幕上英语与该语言的文字。",
+  "settings.seek.search_language.hint": "始终会搜索英语。再添加一种语言后,搜索栏会变成真实的文本输入框,可经由输入法(IME)进行组合输入,并只匹配屏幕上英语与该语言的文字。 添加语言后,读取屏幕(OCR)并找到结果所需的时间会更长。",
   "settings.seek.search_language.option.en": "仅英语",
   "settings.seek.search_language.option.ko": "英语 + 한국어",
   "settings.seek.search_language.option.zh": "英语 + 中文",

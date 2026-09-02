@@ -64,7 +64,7 @@
   "settings.seek.change_click_modes_with_modifiers": "modifier 키로 클릭 모드를 변경한다",
   "settings.seek.change_click_modes_with_modifiers.hint": "이 설정을 끄면 modifier 가 클릭에 그대로 적용된다",
   "settings.seek.search_language.label": "검색 언어",
-  "settings.seek.search_language.hint": "영어는 항상 검색합니다. 영어 외 언어를 하나 더하면 검색 창이 실제 입력 필드로 바뀌어 입력기(IME)로 조합한 문자와 화면의 해당 언어 텍스트를 기준으로 찾습니다.",
+  "settings.seek.search_language.hint": "영어는 항상 검색합니다. 영어 외 언어를 하나 더하면 검색 창이 실제 입력 필드로 바뀌어 입력기(IME)로 조합한 문자와 화면의 해당 언어 텍스트를 기준으로 찾습니다. 언어를 추가하면 화면을 읽고(OCR) 검색 결과를 찾는 시간이 길어질 수 있습니다.",
   "settings.seek.search_language.option.en": "영어만",
   "settings.seek.search_language.option.ko": "영어 + 한국어",
   "settings.seek.search_language.option.zh": "영어 + 中文",

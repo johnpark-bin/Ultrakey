@@ -64,7 +64,7 @@
   "settings.seek.change_click_modes_with_modifiers": "Cambiar los modos de clic con las teclas modificadoras",
   "settings.seek.change_click_modes_with_modifiers.hint": "Si esta opción está desactivada, los modificadores se aplicarán al clic",
   "settings.seek.search_language.label": "Idioma de búsqueda",
-  "settings.seek.search_language.hint": "El inglés siempre se busca. Al añadir otro idioma, la barra de búsqueda se convierte en un campo de texto real que compone con su método de entrada (IME) y solo coincide con el texto en pantalla en inglés o en ese idioma.",
+  "settings.seek.search_language.hint": "El inglés siempre se busca. Al añadir otro idioma, la barra de búsqueda se convierte en un campo de texto real que compone con su método de entrada (IME) y solo coincide con el texto en pantalla en inglés o en ese idioma. Añadir un idioma hace que los resultados tarden más en aparecer, porque el texto de la pantalla debe reconocerse en más de un idioma.",
   "settings.seek.search_language.option.en": "Solo inglés",
   "settings.seek.search_language.option.ko": "Inglés + 한국어",
   "settings.seek.search_language.option.zh": "Inglés + 中文",

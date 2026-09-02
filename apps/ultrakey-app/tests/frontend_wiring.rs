@@ -2577,6 +2577,55 @@ fn searchbar의_apply_팔레트는_bar_fg를_갱신한다() {
     );
 }
 
+/// ⭐(이슈 #102) — 검색 바 HTML 의 카운터 분기 블록을 추출한다.
+///
+/// `const total = payload.total_matches` 부터 if/else 체인의 닫는 `}` 까지다.
+/// 이 파일의 방어적 스캔 스타일(`css_rule_body`)과 같은 원리의 최소 추출기다.
+fn searchbar_counter_block(html: &str) -> Option<String> {
+    let start = html.find("const total = payload.total_matches")?;
+    let tail = &html[start..];
+    // 마지막 분기(`- / " + total;`)의 `counter.textContent` 뒤 첫 `}` 가
+    // 카운터 if/else 체인의 끝이다(그 사이에 중괄호가 없다).
+    let last_branch = tail.find("counter.textContent = \"- / \" + total;")?;
+    let close = tail[last_branch..].find('}')?;
+    Some(tail[..last_branch + close].to_string())
+}
+
+/// ⭐ 이슈 #102 — 검출 중 카운터가 "찾는 중…"을 표시한다(분기 순서 고정).
+///
+/// 이번 결함의 본질: 카운터가 `total <= 0` 을 먼저 판정해, 검출이 아직 진행
+/// 중(한국어 OCR 최대 약 3.1s)인데도 "없음"(= 검색 완료 + 0개)을 내보냈다 —
+/// 사용자가 "프로그램이 동작하지 않는다"고 오독했다. 분기의 **존재**만 단언하면
+/// 순서가 뒤집혀 detecting 분기가 도달 불가로 죽는 회귀를 잡지 못하므로,
+/// 추출한 블록 안에서 판정 **순서**까지 고정한다.
+#[test]
+fn searchbar_카운터는_검출_중_찾는중을_표시한다() {
+    let html = read_searchbar_html();
+    let block = searchbar_counter_block(&html).unwrap_or_else(|| {
+        panic!("overlay-searchbar.html 에 카운터 블록(const total = payload.total_matches)이 없다")
+    });
+
+    assert!(
+        block.contains("찾는 중"),
+        "overlay-searchbar.html 카운터 블록에 검출 중 문구(\"찾는 중…\")가 없다 — 이슈 #102"
+    );
+    let detecting_at = block
+        .find("payload.detecting")
+        .unwrap_or_else(|| panic!("카운터 블록이 payload.detecting 을 읽지 않는다 — 이슈 #102"));
+    let no_matches_at = block
+        .find("total <= 0")
+        .unwrap_or_else(|| panic!("카운터 블록에 total <= 0 분기가 없다 — 확정 '없음' 판정 소실"));
+    assert!(
+        detecting_at < no_matches_at,
+        "카운터 블록에서 payload.detecting 판정이 total <= 0 보다 뒤다 — \
+         검출 중에도 '없음'이 나오는 이슈 #102 결함 재발. detecting 분기가 먼저여야 한다"
+    );
+    assert!(
+        block.contains("\"없음\""),
+        "overlay-searchbar.html 카운터 블록에 검출 완료 후 확정 문구(\"없음\")가 없다"
+    );
+}
+
 // ============================================================================
 // 이슈 #79 — UI/UX 1차 현대화(P0) 재발 방지 테스트.
 //

@@ -64,7 +64,7 @@
   "settings.seek.change_click_modes_with_modifiers": "Change click modes with modifier keys",
   "settings.seek.change_click_modes_with_modifiers.hint": "If this setting is disabled, modifiers will be applied to the click",
   "settings.seek.search_language.label": "Search in:",
-  "settings.seek.search_language.hint": "English is always searched. Adding another language turns the search bar into a real text field that composes with your input method (IME), and only matches on-screen text in English or that language.",
+  "settings.seek.search_language.hint": "English is always searched. Adding another language turns the search bar into a real text field that composes with your input method (IME), and only matches on-screen text in English or that language. Adding a language makes initial results slower, because the on-screen text must be recognized in more than one language.",
   "settings.seek.search_language.option.en": "English only",
   "settings.seek.search_language.option.ko": "English + 한국어",
   "settings.seek.search_language.option.zh": "English + 中文",
