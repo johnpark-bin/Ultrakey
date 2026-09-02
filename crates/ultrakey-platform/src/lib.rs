@@ -14,6 +14,7 @@
 //! `docs/dev/architecture.md`(경로 A/B/C 배치)를 그대로 따른다.
 
 pub mod accessibility;
+pub mod apps;
 pub mod ax_text;
 pub mod bundle;
 pub mod click_synthesis;

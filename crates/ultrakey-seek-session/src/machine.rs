@@ -57,6 +57,13 @@ pub enum CloseReason {
     ReleasedWithoutMatch,
     /// 세션 중 디스플레이 구성이 바뀜(§5 #6 — 안전한 기본값으로 취소).
     DisplaysChanged,
+    /// ⭐(이슈 #93) 다국어 세션에서 검색 바 창이 키 윈도우 자격을 잃음
+    /// (`didResignKey` — 예: 사용자가 다른 앱을 클릭). 인풋 박스 모드에만
+    /// 적용된다 — 키가 통과되는 동안 다른 앱으로의 문자 누출(암호 필드 오타
+    /// 등)을 막기 위해 복원 없이 닫는다(Plan §3 D7, §9 #11). ⚠️ **확정 처리
+    /// 중(`Confirming`)에는 닫지 않는다** — F-04 가 클릭 대상 앱을 활성화하며
+    /// 낸 `resignKey` 를 취소로 오인하지 않도록.
+    Defocused,
 }
 
 /// 세션 상태 머신이 산출하는 부수효과. 호출자(F-09 등 앱 계층)가 이 목록을
@@ -206,6 +213,10 @@ impl SeekSessionMachine {
                 let mode = self.config.mode_for(path);
                 let mut overlay = OverlaySession::open(displays, appearance, reduce_motion);
                 overlay.set_search_bar_origin(search_bar_origin.0, search_bar_origin.1);
+                // ⭐(이슈 #93) 검색 언어가 명시적 비영어면 이 세션은 인풋 박스
+                // 모드다 — 세션 열림 시점에 래칭된다(중간에 설정이 바뀌어도
+                // 이 세션의 모드는 유지).
+                overlay.set_input_mode(self.config.input_box_mode);
 
                 self.session = Some(Session {
                     state: SessionState::Opening,
@@ -379,6 +390,60 @@ impl SeekSessionMachine {
                 vec![SessionEffect::Repaint]
             }
         }
+    }
+
+    /// ⭐(이슈 #93) 다국어(인풋 박스) 세션에서 **웹뷰 `<input>` 이 보낸 조합된
+    /// 쿼리**를 반영한다 — 검색어 편집이 Rust 가 아니라 macOS IME 가 소유하기
+    /// 때문에, `handle_key`(문자 하나씩) 대신 **완성된 문자열**로 들어온다
+    /// (Plan §3 D5).
+    ///
+    /// `handle_key` 의 `Text`/`Backspace` 분기와 같은 효과를 낸다:
+    /// - `Opening` 중이면 쿼리 버퍼에 누적하고 `overlay.set_query` 만 걸어
+    ///   둔다 — 검출(특히 한국어 OCR 약 3.1s)이 끝나 `ingest_display` 가
+    ///   도착하면 그 쿼리로 즉시 필터링된다(`machine.rs` §5 #3 버퍼링과 동일).
+    /// - 그 뒤면 `overlay.set_query` 후 `Querying` 으로 전이한다(빈 쿼리여도
+    ///   `handle_key` 의 Backspace 분기와 같은 결 — 상태 유일성 유지).
+    /// - `Confirming` 중에는 아무것도 바꾸지 않는다(확정 처리 중 입력 무시
+    ///   계약, `handle_key` 와 동일).
+    ///
+    /// 검출 재실행·재캡처는 유발하지 **않는다** — 쿼리는 세션 시작에 캡처된
+    /// 후보의 필터일 뿐이다(Plan §2 사실 6·8).
+    #[must_use]
+    pub fn set_query_external(&mut self, query: String) -> Vec<SessionEffect> {
+        let Some(session) = &mut self.session else {
+            return Vec::new();
+        };
+        if session.state == SessionState::Confirming {
+            return Vec::new();
+        }
+        session.query = query;
+        if session.state == SessionState::Opening {
+            session.overlay.set_query(&session.query);
+        } else {
+            session.overlay.set_query(&session.query);
+            session.state = SessionState::Querying;
+        }
+        vec![SessionEffect::Repaint]
+    }
+
+    /// ⭐(이슈 #93) 다국어 세션에서 검색 바 창이 키 윈도우 자격을 잃었다 —
+    /// `didResignKey`(타 앱 클릭). 인풋 박스 모드의 문자 통과가 다른 앱으로
+    /// 누출되는 것을 막기 위해 복원 없이 세션을 닫는다(Plan §3 D7, §9 #11).
+    ///
+    /// ⚠️ **`Confirming` 상태에서는 닫지 않는다** — F-04 가 클릭 대상 앱을
+    /// 활성화하며 낸 `resignKey` 를 취소로 오인하는 것을 막는 비대칭 처리.
+    #[must_use]
+    pub fn defocused(&mut self) -> Vec<SessionEffect> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        if session.state == SessionState::Confirming {
+            return Vec::new();
+        }
+        self.session = None;
+        vec![SessionEffect::Closed {
+            reason: CloseReason::Defocused,
+        }]
     }
 
     /// F-02 `on_display` 증분 콜백의 소비자(S-1·S-6).
@@ -1449,5 +1514,143 @@ mod tests {
             "세션 도중 모드가 뒤집히면 안 된다"
         );
         assert!(!machine.config().execute_on_close);
+    }
+
+    // ── ⭐(이슈 #93) set_query_external — 다국어(인풋 박스) 세션의 웹뷰 쿼리 ──
+
+    fn open_global(machine: &mut SeekSessionMachine) {
+        *machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+    }
+
+    /// T10 — 외부 쿼리("한글")가 필터에 반영되고 Querying 로 전이한다.
+    #[test]
+    fn set_query_external_filters_and_enters_querying() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        open_global(&mut machine);
+        let _ = machine.ingest_display(
+            1,
+            vec![candidate("안녕하세요", 0.0), candidate("hello", 100.0)],
+        );
+        let _ = machine.finish_detection();
+        assert_eq!(machine.state(), SessionState::Ready);
+
+        let effects = machine.set_query_external("안녕".to_string());
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert_eq!(machine.query(), "안녕");
+        assert_eq!(machine.state(), SessionState::Querying);
+        let bar = machine.overlay().unwrap().search_bar_frame();
+        assert_eq!(bar.total_matches, 1, "한글 쿼리로 후보가 필터링돼야 한다");
+        assert_eq!(bar.matches[0].text, "안녕하세요");
+    }
+
+    /// T10-b(§9 #8) — Opening 중(한국어 OCR 약 3.1s) 도착한 외부 쿼리는 버퍼에
+    /// 누적되고, 후보가 배치로 도착하면 즉시 그 쿼리로 필터된다(유실 방지).
+    #[test]
+    fn set_query_external_during_opening_buffers_and_filters() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        open_global(&mut machine);
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        let effects = machine.set_query_external("검색".to_string());
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert_eq!(machine.query(), "검색");
+        assert_eq!(machine.state(), SessionState::Opening, "검출 전엔 Opening 유지");
+
+        // 후보가 도착하면 누적된 쿼리로 즉시 필터된다(`machine.rs` §5 #3 버퍼링).
+        let _ = machine.ingest_display(
+            1,
+            vec![candidate("검색기록", 0.0), candidate("설정", 100.0)],
+        );
+        let bar = machine.overlay().unwrap().search_bar_frame();
+        assert_eq!(bar.total_matches, 1, "버퍼된 쿼리가 도착 후보에 적용돼야 한다");
+        assert_eq!(bar.matches[0].text, "검색기록");
+    }
+
+    /// 외부 쿼리를 비우면 Backspace 분기와 같은 결(빈 채 Querying)이 되고 매치
+    /// 0 개로 돌아간다.
+    #[test]
+    fn set_query_external_empty_returns_to_ready() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        open_global(&mut machine);
+        let _ = machine.ingest_display(1, vec![candidate("abc", 0.0)]);
+        let _ = machine.finish_detection();
+        assert_eq!(machine.state(), SessionState::Ready);
+
+        let _ = machine.set_query_external("abc".to_string());
+        assert_eq!(machine.state(), SessionState::Querying);
+
+        let effects = machine.set_query_external(String::new());
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert!(machine.query().is_empty());
+        assert_eq!(machine.state(), SessionState::Querying, "Backspace 분기와 같은 결");
+        assert_eq!(
+            machine.overlay().unwrap().search_bar_frame().total_matches,
+            0
+        );
+    }
+
+    /// 세션이 없으면 외부 쿼리는 무해하다.
+    #[test]
+    fn set_query_external_without_session_is_noop() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        assert!(machine.set_query_external("안녕".to_string()).is_empty());
+    }
+
+    // ── ⭐(이슈 #93) defocused — D7 키 상실 자동 닫힘 ────────────────────
+
+    /// 세션이 열려 있으면(인풋 박스 모드와 무관하게 판정은 같다) 닫는다.
+    #[test]
+    fn defocused_closes_active_session() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        open_global(&mut machine);
+        assert!(machine.is_active());
+
+        let effects = machine.defocused();
+        assert_eq!(
+            effects,
+            vec![SessionEffect::Closed {
+                reason: CloseReason::Defocused
+            }]
+        );
+        assert!(!machine.is_active());
+
+        // 세션이 없으면 no-op.
+        assert!(machine.defocused().is_empty());
+    }
+
+    /// ⚠️ Confirming(확정 처리 중)에는 닫지 않는다 — F-04 가 대상 앱을
+    /// 활성화하며 낸 resignKey 를 취소로 오인하지 않게(Plan §9 #11).
+    #[test]
+    fn defocused_does_not_close_while_confirming() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        let _ = machine.ingest_display(1, vec![candidate("설정", 0.0)]);
+        let _ = machine.finish_detection();
+        let _ = machine.set_query_external("설".to_string());
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 1);
+        let _ = machine.handle_key(&key_down(KeyCode::RETURN, EventFlags::NONE), Some('\r'));
+        assert_eq!(machine.state(), SessionState::Confirming);
+
+        assert!(machine.defocused().is_empty(), "Confirming 은 닫으면 안 된다");
+        assert!(machine.is_active());
     }
 }

@@ -427,6 +427,18 @@
         </label>
       </div>
 
+      <!-- ⭐(이슈 #93) — 검색 언어(영어 + 선택 언어 1개). 저장 키
+           `seek.searchLanguage`. 부재 = 로케일 폴백(이슈 #48 의 기존 OCR 언어
+           계산 유지), 명시 "en" = 영어 강제, "ko"/"zh"/"ja"/"es" = 다국어
+           (인풋 박스 모드 + 해당 OCR 언어). 팝업은 부재일 때 유효 값(로케일
+           파생)을 선택된 것으로 표시하고, 사용자가 팝업을 조작하면 명시 값으로
+           굳는다(Plan D1·D6 §9 #1~#2). -->
+      <div class="row">
+        <span id="seek-search-language-label"></span>
+        <select id="seek-search-language" data-key="seek.searchLanguage"></select>
+      </div>
+      <p class="hint" id="seek-search-language-hint"></p>
+
       <!-- 항목 9 — Seek 탭에서 유일하게 출고 기본값이 ☑ 인 항목(명세 §4).
            ⓘ 팝오버는 구현하지 않는다(현재 설정 UI 에 팝오버 인프라가 없음 —
            범위 밖 결정, 이슈 #44). 원문 부제를 힌트로 대체한다. -->
@@ -1231,6 +1243,12 @@ if (!tauri || !tauri.core) {
     $("seek-change-click-modes-with-modifiers-hint").textContent = t(
       "settings.seek.change_click_modes_with_modifiers.hint",
     );
+    // ⭐(이슈 #93) — 검색 언어 팝업(라벨·힌트·5 종 선택지). 근거 문구는
+    // Plan D1·D6 (Multilingual). 부제는 "영어 외 언어를 고르면 검색 창이
+    // 입력기(IME)로 조합된 값을 기준으로 검색한다" 는 동작 차이를 알린다.
+    $("seek-search-language-label").textContent = t("settings.seek.search_language.label");
+    $("seek-search-language-hint").textContent = t("settings.seek.search_language.hint");
+    populateSearchLanguageSelect();
     $("seek-quick-press-hint").textContent = t("settings.seek.quick_press.hint");
     $("presets-heading-text").textContent = t("settings.presets.heading");
     $("presets-group-caps").textContent = t("settings.presets.group.caps_lock");
@@ -2754,6 +2772,9 @@ if (!tauri || !tauri.core) {
   // 끝냈을 때) — renderKeyboardsTab 의 state.perDevice 방어와 같은 패턴으로
   // renderSeek() 이 조용히 아무 일도 하지 않는다.
   let currentSeekState = null; // 마지막으로 받은 state.seek(Escape 취소 시 복원용)
+  // ⭐(이슈 #93) — 검색 언어 팝업이 "부재(= 로케일 폴백) 상태였는가". 부재 상태에서
+  // 사용자가 팝업을 조작하면 유효 값이 명시 값으로 굳는다(Plan §9 #2).
+  let seekSearchLanguageWasAbsent = true;
   let seekRecording = false;
   let seekRecordingHandler = null;
 
@@ -2843,6 +2864,46 @@ if (!tauri || !tauri.core) {
     await commit("seek.toggleShortcut.modifiers", 0);
   });
 
+  // ⭐(이슈 #93) — 부재(로케일 폴백) 상태에서 사용자가 검색 언어 팝업을 열고
+  // 고르면(같은 행을 다시 골라도) 유효 값이 명시 값으로 굳는다 — 그래야 한국어
+  // UI 사용자가 그대로 두면 로케일 폴백(영문 입력 전용)에 갇히지 않는다. 값
+  // 변화가 없어 `change` 가 안 오는 경우를 잡는 커버다 `change` 더블 커밋은
+  // 무해하다(같은 값 영속화).
+  $("seek-search-language").addEventListener("click", () => {
+    if (!seekSearchLanguageWasAbsent) return;
+    commit("seek.searchLanguage", $("seek-search-language").value);
+  });
+
+  // ⭐(이슈 #93) — 검색 언어 팝업 선택지 5 종(영어 단일 + 비영어 4 종).
+  // 라벨은 카탈로그(`settings.seek.search_language.option.*`)에서 번역한다.
+  const SEARCH_LANGUAGE_OPTIONS = [
+    { code: "en", labelKey: "settings.seek.search_language.option.en" },
+    { code: "ko", labelKey: "settings.seek.search_language.option.ko" },
+    { code: "zh", labelKey: "settings.seek.search_language.option.zh" },
+    { code: "ja", labelKey: "settings.seek.search_language.option.ja" },
+    { code: "es", labelKey: "settings.seek.search_language.option.es" },
+  ];
+
+  function populateSearchLanguageSelect() {
+    const select = $("seek-search-language");
+    select.innerHTML = "";
+    for (const o of SEARCH_LANGUAGE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = o.code;
+      opt.textContent = t(o.labelKey);
+      select.append(opt);
+    }
+  }
+
+  // 유효 검색 언어 — 명시 값이 있으면 그것, 없으면(부재 = 로케일 폴백) UI
+  // 언어(`general.language`, 이미 해석된 code)에서 파생한다(Plan D1·D6).
+  function effectiveSearchLanguage(state) {
+    const seek = state.seek;
+    if (seek && seek.searchLanguage) return seek.searchLanguage;
+    const ui = state.general && state.general.language;
+    return (ui === "ko" || ui === "zh" || ui === "ja" || ui === "es") ? ui : "en";
+  }
+
   function renderSeek(state) {
     const seek = state.seek;
     if (!seek) return; // 방어 — renderKeyboardsTab 의 state.perDevice 방어와 같은 패턴.
@@ -2850,6 +2911,12 @@ if (!tauri || !tauri.core) {
 
     fillSelect("seek-remap-key", seek.remapKeyOptions);
     setSelectValue("seek-remap-key", seek.remapKey);
+
+    // ⭐(이슈 #93) — 검색 언어. 부재면 유효 값(로케일 파생)이 선택된 것으로
+    // 보인다. 명시 값이 있으면 그 값이 선택된다.
+    populateSearchLanguageSelect();
+    setSelectValue("seek-search-language", effectiveSearchLanguage(state));
+    seekSearchLanguageWasAbsent = !seek.searchLanguage;
 
     // ⭐ §4 실측 — 팝업이 체크박스를 좌우한다(Hyperkey 탭의 체크박스→팝업
     // dimmed 방향과 반대). 값은 지우지 않고 보존한다.

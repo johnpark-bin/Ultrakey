@@ -173,6 +173,19 @@ impl NsWindowHandle {
         imp::order_front_regardless(self.ptr);
     }
 
+    /// ⭐(이슈 #93) — 이 창을 **키 윈도우로 승격·표시**한다(`makeKeyAndOrderFront`).
+    ///
+    /// ⛔ 영어 단일(현행) Seek 세션에서는 절대 부르지 않는다 — 명세 §1 의 가장
+    /// 중요한 제약("하위 앱 포커스를 빼앗지 않는다")을 다국어(인풋 박스)
+    /// 세션에 한해 **일시적으로** 유예한다(Plan §3 D3).
+    ///
+    /// 호출 전에 반드시 [`Self::set_can_become_key(true)`], 그리고 호출자 앱이
+    /// 활성 상태여야 제대로 키를 받는다(`NSRunningApplication.activate` —
+    /// `ultrakey-platform::apps::activate_pid`). 이 메서드는 창 쪽만 담당한다.
+    pub fn make_key_and_order_front(self) {
+        imp::make_key_and_order_front(self.ptr);
+    }
+
     /// 창을 화면에서 내린다(§3.1 숨김).
     pub fn order_out(self) {
         imp::order_out(self.ptr);
@@ -197,6 +210,27 @@ impl NsWindowHandle {
     #[must_use]
     pub fn collection_behavior(self) -> Option<usize> {
         imp::collection_behavior(self.ptr)
+    }
+
+    /// ⭐(이슈 #93) — 이 창의 키 윈도우 가능 여부를 **런타임에 토글**한다.
+    ///
+    /// ⛔ **`force_non_activating` 을 다시 부르지 않는다.** 그 함수는 스위즐 자체를
+    /// 설치하고(프로세스당 1회), 진단용 킬 스위치 `ULTRAKEY_OVERLAY_NO_SWAP` 의
+    /// "클래스 바꿔 끼우기를 끈다"는 의도를 우회한다. 여기서는 **등록부
+    /// (`NON_ACTIVATING`)에서 이 창을 추가/제거**만 한다 — 스위즐된
+    /// `canBecomeKeyWindow` 는 등록부에 있는 창만 `NO` 를 반환하고 나머지는 원래
+    /// 구현(tao 가 `YES` 로 오버라이드한 것)으로 넘기므로(모듈 문서), 제거만으로
+    /// 키 윈도우 자격이 복귀한다.
+    ///
+    /// 다국어 Seek 세션(인풋 박스 모드)이 열릴 때 `allow = true`, 닫힐 때
+    /// `allow = false` 로 부른다 — 영어 단일 세션은 이 함수를 한 번도 부르지
+    /// 않는다(Plan §3 D3, 상급 리뷰 §9 #7).
+    ///
+    /// ⚠️ 등록부는 `canBecomeKeyWindow`·`canBecomeMainWindow` 두 셀렉터에 **공유**
+    /// 된다 — `allow = true` 구간 동안 이 창이 main 자격도 얻지만, 다국어 세션
+    /// 중에는 무해하다(입력 소유가 목적이고 main 을 요구하는 UI 가 없다).
+    pub fn set_can_become_key(self, allow: bool) -> bool {
+        imp::set_can_become_key(self.ptr, allow)
     }
 }
 
@@ -352,6 +386,34 @@ mod imp {
         }
     }
 
+    /// ⭐(이슈 #93) — 등록부만 토글한다(모듈 문서의 "등록부 창만 NO" 구조를 쓰는
+    /// 것). 스위즐 설치는 다시 하지 않는다. 반환: 등록부 조작 성공 여부.
+    pub(super) fn set_can_become_key(ptr: *mut core::ffi::c_void, allow: bool) -> bool {
+        // SAFETY: 널·클래스 검사는 `NsWindowHandle::from_tauri_ptr` 이 이미 했다.
+        let Some(obj) = (unsafe { (ptr as *const AnyObject).as_ref() }) else {
+            return false;
+        };
+        let key = std::ptr::from_ref(obj) as usize;
+        match NON_ACTIVATING.write() {
+            Ok(mut list) => {
+                let was = list.contains(&key);
+                if allow && was {
+                    list.retain(|k| *k != key);
+                } else if !allow && !was {
+                    list.push(key);
+                }
+                tracing::info!(
+                    allow,
+                    was,
+                    registered = list.len(),
+                    "toggled the key-window ability of an overlay window (registry-only)"
+                );
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// ⭐ 포인터가 정말 `NSWindow` 인스턴스인가 — `isKindOfClass:` 로 확인한다.
     pub(super) fn is_ns_window(ptr: *mut core::ffi::c_void) -> bool {
         // SAFETY: 널이 아님은 호출자([`NsWindowHandle::from_tauri_ptr`])가 이미
@@ -431,6 +493,14 @@ mod imp {
         }
     }
 
+    /// ⭐(이슈 #93) — 다국어(인풋 박스) 세션 한정 키 윈도우 승격.
+    pub(super) fn make_key_and_order_front(ptr: *mut core::ffi::c_void) {
+        // SAFETY: 호출자 계약.
+        if let Some(w) = unsafe { window(ptr) } {
+            w.makeKeyAndOrderFront(None);
+        }
+    }
+
     /// 창을 화면에서 내린다(§3.1 숨김).
     pub(super) fn order_out(ptr: *mut core::ffi::c_void) {
         // SAFETY: 호출자 계약.
@@ -474,6 +544,10 @@ mod imp {
     }
     pub(super) fn order_front_regardless(_p: *mut core::ffi::c_void) {}
     pub(super) fn order_out(_p: *mut core::ffi::c_void) {}
+    pub(super) fn make_key_and_order_front(_p: *mut core::ffi::c_void) {}
+    pub(super) fn set_can_become_key(_p: *mut core::ffi::c_void, _allow: bool) -> bool {
+        false
+    }
     pub(super) fn can_become_key(_p: *mut core::ffi::c_void) -> Option<bool> {
         None
     }

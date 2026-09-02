@@ -80,6 +80,10 @@ pub struct WebviewOverlayRenderer {
     visible: bool,
     /// 사용자가 검색 바를 끌어 옮겼을 때 불린다 — 영속화(F-15)는 호출자 몫이다.
     on_bar_moved: Option<Arc<dyn Fn(f64, f64) + Send + Sync>>,
+    /// ⭐(이슈 #93) 검색 바 창이 키 윈도우 자격을 잃었을 때 불린다(Focused(false)
+    /// → Seek 워커가 세션을 닫는다). 인풋 박스 모드에서 문자 통과가 다른 앱으로
+    /// 누출되는 것을 막는 D7 자동 닫힘의 신호원이다.
+    on_resign_key: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl WebviewOverlayRenderer {
@@ -92,6 +96,7 @@ impl WebviewOverlayRenderer {
             bar_created: false,
             visible: false,
             on_bar_moved: None,
+            on_resign_key: None,
         }
     }
 
@@ -105,6 +110,17 @@ impl WebviewOverlayRenderer {
         self
     }
 
+    /// ⭐(이슈 #93) 검색 바 창이 키 윈도우 자격을 잃었을 때 부를 콜백을 건다
+    /// (`WindowEvent::Focused(false)` — 다국어 세션의 D7 자동 닫힘 신호원).
+    #[must_use]
+    pub fn on_search_bar_resign_key(
+        mut self,
+        f: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.on_resign_key = Some(Arc::new(f));
+        self
+    }
+
     /// 창 하나를 만들고 `ns_window()` 로 네이티브 설정을 건다.
     ///
     /// ⚠️ **메인 스레드로 비동기 디스패치**한다(`architecture.md` §2, `main.rs`
@@ -114,6 +130,7 @@ impl WebviewOverlayRenderer {
         let app = self.app.clone();
         let (x, y, w, h) = rect;
         let moved_cb = self.on_bar_moved.clone();
+        let resign_key_cb = self.on_resign_key.clone();
         let dispatched = self.app.run_on_main_thread(move || {
             if app.get_webview_window(&label).is_some() {
                 return;
@@ -167,6 +184,19 @@ impl WebviewOverlayRenderer {
                     window.on_window_event(move |event| {
                         if let tauri::WindowEvent::Moved(pos) = event {
                             cb(f64::from(pos.x) / scale, f64::from(pos.y) / scale);
+                        }
+                    });
+                }
+                // ⭐(이슈 #93) — 키 윈도우 자격 상실(Focused(false))을 워커에
+                // 알린다. 인풋 박스 모드에서 타 앱 클릭·⌘Tab 스위치 시 세션을
+                // 자동으로 닫아 문자 누출을 막는다(Plan §3 D7, §9 #11).
+                // 영어 단일 세션은 이 콜백이 와도 워커가 무시한다(세션 없음 =
+                // 여기서는 `defocused` no-op).
+                if let Some(cb) = &resign_key_cb {
+                    let cb = cb.clone();
+                    window.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Focused(false)) {
+                            cb();
                         }
                     });
                 }
@@ -409,8 +439,73 @@ impl OverlayRenderer for WebviewOverlayRenderer {
         for label in self.surfaces.values().cloned().chain(std::iter::once(SEARCH_BAR_LABEL.to_string())) {
             self.order(label, false);
         }
+        // ⭐(이슈 #93) — 인풋 박스(다국어) 세션의 `<input>` 값을 다음 세션에
+        // 남기지 않는다. 검색 바 창은 세션 사이 상주하므로, 닫힘마다 웹뷰에
+        // 클리어 이벤트를 보내 입력·값·span 상태를 초기화한다(영어 세션에서는
+        // 무해한 순수 클리어).
+        let _ = self.app.emit_to(
+            EventTarget::webview_window(SEARCH_BAR_LABEL),
+            "overlay://searchbar-clear",
+            (),
+        );
         self.visible = false;
         Ok(())
+    }
+}
+
+/// ⭐(이슈 #93) — 다국어(인풋 박스) 세션 개시 시, 검색 바를 **실제 키 윈도우로
+/// 승격**한다: `NON_ACTIVATING` 등록부에서 해제(키 윈도우 자격 복권) → 자기 앱
+/// 활성화(`Accessory` 앱이 키를 받으려면 활성이어야 한다) → `makeKeyAndOrderFront`.
+///
+/// 메인 스레드로 디스패치한다(창 조작 규약). 영어 단일 세션은 절대 부르지 않는다.
+#[allow(clippy::needless_pass_by_value)]
+pub fn make_search_bar_key_for_input(app: tauri::AppHandle) {
+    if app.get_webview_window(SEARCH_BAR_LABEL).is_none() {
+        tracing::warn!("search bar window missing; cannot promote it for input");
+    }
+    let app_inner = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let Some(window) = app_inner.get_webview_window(SEARCH_BAR_LABEL) else {
+            return;
+        };
+        let Ok(raw) = window.ns_window() else {
+            return;
+        };
+        let Some(handle) = NsWindowHandle::from_tauri_ptr(raw) else {
+            return;
+        };
+        handle.set_can_become_key(true);
+        // 자기 프로세스 활성화 — `Accessory` 앱은 활성화돼야 키 윈도우를 받는다.
+        let _ = ultrakey_platform::apps::activate_pid(std::process::id() as i32);
+        handle.make_key_and_order_front();
+        tracing::info!(can_become_key = ?handle.can_become_key(), "search bar promoted to key window for input-box session");
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "failed to promote the search bar for input");
+    }
+}
+
+/// ⭐(이슈 #93) — 다국어(인풋 박스) 세션 종료 시, 검색 바를 다시 NON-activating
+/// 으로 되돌린다(등록부 재등록만 — 스위즐을 다시 걸지 않는다, Plan §9 #7).
+/// 메인 스레드로 디스패치한다.
+#[allow(clippy::needless_pass_by_value)]
+pub fn release_search_bar_input(app: tauri::AppHandle) {
+    let app_inner = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let Some(window) = app_inner.get_webview_window(SEARCH_BAR_LABEL) else {
+            return;
+        };
+        let Ok(raw) = window.ns_window() else {
+            return;
+        };
+        let Some(handle) = NsWindowHandle::from_tauri_ptr(raw) else {
+            return;
+        };
+        handle.set_can_become_key(false);
+        tracing::info!(can_become_key = ?handle.can_become_key(), "search bar restored to non-activating");
+    });
+    if let Err(e) = dispatched {
+        tracing::error!(error = %e, "failed to restore the search bar to non-activating");
     }
 }
 

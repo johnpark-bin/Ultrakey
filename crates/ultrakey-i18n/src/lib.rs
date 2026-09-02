@@ -130,6 +130,22 @@ impl Locale {
             Locale::Ja => &["ja-JP", "en-US"],
         }
     }
+
+    /// ⭐(이슈 #93) — `seek.searchLanguage`(검색 언어) 값 `"ko"`·`"zh"`·`"ja"`·
+    /// `"es"` → [`Locale`] 로 매핑한다. `"en"`(영어 단일 명시)은 `Locale::En` 을
+    /// 준다(`ocr_recognition_languages` 가 `[]` 반환). 모르는 값은 `None` — 호출자가
+    /// 로케일 폴백으로 처리한다(부재 = 로케일 폴백, Plan D1·D6 §9 #1~#2).
+    #[must_use]
+    pub fn from_search_language(code: &str) -> Option<Locale> {
+        match code {
+            "en" => Some(Locale::En),
+            "ko" => Some(Locale::Ko),
+            "zh" => Some(Locale::Zh),
+            "ja" => Some(Locale::Ja),
+            "es" => Some(Locale::Es),
+            _ => None,
+        }
+    }
 }
 
 /// en 카탈로그 원본. 컴파일 타임에 임베드된다.
@@ -666,6 +682,18 @@ mod tests {
             Locale::En.ocr_recognition_languages().is_empty(),
             "en 은 빈 목록이어야 한다 — Vision 기본값(영어)을 그대로 쓰는 기존 동작을 유지한다(이슈 #48)"
         );
+    }
+
+    /// ⭐(이슈 #93) — `seek.searchLanguage` 값 → `Locale`. 모르는 값은 `None`.
+    #[test]
+    fn from_search_language_maps_known_codes_and_ignores_unknown() {
+        assert_eq!(Locale::from_search_language("en"), Some(Locale::En));
+        assert_eq!(Locale::from_search_language("ko"), Some(Locale::Ko));
+        assert_eq!(Locale::from_search_language("zh"), Some(Locale::Zh));
+        assert_eq!(Locale::from_search_language("ja"), Some(Locale::Ja));
+        assert_eq!(Locale::from_search_language("es"), Some(Locale::Es));
+        assert_eq!(Locale::from_search_language("fr"), None);
+        assert_eq!(Locale::from_search_language(""), None);
     }
 
     /// ⭐ 이슈 #48 — 영어 폴백 `en-US` 가 **정확히 2번째 원소**로 들어 있다

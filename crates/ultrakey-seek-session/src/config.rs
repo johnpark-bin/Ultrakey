@@ -49,6 +49,17 @@ pub struct SeekConfig {
     /// 있어 이 문제가 없다. 그래서 전역 단축키만은 조합 자체를 여기 들고 있다가
     /// 세션 중 키 라우팅에서 직접 알아본다.
     pub global_shortcut: Option<(KeyCode, EventFlags)>,
+    /// ⭐(이슈 #93) 검색 언어가 **명시적 비영어**(`ko`·`zh`·`ja`·`es`)일 때만 켜진다.
+    ///
+    /// 켜져 있으면 — 다국어 세션 — 세션이 **인풋 박스 모드**다: 검색 바가 실제
+    /// `<input>` 이 되어 macOS IME 가 조합하고, 계층 1 이 `Text`/`Backspace`(및
+    /// ⌥+문자) 키를 원본 그대로 통과시킨 뒤, 웹뷰가 100ms idle(및 `compositionend`)
+    /// 후 조합값을 워커로 보내 쿼리를 필터링한다(즉시 문자 입력의 현행 경로와는
+    /// 다르다 — `docs/plan/issue-93-seek-multilingual-ime.md` §3 D2).
+    ///
+    /// ⚠️ **세션 열림 시점에 래칭**된다 — 열린 세션 중 설정 변경이 이 값을 바꿔도
+    /// 진행 중인 세션의 키 라우팅·웹뷰 모드는 바뀌지 않는다(`set_config` 계약).
+    pub input_box_mode: bool,
 }
 
 impl SeekConfig {
@@ -153,6 +164,8 @@ mod tests {
         assert!(!config.quick_press_opens);
         assert!(config.global_shortcut.is_none());
         assert!(!config.any_activation_configured());
+        // ⭐(이슈 #93) — 검색 언어 부재 = 로케일 폴백이라 기본은 인풋 박스가 아니다.
+        assert!(!config.input_box_mode);
     }
 
     /// 세 경로 중 하나만 켜져도 `any_activation_configured` 가 `true`.
