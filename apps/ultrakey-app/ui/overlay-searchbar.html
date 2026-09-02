@@ -7,7 +7,13 @@
   :root {
     /* ⭐ palette 는 Rust 가 매 이벤트마다 보내므로, JS 가 이 CSS 변수들을
        매번 갱신한다. 여기 값은 첫 페인트(이벤트 도착 전)를 위한 폴백이며
-       docs/spec/seek-overlay-ui.md §4.2 제안 기본값과 같다. */
+       **다크 단일**이다(실제 출고값은 라이트/다크가 둘 다 있음). 출고값의
+       정본은 `crates/ultrakey-overlay/src/palette.rs:66-80` — UXR-11 "명세
+       따라잡기"로 구현(정본)과 명세 `docs/spec/seek-overlay-ui.md §4.2` 가
+       함께 확정됐다(이슈 #67 bar_fg 포함). 라이트 팔레트가 흰 배경/검정
+       글자가 아니라 검정 글자를 쓸 수도 있는데도 첫 페인트 폴백만 다크인
+       것은, Rust 가 세션 시작 시 외관을 판정해 항상 완전한 팔레트를
+       보내므로 폴백이 실제로 그려질 일이 없기 때문이다. */
     --hl-selected-fill: rgba(10, 132, 255, 0.30);
     --hl-selected-stroke: #0A84FF;
     --bar-bg: rgba(0, 0, 0, 0.72);

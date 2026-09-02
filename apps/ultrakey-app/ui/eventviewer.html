@@ -54,7 +54,10 @@
     position: sticky; top: 0; z-index: 1;
     background: Canvas;
     text-align: left; font-weight: 600; font-size: 11px;
-    text-transform: uppercase; letter-spacing: .04em; opacity: .6;
+    letter-spacing: .04em;
+    /* ⭐ UXR-04 — 대문자 변환 없이 캡션 헤딩. opacity .6 대신 color 로
+       대비를 건다(라이트/다크 같은 강도). */
+    color: color-mix(in srgb, currentColor 55%, transparent);
     padding: 6px 8px;
     border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   }
@@ -62,11 +65,13 @@
     padding: 4px 8px; vertical-align: top;
     border-bottom: 1px solid color-mix(in srgb, currentColor 7%, transparent);
   }
-  tbody tr:hover { background: color-mix(in srgb, currentColor 5%, transparent); }
+  tbody tr:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
 
   /* ⭐ 이 창의 핵심 질문은 "내가 누른 것이 그대로 나갔는가, 아니면 Ultrakey 가 먹고
-     다른 것을 냈는가"다. 그래서 소비된 줄을 색 막대로 구분한다(event-viewer.md §3.3). */
-  tr.consumed { background: color-mix(in srgb, Highlight 9%, transparent); }
+     다른 것을 냈는가"다. 그래서 소비된 줄을 색 막대로 구분한다(event-viewer.md §3.3).
+     ⭐ UXR-10 — 대비 보정: Highlight 9% → 12%, hover 5% → 7%. 라이트에서도
+     옅지 않고 다크에서도 다른 행과 즉시 구분되게. */
+  tr.consumed { background: color-mix(in srgb, Highlight 12%, transparent); }
   tr.consumed td:first-child { box-shadow: inset 3px 0 0 Highlight; }
 
   .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }

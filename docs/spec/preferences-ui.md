@@ -95,6 +95,12 @@
 
 `Korean`·`Keyboards` 두 탭은 원본에 없는 클론 고유 탭이므로(F-16·F-17, `../spec/README.md` 갈라짐 표) 원본 실측이 존재하지 않는다 — 위 네 개와 같은 어휘로 새로 그렸다: `Korean` 은 한글 글자 `가` 의 획, `Keyboards` 는 키보드 외곽선 + 키 점. ⛔ **이 절은 `../spec/README.md` 의 갈라짐 표에 새 행을 만들지 않는다** — 원본에도 탭 아이콘이 있으므로 이것은 갈라짐이 아니라 **원본에 맞추는 것**이다. 패널 상단에는 탭 이름과 ⓘ 정보 버튼이 함께 표시되는 것은 `Seek`·`Hyperkey` 뿐이다(실측: AX 트리 — `SeekInfoViewController`·`HyperkeyInfoViewController` 두 개만 패널 제목 옆에 있고, `Presets`·`General` 패널 제목에는 ⓘ 가 없다. 기존 판의 `(추정 — 일관성상 있을 가능성)` 을 정정한다).
 
+⭐⭐ **현대화 — 선택 상태·탭 전환 규약 (이슈 #79, UXR-01·UXR-07·UXR-04)**:
+
+- **선택 상태의 색 온도 (UXR-01)**: 사이드바 선택 탭(`button[aria-selected="true"]`)과 Keyboards 디바이스 선택 행(`[role="option"][aria-selected="true"]`)의 채움을 `currentColor 14%` → **`color-mix(in srgb, Highlight 12~16%, transparent)`** 로 바꾼다 — hover(8% currentColor)와 선택이 **색 온도로도 구분**된다. `Highlight` 는 시스템 강조색 키워드라 테마별 자산이 없고 라이트/다크에서 accent 색이 자동으로 따라온다(기존 `color-scheme: light dark` 골격 그대로). `aria-selected`·`data-tab`·컨트롤 id·`font-weight` 는 **무변경** — CSS 선택기 값만 바뀐다.
+- **탭 전환 패널 페이드 (UXR-07)**: 탭을 바꾸면 패널이 **90~110ms opacity 페이드 인**으로 나타난다. `[hidden]`(display:none) 에서는 transition 이 켜지지 않으므로, `hidden` 해제 직후 패널에 인라인 `opacity: 0` 을 세팅하고 reflow 를 강제한 뒤 `requestAnimationFrame` 1프레임에서 인라인 opacity 를 제거해 `transition: opacity 110ms` 가 페이드 인되도록 한다. `prefers-reduced-motion` 시 페이드 0ms(즉시) — 오버레이의 감소 모션 관례와 같은 취지. ⚠️ 정적 HTML 폴백 유지(기본 표시 상태 = opacity 1). `activateTab` 의 탭 화이트리스트·persist·`settings_set_tab` invoke·hidden 토글 로직은 **그대로** — 표시 타이밍의 인라인 처리만 추가한다.
+- **섹션/그룹 헤딩 대비 (UXR-04)**: 준수 세부는 §3.2 의 "대비 정책" 참조 — `h2.group` 은 대문자 변환 없이 캡션 헤딩으로, `color-mix(in srgb, currentColor 55%, transparent)` 대비(§3.2).
+
 ### 3.2 컨트롤 타입 카탈로그
 
 | 타입 | 등장 위치 | 동작 규칙 |
@@ -109,6 +115,17 @@
 | **ⓘ 정보 팝오버 버튼** | Seek 3개(제목 옆·`Seek using macOS accessibility` 옆·`Change click modes with modifier keys` 옆), Hyperkey 1개(제목 옆) | ⭐ 실재하는 UI 컴포넌트다(실측: AX 트리 + `Info.storyboardc`). 컨트롤러: `SeekInfoViewController`·`SeekAccessibilityViewController`·`ClickModesInfoViewController`·`HyperkeyInfoViewController`. **F-09 는 팝오버의 배치(어느 항목 옆에 붙는가)와 컴포넌트 종류만 소유한다. 팝오버 안의 설명 문구 자체는 각 항목을 소유하는 명세(F-01~F-04, F-05)가 소유한다** — 원문 전문은 app-bundle-analysis.md §5.2 참조 |
 | **버튼** | General: `v1.66 (66)`·`Remove Oldest Activation`·`Purchase` | ⭐ `v1.66 (66)` 은 정적 텍스트가 아니라 **버튼**임이 확정됐다(실측: AX 트리) — 클릭 시 동작은 About 창 오픈으로 추정되나 `(미확정)`. `Purchase` 는 강조색(accent color) 버튼 |
 | **접이식 섹션** (`<details>`/`<summary>`) 🧩 | General 탭 최하단: `Advanced`(이슈 #77) | ⭐ **신규 구조 요소 타입.** `<details>` 는 저장소에서 첫 사용이다 — 기존 선례는 `#about`(`hidden` 속성 + 버튼 토글, 설정 창)뿐이었다. 동작 규칙: ① **기본 접힘**(`open` 속성 부재)으로 출하한다 ② **접힘 상태는 저장하지 않는다**(세션 상태 — F-15 "부재 = 기본값", 신규 저장 키 0개) ③ `<summary>` 가 그룹 헤딩을 겸한다(접이식 안에 `h2.group` 을 다시 두어 이중 헤딩을 만들지 않는다). ⚠️ 이 타입은 **한 컨트롤의 값이 다른 컨트롤의 노출을 결정**하는 §3.8 종속 표현 3종(① dimmed·② 숨김·③ 문장 중간 삽입)과 **다르다** — Advanced 는 어떤 설정 값에도 종속하지 않는 **사용자 조작 disclosure 위젯**이므로 §3.8 에 추가하지 않고 이 카탈로그의 구조 요소로 등재한다 |
+
+⭐⭐ **컨트롤 시각 속성 확장 (이슈 #79, UXR-03·UXR-05·UXR-06·UXR-08·UXR-09)** — P0 현대화 인라인 반영. 컨트롤 종류·id·저장 키·카탈로그 키·invoke 배선은 **무변경**, 아래는 시각 속성만 추가로 정의한다:
+
+- **액션 버튼 (UXR-03)**: `button.accent`(설정 창)와 온보딩 `button.primary`(`#open`)를 **시스템 강조색 채움**으로 그린다 — `background: color-mix(in srgb, Highlight 85~95%, Canvas)`, `color: CanvasText`(강조색 위 대비 보정 농도), hover 시 한 단계 진하게. ⛔ `.danger`(비활성화 확인)는 기존 붉은 스타일을 유지하고 accent 와 섞지 않는다. `disabled` 는 기존 opacity `.5` 규약 유지. (온보딩 화면에 같은 어휘를 적용 — `index.html`.)
+- **온보딩 화면 공용 규약 (UXR-09)**: 온보딩(`index.html`)의 primary 버튼은 위 "액션 버튼"과 같은 어휘로 그린다. 수동 절차 블록(`pre.steps`)은 줄 간격 1.6 이상으로 읽기 흐름을 주고, 힌트(`locked-hint`)는 대비 55% `color-mix` 로 맞춘다. 문구·`modal_copy` 계약·버튼 배선 무변경(F-11 참조).
+- **간격 공통 속성 (UXR-05)**: 힌트(부제)가 붙는 행은 아래 간격 12px, 힌트 없는 행 10px 유지. 섹션 구분선(`hr`) 상하 여백 18~20px. DOM 구조·순서 불변.
+- **대비 정책 (UXR-04)**: 섹션/그룹 헤딩(`h2.group`·Event Viewer `thead th`)은 `text-transform` 없이 캡션 헤딩으로, `color: color-mix(in srgb, currentColor 55%, transparent)` — 라이트/다크 같은 대비.
+- **경고 힌트 (UXR-06)**: "활성화 경로 없음" 같은 상태 알림은 `.warn` 규약(시스템 오렌지 `color-mix(in srgb, orange 70%, CanvasText)`)을 쓴다 — 일반 부제(`.hint`)와 구분. (예: `#seek-not-configured` 는 `hint warn`.)
+- **단축키 레코더 — 필드형 캡슐 (UXR-08)**: `#seek-shortcut-record` 를 일반 버튼과 구분되는 **필드형 캡슐**로 그린다(둥근 radius 6~7px, `currentColor` 4~6% 배경 + 25% 테두리). 레코딩 중(`aria-pressed="true"`)엔 accent 테두리/채움으로 "입력 대기"를 알린다. 요소 종류·id·이벤트·라벨·조회/취소/commit 동작(§3.5)은 **무변경**.
+- **focus-visible 공용 규약 (UXR-02)**: §3.4(접근성) 참조.
+- **Event Viewer 소비 행 대비 (UXR-10)**: `event-viewer.md` §3.3 참조 — `tr.consumed` 는 `Highlight 12%` 배경 + 좌측 `inset 3px` 막대, hover `currentColor 7%`.
 
 ### 3.3 창 생명주기
 
@@ -131,6 +148,7 @@
 - **VoiceOver**: 원본은 AppKit 네이티브 창(`NSMainStoryboardFile`)이므로 표준 `NSButton`/`NSPopUpButton`/`NSSlider` 는 VoiceOver 를 "공짜로" 지원한다. 클론은 Tauri WebView 로 이 창을 구현하기로 결정했으므로(§7), 이 무료 지원은 클론에는 적용되지 않는다 — 표준 HTML 폼 컨트롤(체크박스=`<input type="checkbox">`, 팝업=`<select>`)은 WebKit 이 접근성 트리에 노출하지만, **비표준 커스텀 컨트롤**(단축키 레코더, 인라인 팝업이 낀 라벨 문장, 슬라이더-값 라벨 연동, ⓘ 팝오버)은 ARIA 속성을 명시적으로 부여해야 한다 `(추정)`.
 - **키보드 내비게이션**: 탭 사이드바는 방향키로 이동 가능해야 하고, 패널 내부는 `Tab`/`⇧Tab` 으로 컨트롤 간 이동이 가능해야 한다. 단축키 레코더가 레코딩 모드일 때만 `Tab` 을 "다음 키 조합의 일부"로 먹고, 그 외엔 포커스 이동으로 처리해야 한다 `(추정)`.
 - **다크모드**: macOS 시스템 외관을 따라야 한다. 스크린샷 5장은 전부 라이트 모드로 캡처되어(실측: 02~05-*.png) 다크모드 시각 사양 자체는 이번 조사로도 확인되지 않았다 `(추정)`.
+- ⭐ **공용 `:focus-visible` 규약 (UXR-02, 이슈 #79)**: 키보드 사용자가 Tab 순회할 때 포커스 위치를 일관되게 보여야 한다. **버튼·탭·목록 행·개별 속성 없는 요소**에 `:focus-visible { outline: 2px solid Highlight; outline-offset: 1~2px; }` 를 공용 규칙으로 둔다. **체크박스·`select`·`input[type=range]` 는 WebKit 네이티브 포커스 링을 유지한다** — 커스텀 링으로 재구현하면 macOS 포커스 링 표현(시스템 설정)과 어긋나고 회귀를 만든다. `:focus`(마우스 클릭 시)에는 보이지 않게 하려고 `:focus-visible` 로만 건다.
 
 ### 3.5 단축키 레코더 동작 명세
 

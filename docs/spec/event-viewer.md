@@ -115,6 +115,8 @@ ring.push()  ← 무잠금
 
 **소비된 이벤트는 시각적으로 구분한다** — `Consume` 인 줄은 좌측에 색 막대를 둔다. "내가 누른 것이 그대로 나갔는가, 아니면 Ultrakey 가 먹고 다른 것을 냈는가"가 이 창의 핵심 질문이기 때문이다.
 
+⭐ **색 표현 확정 (UXR-10, 2026-09-02)**: `tr.consumed` 는 `Highlight 12%` 배경 + 좌측 `inset 3px` 막대(`Highlight`), 행 hover 는 `currentColor 7%` 로 확정한다 — 시스템 색(`color-scheme: light dark` + `color-mix`)만 쓰므로 테마별 자산이 없고, 라이트/다크 양쪽에서 소비된 행이 다른 행과 즉시 구분되어야 한다(`eventviewer.html` 의 CSS 가 그 값의 정본이다).
+
 ### 3.4 ⭐ "적용된 규칙" — `Layer` 만으로는 부족하다
 
 `Outcome` 은 지금 어느 **계층**이 결정했는지(`Layer`)만 들고 있다. 그런데 `Layer::PresetCombo` 하나에 F-08 프리셋 16종이 전부 들어간다 — 사용자가 "내 설정이 제대로 되어 있나"를 판정하려면 **그중 어느 것이 발화했는지**를 알아야 한다.

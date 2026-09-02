@@ -245,7 +245,24 @@ permission:
 - [ ] P2 제품 개선 — 명세 갱신 후 별도 이슈로 위임
 - [ ] 창 틀 교체 스파이크 (별도 승인 후 진행)
 
-> ⚠️ 단계 4 의 구현은 이 계획 초안이 **구현 순서 지시서**를 가지지 않는다 — 실제 변경 항목은 요구사항 문서가 확정된 뒤, 계획 초안(이 문서)을 갱신해 구현 순서를 명시한다. (이 문서는 범위·분류·제약만 정한다.)
+> ⭐ **구현 순서 지시서 (2026-09-02, 요구사항 확정 후 갱신 — 이슈 #79-ux-requirements.md §2.1·§2.2 의 UXR-01~11)**. 각 항목은 **파일 → 절(또는 식별자) → 고칠 내용 → 검증 테스트** 순서로 지시한다. ⛔ 전 항목 공통 불변: 컨트롤 id·저장 키·카탈로그 키·invoke 배선 무변경, i18n 5카탈로그 키 집합 불변. **CSS 를 시각 로직으로, JS 는 UXR-07 의 표시 타이밍 클래스 부착만 예외로 허용**(else 는 CSS 만).
+
+| 순서 | UXR | 파일 → 위치 | 고칠 내용 | 요구 테스트 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | UXR-01 | `apps/ultrakey-app/ui/settings.html` → `<style>` `.sidebar button[aria-selected="true"]`·`.keyboards-device-pane [role="option"][aria-selected="true"]` | 선택 표현을 `currentColor 14%` → `color-mix(in srgb, Highlight 12~16%, transparent)` 로 교체(hover 8% 는 유지 — 색 온도로 hover/선택 구분). `aria-selected`·`data-tab`·id 무변경 | 신규 정적 회귀 1(`frontend_wiring.rs`: 선택 규칙이 `Highlight` 를 쓴다) + 기존 회귀 전체 |
+| 2 | UXR-02 | `settings.html` → `<style>` 공용 `:focus-visible` 규칙 추가 | 버튼·탭·목록 행에 `outline: 2px solid Highlight; outline-offset: 1~2px`. 체크박스·select·range 는 **제외**(네이티브 링 유지) | 기존 회귀 전체(신규 없음 — CSS 추가 전용) |
+| 3 | UXR-03 | `settings.html` `button.accent` + `index.html` `button.primary`(`#open`) → `<style>` | accent 채움: `background: color-mix(in srgb, Highlight 85~95%, Canvas)`, `color: CanvasText` 농도 보정, hover 시 한 단계 진하게. `.danger` 는 기존 붉은 스타일 유지(섞지 않음). id·텍스트·클릭 배선·disabled opacity(`.5`) 무변경 | 기존 회귀 전체 + 실기 대비(수용 기준) |
+| 4 | UXR-04 | `settings.html` `h2.group` + `eventviewer.html` `thead th` → `<style>` | `text-transform: uppercase` 제거, `opacity: .6` → `color: color-mix(in srgb, currentColor 55%, transparent)`. 문구·헤딩 텍스트 무변경 | 기존 회귀 전체 |
+| 5 | UXR-05 | `settings.html` `<style>` `.hint`·`hr` | 힌트 하단 간격 10→12px, `hr` 상하 16→18~20px. DOM 구조 불변 | 기존 회귀 전체 |
+| 6 | UXR-06 | `settings.html` `#seek-not-configured` → `<p class="hint warn">` | 클래스만 `hint` → `hint warn`(기존 `.warn` 오렌지 규약). 키·문구·`hidden` 토글·`anyActivationConfigured` 무변경 | 신규 정적 회귀 2(클래스가 `hint warn` 을 갖는다) + 기존 회귀 |
+| 7 | UXR-07 | `settings.html` `.tabpanel` CSS + `activateTab()` JS | 탭 전환 패널 90~110ms opacity 페이드 인. `[hidden]`(display:none) 에서 transition 불가 → hidden 해제 직후 **인라인 opacity 0** 을 세팅하고 reflow 로 시작값을 고정한 뒤, rAF 다음 프레임에 인라인을 지워 CSS 기본(1)로 전환한다(⚠️ 요구사항 초안의 `.tabpanel-visible` **클래스** 방식은 CSS 기본 opacity 를 0 으로 만들어 정적 렌더·④ 전제("기본 opacity 1")를 위반하므로, **인라인 방식으로 구현**한다 — 효과·수용 기준은 동일). `prefers-reduced-motion` 시 0ms(즉시). activateTab 의 화이트리스트·persist·`settings_set_tab` invoke·hidden 토글 로직 자체는 **무변경** | 신규 정적 회귀 3(`revealTabPanel`+`requestAnimationFrame`+`prefers-reduced-motion` 존재) + `최초_렌더는_탭을_저장하지_않는다` 유지 + 기존 회귀 |
+| 8 | UXR-08 | `settings.html` `#seek-shortcut-record` → `<style>` (`[aria-pressed="true"]` 상태 포함) | 레코더를 필드형 캡슐로(radius 6~7px, `currentColor` 4~6% bg + border 25%), 레코딩 중(`aria-pressed=true`) accent 테두리/채움. `startSeekRecording`·label·id·commit 무변경 | 기존 회귀 전체(JS 무변경) |
+| 9 | UXR-09 | `index.html` → `<style>` `#open`(`.primary`)·`pre.steps`·`.hint`(`locked-hint`) | `#open` 를 UXR-03 공용 액션 규약과 같은 어휘로, `pre.steps` 줄 간격 1.6 이상, `locked-hint` 대비 55% color-mix. 문구·`modal_copy`·버튼 배선 무변경 | 기존 회귀 전체 |
+| 10 | UXR-10 | `eventviewer.html` → `<style>` `tr.consumed`·`tbody tr:hover` | consumed `Highlight 9%`→`12%`, hover `5%`→`7%`. `inset 3px` 막대는 `Highlight` 유지. 표 마크업·렌더 로직 무변경 | 기존 회귀 전체 |
+| 11 | UXR-11 (P1) | `overlay-searchbar.html`·`overlay-highlight.html` → 팔레트 폴백 주석 + `seek-overlay-ui.md`§4.2·§5(3단계에서 명세 승격) | 코드는 **이미 정본**(`crates/ultrakey-overlay/src/palette.rs:66-80` 라이트·회귀 4종). HTML 폴백 값은 그대로 두고, 주석이 "§4.2 제안 기본값" 참조 대신 **구현(정본 palette.rs)을 가리키도록** 갱신 | palette.rs 회귀 4종 + `searchbar의_*` 기존 회귀 |
+
+- **테스트 실행**: `cargo test --workspace`(회귀 전체 통과) · `cargo clippy --workspace --all-targets -- -D warnings`(경고 0) · i18n 키 집합 검사(`all_catalogs_*`) 무변경 · 실기기 라이트/다크 확인(§7 수용 기준).
+- **완료 정의**: 요구사항 문서 §2.1(UXR-01~10)·§2.2(UXR-11) 의 수용 기준 전부 + 이 계획 §7 수용 기준. `frontend_wiring.rs` 에 신규 정적 회귀를 **추가**할 수 있다(해당 UXR 항목 기재한 것 — 단, 기존 검사의 기대 문자열은 건드리지 않는다).
 
 ---
 

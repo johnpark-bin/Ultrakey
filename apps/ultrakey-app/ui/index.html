@@ -41,7 +41,9 @@
     border-radius: 7px;
     background: color-mix(in srgb, currentColor 8%, transparent);
   }
-  .hint { opacity: .65; font-size: 12px; }
+  /* ⭐ UXR-04 동일 대비 정책 — opacity 로 뭉개뜨리는 대신 color 로 대비를
+     건다(라이트/다크 같은 강도). */
+  .hint { color: color-mix(in srgb, currentColor 55%, transparent); font-size: 12px; }
   pre.steps {
     white-space: pre-wrap;
     font: inherit;
@@ -49,6 +51,8 @@
     padding: 10px 12px;
     border-radius: 7px;
     background: color-mix(in srgb, currentColor 8%, transparent);
+    /* ⭐ UXR-09 — 3단계 수동 절차의 읽기 흐름: 줄 간격 1.6 이상. */
+    line-height: 1.6;
   }
   .row { display: flex; gap: 8px; margin-top: 18px; }
   button {
@@ -60,8 +64,18 @@
     color: inherit;
     cursor: pointer;
   }
-  button.primary { font-weight: 500; }
-  button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+  /* ⭐ UXR-03·UXR-09 — 온보딩의 1차 동작(primary)을 설정 창 accent 버튼과
+     같은 시각 어휘(시스템 강조색 채움)로. 글자색은 accent 위 대비를 위해
+     CanvasText 를 흰 쪽으로 color-mix(설정 창 비고와 같은 보정). */
+  button.primary {
+    font-weight: 600;
+    border-color: color-mix(in srgb, Highlight 60%, CanvasText);
+    background: color-mix(in srgb, Highlight 88%, Canvas);
+    color: color-mix(in srgb, CanvasText 10%, white);
+  }
+  button.primary:hover:not(:disabled) { background: Highlight; }
+  button.primary:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
   [hidden] { display: none !important; }
 </style>
 </head>

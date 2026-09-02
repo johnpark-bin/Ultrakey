@@ -49,8 +49,14 @@
     align-items: center;
     gap: 8px;
   }
+  /* ⭐ UXR-01 — 선택 상태는 시스템 강조색 채움으로. currentColor 농도만으로는
+     hover(8%)와 선택(14%)의 차이가 약하고 라이트/다크에서 같은 회색 톤이라
+     "지금 어느 탭을 보고 있는가"가 덜 또렷하다. Highlight 는 시스템 강조색
+     키워드라 테마별 자산이 없고(기존 Canvas/currentColor 규약과 같은 이유)
+     라이트/다크에서 accent 색이 자동으로 따라온다. hover(8%)는 색 온도가
+     다르므로 그대로 둔다 — hover 와 선택이 색으로도 구분된다. */
   .sidebar button[aria-selected="true"] {
-    background: color-mix(in srgb, currentColor 14%, transparent);
+    background: color-mix(in srgb, Highlight 14%, transparent);
     font-weight: 600;
   }
   .sidebar button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
@@ -71,6 +77,16 @@
   .sidebar button[aria-selected="true"] .tab-icon { opacity: 1; }
 
   .panel { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; }
+
+  /* ⭐ UXR-07 (이슈 #79) — 탭 전환 패널 페이드 인. 감소 모션 지정 시
+     transition 자체를 끈다(0ms). `[hidden]`(display:none) 에서는 transition 이
+     켜지지 않으므로, JS 가 hidden 해제 직후 **인라인 opacity 0** 을 세팅하고
+     한 프레임 뒤 지워 기존 값을 CSS 기본(1)로 돌려 전환을 건다 — CSS 기본은
+     opacity 1 이라 JS 없는 정적 렌더에서도 즉시 보인다(수용 기준 ④). */
+  .tabpanel { transition: opacity 110ms ease-in-out; }
+  @media (prefers-reduced-motion: reduce) {
+    .tabpanel { transition: none !important; }
+  }
   /* ⭐ 상세 헤딩(이슈 #45) — 제목 좌측에 해당 탭의 아이콘을 표시한다. 아이콘은
      사이드바 탭 button 의 인라인 SVG 를 JS 가 `cloneNode` 로 복제해 넣는다
      (`mountTabHeadingIcons` 참고 — 마크업을 두 벌로 복제하지 않아 drift 가 없다).
@@ -91,11 +107,12 @@
   select { font: inherit; }
   select:disabled { opacity: .45; cursor: not-allowed; }
 
-  .hint { opacity: .65; font-size: 12px; margin: 2px 0 10px; }
+  .hint { opacity: .65; font-size: 12px; margin: 2px 0 12px; }
   .hint.why { font-style: italic; }
   .warn { color: color-mix(in srgb, orange 70%, CanvasText); font-size: 12px; margin: 4px 0; }
 
-  hr { border: none; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); margin: 16px 0; }
+  /* ⭐ UXR-05 — 섹션 구분선 상하 여백 16 → 18px. 섹션 경계가 더 또렷하게. */
+  hr { border: none; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); margin: 18px 0; }
 
   .badge {
     font-size: 10px;
@@ -156,11 +173,57 @@
   }
   button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  button.accent { font-weight: 600; }
+
+  /* ⭐ UXR-03 (이슈 #79) — accent(액션) 버튼: 시스템 강조색 채움. macOS 기본
+     (action) 버튼 관례를 따른다. 글자색은 accent 위 대비를 위해 CanvasText
+     를 흰 쪽(라이트)에 가깝게 color-mix 로 당긴다 — Highlight 밝기에 대한
+     명시적 보정(제안식). hover 시 한 단계 진하게(채움 88% → Highlight 100%).
+     ⛔ .danger(비활성화 확인)는 기존 붉은 스타일을 유지하고 accent 와 섞지
+     않는다 — accent 가 danger 와 함께 붙은 버튼은 accent 채움이 무효화된다. */
+  button.accent:not(.danger) {
+    font-weight: 600;
+    border-color: color-mix(in srgb, Highlight 60%, CanvasText);
+    background: color-mix(in srgb, Highlight 88%, Canvas);
+    color: color-mix(in srgb, CanvasText 10%, white);
+  }
+  button.accent:not(.danger):hover:not(:disabled) { background: Highlight; }
+
+  /* ⭐ UXR-08 (이슈 #79) — 단축키 레코더를 필드형(캡슐) 컨트롤로. 버튼 요소·
+     id·이벤트(`startSeekRecording`)·라벨은 그대로 두고 표면 스타일만 일반
+     버튼과 구분한다. 레코딩 중(aria-pressed="true")은 accent 테두리/채움으로
+     "지금 입력을 받는 중"을 즉시 알린다(라벨은 카탈로그 키라 무변경). */
+  #seek-shortcut-record {
+    padding: 5px 16px;
+    border-radius: 7px;
+    background: color-mix(in srgb, currentColor 4%, transparent);
+    border-color: color-mix(in srgb, currentColor 25%, transparent);
+    min-width: 150px;
+    font-variant-numeric: tabular-nums;
+  }
+  #seek-shortcut-record[aria-pressed="true"] {
+    background: color-mix(in srgb, Highlight 12%, transparent);
+    border-color: Highlight;
+    font-weight: 600;
+  }
+
+  /* ⭐ UXR-02 (이슈 #79) — 공용 focus-visible 규약. 버튼·탭·목록 행에 동일한
+     포커스 링을 준다. :where() 로 이 규칙의 특이성을 0 으로 두어, 사이드바
+     탭의 기존 전용 규칙(outline-offset -2px)이 우선 유지된다. 체크박스·select·
+     range 는 이 선택자에 걸리지 않아 WebKit 네이티브 포커스 링을 유지한다
+     (macOS 접근성 순응). 마우스 클릭 시(:focus)에는 드러나지 않게 :focus-visible 만. */
+  :where(button, [role="tab"], [role="option"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
 
   h2.group {
-    font-size: 12px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: .04em; opacity: .6; margin: 4px 0 8px;
+    /* ⭐ UXR-04 — 대문자 변환 제거 + color-mix 55% 대비. 한글 헤딩에서
+       text-transform 은 무의미하고, opacity .6 은 다크에서 대비가 약했다.
+       라이트/다크가 같은 강도가 되도록 opacity 대신 color 로 대비를 건다. */
+    font-size: 12px; font-weight: 600;
+    letter-spacing: .04em;
+    color: color-mix(in srgb, currentColor 55%, transparent);
+    margin: 4px 0 8px;
   }
 
   input[type="range"] { width: 200px; }
@@ -189,7 +252,7 @@
     background: color-mix(in srgb, currentColor 8%, transparent);
   }
   .keyboards-device-pane [role="option"][aria-selected="true"] {
-    background: color-mix(in srgb, currentColor 14%, transparent);
+    background: color-mix(in srgb, Highlight 14%, transparent);
     font-weight: 600;
   }
   .keyboards-device-pane .device-name { display: block; }
@@ -326,7 +389,7 @@
            (mountTabHeadingIcons), 텍스트 span 을 카탈로그가 채운다. -->
       <h1 id="seek-heading"><span id="seek-heading-text"></span></h1>
 
-      <p class="hint" id="seek-not-configured" hidden></p>
+      <p class="hint warn" id="seek-not-configured" hidden></p>
 
       <div class="row">
         <span id="seek-shortcut-label"></span>
@@ -2915,6 +2978,23 @@ if (!tauri || !tauri.core) {
     el.hidden = !text;
   }
 
+  // ⭐ UXR-07 (이슈 #79) — 탭 패널 페이드 인. [hidden](display:none) 에서는
+  // transition 이 켜지지 않으므로, hidden 해제 직후 인라인 opacity 0 을 세팅하고
+  // 브라우저가 그 시작값을 페인트에 반영하도록 reflow 를 강제한 뒤, rAF 한 프레임
+  // 후 인라인을 지워 CSS 기본(opacity 1)로 전환한다. 감소 모션 시 즉시 표시 —
+  // 애초에 인라인 0 을 세팅하지 않는다(절대 투명 상태로 시작하지 않는다). JS 가
+  // 죽은 정적 렌더에서도 패널은 CSS 기본 opacity 1 로 즉시 보인다(④).
+  function revealTabPanel(panel) {
+    const reduceMotion =
+      window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) return;
+    panel.style.opacity = "0";
+    if (panel.getBoundingClientRect) panel.getBoundingClientRect(); // reflow 강제
+    requestAnimationFrame(() => {
+      panel.style.opacity = "";
+    });
+  }
+
   function activateTab(tab, { persist = true } = {}) {
     activeTab = tab;
     for (const name of TABS) {
@@ -2922,8 +3002,11 @@ if (!tauri || !tauri.core) {
       const btn = $(`tab-${name}`);
       btn.setAttribute("aria-selected", String(active));
       btn.tabIndex = active ? 0 : -1;
-      $(`panel-${name}`).hidden = !active;
+      const panel = $(`panel-${name}`);
+      panel.hidden = !active;
+      if (!active) panel.style.opacity = ""; // 다음 표시 때 깨끗하게(UXR-07)
     }
+    if (!$(`panel-${tab}`).hidden) revealTabPanel($(`panel-${tab}`));
     // ⭐ 이슈 #32 Phase 1 부터 탭 전환은 창 크기를 바꾸지 않는다 — 이 invoke 는
     // 이제 (1) Rust 쪽 탭 화이트리스트(KNOWN_TABS) 검증과 (2) persist 가 true 일
     // 때 ui.lastTab 저장, 이 두 가지만 한다.
