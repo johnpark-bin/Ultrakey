@@ -1882,6 +1882,32 @@ hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'   # 대조군
 | 2 | ⭐ **`(VID,PID)` 중복이 없다** — `hidutil list` 는 같은 키보드를 서비스 수만큼 여러 줄로 보여주지만(S-2), 팝업에는 1대당 한 항목만 떠야 한다 |
 | 3 | VID·PID·제품명이 `hidutil list` 와 일치한다 |
 
+#### ⭐ C-1b. 내장 키보드 포함 확인 (이슈 #86 — 실기기 필요)
+
+이슈 #86 은 "내장 키보드가 `Keyboards` 탭에 안 보인다"는 보고다. 확장 probe 가
+**두 필터의 이중 매칭 비교**(`DeviceUsagePage`/`DeviceUsage` vs `PrimaryUsagePage`/
+`PrimaryUsage` — hidutil list 정본)와 중복 제거 전 원시 서비스 덤프를 출력하므로,
+실기기(내장 키보드가 있는 Mac)에서 아래를 수행해 판정한다. ⛔ **이 기기(`Mac16,11`)엔
+내장 키보드가 없어 이 절차는 미수행 · 미검증이다 — 이슈는 "실기기 검증 대기" 상태로
+남아 있다.**
+
+```sh
+cargo run -p ultrakey-platform --example keyboard_list_probe
+hidutil property --get UserKeyMapping   # baseline — 검증 전 잔존 매핑 기록
+```
+
+| # | 조작 | 기대 |
+| :--- | :--- | :--- |
+| 1 | 위 probe 실행 | **출력 1 원시 덤프**에 내장 키보드 서비스가 보인다(제품명 e.g. `Apple Internal Keyboard`, `Built-In` 컬럼 관찰). 내장이 **없다**면 매칭 필터 문제(계획 D1 원인 a) — `ioreg -l` 로 재판정 |
+| 2 | **출력 2** 가 두 필터의 집합을 보여준다 | 내장 키보드 서비스가 `PrimaryUsage` 필터에는 있고 `DeviceUsage` 필터엔 없다 → 매칭 키 정렬(이슈 #86 수정)이 이슈를 고친 것. 서비스 단위에서 두 필터가 달라도 **`(VID,PID)` 중복 제거 후 목록이 같으면 회귀 없음** |
+| 3 | 내장 덤프의 VID/PID | `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 의 내장 행과 동일 |
+| 4 | **출력 3** dedup 회귀 체크 | 내장 키보드가 `(VID,PID)` 로 1대만 나타난다(중복 없음 · `exit 1` 없음) |
+| 5 | 앱 실행 → `Keyboards` 탭 좌측 패인 | 내장 키보드가 제품명으로 나타난다(리매핑 대상으로 선택 가능) |
+| 6 | 내장에 기능 1 등록 → 실제로 누름 | 내장 키보드에서만 그 변환이 동작하고 외장 키보드는 영향 없음(S-1 재현) |
+| 7 | caps lock 의존 프리셋 켠 상태 | 내장 키보드의 caps lock 이 정규화된다(D-1 이 내장에도 디바이스 한정으로 설치) |
+| 8 | ⭐ `Built-In` 컬럼 확인 | 내장 = `1`(또는 `Yes`)로 읽히는지 기록 — **라벨(`(내장)`) 구현의 선행 조건**(명세 §3.1.2). 이 필드만 못 읽으면 그 항목은 `(못 읽음)` 으로 출력되고 기능에는 영향 없음 |
+| 9 | 검증 후 baseline 복원 | C-6 절차 그대로 빈 배열 복원 + 되읽기 대조 |
+
 ### C-2. ⭐ 디바이스 격리 — 이 기능의 핵심 (§8 수용 기준 2, S-1 재현)
 
 **이것이 통과하지 못하면 F-17 은 실패다.** S-3 의 함정(VID 단독 매칭 → `IOHIDSystem` 오염 →
@@ -1993,6 +2019,19 @@ $ cargo run -p ultrakey-platform --example keyboard_list_probe
 ```
 `hidutil list` 의 물리 디바이스 목록과 정확히 일치한다. ⚠️ `Built-In` 은 읽지 못했다
 (명세 §9 #7 은 그대로 `(미확정)`) — 이 구현은 식별에 VID+PID 만 쓰므로 기능에 영향이 없다.
+
+#### ⭐ C-1 이슈 #86 확장 probe 실측 (2026-09-02, 본 기기 기준)
+
+확장 probe 는 **서비스 단위에서 두 필터가 다르다**는 것을 실측했다 — `DeviceUsagePage`/
+`DeviceUsage` 필터는 F108Pro 동글의 **Consumer 인터페이스**(`PrimaryUsagePage/Usage = 0xc/1`)
+까지 추가로 매칭한다(그 서비스가 `DeviceUsagePairs` 로 키보드 컬렉션을 선언하기 때문.
+IOHIDKeys.h 문서: `DeviceUsage*` 는 전체 응용 컬렉션 중 하나에 걸린다). `PrimaryUsagePage`/
+`PrimaryUsage` 정렬 후 매칭 서비스는 앞 2개로 좁혀졌다.
+
+**회귀 판정**: 양쪽 `(VID,PID)` 중복 제거 후 목록은 **동일하게 2대** — `Keyboards` 탭
+목록은 바뀌지 않으므로 매칭 키 정렬은 이 기기에서 **회귀 없음**. ⛔ 내장 키보드
+포함 여부는 본 기기엔 내장 키보드가 없어 **실기기 미검증** — C-1b 절차가 그 판정을
+둔다.
 
 #### `Keyboards` 탭 UI — **통과**(스크린샷으로 확인)
 

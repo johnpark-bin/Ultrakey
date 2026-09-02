@@ -6,7 +6,7 @@
 
 ## 1. 요약
 
-**결론부터**: 이 이슈는 **UI 표시 문제가 아니라 열거(enumeration) 문제**다. `build_per_device_view()`(main.rs:692)는 `list_attached_keyboards()` 결과를 그대로 좌측 패인에 매핑할 뿐이므로, 내장 키보드가 목록에 안 보인다는 것은 곧 **`list_attached_keyboards()` 가 내장 키보드를 돌려주지 않는다**는 뜻이다. 그리고 이는 **기능적 결함**이기도 하다 — 엔진의 `reconcile_on_start`/`apply_all`(path_b.rs:197-203)이 `attached` 목록의 디바이스에만 D-1(`caps lock → F18`)과 디바이스별 설정을 쓰므로, 내장 키보드가 목록에서 빠지면 **내장 키보드의 caps lock 정규화(D-1)와 F-17 설정이 통째로 적용되지 않는다.**
+**결론부터**: 이 이슈는 **UI 표시 문제가 아니라 열거(enumeration) 문제**다. `build_per_device_view()`(main.rs:692)는 `list_attached_keyboards()` **∪ 설정 키 존재 디바이스** 합집합을 좌측 패인에 매핑한다(`main.rs:692` 주석). ⭐ **내장 키보드는 그 합집합에서 열거(`list_attached_keyboards()`)로만 진입한다** — 설정 키가 없는 새 내장 키보드가 목록에 나타나는 유일한 경로가 열거이므로, 목록에 안 보인다는 것은 곧 **`list_attached_keyboards()` 가 내장 키보드를 돌려주지 않는다**는 뜻이다(결론 불변, 상급 리뷰 §8 #1). 그리고 이는 **기능적 결함**이기도 하다 — 엔진의 `reconcile_on_start`/`apply_all`(path_b.rs:197-203)이 `attached` 목록의 디바이스에만 D-1(`caps lock → F18`)과 디바이스별 설정을 쓰므로, 내장 키보드가 목록에서 빠지면 **내장 키보드의 caps lock 정규화(D-1)와 F-17 설정이 통째로 적용되지 않는다.**
 
 **원인은 미확정이며, 실측으로 판정한다.** 코드 실측으로 확인된 사실 두 가지가 후보를 좁힌다:
 
@@ -52,7 +52,7 @@
 
 ### D3 — built-in 라벨 표시: 권장하되 실기기 검증 후로 미룬다
 
-`PerDeviceDeviceView`(main.rs:618)에 `built_in: Option<bool>` 추가 + `populateDeviceList`(settings.html:1537-1557)에서 `(내장)` 라벨. i18n `preferences.keyboards.devicePicker.builtIn` 1키 × 5언어.
+`PerDeviceDeviceView`(main.rs:618)에 `built_in: Option<bool>` 추가 + `populateDeviceList`(settings.html:1568)에서 `(내장)` 라벨. i18n `preferences.keyboards.devicePicker.builtIn` 1키 × 5언어.
 
 - 근거: Apple VID(0x5ac)는 서드파티 키보드와 내장이 **공유** — 제품명만으로 구분 불가할 수 있다.
 - **단, 실기기 검증 선행**: 수동 검증 C-1 에서 `Built-In` 읽기가 실패("(못 읽음)"). 내장 키보드에서 `Built-In` = 1 이 읽히는지는 실측된 바 없다(명세 §9 Q7). 확인 전 라벨 도입은 무의미.
@@ -146,6 +146,10 @@
 
 > `Built-In` = 1 인 항목은 제품명 뒤에 `(내장)` 라벨 — Apple VID(0x5ac)는 서드파티 키보드와 공유되므로 제품명만으로 구분이 안 될 수 있다.
 
+### §6 플랫폼 API 표 — `IOServiceMatching` + `UsagePage`/`Usage` 필터 행 갱신
+
+> `IOServiceMatching(kIOHIDDeviceKey)` + `UsagePage`/`Usage` 필터 행을 **`PrimaryUsagePage`/`PrimaryUsage`** 로 갱신(per-device-settings.md:534→541 기록, 상급 리뷰 §8 #3).
+
 ### §8 수용 기준 — 추가
 
 - [ ] 내장 키보드가 있는 Mac 에서 Keyboards 탭 좌측 패인에 내장 키보드가 나타나고(제품명 + `(내장)` 라벨), 서드파티 키보드 목록은 수정 전과 동일하다.
@@ -154,7 +158,7 @@
 
 ### §9 미해결 질문 — 갱신
 
-- Q1(Apple VID 구분)·Q7(`Built-In` 컬럼 소스) — 실측 결과 반영(내장 키보드 기기 확보 시).
+- Q1(Apple VID 구분)·Q7(`Built-In` 컬럼 소스) — 실측 결과 반영(내장 키보드 기기 확보 시). 확인 수단은 확장 probe(이중 매칭 비교)의 원시 덤프 + `hidutil list` 대조(부록 C-1) — ⚠️ Q1 절차에서 probe 가 ① 이므로 `hidutil list` 는 "본 절차 ①" 과 같은 순서 참조를 쓰지 말 것(재번호화 헷갈림, 상급 리뷰 부수).
 
 ---
 

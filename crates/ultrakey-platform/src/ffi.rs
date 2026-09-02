@@ -127,6 +127,18 @@ extern "C" {
         options: u32,
     ) -> *mut c_void;
 
+    /// 근거: `IOKitLib.h` — `kern_return_t IORegistryEntryGetRegistryEntryID(
+    /// io_registry_entry_t entry, uint64_t *entryID );`
+    /// `io_registry_entry_t` 는 `io_object_t` 의 별칭.
+    /// 서비스의 레지스트리 ID — `hidutil list` 의 `RegistryID` 컬럼(스파이크 §10).
+    /// ⚠️ 레지스트리 **프로퍼티**("RegistryID")가 아니라 이 함수의 반환값으로 얻는다
+    /// — `IORegistryEntryCreateCFProperty` 로는 읽을 수 없다(실측, 이슈 #86). reboot
+    /// 이전까지 전 태스크 공통의 개별 식별자다(문서: "global to all tasks").
+    pub(crate) fn IORegistryEntryGetRegistryEntryID(
+        entry: IoObjectT,
+        entry_id: *mut u64,
+    ) -> KernReturnT;
+
     /// 근거: `IOKitLib.h`. `matching` 은 참조 하나를 소비한다(CF_RELEASES_ARGUMENT).
     pub(crate) fn IOServiceAddMatchingNotification(
         notify_port: IONotificationPortRef,
@@ -166,8 +178,24 @@ pub(crate) const K_IO_MATCHED_NOTIFICATION: &[u8] = b"IOServiceMatched\0";
 pub(crate) const K_IO_TERMINATED_NOTIFICATION: &[u8] = b"IOServiceTerminate\0";
 /// 근거: `IOKit.framework/.../hid/IOHIDKeys.h` / `IOHIDDeviceKeys.h`
 pub(crate) const K_IOHID_DEVICE_KEY: &[u8] = b"IOHIDDevice\0";
+/// 근거: `IOKit.framework/.../hid/IOHIDDeviceKeys.h` — `#define kIOHIDDeviceUsagePageKey "DeviceUsagePage"`.
+/// ⚠️ **이 필터 키는 매칭 사전에서 쓰지 않는다**(이슈 #86 정렬로
+/// `PrimaryUsagePage`/`PrimaryUsage` 를 쓴다, 명세 §3.2) — 디바이스가 선언한
+/// **모든** 응용 컬렉션(behaviors, `DeviceUsagePairs`) 중 하나에 걸리는 키라
+/// `hidutil list` 가 쓰는 `PrimaryUsage*` 와 다르게 매칭될 수 있다. 진단
+/// probe(`keyboard_list_probe.rs`, 이슈 #86)가 두 필터의 집합 차이를 확인할 때만
+/// 참조한다.
 pub(crate) const K_IOHID_DEVICE_USAGE_PAGE_KEY: &str = "DeviceUsagePage";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDDeviceUsageKey "DeviceUsage"`.
 pub(crate) const K_IOHID_DEVICE_USAGE_KEY: &str = "DeviceUsage";
+/// 근거: `IOKit.framework/.../hid/IOHIDDeviceKeys.h` — `#define kIOHIDPrimaryUsagePageKey "PrimaryUsagePage"`.
+/// ⭐ **`build_keyboard_matching_dict()` 가 쓰는 매칭 키**(이슈 #86 — 명세 §3.2 의
+/// 정본 `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 와 같은
+/// 필터). `DeviceUsagePage`/`DeviceUsage` 는 같은 매칭 숫자(1/6)라도 **다른 IOKit
+/// 프로퍼티**다 — 이슈 #86 은 그 불일치가 내장 키보드 누락의 원인 후보 (a) 다.
+pub(crate) const K_IOHID_PRIMARY_USAGE_PAGE_KEY: &str = "PrimaryUsagePage";
+/// 근거: 위와 동일 헤더 — `#define kIOHIDPrimaryUsageKey "PrimaryUsage"`.
+pub(crate) const K_IOHID_PRIMARY_USAGE_KEY: &str = "PrimaryUsage";
 /// USB HID Usage Tables — Generic Desktop 페이지(1) / Keyboard 사용처(6).
 pub(crate) const K_HID_USAGE_PAGE_GENERIC_DESKTOP: i32 = 0x01;
 pub(crate) const K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD: i32 = 0x06;
