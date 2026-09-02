@@ -254,6 +254,24 @@ pub fn resolve_caps_lock_alias_for_trace(cfg: &EngineConfig, keycode: KeyCode) -
     resolve_caps_lock_alias_keycode(cfg, keycode)
 }
 
+/// ⭐(이슈 #93·#101) — 이 이벤트가 **설정된 세션 토글 단축키**(`Toggle Seek with
+/// shortcut:`) 조합과 일치하는가. UI 는 "앱 단축키가 검색어에 새지 않게" +
+/// "인풋 박스에서도 세션을 단축키로 다시 닫을 수 있게" 두 가지로 이 가드를 쓴다.
+///
+/// 일치하면 통과 **금지**(Consume → `SeekKey` → machine 의 `matches_global_shortcut`
+/// 재입력 토글 판정으로 떨어진다). modifier 비트마스크는 SHIFT|CONTROL|ALTERNATE|
+/// COMMAND 로 좁혀 비교한다 — `NX_DEVICE*KEYMASK` 같은 device 비트는 단축키 조합의
+/// 일부가 아니다.
+fn is_seek_shortcut_combo(ev: &InputEvent, gates: &GateSnapshot) -> bool {
+    const SHORTCUT_MOD_MASK: u64 = EventFlags::SHIFT.0
+        | EventFlags::CONTROL.0
+        | EventFlags::ALTERNATE.0
+        | EventFlags::COMMAND.0;
+    gates.seek_shortcut_keycode != 0
+        && ev.keycode.0 == gates.seek_shortcut_keycode
+        && (ev.flags.0 & SHORTCUT_MOD_MASK) == (gates.seek_shortcut_mods & SHORTCUT_MOD_MASK)
+}
+
 /// 중재 엔진 하나의 인스턴스. 탭 스레드가 배타 소유한다(`docs/dev/architecture.md` §2.2).
 pub struct Arbiter {
     pub state: KeyStateTable,
@@ -379,22 +397,39 @@ impl Arbiter {
             // (위)와 마찬가지로 **원본 이벤트 그대로**(환원된 kind 가 아니라)
             // `Outcome::pass` 한다 — IME 는 KeyDown/KeyUp/FlagsChanged 어느 쪽이든
             // 받아야 조합·상태가 깨지지 않는다(Plan §9 #4).
-            if gates.seek_input_box
-                && crate::seek_input_box::is_input_box_pass_key(ev, gates.seek_semicolon_cycles)
-            {
+            //
+            // ⭐(이슈 #101, 플랜 §3 D1·D2) — 입력 소스 전환 3경로 중 둘을 이 자리에서
+            // 처리한다. ① F-16.1(⇧+Space)은 계층 3 규칙을 **SPACE 키에 한해 여기서
+            // 재평가**(세션 중 계층 3 가 short-circuit 되므로 — D2), ② 시스템 입력
+            // 소스 전환 단축키(⌃Space·⌃⌥Space)는 원본 통과(D1). 평가 순서는 D2 →
+            // D1 — ⌃ 를 추가한 채 space 를 뗄 때 잔존 래치가 D1 통과로 우회되지
+            // 않도록 D2 가 먼저 처리해야 한다(리뷰 #3-a, T-②)。
+            if gates.seek_input_box {
+                let shortcut_combo = is_seek_shortcut_combo(ev, &gates);
+                // D2 — F-16.1(⇧+Space → ⌃Space 치환)의 세션 중 발화. 규칙·조건
+                // 3종(앱 제외·IME·hyper 활성)·래치(down/up 짝맞춤) 전부 기존
+                // `evaluate_korean_rules` 를 그대로 쓴다 — 새 판정 로직을 만들지
+                // 않는다. 세션 토글 조합은 건너뛴다(재입력 토글 유지).
+                if ev.keycode == KeyCode::SPACE
+                    && (kind == EventKind::KeyDown || kind == EventKind::KeyUp)
+                    && !shortcut_combo
+                {
+                    let mut korean = Outcome::consume(Layer::KoreanInput);
+                    if self.evaluate_korean_rules(cfg, ev, kind, gates, &mut korean) {
+                        return korean;
+                    }
+                }
+                // D1 — 시스템 입력 소스 전환 단축키(⌃Space·⌃⌥Space): `is_input_box_pass_key`
+                // 의 ⌘/⌃ 소비 판정 앞에서 원본 통과 — 시스템이 입력 소스를 전환한다.
                 // ⭐ 전역 단축키(`Toggle Seek with shortcut:`) 조합은 통과시키지
-                // 않는다 — 문자로 새어 들어가면 세션을 단축키로 다시 닫을 수
-                // 없다. 아래로 떨어져 Consume → `SeekKey` → machine 의 재입력
-                // 판정(`matches_global_shortcut`)을 탄다.
-                const SHORTCUT_MOD_MASK: u64 = EventFlags::SHIFT.0
-                    | EventFlags::CONTROL.0
-                    | EventFlags::ALTERNATE.0
-                    | EventFlags::COMMAND.0;
-                let is_shortcut = gates.seek_shortcut_keycode != 0
-                    && ev.keycode.0 == gates.seek_shortcut_keycode
-                    && (ev.flags.0 & SHORTCUT_MOD_MASK)
-                        == (gates.seek_shortcut_mods & SHORTCUT_MOD_MASK);
-                if !is_shortcut {
+                // 않는다 — 아래로 떨어져 Consume → `SeekKey` → machine 의 재입력
+                // 판정(`matches_global_shortcut`)을 탄다(세션을 단축키로 다시 닫기).
+                if crate::seek_input_box::is_input_source_switch_shortcut(ev) && !shortcut_combo {
+                    return Outcome::pass(Layer::SeekSession);
+                }
+                if crate::seek_input_box::is_input_box_pass_key(ev, gates.seek_semicolon_cycles)
+                    && !shortcut_combo
+                {
                     return Outcome::pass(Layer::SeekSession);
                 }
             }
@@ -2036,6 +2071,353 @@ mod tests {
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.effects().len(), 1);
         assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    // ── ⭐(이슈 #101, 플랜 §4) — 인풋 박스 모드의 입력 소스 전환 키 복구 ────────────────
+    // 사용자 피드백: 인풋 박스(다국어) 세션에서 ⌃Space 도 ⇧+Space 도 입력 소스 전환이
+    // 동작하지 않았다. T1~T11·T-①~⑤ 가 그 복구를 고정한다.
+    //   D1 — 시스템 입력 소스 전환 단축키(⌃Space·⌃⌥Space) 원본 통과
+    //   D2 — F-16.1(⇧+Space)의 세션 중 발화(계층 3 규칙을 계층 1 자리에서 재평가)
+
+    /// T1·T1-b — 인풋 박스 + ⌃Space **KeyDown/KeyUp** → **Pass**(시스템이 입력 소스
+    /// 전환 처리). SeekKey 가 나가면 안 된다. flags 는 macOS 실제 모양
+    /// (CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)).
+    #[test]
+    fn input_box_passes_system_input_source_shortcut() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), gates, Millis(0));
+        assert_eq!(down.layer(), Layer::SeekSession);
+        assert_eq!(down.disposition(), Disposition::Pass, "⌃Space down 은 시스템 전환으로 통과");
+        assert!(down.effects().is_empty(), "SeekKey 를 내면 안 된다");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)), gates, Millis(10));
+        assert_eq!(up.disposition(), Disposition::Pass, "⌃Space up 도 같은 경로로 통과");
+        assert!(up.effects().is_empty());
+    }
+
+    /// T2 — 인풋 박스 + ⌃⌥Space("입력 메뉴의 다음 소스" 기본 단축키) → **Pass**.
+    #[test]
+    fn input_box_passes_control_option_space() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let e = key_down(KeyCode::SPACE, EventFlags(0x000C_0021)); // CONTROL|ALT|DEVICE_LCTL|DEVICE_LALT
+        let out = arb.arbitrate(&cfg, &e, input_box_gates(false), Millis(0));
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T2-b(리뷰 #2-a) — 인풋 박스 + ⌃⇧Space → **Pass**(⇧ 는 가리지 않는다).
+    #[test]
+    fn input_box_passes_control_shift_space() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let e = key_down(KeyCode::SPACE, EventFlags(0x0006_0001));
+        let out = arb.arbitrate(&cfg, &e, input_box_gates(false), Millis(0));
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T3 — 인풋 박스 + ⌘Space / ⌘⌃Space → **계속 Consume + SeekKey**(⌘ 가드 —
+    /// Spotlight·앱 단축키 보호가 ⌃ 통과보다 우선).
+    #[test]
+    fn input_box_still_consumes_command_space() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        for flags in [EventFlags(0x0010_0008), EventFlags(0x0014_0009)] {
+            let out = arb.arbitrate(
+                &cfg,
+                &key_down(KeyCode::SPACE, flags),
+                input_box_gates(false),
+                Millis(0),
+            );
+            assert_eq!(out.disposition(), Disposition::Consume, "{flags:?}");
+            assert_eq!(out.effects().len(), 1, "{flags:?}");
+        }
+    }
+
+    /// T4 — 인풋 박스 + ⌃Space 가 **설정된 세션 토글(⌃Space)** 과 일치 → **Consume +
+    /// SeekKey**(재입력 토글 유지 — D1 의 예외 가드).
+    #[test]
+    fn input_box_consumes_control_space_when_it_is_the_toggle() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: false,
+            seek_shortcut_keycode: KeyCode::SPACE.0,
+            seek_shortcut_mods: EventFlags::CONTROL.0,
+            ..Default::default()
+        };
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
+            gates,
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Consume, "토글 조합은 통과 금지");
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    /// T4-b(리뷰 ⑦) — **다른** 조합이 토글일 때(⌥Space) ⌃Space 는 여전히 **Pass**
+    /// (가드 과매칭 없음 — 기존 `input_box_consumes_configured_global_shortcut_combo` 의
+    /// 역방향).
+    #[test]
+    fn input_box_passes_control_space_when_toggle_is_different_combo() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: false,
+            seek_shortcut_keycode: KeyCode::SPACE.0,
+            seek_shortcut_mods: EventFlags::ALTERNATE.0,
+            ..Default::default()
+        };
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
+            gates,
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T5 — **영어 단일** 세션 + ⌃Space → **계속 Consume + SeekKey**(인풋 박스 분기
+    /// 부재 — 회귀 없음).
+    #[test]
+    fn english_only_still_consumes_control_space() {
+        let cfg = EngineConfig::default();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    /// T5-b(리뷰 ⑥) — 영어 단일 + **F-16.1 켬** + ⇧+Space → **Consume + SeekKey**
+    /// (D2 분기 자체가 인풋 박스에 한정됨을 고정).
+    #[test]
+    fn english_only_f16_1_shift_space_still_routes_to_seek() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
+            GateSnapshot { seek_active: true, ..Default::default() },
+            Millis(0),
+        );
+        assert_eq!(out.layer(), Layer::SeekSession, "한국어 규칙이 발화하면 안 된다");
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    /// T6 — 인풋 박스 + **F-16.1 켬** + ⇧+Space 전체 시퀀스 → ⌃Space 치환 KeyDown/KeyUp
+    /// 짝 방출(래치). 기대값은 macOS 헤더 리터럴(0x0004_0001) — 시나리오 A 검증.
+    #[test]
+    fn input_box_f16_1_shift_space_substitutes_control_pair() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
+        assert_eq!(down.layer(), Layer::KoreanInput);
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].kind, EventKind::KeyDown);
+        assert_eq!(down.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "⇧ 제거 + ⌃ 치환");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(15));
+        assert_eq!(up.layer(), Layer::KoreanInput);
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "래치가 같은 치환으로 짝을 맞춘다");
+
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(20));
+        assert!(!arb.state.is_pressed(KeyCode::LEFT_SHIFT));
+    }
+
+    /// T7 — 인풋 박스 + **F-16.1 꺼짐(기본)** + ⇧+Space → **Pass**(검색어 공백 — 회귀 없음).
+    #[test]
+    fn input_box_f16_1_off_shift_space_passes_as_space() {
+        let cfg = EngineConfig::default(); // korean_rules 없음 = F-16.1 꺼짐
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
+            input_box_gates(false),
+            Millis(0),
+        );
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T8 — 인풋 박스 + F-16.1 켬 + **hyper 활성**(active_synth_flags) + ⇧+Space →
+    /// **미발화**(`evaluate_korean_rules` 조건 3 이 세션에서도 재사용됨). hyper 소스는
+    /// `F13` — `korean::MODIFIER_KEYS` 에 없으므로 shift-only 조건을 깨지 않으면서
+    /// active_synth_flags 를 채울 수 있다(세션 **전에** 눌려 hold 로 확정된 상태).
+    #[test]
+    fn input_box_f16_1_does_not_fire_while_hyper_active() {
+        let mut cfg = korean_config();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::F13,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert!(!arb.state.active_synth_flags().is_empty(), "F13 이 hyper 로 확정돼야 한다");
+
+        let gates = input_box_gates(false);
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
+        assert_ne!(out.layer(), Layer::KoreanInput, "hyper 활성 중 F-16.1 은 발화하지 않아야 한다");
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T10 — 인풋 박스 + F-16.1 켬 + **한/영 키(0x68)** → 계속 **Pass**(#76 예외가
+    /// 인풋 박스 분기보다 앞 — 재평가로 치환되지 않는다, D2 는 SPACE 한정).
+    #[test]
+    fn input_box_f16_1_han_eng_key_still_passes_original() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), input_box_gates(false), Millis(0));
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.emitted().is_empty(), "치환 이벤트를 내면 안 된다");
+        assert!(out.effects().is_empty());
+    }
+
+    /// T11 — 인풋 박스 + F-16.1 켬 + **한자(0x66)** → 계속 Consume + SeekKey(재평가
+    /// 분기 SPACE 한정 — 한자는 세션 중 발화 금지 기존 설계 유지).
+    #[test]
+    fn input_box_f16_1_hanja_key_still_consumed() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), input_box_gates(false), Millis(0));
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    /// T-①(리뷰 ①) — **래치 세션 경계**: 세션 중 F-16.1 발화(래치 세움) → 세션 닫힘
+    /// → space up 은 계층 3 래치 경로가 소비해 ⌃Space up 으로 짝을 맞춘다.
+    #[test]
+    fn latch_consumed_by_layer_three_after_session_closes() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates_open = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates_open, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates_open, Millis(10));
+        assert_eq!(down.disposition(), Disposition::Consume, "세션 중 발화(래치 세움)");
+
+        // 세션이 그 사이 닫혔다 — space up 은 세션 밖 계층 3 으로 온다.
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(20));
+        assert_eq!(up.layer(), Layer::KoreanInput);
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "같은 치환으로 짝을 맞춘다");
+
+        // 래치가 소비됐으므로 이후 일반 공백은 정상 통과.
+        let plain = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags::NONE), GateSnapshot::default(), Millis(30));
+        assert_eq!(plain.disposition(), Disposition::Pass);
+    }
+
+    /// T-②(리뷰 #3-a 핵심) — **래치 pending + ⌃Space up**: F-16.1 발화 후 space 를
+    /// ⌃ 를 추가한 채 떼면 `SPACE+CONTROL` up 이 D2(SPACE 재평가 — D1 보다 앞)에
+    /// 먼저 도달해 래치를 소비한다. 통과로 우회되어 래치가 잔존하지 않는다.
+    #[test]
+    fn latch_is_consumed_by_control_space_up_before_d1_passes_it() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates_open = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates_open, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates_open, Millis(10));
+        assert_eq!(down.disposition(), Disposition::Consume, "F-16.1 발화");
+
+        // ⌃ 를 추가한 채 space 를 뗀다 — D2 가 잔존 래치를 소비해야 한다.
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)), gates_open, Millis(20));
+        assert_eq!(up.layer(), Layer::KoreanInput, "D1 통과로 우회되면 안 된다");
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001));
+
+        // 래치가 소비됐다 — shift 를 정리한 뒤 평범한 공백 down 은 정상 통과
+        // (shift 가 눌린 채면 F-16.1 이 다시 발화하는 것이 정상이라 먼저 뗀다).
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates_open, Millis(30));
+        let plain = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags::NONE), gates_open, Millis(40));
+        assert_eq!(plain.disposition(), Disposition::Pass, "잔존 래치가 없어야 정상 통과");
+    }
+
+    /// T-③(리뷰 ③) — **autorepeat**: 세션 + F-16.1 켬 + ⇧+Space 반복 down → 전부
+    /// Consume + 치환(래치 덮어쓰기, korean-input.md §5#7) — 세션 변형.
+    #[test]
+    fn input_box_f16_1_autorepeat_substitutes_each_tick() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
+        assert_eq!(first.emitted().len(), 1);
+
+        let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
+        repeat.autorepeat = true;
+        let second = arb.arbitrate(&cfg, &repeat, gates, Millis(50));
+        assert_eq!(second.disposition(), Disposition::Consume);
+        assert_eq!(second.emitted().len(), 1, "autorepeat 도 ⌃Space down 으로 치환(래치 덮어쓰기)");
+        assert_eq!(second.emitted()[0].flags, EventFlags(0x0004_0001));
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(60));
+        assert_eq!(up.emitted().len(), 1, "up 은 한 번만 나가야 한다");
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+    }
+
+    /// T-④(리뷰 ④) — **무래치 KeyUp 통과**: 평범한 공백 down(통과) → up 은 래치가
+    /// 없으므로 **Pass**(D2 KeyUp 이 래치 없이 소비하지 않음).
+    #[test]
+    fn plain_space_up_without_latch_passes() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags::NONE), gates, Millis(0));
+        assert_eq!(down.disposition(), Disposition::Pass, "modifier 없는 공백은 통과");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags::NONE), gates, Millis(10));
+        assert_eq!(up.disposition(), Disposition::Pass, "래치 없이 KeyUp 을 소비하면 안 된다");
+        assert!(up.effects().is_empty());
+    }
+
+    /// T-⑤(리뷰 ⑤) — **D2→D1 순서**: 인풋 박스 + F-16.1 켬 + ⌃Space → D2(⌃ 로 인해
+    /// shift-only 불충족 — 미발화) 후 D1 통과. 순서 고정.
+    #[test]
+    fn input_box_f16_1_control_space_still_passes_d1() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), input_box_gates(false), Millis(0));
+        assert_ne!(out.layer(), Layer::KoreanInput, "⌃Space 는 F-16.1 대상이 아니다");
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
