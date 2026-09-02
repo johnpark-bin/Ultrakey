@@ -234,6 +234,8 @@
   "preferences.keyboards.functionKeys.templates.macMediaKeys": "Mac media keys (F1–F12)",
   "preferences.keyboards.functionKeys.templates.standardFKeys": "Standard F-keys (F1–F12)",
   "preferences.keyboards.functionKeys.templates.apply": "Apply",
+  "preferences.keyboards.functionKeys.templates.confirmTitle": "Apply this template?",
+  "preferences.keyboards.functionKeys.templates.confirmBody": "This will replace the current Function Keys for “{0}” with the selected template's values for all 12 keys.",
   "preferences.keyboards.functionKeys.unverifiedHint": "This destination's usage page has not been verified to work through hidutil.",
   "preferences.keyboards.functionKeys.category.disable": "Disable",
   "preferences.keyboards.functionKeys.category.modifierKeys": "Modifier keys",

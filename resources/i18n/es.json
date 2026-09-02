@@ -234,6 +234,8 @@
   "preferences.keyboards.functionKeys.templates.macMediaKeys": "Conjunto de teclas multimedia de Mac (F1–F12)",
   "preferences.keyboards.functionKeys.templates.standardFKeys": "Conjunto de teclas F estándar (F1–F12)",
   "preferences.keyboards.functionKeys.templates.apply": "Aplicar",
+  "preferences.keyboards.functionKeys.templates.confirmTitle": "¿Aplicar esta plantilla?",
+  "preferences.keyboards.functionKeys.templates.confirmBody": "Esto reemplazará las teclas de función actuales de “{0}” con los valores de las 12 teclas de la plantilla seleccionada.",
   "preferences.keyboards.functionKeys.unverifiedHint": "No se ha verificado que la usage page de este destino funcione a través de hidutil.",
   "preferences.keyboards.functionKeys.category.disable": "Desactivar",
   "preferences.keyboards.functionKeys.category.modifierKeys": "Teclas modificadoras",

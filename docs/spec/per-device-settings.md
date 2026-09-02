@@ -431,9 +431,15 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 **근거**: ①의 배치는 Apple 키보드의 실제 각인 어휘와 카탈로그의 조인이다 — 밝기 2종·`mission_control`·`launchpad` 는 벤더 page 목적지라 적용 후 각 행 아래 동작 미확인 힌트가 그대로 뜬다(§3.1.3 (c) — "빼기가 아니라 알리기" 규약 준수), 미디어 재생·볼륨·트랙·eject 계열은 실측(`Measured`) 등급이다. ②는 §3.5 의 `표준 F-키로 사용`(`null`) 12개 기록이다. 두 템플릿 모두 §2 시나리오 C/D 의 절반을 원클릭으로 만든다.
 
-**표시 조건**: 디바이스 선택 중에만 보인다(② 숨김). **기각한 대안 — 공통 계층에도 적용**: 템플릿의 주 용처는 "이 디바이스만" 차등(§1 이 기능의 존재 이유)이고, 개별 조작 없이 공통을 바꾸는 지름길은 §3.7 의 복사·복귀 모델과 섞일 때 예상을 벗어난 부작용을 낸다.
+⭐ **이슈 #94 가 §3.7.4 의 "기각한 대안 — 공통 계층에도 적용"을 재검토하게 했다 — 아래 표시 조건·적용 규칙은 그 갱신된 판단이다.**
 
-**적용 규칙**: 기존 디바이스 전용 값을 실제로 바꿀 때만 확인 대화상자(§3.7.1 의 복사 확인과 같은 판정·같은 오버레이 재사용). 같은 값이면 바로 실행한다(이슈 #31 ① 저장 억제). 적용 후의 상태는 뱃지(§3.7.3 (b))·행별 팝업·동작 미확인 힌트가 자동으로 반영한다(전부 기존 렌더 경로). **기각한 대안 — 템플릿에 `illumination_up/down`(키보드 조명) 추가**: VendorPageUnverified 등급이고 Apple 각인의 F5/F6 자리(재생·되감기)와 경합해 어휘 선택이 애매해진다.
+**표시 조건**: 공통("모든 키보드")·디바이스 **어느 선택에서도 보인다**. 표시를 가리던 원인은 이슈 #94 사용자 피드백(2026-09-02)의 핵심이었다 — "현행 기본(F 표준 펑션키)은 일괄 선택돼 있는데 **맥 기본 펑션키(미디어키) 세트를 '또 다른 기본 템플릿'으로** 달라"는 요구가, 초판이 디바이스 선택 중에만 보이게 숨겨 둔 템플릿 행을 **처음 화면(기본 선택 = 공통)에서 아예 보이지 않게 하여** 기능 자체의 발견을 막았다. 공통 계층에 적용하면 `perDevice.all.functionKeys.f<N>` 에 기록되어 2계층 폴백(§3.3)으로 **모든 키보드의 기본 펑션키 세트**가 된다 — 이것이 사용자가 요구한 "또 다른 기본 템플릿"이다.
+
+**적용 규칙**: 템플릿은 선택된 계층에 기록한다 — 공통 선택 중이면 `perDevice.all.functionKeys.f<N>`(기본 펑션키 세트), 디바이스 선택 중이면 `perDevice.<vid>:<pid>.functionKeys.f<N>`(그 디바이스만, 기존 동작). 기존 값을 실제로 바꿀 때만 확인 대화상자(§3.7.1 의 복사 확인과 같은 판정·같은 오버레이 재사용). 같은 값이면 바로 실행한다(이슈 #31 ① 저장 억제). 적용 후의 상태는 뱃지(§3.7.3 (b))·행별 팝업·동작 미확인 힌트가 자동으로 반영한다(전부 기존 렌더 경로).
+
+**공통 계층에서의 `null`(표준 F-키로 사용)**: 공통 계층에서 `null` 은 "부재"와 동작이 같다(§3.3 최상위 "부재 = 기본값") — 그래서 **명시 값(문자열)이 있는 키만 `null` 로 되돌리고, 부재인 키에는 `null` 을 쓰지 않는다.** 이로써 "운 이 없는(F키 표준 세트) 기본 템플릿을 새 공통에 적용"해도 설정 파일에 무의미한 `null` 12개가 쌓이지 않는다. ⚠️ 이 규칙은 **공통 계층 전용**이다 — 디바이스 계층에서는 부재와 `null` 이 구별되므로(§3.3), F키 표준 세트는 디바이스에 `null` 12개를 그대로 기록한다(기존 동작).
+
+**확인 대화상자 카피**: 템플릿 전용 문구(`preferences.keyboards.functionKeys.templates.confirm{Title,Body}`)를 쓴다 — 복사 확인 카피("…among For all devices …")는 템플릿(특히 공통 계층 적용)에 어긋난다. `{0}` = 대상(공통이면 `For all devices` 카탈로그 문구, 디바이스면 제품명 — 컨텍스트 헤더 문구 그대로). **기각한 대안 — 템플릿에 `illumination_up/down`(키보드 조명) 추가**: VendorPageUnverified 등급이고 Apple 각인의 F5/F6 자리(재생·되감기)와 경합해 어휘 선택이 애매해진다.
 
 ---
 
@@ -471,6 +477,8 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | `preferences.keyboards.functionKeys.templates.macMediaKeys` | `Mac media keys (F1–F12)` | `맥 미디어키 세트 (F1–F12)` |
 | `preferences.keyboards.functionKeys.templates.standardFKeys` | `Standard F-keys (F1–F12)` | `F키 표준 세트 (F1–F12)` |
 | `preferences.keyboards.functionKeys.templates.apply` | `Apply` | `적용` |
+| `preferences.keyboards.functionKeys.templates.confirmTitle` | `Apply this template?` | `이 템플릿을 적용할까요?` |
+| `preferences.keyboards.functionKeys.templates.confirmBody` | `This will replace the current Function Keys for “{0}” with the selected template's values for all 12 keys.` | `{0}의 현재 Function Keys 설정을 선택한 템플릿의 12개 키 값으로 교체합니다.` |
 | `preferences.keyboards.functionKeys.macosStatus.label` | `macOS setting: "Use F1, F2, etc. keys as standard function keys"` | `macOS 설정: "F1, F2 등의 키를 표준 기능 키로 사용"` |
 | `preferences.keyboards.functionKeys.macosStatus.openButton` | `Open System Settings` | `시스템 설정 열기` |
 | `preferences.keyboards.functionKeys.macosStatus.on` | `On` | `켜짐` |
@@ -496,7 +504,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 > ⚠️ 이 카피는 이 명세 문서의 **제안**이지 최종 확정된 UI 카피가 아니다. 원본 SuperKey 에 대응 문구가 없으므로(§1 divergence) 표절 대상 원문이 없다 — F-09 UI 구현·리뷰 단계에서 조정될 수 있다. ⚖️ 카테고리 영문 라벨은 **우리 문구다** — Karabiner 의 카테고리 이름을 그대로 베끼지 않았다. 대부분은 그 분류를 가리키는 자연스러운 영어라 결과적으로 같아지지만(`Modifier keys`·`Arrow keys` 등), 두 곳은 의도적으로 다르게 썼다: Karabiner 의 `Keys in pc keyboards` → `PC keyboard keys`, `Generic GUI application control keys` → `GUI application control keys`. 이 기능이 참조한 것은 **어떤 목적지가 어느 분류에 속하는가라는 사실**이지 그 표현이 아니다(§3.5 "출처").
 
-> ⭐ **이슈 #46 로 추가된 8개 키와 보충한 4개**(`keyRemap.inheritedFromCommon`·`macosStatus.on/off/unknown` — 카탈로그에는 이미 있던 키)는 위 표에 en·ko 값만 적었다. ⭐ **이슈 #69 로 추가된 5개 키**(`status.mixed` + `functionKeys.templates.label/.macMediaKeys/.standardFKeys/.apply`)도 같은 방식이다. zh·es·ja 는 D6 로케일 확장 규약(`localization-and-input-sources.md` §3.1.2-a)에 따라 **같은 키 집합**과 위치 인자 `{0}` 집합을 유지한다 — 실제 값은 `resources/i18n/*.json` 이 정본이고, `ultrakey-i18n` 의 키 집합/위치 인자 동일성 테스트가 5개 언어를 강제한다.
+> ⭐ **이슈 #46 로 추가된 8개 키와 보충한 4개**(`keyRemap.inheritedFromCommon`·`macosStatus.on/off/unknown` — 카탈로그에는 이미 있던 키)는 위 표에 en·ko 값만 적었다. ⭐ **이슈 #69 로 추가된 5개 키**(`status.mixed` + `functionKeys.templates.label/.macMediaKeys/.standardFKeys/.apply`)도 같은 방식이다. ⭐ **이슈 #94 로 추가된 2개 키**(`templates.confirmTitle/.confirmBody`)도 같은 방식이다. zh·es·ja 는 D6 로케일 확장 규약(`localization-and-input-sources.md` §3.1.2-a)에 따라 **같은 키 집합**과 위치 인자 `{0}` 집합을 유지한다 — 실제 값은 `resources/i18n/*.json` 이 정본이고, `ultrakey-i18n` 의 키 집합/위치 인자 동일성 테스트가 5개 언어를 강제한다.
 
 ### 4.2 기능 1 — 디바이스별 키 변환 세트
 
@@ -585,7 +593,8 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 - [ ] (이슈 #69 K1-2) 기능 2 그룹 뱃지가 상속/일부 전용/전부 전용 4상태 규칙대로 표시되고, 공통에 Value 인 F-키가 없거나 `For all devices` 선택 중이면 숨겨진다(§3.7.3 (b)).
 - [ ] (이슈 #69 K2) 기능 2 그룹에도 `공통 설정 따르기` 복귀 버튼이 있고, 디바이스 계층에 `functionKeys.*` 명시적 키가 1개 이상 있을 때만 표시되며, 누르면 디바이스 계층의 해당 키 12개가 모두 삭제된다(§3.7.2 (b)).
 - [ ] (이슈 #69 K3) 기능 1 복귀 버튼이 그룹 제목 행(뱃지·복사 버튼과 같은 선상)에 있고 목록 아래에 없다(§3.7.2 (a)).
-- [ ] (이슈 #69 K4) Function Keys 템플릿 팝업+적용 버튼이 디바이스 선택 중에만 보이고, `맥 미디어키 세트` 적용 시 §3.7.4 표의 12개 목적지 id 가, `F키 표준 세트` 적용 시 `null` 12개가 디바이스 계층 F-키 키에 기록된다. 기존 값을 바꿀 때만 확인 대화상자가 뜬다. 새 저장 키가 생기지 않는다(§3.7.4).
+- [ ] (이슈 #69 K4) Function Keys 템플릿 팝업+적용 버튼이 있고, `맥 미디어키 세트` 적용 시 §3.7.4 표의 12개 목적지 id 가, `F키 표준 세트` 적용 시 `null` 12개가 선택 대상(디바이스 또는 공통) 계층의 F-키 키에 기록된다. 기존 값을 바꿀 때만 확인 대화상자가 뜬다. 새 저장 키가 생기지 않는다(§3.7.4).
+- [ ] (이슈 #94) Function Keys 템플릿 행이 공통("모든 키보드") 선택 중에도 보이고, 공통 계층에 `맥 미디어키 세트` 를 적용하면 `perDevice.all.functionKeys.f1`~`f12` 가 기록되어 디바이스 전용 값이 없는 모든 키보드의 기본 펑션키가 된다. 공통 계층에 `F키 표준 세트` 를 적용하면 명시 값이 있는 공통 키만 `null` 로 되돌아가고, 부재인 키에는 쓰지 않는다(§3.7.4).
 - [ ] (이슈 #86) 내장 키보드가 있는 Mac 에서 Keyboards 탭 좌측 패인에 내장 키보드가 나타나고(제품명 + `(내장)` 라벨), 서드파티 키보드 목록은 수정 전과 동일하다. ⚠️ **실기기 확보 전 미검증 — 이슈는 "실기기 검증 대기" 상태다.**
 - [ ] (이슈 #86) 내장 키보드에 기능 1/2 설정을 등록하면 그 키보드에서만 동작하고 외장 키보드에는 영향이 없다.
 - [ ] (이슈 #86) caps lock 의존 프리셋이 켜진 상태에서 내장 키보드의 caps lock 이 정규화된다.

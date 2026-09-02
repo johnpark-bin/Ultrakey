@@ -899,9 +899,11 @@
                규약(명시적 키가 1개 이상일 때만).
                ⭐ 이슈 #69 K4 — 제목 행 아래에 Function Keys 템플릿 행(팝업 + 적용
                버튼)을 둔다. 맥 미디어키 세트 / F키 표준 세트 2종 — 사전 정의된
-               템플릿 선택이지 임의 커스텀 리매핑 개방이 아니다. 디바이스 선택
-               중에만 보인다(공통 계층은 템플릿의 용처가 아니다 — §1 이 기능의
-               존재 이유는 디바이스별 차등). -->
+               템플릿 선택이지 임의 커스텀 리매핑 개방이 아니다.
+               ⭐ 이슈 #94 — 공통("모든 키보드") 선택 중에도 보인다. 공통 계층에
+               적용하면 `perDevice.all.functionKeys.*` 로 기록되어 **이 앱의 기본
+               펑션키 세트**가 되는데, 이것이 사용자가 요구한 "또 다른 기본
+               템플릿"(맥 기본 펑션키·미디어키)의 정체다(§3.7.4). -->
           <div class="group-title-row">
             <h2 class="group" id="keyboards-functionkeys-heading"></h2>
             <!-- ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지(기능 1 뱃지와 같은 ③
@@ -2097,11 +2099,13 @@ if (!tauri || !tauri.core) {
     }
   }
 
-  // 템플릿 적용이 기존 디바이스 전용 값을 실제로 바꾸는가(§3.7.1 의
-  // copyNeedsConfirm 과 동일 판정). 디바이스 키 부재(상속 중)인 키는 템플릿이
-  // 물질화하는 대상이라 "바꾼다"에 센다 — 상속 값을 갈아치우는 것이므로.
+  // 템플릿 적용이 현재 선택 대상(디바이스 또는 공통)의 기존 값을 실제로
+  // 바꾸는가(§3.7.1 의 copyNeedsConfirm 과 동일 판정). 키가 부재(상속 중)인 키는
+  // 템플릿이 물질화하는 대상이라 "바꾼다"에 센다 — 상속 값을 갈아치우는 것이므로.
+  // ⭐ 이슈 #94 — 공통 계층("모든 키보드")에서도 같은 판정을 한다. 공통 키 부재 +
+  // 표준 F-키(null)는 "부재 = 기본값"(F-15)이라 변화가 없다 → 확인 대상이 아니다.
   function templateNeedsConfirm(template) {
-    if (!currentPerDevice || currentDevice === "all") return false;
+    if (!currentPerDevice) return false;
     for (const fk of KEYBOARDS_FN_KEYS) {
       const deviceKey = functionKeyStorageKey(currentDevice, fk);
       const wanted = template[fk];
@@ -2118,14 +2122,19 @@ if (!tauri || !tauri.core) {
 
   async function applyFunctionKeyTemplate(templateName) {
     const template = FUNCTION_KEY_TEMPLATES[templateName];
-    if (!template || !currentPerDevice || currentDevice === "all") return;
+    if (!template || !currentPerDevice) return;
     if (templateNeedsConfirm(template)) {
       pendingTemplate = { templateName };
-      $("confirm-title").textContent = t("preferences.keyboards.copy.confirmTitle");
+      // ⭐ 이슈 #94 — 템플릿 전용 확인 카피. 대상(공통/디바이스)은 컨텍스트
+      // 헤더 문구 그대로 쓴다 — 공통이면 "모든 키보드" 카탈로그 문구, 디바이스면
+      // 제품명(고유명사 — 번역하지 않는다, renderKeyboardsContextHeader 규약).
+      $("confirm-title").textContent = t("preferences.keyboards.functionKeys.templates.confirmTitle");
+      const target = $("keyboards-context-header").textContent;
       $("confirm-body").textContent = tf(
-        "preferences.keyboards.copy.confirmBody",
-        [t("preferences.keyboards.group.functionKeys.title")]
+        "preferences.keyboards.functionKeys.templates.confirmBody",
+        [target]
       );
+      $("confirm-continue").textContent = t("preferences.keyboards.functionKeys.templates.apply");
       $("confirm-overlay").hidden = false;
       $("confirm-continue").focus();
       return;
@@ -2136,15 +2145,26 @@ if (!tauri || !tauri.core) {
   // 템플릿 기록 — 각 F-키를 개별 저장 키에 기록한다(§3.3·§3.5 저장 규약 그대로,
   // 새 저장 키 없음). null 은 명시적 끔(sentinel)이다. 저장 후 renderState 가
   // 상태 전체를 다시 그린다(F-15 write-through 규약).
+  // ⭐ 이슈 #94 — 공통 계층("모든 키보드") 적용 허용 + 저장 억제 두 규칙:
+  // ① 이미 같은 값이면 스킵(이슈 #31 ① 저장 억제)
+  // ② 공통 계층에서 `표준 F-키로 사용`(null)은 "부재"와 동작이 같다(F-15 부재 =
+  //    기본값) — 명시 값(문자열)이 있는 키만 null 로 되돌리고, 부재인 키에는
+  //    null 을 쌓지 않는다. 디바이스 계층은 부재와 null 이 구별되므로(§3.3) 이
+  //    규칙은 공통 계층 전용이다.
   async function commitFunctionKeyTemplate(template) {
     try {
       let state = null;
       for (const fk of KEYBOARDS_FN_KEYS) {
         const key = functionKeyStorageKey(currentDevice, fk);
-        if (template[fk] === null) {
+        const wanted = template[fk];
+        const hasKey = Object.prototype.hasOwnProperty.call(currentPerDevice.values, key);
+        const existing = hasKey ? currentPerDevice.values[key] : undefined;
+        if (currentDevice === "all" && wanted === null && !hasKey) continue;
+        if (existing === wanted) continue;
+        if (wanted === null) {
           state = await invoke("settings_set", { key, value: null });
         } else {
-          state = await invoke("settings_set", { key, value: template[fk] });
+          state = await invoke("settings_set", { key, value: wanted });
         }
       }
       if (state) renderState(state);
@@ -2351,10 +2371,11 @@ if (!tauri || !tauri.core) {
     renderFunctionKeysRevertControl(perDevice, device);
     // ⭐ 이슈 #69 K1-2 — 기능 2 그룹 소속 뱃지.
     renderFunctionKeysStatusBadge(perDevice, device);
-    // ⭐ 이슈 #69 K4 — 템플릿 행. 디바이스 선택 중에만 보인다(공통 계층은
-    // 템플릿의 용처가 아니다 — §1 이 기능의 존재 이유는 디바이스별 차등).
+    // ⭐ 이슈 #69 K4 / 이슈 #94 — 템플릿 행. 공통·디바이스 어느 선택에서도
+    // 보인다 — 공통 계층에 적용하면 `perDevice.all.functionKeys.*` 로 기록되어
+    // "이 앱의 기본 펑션키 세트"(사용자 요구의 "또 다른 기본 템플릿")가 된다.
     populateFunctionKeyTemplates();
-    $("keyboards-functionkeys-template-row").hidden = device === "all";
+    $("keyboards-functionkeys-template-row").hidden = false;
   }
 
   function renderKeyboardsTab(state) {
