@@ -63,8 +63,8 @@ mod macos_impl {
     use super::{HotplugEvent, HotplugEventKind};
     use crate::ffi::{
         self, IONotificationPortRef, IoIteratorT, IoObjectT, K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD,
-        K_HID_USAGE_PAGE_GENERIC_DESKTOP, K_IOHID_DEVICE_KEY, K_IOHID_DEVICE_USAGE_KEY,
-        K_IOHID_DEVICE_USAGE_PAGE_KEY, K_IO_MATCHED_NOTIFICATION, K_IO_TERMINATED_NOTIFICATION,
+        K_HID_USAGE_PAGE_GENERIC_DESKTOP, K_IOHID_DEVICE_KEY, K_IOHID_PRIMARY_USAGE_KEY,
+        K_IOHID_PRIMARY_USAGE_PAGE_KEY, K_IO_MATCHED_NOTIFICATION, K_IO_TERMINATED_NOTIFICATION,
     };
     use crate::runloop::{CommandSignaller, CommandSource, RunLoopHandle};
     use core::ffi::c_void;
@@ -88,12 +88,30 @@ mod macos_impl {
         kind: HotplugEventKind,
     }
 
-    /// 키보드 usage(`DeviceUsagePage=1`/`DeviceUsage=6`) 매칭 사전을 만든다.
+    /// 키보드 usage(`PrimaryUsagePage=1`/`PrimaryUsage=6`) 매칭 사전을 만든다.
     ///
     /// ⭐ F-17(`per-device-settings.md` §3.2)의 디바이스 열거(`hid_device.rs`)가
     /// **같은 필터**를 그대로 재사용한다 — 새 필터를 만들지 않는다. 그래서
     /// `pub(crate)` 로 올려 둔다.
+    ///
+    /// ⭐ **이슈 #86 — 키는 `hidutil list` 와 같은 `PrimaryUsagePage`/
+    /// `PrimaryUsage` 다.** 명세 §3.2 정본은
+    /// `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 이고,
+    /// `hidutil` 은 곧 IOKit 의 `PrimaryUsage*` 프로퍼티 필터로 매칭한다. 옛 구현이
+    /// 쓴 `DeviceUsagePage`/`DeviceUsage` 는 **다른 IOKit 프로퍼티**다 — 내장
+    /// 키보드가 두 필터에서 다르게 매칭될 수 있다는 것이 이슈 #86 의 원인 후보 (a)
+    /// 였다. 필터 키 하나로 열거·핫플러그 두 경로가 정렬된다. `Device*` 키 자체는
+    /// 진단 probe 가 두 필터를 대조할 때만 쓴다(`build_keyboard_matching_dict_with_keys`).
     pub(crate) fn build_keyboard_matching_dict() -> Option<CFRetained<CFMutableDictionary>> {
+        build_keyboard_matching_dict_with_keys(K_IOHID_PRIMARY_USAGE_PAGE_KEY, K_IOHID_PRIMARY_USAGE_KEY)
+    }
+
+    /// 매칭 키를 명시적으로 받는 변형 — 이슈 #86 진단 probe(두 필터의 이중 매칭
+    /// 비교)가 쓴다. 프로덕션 경로는 [`build_keyboard_matching_dict`] 를 쓴다.
+    pub(crate) fn build_keyboard_matching_dict_with_keys(
+        usage_page_key: &str,
+        usage_key: &str,
+    ) -> Option<CFRetained<CFMutableDictionary>> {
         // SAFETY: 정적 C 문자열을 넘기는 순수 함수 호출이다.
         let dict_ptr = unsafe {
             ffi::IOServiceMatching(K_IOHID_DEVICE_KEY.as_ptr() as *const std::os::raw::c_char)
@@ -103,8 +121,8 @@ mod macos_impl {
         // 소유권은 이미 우리에게 있다.
         let dict = unsafe { CFRetained::from_raw(dict) };
 
-        let usage_page_key = CFString::from_str(K_IOHID_DEVICE_USAGE_PAGE_KEY);
-        let usage_key = CFString::from_str(K_IOHID_DEVICE_USAGE_KEY);
+        let usage_page_key = CFString::from_str(usage_page_key);
+        let usage_key = CFString::from_str(usage_key);
         let usage_page_value = CFNumber::new_i32(K_HID_USAGE_PAGE_GENERIC_DESKTOP);
         let usage_value = CFNumber::new_i32(K_HID_USAGE_GENERIC_DESKTOP_KEYBOARD);
 
@@ -438,7 +456,7 @@ pub use macos_impl::{watch_keyboards, KeyboardHotplugWatcher};
 /// `hid_device.rs`(디바이스 열거)가 재사용하는 내부 도구 — 같은 매칭 필터와 같은
 /// 이터레이터 순회 골격을 두 번 만들지 않는다(§3.2 "기존 자산 재사용 판정").
 #[cfg(target_os = "macos")]
-pub(crate) use macos_impl::{build_keyboard_matching_dict, drain_iterator};
+pub(crate) use macos_impl::{build_keyboard_matching_dict, build_keyboard_matching_dict_with_keys, drain_iterator};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {

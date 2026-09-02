@@ -52,7 +52,7 @@
 
 ### D3 — built-in 라벨 표시: 권장하되 실기기 검증 후로 미룬다
 
-`PerDeviceDeviceView`(main.rs:618)에 `built_in: Option<bool>` 추가 + `populateDeviceList`(settings.html:1537-1557)에서 `(내장)` 라벨. i18n `preferences.keyboards.devicePicker.builtIn` 1키 × 5언어.
+`PerDeviceDeviceView`(main.rs:618)에 `built_in: Option<bool>` 추가 + `populateDeviceList`(settings.html:1568)에서 `(내장)` 라벨. i18n `preferences.keyboards.devicePicker.builtIn` 1키 × 5언어.
 
 - 근거: Apple VID(0x5ac)는 서드파티 키보드와 내장이 **공유** — 제품명만으로 구분 불가할 수 있다.
 - **단, 실기기 검증 선행**: 수동 검증 C-1 에서 `Built-In` 읽기가 실패("(못 읽음)"). 내장 키보드에서 `Built-In` = 1 이 읽히는지는 실측된 바 없다(명세 §9 Q7). 확인 전 라벨 도입은 무의미.

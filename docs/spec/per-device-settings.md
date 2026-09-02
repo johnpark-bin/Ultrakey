@@ -80,6 +80,13 @@ right_option  → right_command
 | 2 | 현재 붙어 있는 키보드 전부 | 제품명(예: `F108Pro Dongle`, 실측: 스파이크 §10 `hidutil list` 출력의 `Product` 컬럼) + 그 아래 작은 글씨로 `[VID: <십진>, PID: <십진>]` |
 | 3 | 설정만 남아 있는 미연결 키보드 | 제품명 + `(연결 안 됨)` 접미 + 위와 같은 VID/PID 서브라벨 |
 
+> ⭐ **이슈 #86 — 내장 키보드도 항목 2(현재 붙어 있는 키보드)에 포함된다.** §3.2 열거가
+> 내장 키보드를 목록에 실리게 한다. `Built-In` = 1 인 항목은 제품명 뒤에 `(내장)` 라벨을
+> 붙인다 — Apple VID(0x5ac)는 서드파티 키보드와 공유되므로 제품명만으로 구분이 안 될 수
+> 있다. ⚠️ **`(내장)` 라벨의 구현은 실기기에서 `Built-In` 프로퍼티 읽기를 검증한 뒤로
+> 보류**한다(이슈 #86 — 수동 검증 C-1 현재 기기에서 `Built-In` 읽기 실패, §9 질문 7
+> `(미확정)`). 라벨 없이도 내장 키보드는 사용자 설정의 대상으로 열거·동작해야 한다.
+
 선택이 바뀌면 그 오른쪽 두 그룹(**키 변환 세트** = 기능 1, **Function Keys** = 기능 2)이 선택된 대상의 값으로 즉시 갈린다(다른 컨트롤과 동일하게 별도 "적용" 버튼 없음, F-09 §3.7).
 
 ##### ⭐ 이슈 #40 ① — 2패인 **위**의 상단 독립 영역
@@ -141,9 +148,9 @@ F-09 §4 에 편입할 때는 "고정 20개 + 가변 M행(기능 1)"으로 표�
 
 ⭐ **Apple VID 문제의 실제 모습(스파이크 S-3, 실측).** 이슈 #21 은 "VID `0x5ac`(Apple)가 내장 키보드와 헷갈릴 수 있다"고 경고했으나, 실측된 위험은 다른 곳에 있었다 — **VID 단독 매칭은 `IOHIDSystem`(VID `0x5ac`/PID `0x0`/UsagePage `65280`/Usage `23`)을 함께 잡는다.** `IOHIDSystem` 은 개별 디바이스가 아니라 **시스템 전역 매핑의 대상 노드**이므로, VID 만으로 매칭해 쓰면 사실상 전역 쓰기가 된다. **규칙**: 매칭 사전에는 반드시 `VendorID` 와 `ProductID` 를 함께 넣는다. VID 단독 매칭·매칭 없는 `--set` 은 이 문서 전체에서 금지한다(§3.6 에서 재확인).
 
-**열거**: `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 VID·PID·제품명·Transport·Built-In·RegistryID 를 얻을 수 있다(실측, 스파이크 §10). 구현은 같은 매칭 사전을 IOKit(`IOServiceMatching(kIOHIDDeviceKey)` + `UsagePage`/`Usage` 필터)으로 쓴다.
+**열거**: `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 VID·PID·제품명·Transport·Built-In·RegistryID 를 얻을 수 있다(실측, 스파이크 §10). 구현은 같은 매칭 사전을 IOKit(`IOServiceMatching(kIOHIDDeviceKey)` + **`PrimaryUsagePage`/`PrimaryUsage`** 필터)으로 쓴다 — ⚠️ **`DeviceUsagePage`/`DeviceUsage` 가 아니다**(이슈 #86). ⭐ **내장 키보드도 목록에 포함된다**(§3.1.2).
 
-**기존 자산 재사용 판정(스파이크 §10, 실측)**: `ultrakey-platform/src/hotplug.rs` 의 `IOServiceAddMatchingNotification` 기구는 매칭 필터가 `UsagePage 1 / Usage 6` 로 이 기능이 필요로 하는 것과 정확히 같고, Input Monitoring 권한도 불필요해(`docs/dev/architecture.md` §3 "결정 2") **재사용할 수 있다.** ⛔ 그러나 현재 `pub enum HotplugEvent { Attached, Detached }` 는 **디바이스 속성을 싣지 않는다** — 확인 결과 `hotplug.rs` 는 이터레이터를 순회할 뿐 `IORegistryEntryCreateCFProperty` 로 `VendorID`/`ProductID`/`Product` 를 읽지 않는다. 이 기능은 다음 확장을 요구한다:
+**기존 자산 재사용 판정(스파이크 §10, 실측)**: `ultrakey-platform/src/hotplug.rs` 의 `IOServiceAddMatchingNotification` 기구는 매칭 필터가 `PrimaryUsagePage 1 / PrimaryUsage 6`(hidutil list 정본, 이슈 #86 정렬 후) 로 이 기능이 필요로 하는 것과 정확히 같고, Input Monitoring 권한도 불필요해(`docs/dev/architecture.md` §3 "결정 2") **재사용할 수 있다.** ⛔ 그러나 현재 `pub enum HotplugEvent { Attached, Detached }` 는 **디바이스 속성을 싣지 않는다** — 확인 결과 `hotplug.rs` 는 이터레이터를 순회할 뿐 `IORegistryEntryCreateCFProperty` 로 `VendorID`/`ProductID`/`Product` 를 읽지 않는다. 이 기능은 다음 확장을 요구한다:
 
 1. `HotplugEvent::Attached`/`Detached` 가 `DeviceInfo { vendor_id, product_id, product_name, transport, built_in }` 를 함께 싣도록 확장한다. `IORegistryEntryCreateCFProperty` 로 `VendorID`/`ProductID`/`Product` 읽는 경로를 `drain_iterator` 안에 추가하면 된다(스파이크 §10 이 확장 지점으로 지목한 자리와 동일).
 2. **현재 붙어 있는 키보드를 열거**하는 API(`list_attached_keyboards() -> Vec<DeviceInfo>`)를 신설한다 — 알림 등록 없이 `IOServiceGetMatchingServices` 로 한 번 순회하는 것으로 충분하다. `Keyboards` 탭의 좌측 패인 초기 목록과 §3.6 의 기동 시 재조정(startup reconciliation) 둘 다 이 API 를 쓴다.
@@ -531,7 +538,7 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 | API / 구성요소 | 용도 | 비고 |
 | :--- | :--- | :--- |
 | `hidutil property --matching '{"VendorID":…,"ProductID":…}' --get/--set UserKeyMapping`(서브프로세스) | 경로 B 1차 구현 — 디바이스 한정 조회/적용/정리 | 기존 `hid_mapping.rs::HidutilBackend` 확장 대상. `--matching` 인자 추가 필요(현재 없음, §3.6) |
-| `IOServiceMatching(kIOHIDDeviceKey)` + `UsagePage`/`Usage` 필터 | 디바이스 열거(`hidutil list` 대응, IOKit 직접 경로) | 스파이크 §10, 기존 `hotplug.rs::build_keyboard_matching_dict` 와 동일 필터 재사용 |
+| `IOServiceMatching(kIOHIDDeviceKey)` + **`PrimaryUsagePage`/`PrimaryUsage`** 필터 | 디바이스 열거(`hidutil list` 대응, IOKit 직접 경로) | ⚠️ `DeviceUsagePage`/`DeviceUsage` 가 아니다 — 같은 숫자(1/6)라도 **다른 IOKit 프로퍼티**라 매칭 집합이 다를 수 있다(이슈 #86). 스파이크 §10, 기존 `hotplug.rs::build_keyboard_matching_dict` 와 동일 필터 재사용 |
 | `IOServiceAddMatchingNotification`(`kIOMatchedNotification`/`kIOTerminatedNotification`) | 핫플러그 감지(재사용) | 기존 `hotplug.rs`. TCC 권한 불필요(이미 확인됨) |
 | `IORegistryEntryCreateCFProperty`(`VendorID`/`ProductID`/`Product`) | 핫플러그 콜백·열거 API 에 디바이스 속성 싣기(신규) | §3.2 가 요구하는 `hotplug.rs` 확장의 구체적 호출 지점 |
 | `IOHIDServiceClientSetProperty` / `IOHIDEventSystemClientCreateSimpleClient`(FFI, 미채택) | 경로 B 의 대안 구현 | ⛔ 공개 헤더에 없는 심볼, 시그니처 미확정 — `key-remapping-engine.md` §7 판정 반전과 동일 이유로 **채택하지 않는다**(§7) |
@@ -579,6 +586,9 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 - [ ] (이슈 #69 K2) 기능 2 그룹에도 `공통 설정 따르기` 복귀 버튼이 있고, 디바이스 계층에 `functionKeys.*` 명시적 키가 1개 이상 있을 때만 표시되며, 누르면 디바이스 계층의 해당 키 12개가 모두 삭제된다(§3.7.2 (b)).
 - [ ] (이슈 #69 K3) 기능 1 복귀 버튼이 그룹 제목 행(뱃지·복사 버튼과 같은 선상)에 있고 목록 아래에 없다(§3.7.2 (a)).
 - [ ] (이슈 #69 K4) Function Keys 템플릿 팝업+적용 버튼이 디바이스 선택 중에만 보이고, `맥 미디어키 세트` 적용 시 §3.7.4 표의 12개 목적지 id 가, `F키 표준 세트` 적용 시 `null` 12개가 디바이스 계층 F-키 키에 기록된다. 기존 값을 바꿀 때만 확인 대화상자가 뜬다. 새 저장 키가 생기지 않는다(§3.7.4).
+- [ ] (이슈 #86) 내장 키보드가 있는 Mac 에서 Keyboards 탭 좌측 패인에 내장 키보드가 나타나고(제품명 + `(내장)` 라벨), 서드파티 키보드 목록은 수정 전과 동일하다. ⚠️ **실기기 확보 전 미검증 — 이슈는 "실기기 검증 대기" 상태다.**
+- [ ] (이슈 #86) 내장 키보드에 기능 1/2 설정을 등록하면 그 키보드에서만 동작하고 외장 키보드에는 영향이 없다.
+- [ ] (이슈 #86) caps lock 의존 프리셋이 켜진 상태에서 내장 키보드의 caps lock 이 정규화된다.
 
 ---
 
@@ -588,13 +598,13 @@ Ultrakey 는 자신이 관리하는 디바이스의 `UserKeyMapping` 에 대해 
 
 | # | 질문 | 현재 처리 | 확인 방법 |
 | :--- | :--- | :--- | :--- |
-| 1 | Apple VID 서드파티 키보드와 진짜 Apple 내장 키보드가 PID 로 구분되는가 | `(미확정)` — 검증 기기(`Mac16,11`)에 내장 키보드가 없어 확인 불가(스파이크 S-4) | 내장 키보드가 있는 Mac 에서: ① `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 내장 키보드의 VID/PID 기록 ② 외장 키보드에만 `--matching {VID,PID} --set` 으로 눈에 띄는 매핑 설치 ③ 내장 키보드에서 같은 키를 눌러 바뀌지 않는지 확인 ④ 빈 배열로 복원(스파이크 §5 절차 그대로) |
+| 1 | Apple VID 서드파티 키보드와 진짜 Apple 내장 키보드가 PID 로 구분되는가 | `(미확정)` — 검증 기기(`Mac16,11`)에 내장 키보드가 없어 확인 불가(스파이크 S-4). 이슈 #86 이 확장 probe(`keyboard_list_probe` 이중 매칭 비교)와 판정 절차(수동 검증 C-1)를 더했으나 실기기 확보 전 `(미확정)` 유지 | 내장 키보드가 있는 Mac 에서: ① `cargo run -p ultrakey-platform --example keyboard_list_probe` 로 내장 키보드의 원시 덤프(RegistryID·VID/PID·Built-In) 기록 ② 확인 방법 ① 의 `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` 로 같은 VID/PID 대조 ③ 외장 키보드에만 `--matching {VID,PID} --set` 으로 눈에 띄는 매핑 설치 ④ 내장 키보드에서 같은 키를 눌러 바뀌지 않는지 확인 ⑤ 빈 배열로 복원(스파이크 §5 절차 그대로) |
 | 2 | 동일 모델 2대(같은 VID+PID)가 실제로 하나로 보이는가, 그리고 그 체감이 사용자에게 어떻게 인지되는가 | `(미확정)` — 한계로 명시했으나 실측하지 않았다 | 같은 모델 키보드 2대를 동시에 연결하고 `hidutil list --matching {VID,PID}` 로 RegistryID 가 몇 줄 나오는지 확인, 각각에 다른 매핑을 걸어보고 실제로 구분되는지 관찰 |
 | 3 | `RegistryID`/`LocationID` 가 재부팅·포트 변경에 걸쳐 안정적인가(설정 키로 쓸 수 있는지) | `(미확정)` | 같은 디바이스를 재부팅 전후, 포트를 바꿔가며 연결해 `RegistryID`/`LocationID` 값이 유지되는지 로그 비교 |
 | 4 | macOS Function Keys 토글이 꺼져 있을 때 F-키 단독 입력이 어떤 usage 로 도착하는가 | `(미확정)` — 스파이크 S-9 는 토글이 켜진 상태만 관찰했다 | 시스템 설정에서 토글을 끈 뒤, F-키 각각을 눌러 도착하는 usage 를 로그로 관찰(브라우저 프로브 또는 자체 진단 로그) |
 | 5 | 기능 2 의 11종(volume_increment 제외) 시스템 기능이 표에 제시한 후보 Consumer Page usage 로 실제 동작하는가 | `(미확정)` — 후보값은 검증되지 않은 참고값(§3.5) | 스파이크 S-8 과 동일한 통제 실험(대조군 포함, 매핑을 주기적으로 재설치해 S-6 을 이기고, 설치 직후·키 입력 직후 되읽기로 생존 확인) 을 나머지 11종 각각에 반복 |
 | 6 | `mission_control`/`spotlight`/`dictation`/`do_not_disturb` 4종이 표준 Consumer Page 로 표현 가능한지, 아니면 Apple 벤더 정의 usage page 가 필요한지 | `(미확정)` | USB HID Usage Tables 표준 문서 대조 + 실제 usage 값 후보를 걸고 키 입력으로 확인(질문 5 와 같은 절차) |
-| 7 | `hidutil list` 의 `Built-In` 컬럼이 어느 IOKit 프로퍼티(들)에서 유도되는가 | `(미확정)` | `ioreg -l` 로 동일 디바이스의 전체 프로퍼티를 덤프해 후보 키(`BuiltIn`, `kIOHIDBuiltInKey` 등) 대조 |
+| 7 | `hidutil list` 의 `Built-In` 컬럼이 어느 IOKit 프로퍼티(들)에서 유도되는가 | `(미확정)` — 이슈 #86 확장 probe 의 원시 덤프가 이 필드를 그대로 출력하지만 실기기 전까지 `(미확정)` 유지(현재 기기 실측: `Built-In`/`DeviceUsagePage`/`DeviceUsage` 는 프로퍼티로 못 읽음. `PrimaryUsagePage`/`PrimaryUsage` 는 읽힘) | `ioreg -l` 로 동일 디바이스의 전체 프로퍼티를 덤프해 후보 키(`BuiltIn`, `kIOHIDBuiltInKey` 등) 대조 + `keyboard_list_probe` 원시 덤프 대조 |
 | 8 | `com.apple.keyboard.fnState` 가 실제 저장 키 이름·도메인이 맞는가 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — `defaults read -g com.apple.keyboard.fnState` → `1`. `NSGlobalDomain`(`kCFPreferencesAnyApplication`)의 `com.apple.keyboard.fnState` 로 확정. ⚠️ **그러나 이 경로는 더 이상 쓰지 않는다** — 키 이름은 맞았지만 `CFPreferences` 가 프로세스 안에서 값을 캐시해 외부 변경을 반영하지 못했다(이슈 #31 ③). 읽기는 IOKit `HIDFKeyMode` 로 옮겼다(§3.5.1) | (해소됨) 재확인이 필요하면 시스템 설정에서 토글을 켜고 끄며 같은 명령의 출력 변화를 관찰 |
 | 9 | 다른 HID 계층 리매퍼(Karabiner 등)의 가상 디바이스를 `Keyboards` 탭 목록에 보일지 | ⭕ **해소(실측, 2026-08-30 · 이슈 #28)** — ⭐ **애초에 목록에 오지 않으므로 제품 결정이 필요 없다.** Karabiner-Elements 가 **실행 중인 상태**(`Karabiner-Core-Service` · `Karabiner-VirtualHIDDevice-Daemon` · DriverKit `dext` 셋 다 살아 있음)에서 `hidutil list` 전체 253행 중 `karabiner`/`pqrs`/`virtual` 에 걸리는 행이 **0건**이었다 | (해소됨) 다른 리매퍼(예: 가상 HID 를 실제로 노출하는 도구)가 등장하면 같은 절차로 재확인 |
 | 10 | 35종 소스 키 어휘로 못 덮는 실사용 요구가 있는가(문자 키·숫자 키 재배정 등) | `(미확정)` | 사용자 요청/이슈 수집. 스파이크·조사 범위 밖 |

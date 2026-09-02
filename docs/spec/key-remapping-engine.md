@@ -288,7 +288,7 @@ SuperKey 는 겉보기엔 세 가지 기능(Seek, Hyperkey, Power User Presets)�
 ⭐ **핫플러그 감지 수단 변경 (2026-08-30, M1 구현 / 이슈 #5).** 원본이 `IOHIDManager*` 계열을 링크한다는 실측(§3-a)은 그대로 유효하지만, **클론은 `IOServiceAddMatchingNotification` 을 쓴다.** 근거:
 
 - `IOHIDManager` 계열은 **감지만 하려 해도 `IOHIDManagerOpen` 이 필요하고, 그것이 곧 Input Monitoring(TCC) 권한 요구**다. 그런데 이 문서와 F-11 이 함께 확정한 사실은 "원본은 Input Monitoring 을 명시적으로 확인하지 않고 `IOHIDManagerOpen` 실패를 재시도로 흡수한다"(§6 권한 표, F-11 §3.1)이다. 즉 명세대로 구현하면 **핫플러그 감지 하나를 위해 권한이 끝내 없을 때 영영 동작하지 않는 경로**를 만들게 되고, 그 사실이 사용자에게 보이지도 않는다.
-- `IOServiceAddMatchingNotification` 은 **TCC 권한을 요구하지 않으면서** 같은 정보(키보드 HID 장치의 등장·소멸)를 준다. 매칭 딕셔너리는 `IOServiceMatching(kIOHIDDeviceKey)` 에 `kIOHIDDeviceUsagePageKey = 1`(GenericDesktop) · `kIOHIDDeviceUsageKey = 6`(Keyboard) 를 더해 좁힌다.
+- `IOServiceAddMatchingNotification` 은 **TCC 권한을 요구하지 않으면서** 같은 정보(키보드 HID 장치의 등장·소멸)를 준다. 매칭 딕셔너리는 `IOServiceMatching(kIOHIDDeviceKey)` 에 `kIOHIDPrimaryUsagePageKey = 1`(GenericDesktop) · `kIOHIDPrimaryUsageKey = 6`(Keyboard) 를 더해 좁힌다 — ⚠️ **이슈 #86 정렬 후 `DeviceUsagePage`/`DeviceUsage` 가 아니다**(`F-17` §3.2 hidutil list 정본과 같은 필터).
 - **바뀌지 않는 것**: 감지 *이후*의 동작(경로 B 재적용, `keyboardConnectionDelay` 지연, 재시작 디바운스)은 §3-a·§5 #10 그대로다. 바뀌는 것은 감지 수단 하나뿐이다.
 - ⚠️ 구현 함정: `IOServiceAddMatchingNotification` 은 첫 등록 시 **기존 장치 전부에 대해 즉시 콜백이 온다**. 반환된 이터레이터를 끝까지 비워야 이후 알림이 도착한다.
 
