@@ -2812,9 +2812,14 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 > ⭐ 명세 §7 결정 — 실제 Paddle 은 붙이지 않고 **no-op `LicenseProvider`(항상 라이선스
 > 활성)** 를 기본으로 한다. 그래서 자동화 가능한 검증( 상태 머신·오프라인 유예·시계
 > 조작 완화·기산점 계산)은 전부 `ultrakey-license` 의 단위 테스트로 이미 통과했고,
-> 아래는 그걸로 검증할 수 없는 **실기기 전용** 항목이다 — Keychain(`Security.framework`)
-> 저장 진짜 살아남는가, IOPlatformUUID 가 실제로 읽히는가, General 탭 UI 가 진짜
-> 그려지는가.
+> 아래는 그걸로 검증할 수 없는 **실기기 전용** 항목이다 — 저장소(빌드 분기에 따라
+> Keychain 또는 파일, 명세 §3.5 개정·이슈 #99)에 기록이 진짜 살아남는가,
+> IOPlatformUUID 가 실제로 읽히는가, General 탭 UI 가 진짜 그려지는가.
+>
+> ⭐ **빌드 분기(이슈 #99)**: `build-signed.sh` 산출물(무-feature 기본 빌드)은
+> **파일 저장**(`~/Library/Application Support/Ultrakey/`)을 쓰고, 정식 서명 릴리즈
+> (`keychain-store` feature)만 **Keychain 저장**을 쓴다. 아래 절차에서 저장소 확인
+> 방법은 빌드별로 갈린다 — 각 행에 표시한다.
 
 ### 15-1. 사전 준비
 
@@ -2822,23 +2827,23 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
   프로세스 권한 문제가 있어 General 탭이 온전히 동작하지 않을 수 있다.
 - `ULTRAKEY_LOG=debug` 로 실행해 라이선스 판정 로그(`license state evaluated`)를 본다.
 
-### 15-2. 체험 기산점이 Keychain 에 기록되는가(§3.5, §5-10)
+### 15-2. 체험 기산점이 저장소에 기록되는가(§3.5, §5-10)
 
 | # | 조작 | 기대 결과 |
 | :--- | :--- | :--- |
-| 1 | 최초 실행(Keychain 에 항목 없음) | 로그에 `license state evaluated state=trial days_remaining=20` |
+| 1 | 최초 실행(저장소에 기록 없음) | 로그에 `license state evaluated state=trial days_remaining=20`. ⭐ **파일 빌드**: 시스템 로그인(키체인 접근) 프롬프트가 **뜨지 않는다**(이슈 #99 — 이 이슈의 핵심 검증) |
 | 2 | General 탭에서 라이선스 상태 확인 | "체험판 — N일 남음" 표시(no-op 활성이라 상태가 라이선스 활성이면 no-op 경로 정상 — 아래 15-3 참고) |
-| 3 | ⭐ Keychain 항목 존재 확인 | `security find-generic-password -s com.ultrakey.license.trial` — `trial_record` JSON 이 담겨 있다 |
-| 4 | **앱을 완전히 삭제(`~/Library/Application Support` 포함) 후 재설치** | 같은 기기에서 기산점이 초기화되지 않는다 — Keychain 에 살아 있음(§8-3). `security find-generic-password` 로 같은 `trial_started_at` 확인 |
-| 5 | `security delete-generic-password -s com.ultrakey.license.trial` 후 재실행 | 체험이 리셋된다(받아들이는 잔여 위험, §3.5) |
+| 3 | ⭐ 저장소 기록 존재 확인 | **파일 빌드**: `cat ~/Library/Application Support/Ultrakey/trial.json` — `TrialRecord` JSON 이 담겨 있다. **정식 서명 빌드**: `security find-generic-password -s com.ultrakey.license.trial` — `trial_record` JSON 이 담겨 있다 |
+| 4 | **앱을 완전히 삭제 후 재설치** | 양 빌드 모두 같은 기기에서 기산점이 초기화되지 않는다 — Keychain 은 앱 번들과 독립이고, 파일도 앱 번들 밖(`~/Library/Application Support/Ultrakey/`)이라 재설치에 살아남는다(§8-3). 같은 `trial_started_at` 확인(각 빌드의 #3 방법) |
+| 5 | 저장소 기록 직접 삭제 후 재실행 | **파일 빌드**: `rm -rf ~/Library/Application Support/Ultrakey` 후 재실행 → 체험 리셋(개발 빌드 한정 수용 리스크, §3.5 개정). **정식 서명 빌드**: `security delete-generic-password -s com.ultrakey.license.trial` 후 재실행 → 체험 리셋(받아들이는 잔여 위험, §3.5) |
 
 > ⚠️ **no-op 경로 주의점**: 현재 빌드는 항상 라이선스 활성이므로 `evaluate_on_start` 가
-> Keychain 에 캐시가 없어도 체험 판정에 도달하지만, `NoopLicenseProvider` 를 주입해
-> 라이선스 활성이 우선한다(§3.2 "최우선"). 그래서 15-2 는 **Keychain 에 trial 항목이
-> 기록되는가**가 핵심이지, 화면에 "체험판"이 보이는가는 아니다 — 화면은 no-op 이라
-> 항상 라이선스 활성으로 표시될 수 있다. 체험 UI 배선을 눈으로 보려면 no-op 을 끄는
-> 진단 플래그(현재 없음)가 필요하다 — 그 전까지는 General 탭 상태 표시가
-> "License active" 로 그려지는지가 배선 검증이다.
+> 저장소에 캐시가 없어도 체험 판정에 도달하지만, `NoopLicenseProvider` 를 주입해
+> 라이선스 활성이 우선한다(§3.2 "최우선"). 그래서 15-2 는 **저장소(빌드별: 파일 또는
+> Keychain)에 trial 항목이 기록되는가**가 핵심이지, 화면에 "체험판"이 보이는가는
+> 아니다 — 화면은 no-op 이라 항상 라이선스 활성으로 표시될 수 있다. 체험 UI 배선을
+> 눈으로 보려면 no-op 을 끄는 진단 플래그(현재 없음)가 필요하다 — 그 전까지는
+> General 탭 상태 표시가 "License active" 로 그려지는지가 배선 검증이다.
 
 ### 15-3. General 탭 라이선스 UI 배선(§4.2)
 
@@ -2854,7 +2859,7 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 | # | 조작 | 기대 결과 |
 | :--- | :--- | :--- |
 | 1 | 로그에 device_id 확인 | `activate`/`deactivate` 시 no-op 이 device_id 를 받는다. 활성화 성공 로그에 기기 슬롯 `0/3` |
-| 2 | (원본 대조 — 저장소 필수 검증 아님) `ioreg -rd1 -c IOPlatformExpertDevice` | `IOPlatformUUID` 값이 로그/Keychain 의 device_id 와 일치해야 한다 |
+| 2 | (원본 대조 — 저장소 필수 검증 아님) `ioreg -rd1 -c IOPlatformExpertDevice` | `IOPlatformUUID` 값이 로그/저장소(파일 빌드: `license-cache.json` · 정식 서명 빌드: Keychain 캐시)의 device_id 와 일치해야 한다 |
 
 > ⚠️ **IOPlatformUUID 는 부팅마다 바뀔 수 있다**(애플이 문서화하지 않은 동작). 이게
 > 재부팅 후에도 안정적인지는 이 위임에서 검증하지 못했다 — 하드웨어 교체 = 새 슬롯
@@ -2864,7 +2869,7 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 
 - **오프라인 유예(§3.4)가 실제 캐시에서 동작하는가** — no-op 은 항상 활성이라 유예
   경계를 재현할 방법이 없다. 이는 `ultrakey-license::machine` 단위 테스트로 검증됐다.
-- **시계 조작 완화(§3.5/§3.6)가 실제 Keychain `last_seen_at` 으로 동작하는가** — 같은
+- **시계 조작 완화(§3.5/§3.6)가 실제 저장소의 `last_seen_at` 으로 동작하는가** — 같은
   이유. 단위 테스트로 검증됐다.
 - **`limit_reached`(3대) — 4번째 기기에서의 활성화 거부** — no-op 이 항상 `activated` 라
   도달 불가. §8-6 은 no-op 하에서 구조적으로 성립이 불가능하며, Paddle 실연동
@@ -2877,9 +2882,12 @@ false`, `seek.changeClickModesWithModifiers = false` — 단, changeModes 는 �
 
 | 항목 | 자동화 | 실기기 |
 | :--- | :--- | :--- |
-| 기산점 최초 기록 → 체험 중 | ✅ 단위 테스트 | ✅ 15-2 (Keychain 기록) |
+| 기산점 최초 기록 → 체험 중 | ✅ 단위 테스트 | ✅ 15-2 (저장소 기록 — 빌드별 파일/Keychain) |
+| ⭐ 파일 빌드 최초 실행 프롬프트 없음(이슈 #99) | ✅ 구조(무-feature 빌드에 키체인 호출 경로 없음) | ✅ 15-2 #1 |
+| ⭐ 정식 서명 빌드 Keychain 유지(이슈 #99) | ✅ `cargo check --features keychain-store` | ✅ 15-2 #3 |
+| 파일 저장 원자적 쓰기·권한 | ✅ 단위 테스트(`file_store`) | — |
 | 20일 경과 → 체험 만료 | ✅ 단위 테스트 | ⚠️ 키보드를 20일 돌릴 수 없어 미검증 |
-| 재설치에도 기산점 유지 | — | ✅ 15-2 #4 (실기기 전용) |
+| 재설치에도 기산점 유지 | — | ✅ 15-2 #4 (실기기 전용 — 양 빌드) |
 | 유효키 활성화 → 라이선스 활성 + 캐시 저장 | ✅ 단위 테스트 | ⚠️ no-op 라 서버 검증 불가 |
 | 오프라인 유예 유지 | ✅ 단위 테스트 | (no-op) |
 | refunded/revoked 즉시 무효 | ✅ 단위 테스트 | (no-op) |
