@@ -3047,13 +3047,18 @@ fn show_about_window(app: &tauri::AppHandle, state: &Arc<AppState>) {
 
     let catalog = state.catalog.load_full();
     let title = catalog.get("about.title").to_string();
+    // ⭐ 이슈 #96 — 창 크기는 "본문 전체가 스크롤바 없이 보이는 고정 크기" 정책이다.
+    // 5개 언어 × 번들 내·외 2상태 전부를 헤드리스 렌더로 실측해 가장 높은 조합
+    // (에스파냐어 + 번들 밖 안내 표시)에 여백을 더한 값으로 정했다 — 콘텐츠는
+    // `about.html` 이 세로 중앙 정렬하므로 짧은 조합은 위아래 여백이 균등하다.
+    // `resizable(false)` 유지 — 사용자가 크기를 바꾸는 창이 아니라 정보 창이다.
     match tauri::WebviewWindowBuilder::new(
         app,
         ABOUT_WINDOW_LABEL,
         tauri::WebviewUrl::App("about.html".into()),
     )
     .title(title)
-    .inner_size(420.0, 360.0)
+    .inner_size(540.0, 480.0)
     .resizable(false)
     .center()
     .build()

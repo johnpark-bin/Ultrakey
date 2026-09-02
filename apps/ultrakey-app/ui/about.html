@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <!-- ⭐ 이슈 #87 — 독립 About 정보 창. "Ultrakey" 는 브랜드 고유명사라 번역
      대상이 아니다(eventviewer.html 과 같은 근거). 실제 창 제목(타이틀바)은 Rust 쪽
-     WebviewWindowBuilder 가 카탈로그 `about.title` 로 정한다. -->
+     WebviewWindowBuilder 가 카탈로그 `about.title` 로 정한다.
+     ⭐ 이슈 #96 — 레이아웃 재구성: 상단 히어로(앱 아이콘·앱 이름·버전) + 정보
+     행 6종 + 하단 중앙 버튼. 앱 이름·버전은 히어로가 표시하므로 중복되는 라벨
+     행 2종은 제거했다(카탈로그 키 `about.app_name`·`about.version` 도 함께 제거). -->
 <title>Ultrakey — About</title>
 <style>
   :root { color-scheme: light dark; }
@@ -16,26 +19,65 @@
     font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     background: Canvas;
     color: CanvasText;
+    /* ⭐ 이슈 #96 — 창 크기는 본문 전체가 스크롤바 없이 담기도록 실측으로 정한
+       고정값이다(main.rs `show_about_window`). `auto` 는 안전장치로 남기되 정상
+       경로에서는 스크롤바가 나타나지 않는다. 본문은 창보다 항상 조금 짧으므로
+       (언어·번들 여부에 따라 높이가 달라진다) 세로 중앙에 둔다 — `justify-content:
+       center` 는 넘칠 때 상단이 잘리므로 `margin: auto`(아래 `#shell`)로 안전하게
+       중앙화한다(넘치면 auto 마진이 0 으로 돌아가 스크롤이 정상 동작). */
+    display: flex; flex-direction: column;
     overflow: auto;
   }
+  #shell, #fatal { margin: auto 0; width: 100%; }
 
-  /* ── 브랜드 헤더 ─────────────────────────────────────────────────────── */
-  .brand {
-    padding: 18px 20px 6px;
+  /* ── 히어로: 앱 아이콘 · 앱 이름 · 버전 ─────────────────────────────────
+     ⭐ 이슈 #96 — 앱 아이콘 노출. `<img src="…">` 가 아니라 **인라인 SVG** 인
+     이유는 index.html(온보딩)의 것과 같다(docs/dev/icons.md §2.4): (1) `currentColor`
+     로 라이트/다크가 자동 대응된다, (2) 추가 네트워크 요청도 CSP 경계도 타지
+     않는다, (3) 외부 리소스 로드가 조용히 실패해 아이콘만 사라지는 경로가 없다.
+     path 의 `d` 는 정본 `assets/app-icon/ultrakey.svg` 와 한 글자도 다르지 않다 —
+     어긋나면 tests/frontend_wiring.rs 가 잡는다.
+     ⛔ 기각한 대안: ① `icons/*.png` 를 `ui/` 에 복사해 `<img>` 로 참조 — 정본
+     파이프라인(`generate-icons.sh`) 밖의 래스터 사본이 생겨 이중 관리가 된다.
+     ② Tauri asset 프로토콜 — capability·CSP 배선이 늘고 새로고침 경로가 취약점을
+     키운다. ③ CSS 로 타일(배경) 재현 — 정본 파이프라인에 없는 시각 어휘를 발명
+     하는 것이라 채택하지 않았다. */
+  .hero {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 26px 24px 16px;
   }
-  .brand .name { font-size: 15px; font-weight: 600; }
-
-  /* ── 정보 표 ────────────────────────────────────────────────────────── */
-  dl.info { margin: 0; padding: 0 0 12px; }
-  .row {
-    display: flex; gap: 10px; align-items: baseline;
-    padding: 3px 20px;
+  .hero .app-icon {
+    width: 64px; height: 64px;
+    margin: 0 0 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: .88;
   }
-  .row dt {
-    flex: 0 0 auto; min-width: 110px;
+  /* ⭐ 브랜드 고유명사 — 번역하지 않는다. */
+  .hero .name { font-size: 17px; font-weight: 600; }
+  .hero .version {
+    margin-top: 2px;
+    font-size: 12px;
     color: color-mix(in srgb, currentColor 55%, transparent);
   }
-  .row dd { margin: 0; word-break: break-all; }
+
+  /* ── 정보 표 ──────────────────────────────────────────────────────────
+     라벨 열은 고정 폭·오른쪽 정렬(시스템 설정의 라벨-값 배치 어휘). 폭은 5개
+     언어 중 가장 긴 라벨(`es` 의 `about.log_path`)이 한 줄에 드는 값을 실측으로
+     정했다 — 라벨이 감행되면 행 높이가 언어마다 달라져 창 크기 고정과 어긋난다. */
+  dl.info { margin: 0; padding: 6px 0 12px; }
+  .row {
+    display: flex; gap: 12px; align-items: baseline;
+    padding: 3.5px 24px;
+  }
+  .row dt {
+    flex: 0 0 200px; text-align: right;
+    color: color-mix(in srgb, currentColor 55%, transparent);
+  }
+  .row dd { margin: 0; min-width: 0; word-break: break-all; }
   .row a { color: Highlight; text-decoration: none; }
   .row a:hover { text-decoration: underline; }
   .row a:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; border-radius: 3px; }
@@ -45,15 +87,15 @@
      .mono 와 같은 어휘). */
   .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }
 
-  /* ── 하단 액션 ──────────────────────────────────────────────────────── */
+  /* ── 하단 액션 — 이슈 #96 로 중앙 정렬(표준 About 대화상자 배치) ────────── */
   .actions {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
-    padding: 14px 20px 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 14px 24px 18px;
     border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
   }
   .actions button {
     all: unset; box-sizing: border-box; cursor: pointer; font: inherit;
-    padding: 5px 12px; border-radius: 6px;
+    padding: 5px 14px; border-radius: 6px;
     border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   }
   .actions button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 8%, transparent); }
@@ -72,14 +114,20 @@
 <body>
 
 <div id="shell">
-  <header class="brand">
+  <header class="hero">
+    <!-- ⭐ 이슈 #96 — 앱 아이콘. 정본 `assets/app-icon/ultrakey.svg` 의 인라인
+         사본(위 스타일 주석의 근거·기각 대안 참고). -->
+    <svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 3C7 3 10 3.5 12 3.5C14 3.5 17 3 17 3L18 12C18 12 15 13 12 13C9 13 6 12 6 12L7 3Z"/>
+      <path d="M3.86857 8.14702L3.00694 18.4411C2.97634 18.8067 3.04731 19.1735 3.21208 19.5016L3.40935 19.8944C3.74963 20.572 4.44521 21 5.2061 21H18.7939C19.5548 21 20.2504 20.572 20.5907 19.8944L20.7879 19.5016C20.9527 19.1735 21.0237 18.8067 20.9931 18.4411L20.1314 8.14702C20.0687 7.39755 19.795 6.68086 19.3418 6.0792L17 3C17 3 14 3.5 12 3.5C10 3.5 6.97782 3 6.97782 3L4.65822 6.0792C4.20498 6.68086 3.9313 7.39755 3.86857 8.14702Z"/>
+      <path d="M6 12L3.5 20M18 12L20.5 20"/>
+    </svg>
     <!-- ⭐ 브랜드 고유명사 — 번역하지 않는다. -->
     <div class="name">Ultrakey</div>
+    <div class="version" id="version"></div>
   </header>
 
   <dl class="info">
-    <div class="row"><dt id="app-name-label"></dt><dd>Ultrakey</dd></div>
-    <div class="row"><dt id="version-label"></dt><dd id="version"></dd></div>
     <div class="row"><dt id="author-label"></dt><dd id="author"></dd></div>
     <div class="row"><dt id="website-label"></dt><dd><a href="#" id="website-link"></a></dd></div>
     <div class="row"><dt id="contact-label"></dt><dd><a href="#" id="contact-link"></a></dd></div>
@@ -142,9 +190,10 @@ if (!tauri || !tauri.core) {
   const LINK_IDS = ["website-link", "contact-link", "issues-link"];
 
   function applyStrings(meta, outsideBundle) {
-    $("app-name-label").textContent = t("about.app_name");
+    // ⭐ 이슈 #96 — 버전은 히어로가 표시한다(`settings.general.version` = `v{0}`).
+    // 앱 이름은 히어로의 브랜드 상수라 라벨 행이 따로 없다.
     $("version").textContent = tf("settings.general.version", [meta.version]);
-    $("version-label").textContent = t("about.version");
+
     $("author").textContent = meta.author;
     $("author-label").textContent = t("about.author");
 

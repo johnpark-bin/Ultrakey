@@ -999,6 +999,30 @@ fn index_html_의_아이콘_path는_정본_svg_와_같다() {
     );
 }
 
+/// ⭐ 이슈 #96 — About 창 히어로의 앱 아이콘도 정본의 인라인 사본이다
+/// (index.html 과 같은 방식·같은 근거 — docs/dev/icons.md §2.4). 온보딩 아이콘과
+/// 마찬가지로 한쪽만 고치면 조용히 갈라지므로 같은 정합 검사로 잡는다.
+#[test]
+fn about_html_의_아이콘_path는_정본_svg_와_같다() {
+    let source = path_data(&read_source_svg());
+
+    let html = read_about_html();
+    let svg_start = html
+        .find("<svg class=\"app-icon\"")
+        .expect("ui/about.html 에 class=\"app-icon\" 인 인라인 SVG 가 없다 (이슈 #96)");
+    let svg_end = html[svg_start..]
+        .find("</svg>")
+        .expect("ui/about.html 의 app-icon SVG 에 </svg> 종료 태그가 없다")
+        + svg_start;
+    let inline = path_data(&html[svg_start..svg_end]);
+
+    assert_eq!(
+        inline, source,
+        "ui/about.html 의 히어로 아이콘 path 가 정본 assets/app-icon/ultrakey.svg 와 \
+         다르다 — 정본을 고친 뒤 그 `d` 를 about.html 에 그대로 옮겨라 (이슈 #96)."
+    );
+}
+
 /// 메뉴바는 **template 이미지**를 써야 다크/라이트가 자동 대응된다(이슈 #16).
 /// 앱 번들 아이콘(불투명 타일)을 되돌려 쓰면 메뉴바에서 사각 실루엣으로
 /// 뭉개지므로, `setup_tray` 가 전용 자산을 가리키는지 정적으로 검사한다.
@@ -2679,8 +2703,30 @@ fn about_창이_닫기_시_숨김_상주로_배선된다() {
     );
 }
 
+/// ⭐ 이슈 #96 — About 창은 "본문 전체가 스크롤바 없이 보이는 고정 크기" 정책이다:
+/// 5개 언어 × 번들 내·외 2상태 전부를 헤드리스 렌더로 실측해 가장 높은 조합에
+/// 여백을 더한 540×480pt 로 고정하고 `resizable(false)` 를 유지한다. 이 배선이
+/// 바뀌면(크기 축소·리사이즈 허용) "스크롤바 없는 정보 창" 약속이 깨진다.
+#[test]
+fn about_창은_스크롤바_없는_고정_크기로_열린다() {
+    let main_rs = read_main_rs();
+    let about_start = main_rs
+        .find("fn show_about_window(")
+        .expect("main.rs 에 show_about_window 가 없다");
+    let about_body = &main_rs[about_start..];
+    assert!(
+        about_body.contains(".inner_size(540.0, 480.0)"),
+        "show_about_window 가 540×480pt 로 열지 않는다 — 5언어×번들 내·외 실측 \
+         기준 고정 크기다(이슈 #96)"
+    );
+    assert!(
+        about_body.contains(".resizable(false)"),
+        "show_about_window 에 resizable(false) 가 없다 — 정보 창은 고정 크기다(이슈 #96)"
+    );
+}
+
 /// 이슈 #87(D3·§9 #2) — General 탭 상단의 `#about` 블록은 제거됐고(로그 위치는
-/// About 창으로, 번들 ID·설정 파일 경로는 Advanced 섹션으로), 버전 버튼
+/// About 창으로, 번들 ID·설정 파일 경로 행은 Advanced 섹션으로), 버전 버튼
 /// `#version-btn` 은 **유지**하되 `open_about_window` 를 invoke 하는 About 창
 /// 오픈 버튼으로 바뀌었다.
 #[test]
@@ -2780,16 +2826,16 @@ fn 이슈87_커맨드가_generate_handler_에_등록되어_있다() {
     }
 }
 
-/// 이슈 #87(D6) — `about.*` 신규 키 10종이 5개 카탈로그 전부에 있고, About 창
-/// 행 값에 쓰는 `settings.general.version` 도 유지된다. ⭐ URL 라벨 3종의 코드
-/// 값(`GitHub`·`GitHub Issues`)도 카탈로그 값과 일치해야 한다(§9 #1 — 번역
-/// 없이 고유 브랜드).
+/// 이슈 #87(D6) — `about.*` 키가 5개 카탈로그 전부에 있고, About 창 행 값에 쓰는
+/// `settings.general.version` 도 유지된다. ⭐ URL 라벨 3종의 코드 값(`GitHub`·
+/// `GitHub Issues`)도 카탈로그 값과 일치해야 한다(§9 #1 — 번역 없이 고유 브랜드).
+/// ⭐ 이슈 #96 — `about.app_name`·`about.version` 두 라벨 키는 제거됐다: 히어로가
+/// 앱 이름(브랜드 상수)·버전(`settings.general.version`)을 직접 표시하므로 라벨
+/// 행이 사라졌기 때문이다(미사용 키 방치 금지 — #87 D6 의 log_path 재배치 선례).
 #[test]
 fn 이슈87의_about_점_키가_다섯_카탈로그_모두에_있다() {
     let required = [
         "about.title",
-        "about.app_name",
-        "about.version",
         "about.author",
         "about.website",
         "about.contact",

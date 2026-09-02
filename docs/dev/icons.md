@@ -15,6 +15,7 @@
 | 앱 번들 아이콘 | `apps/ultrakey-app/icons/{32x32,64x64,128x128,128x128@2x,icon}.png` · `icon.icns` |
 | 메뉴바 template | `apps/ultrakey-app/icons/menubar-template.png` (36×36) |
 | 온보딩 모달 | `apps/ultrakey-app/ui/index.html` 의 인라인 `<svg class="app-icon">` |
+| About 창 히어로 | `apps/ultrakey-app/ui/about.html` 의 인라인 `<svg class="app-icon">`(이슈 #96 — 온보딩과 같은 방식·같은 정합 테스트 대상) |
 | ⚠️ 환경설정 탭 아이콘 | `apps/ultrakey-app/ui/settings.html` 의 인라인 `<svg class="tab-icon">` 6개 — **정본 SVG 의 사본이 아니다**(아래 §1.1) |
 | README | 위 `128x128@2x.png` 를 그대로 참조한다 |
 
