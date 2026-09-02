@@ -143,7 +143,7 @@
   ⛔ **클론은 닫기를 숨김(hide)으로 전환한다 (2026-09-02, 이슈 #88 — 클론 자체 결정. 원본의 닫기 동작이 숨김인지 파괴인지는 여전히 미확인 → §9).** 위 문장은 **원본의 실측 기록**이므로 그대로 둔다 — 클론이 다르게 가기로 한 것이지, 실측이 틀린 것이 아니다(위 "탭 전환 시 리사이즈" ⛔ 블록과 같은 형식 선례). 클론은 `CloseRequested` 에서 `api.prevent_close()` + `hide()` 로 닫는 즉시 창을 숨기고, 설정 창 인스턴스를 **앱 종료까지 상주**시킨다(파괴·재생성하지 않는다).
   - 근거: `show_settings_window`(main.rs) 가 창 **존재**를 전제로 재열림 로직이 완결된다 — 파괴되면 `on_main_thread` 가 `None` 을 받아 에러 로그만 남긴다(이슈 #88 이 드러낸 결함). 크기 영속 배선(`wire_window_size_persistence`)은 setup() 1회 배선이라 파괴-재생성 시 재설치·크기 복원·디바운스 스레드 중복 방지 재설계가 필요하다. Seek 오버레이의 "재생성 비용 회피 상주" 관례(F-03 §3.1)와도 일치한다.
   - **기각: 파괴 후 재생성(builder)** — Event Viewer 의 `CloseRequested` 는 부수 동작(계측 종료)이 있는 창이라 이식에 재설계가 필요하다. 닫기 직후 400ms 디바운스 창 안 크기 변경 손실 가능(저장은 디바운스 스레드가 400ms 뒤). 재생성 시 `wire_window_size_persistence` 재호출이 디바운스 스레드 중복 스폰 버그를 유발하기 쉬운 구조다.
-  - **공통 정책(#87 참조)**: 메뉴가 여는 주 창(설정)은 닫아도 **숨김 유지(상주)**. About 등 신설 창의 정책은 해당 작업이 결정하되 상주를 기본값으로 검토한다.
+  - **공통 정책(#87 참조)**: 메뉴가 여는 주 창(설정)은 닫아도 **숨김 유지(상주)**. ⭐ **이슈 #87 의 About 창도 이 정책을 따른다** — `show_about_window`(main.rs) 가 `CloseRequested` 에서 `prevent_close()` + `hide()` 로 숨겨 상주한다(파괴-재생성 없음, #88 정합).
 - **재열기 시 마지막 탭 기억**: 관찰 중 항상 `Seek` 탭으로 열렸다는 정황은 있으나, 이는 관찰 시작 시 탭을 그렇게 두고 시작했을 가능성과 구분되지 않는다 → `(미확정)` → §9.
 - **다중 인스턴스 방지**: 이미 열려 있는 상태에서 메뉴바에서 다시 `Settings…` 를 선택하면 새 창을 열지 않고 기존 창을 최전면으로 가져온다 `(추정 — 원본 행동, 이번 실측에서 직접 검증하지 않았다 — macOS 단일 설정 창 관례)`. ⭐ **클론 동작 구현 확정 (2026-09-02, 이슈 #88)**: `show_settings_window`(main.rs) 가 **이미 보이면 `show()` 하지 않고 `set_focus()` 만** 호출한다 — 정확히 위 서술의 동작이다. 두 번째 프로세스의 재실행 신호(이슈 #68)도 같은 함수를 타므로 숨김 상태면 `show()`, 표시 상태면 포커스다. 이는 **클론 구현 확정**이지 원본의 `(추정)` 을 해소한 것이 아니다 — 원본 관찰은 여전히 미확정으로 남는다.
 
@@ -312,7 +312,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | — | 앱 로고 이미지 | 정적 이미지 | — | 좌측 | — | — |
 | 1 | `Launch on login` | 체크박스 | ☐ | 첫 행 좌측 | F-10 | — |
-| — | `v1.66 (66)` | **버튼**(정적 텍스트 아님) | — | 첫 행 우측(항목 1 과 같은 행) | 소유 미정 `(미확정)` — About 창 추정 | — |
+| — | `v1.66 (66)` | **버튼**(정적 텍스트 아님) | — | 첫 행 우측(항목 1 과 같은 행) | ⭐ **이슈 #87 로 해소.** 버튼 클릭 → About 창 오픈(§9 Q12 추정 방향). 클론 `#version-btn` 도 About 창을 연다(`open_about_window` 커맨드 — `plan/issue-87` §9 #2 유지 결정) | — |
 | 2 | `Check for updates automatically` | 체크박스 | ☐(`SUEnableAutomaticChecks = false` 와 일치) | | F-13 | `SUEnableAutomaticChecks` |
 | 3 | `Hide menu bar icon` | 체크박스 | ☐ | 부제 `When hidden, relaunch from Finder to open.` 종속 | F-10 | — |
 | 4 | `Menu bar icon` | 라벨 + 팝업(2종, 둘 다 **라벨 없는 이미지 항목**) | 기본 선택 `(미확정)` — 에셋 미추출로 어느 쪽이 기본인지 구분 못함 | | F-10 | — |
@@ -328,6 +328,7 @@
 - **`<details id="general-advanced">`**(§3.2 "접이식 섹션" 구조 요소) — 기본 접힘, `open` 속성 없이 출하, 접힘 상태 비영속(세션 상태).
 - 안에는 ① **`Synthesize Caps Lock Remap` 체크박스**(`presets.synthesizeCapsLockRemap` — 저장 키·엔진 계약은 불변, D5) + 그 아래 **위험 고지 paragraph**(`class="hint warn"`). 이 체크박스는 트레이 메뉴 `Advanced ▸ Synthesize Caps Lock Remap` 을 **제거한 뒤** 이곳이 유일한 표면이다(README 갈라짐 표 이탈 D9). 위험 고지의 방향: **기본(OFF) 상태에서 캡스락 의존 기능 활성 시 커널 HID 매핑(caps lock→F18)이 전역 설치**되고, 이 옵션을 켜면 그 매핑을 제거하고 이벤트 합성(경로 A)만 쓴다. 켬의 트레이드오프는 caps lock 래칭 한계(`key-remapping-engine.md` §5 #20)로 캡스락 기반 기능이 불안정해질 수 있다는 것.
 - ② **기존 진단 툴**(`#open-event-viewer-btn`·`#open-log-folder-btn` + `general-event-viewer-hint`, 이슈 #39 Phase 3·#47)을 **Advanced 안으로 이동**. 버튼·커맨드(`open_event_viewer`·`open_log_folder`)·이벤트 리스너·i18n 키는 그대로 두고 DOM 위치만 옮긴다. 기존 `#general-diagnostics-heading`(h2.group)은 제거 — `<summary>` 가 헤딩을 겸한다(`settings.general.diagnostics` i18n 키 삭제).
+- ③ **⭐ 이슈 #87 — About 정보 이동**: General 탭 상단에 있던 `#about` 블록이 제거되고(About 창 `ui/about.html` 신설 — `plan/issue-87` D1), **번들 ID·설정 파일 경로 행**(`#about-bundle-id`·`#about-settings-path` + 라벨 `settings.general.about.bundle_id`·`settings_path`·`settings_absent`)이 진단 성격이라 이 Advanced 섹션 **진단 버튼 아래**(`#general-path-info`)로 **이동**했다(제거 아님 — 값 채우기·라벨 배선은 불변). **로그 위치**는 About 창으로 이동(키 `settings.general.about.log_path` → `about.log_path` 재배치), **설치 위치**(`AppMeta.app_path`)는 About 창에 신규. **버전 버튼 `#version-btn` 은 유지**하되 클릭 동작이 "About 정보 펼치기"에서 "About 창 열기"로 바뀌었다(§9 Q12 해소, `plan/issue-87` §9 #2).
 
 ## 5. 엣지 케이스와 실패 모드
 
@@ -390,7 +391,7 @@
 - [ ] `settings.json` 이 파싱 불가능한 상태로 손상되어 있을 때 앱이 크래시하지 않고 필드별 기본값으로 시작하며, 손상된 파일이 별도 백업으로 보존된다.
 - [ ] 환경설정 창을 닫아도 앱은 종료되지 않고, 직전까지 활성화되어 있던 리매핑은 계속 동작한다.
 - [ ] 서로 충돌하는 caps lock 프리셋 두 개를 순서대로 켜면 대화상자가 뜨고, 확인 시 먼저 켠 설정이 꺼진다(F-15 상세 명세 필요, 여기서는 존재만 검증).
-- [ ] 설정 창을 닫았다(빨간 stoplight 버튼 또는 `⌘W`) 다시 열면(메뉴 `Settings…`, `About`, #68 앱 재실행) 정상적으로 다시 열리고, 직전 탭·크기가 유지된다(창은 파괴되지 않고 숨김 상주, 이슈 #88).
+- [ ] 설정 창을 닫았다(빨간 stoplight 버튼 또는 `⌘W`) 다시 열면(메뉴 `Settings…`, #68 앱 재실행) 정상적으로 다시 열리고, 직전 탭·크기가 유지된다(창은 파괴되지 않고 숨김 상주, 이슈 #88). ⭐ **이슈 #87 — 메뉴 `About` 과 설정 창의 버전 버튼은 설정 창이 아니라 독립 About 창을 연다**(`About` 닫았다 다시 열기 상주는 About 창 절이 소유, `plan/issue-87` §5.2·`manual-verification.md`).
 
 > ⚠️ **이슈 #88 자동 테스트 없는 근거**: 위 닫기 → 숨김 배선의 핵심은 `CloseRequested` 이벤트 수신 뒤 `prevent_close()`·`hide()` 호출인데, 둘 다 **Tauri 창 라이브 타입**(`tauri::WebviewWindow`)에 붙는 이벤트·호출이라 단위 테스트로 흉내 낼 수 없다. `tauri.conf.json` 이 설정 창을 `visible:false` 로 선언하는 자체(상주 전제)는 기존 `settings_window_default_matches_tauri_conf` 가 지킨다. 런타임 판정은 `docs/dev/manual-verification.md` 항목 18(M1~M9)이 소유한다.
 
@@ -410,7 +411,7 @@
 | 9 | 단축키 레코더의 정확한 취소/충돌 처리(blur 시 취소 여부, 시스템 예약 조합 충돌 시 동작) | `(미확정)` — `KeyboardShortcuts` 패키지 표준 동작을 참고할 뿐 SuperKey 의 실제 동작을 재현 관찰하지 못함 |
 | 10 | 시스템 예약 단축키 조회에 비공개 `kHISymbolicHotKey*` 경로를 클론이 실제로 채택할지 | 제품 결정 사항 `(미확정)` — 위험과 대안은 §6·§7 에 판단 근거를 남겼다 |
 | 11 | `NSUserDefaults` 미사용 결정(§3.6)이 파워유저의 `defaults` 명령 상호운용성 기대에 미치는 영향을 받아들일지 | 제품 결정 사항, 이번 실측이 "부재 = 기본값" 규약의 중요성을 더 명확히 했을 뿐 결론은 내지 않았다 |
-| 12 | `v1.66 (66)` 버튼의 클릭 동작과 소유 명세 | `(미확정)` — About 창 오픈으로 추정만 했다 |
+| 12 | `v1.66 (66)` 버튼의 클릭 동작과 소유 명세 | ✅ **해소 (2026-09-02, 이슈 #87)** — 클론의 독립 About 창(`ui/about.html`)이 신설되고 `#version-btn` 클릭이 그 창을 연다(`open_about_window`). Q12 의 "About 창 오픈 추정"이 원본 추정 방향 그대로 클론에서 실현됐다. **원본 버튼을 직접 눌러 About 창이 열리는 것은 여전히 미관찰**이다 — §3.3 `About.storyboardc` 실측이 창 존재를 보증할 뿐(§9 해소 목록 참조). 소유 명세는 About 창 내용(F-10 주관, 정보 행 값은 F-09·F-13 과 공유) |
 | 13 | `NSEvent.addLocalMonitorForEvents` 가 `objc2-app-kit` 에 실제로 안정적으로 노출되어 있는지 | `(미확정)` — 크레이트 문서·프로토타입으로 별도 검증 필요, 이번 실측 범위 밖 |
 | 14 | 원본 SuperKey 의 설정 창 닫기 동작이 **숨김**인지 **파괴**인지 | `(미확정)` — 이슈 #88 의 클론 결정(닫기 → 숨김 상주, §3.3 ⛔ 클론 결정 블록)은 **클론 자체 결정**이지 원본 실측이 아니다. 원본 관찰(원격 실측 또는 개발자 문의)은 후속 실측 대상으로 남는다 |
 
