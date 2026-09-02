@@ -33,8 +33,8 @@ use ultrakey_overlay::palette::Appearance;
 use ultrakey_seek::DetectionParams;
 
 use crate::overlay::{
-    default_search_bar_origin, overlay_displays, persist_search_bar_origin,
-    stored_search_bar_origin, OverlayController, SurfaceState, WebviewOverlayRenderer,
+    overlay_displays, persist_search_bar_origin, stored_search_bar_origin, OverlayController,
+    SurfaceState, WebviewOverlayRenderer,
 };
 
 /// 기동 후 오버레이를 띄우기까지의 지연 — 검증자가 다른 앱으로 포커스를 옮길 시간.
@@ -82,14 +82,18 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
         tracing::info!(x = u.x, y = u.y, w = u.width, h = u.height, "union frame");
     }
 
-    // ⭐ 검색 바 위치 — F-15 "부재 = 기본값". 저장된 값이 없으면 커서가 있는
-    // 디스플레이의 상단부 중앙(§3.4).
-    let origin = store_origin.unwrap_or_else(|| {
-        let m = ultrakey_platform::screens::mouse_location();
-        let o = default_search_bar_origin(&displays, m);
-        tracing::info!(mouse = ?m, origin = ?o, "no stored search bar position; using default position");
-        o
-    });
+    // ⭐(이슈 #95) 검색 바 위치 — 프로덕션(`seek.rs`)과 같은 결정 경로(§3.4):
+    // 표시 디스플레이는 마우스 → 포커스 → 주 디스플레이 순위로 매번 새로
+    // 고르고, 저장된 위치는 상대 오프셋으로만 해석한다.
+    let mouse = ultrakey_platform::screens::mouse_location();
+    let focused_display = ultrakey_platform::screens::focused_display_id();
+    let origin = ultrakey_overlay::geometry::resolve_search_bar_origin(
+        &displays,
+        mouse,
+        focused_display,
+        store_origin,
+    );
+    tracing::info!(?mouse, ?focused_display, ?origin, "search bar origin resolved (§3.4 priority rule)");
 
     let shared = app.state::<Arc<Mutex<SurfaceState>>>().inner().clone();
     let app_for_persist = app.clone();

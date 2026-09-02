@@ -68,7 +68,7 @@ impl OverlaySession {
     /// `detecting` 은 `true` 로 시작한다.
     #[must_use]
     pub fn open(displays: Vec<OverlayDisplay>, appearance: Appearance, reduce_motion: bool) -> Self {
-        let bar_origin = displays.first().map_or((0.0, 0.0), default_bar_origin);
+        let bar_origin = displays.first().map_or((0.0, 0.0), geometry::default_bar_origin);
 
         Self {
             displays,
@@ -185,7 +185,7 @@ impl OverlaySession {
         if !bar_still_visible {
             if let Some(first) = self.displays.first() {
                 tracing::debug!("seek overlay: display with the search bar disappeared; repositioning");
-                self.bar_origin = default_bar_origin(first);
+                self.bar_origin = geometry::default_bar_origin(first);
             }
             // 남은 디스플레이가 하나도 없으면(극단 케이스) 위치를 그대로
             // 둔다 — 다음 set_displays 로 디스플레이가 복귀하면 그때 다시
@@ -347,14 +347,6 @@ impl OverlaySession {
             self.selected_index = self.matching.len() - 1;
         }
     }
-}
-
-/// §3.4 제안 규칙 — 어느 디스플레이 상단부 중앙에 검색 바 기본 위치를 둔다.
-fn default_bar_origin(display: &OverlayDisplay) -> (f64, f64) {
-    (
-        display.frame.x + (display.frame.width - SEARCH_BAR_WIDTH_PT) / 2.0,
-        display.frame.y,
-    )
 }
 
 /// 선택 매치 사각형에서 `from` 에 가장 가까운 변의 중점(§3.5 연결선 규칙:

@@ -104,6 +104,27 @@ mod macos_impl {
         Some((p.x, main_top - p.y))
     }
 
+    /// ⭐(이슈 #95) **포커스된 윈도우가 있는 디스플레이**의 `CGDirectDisplayID`.
+    ///
+    /// `NSScreen.mainScreen` 은 AppKit 정의상 *"현재 키보드·마우스 이벤트를
+    /// 받고 있는 윈도우가 속한 스크린"* — 즉 포커스된 윈도우의 디스플레이
+    /// 다. 검색 바 표시 디스플레이 우선순위(§3.4)의 ② 신호로 쓴다: 마우스가
+    /// 다른 디스플레이에 멈춰 있어도 사용자의 실제 작업 위치를 가리킨다.
+    ///
+    /// ⭐ AX(`AXUIElement`) 경로를 쓰지 않는 이유: `NSScreen.main` 이 같은
+    /// 정보를 권한 리스크 없이 준다. 스냅샷 시점(세션 열림 직전)에는 검색
+    /// 바가 아직 키 윈도우가 아니라(§1 `canBecomeKey = false`) 이 값은 사용자
+    /// 앱의 포커스 위치다.
+    ///
+    /// ⚠️ **메인 스레드에서만 부른다.** 메인 스레드가 아니거나 스크린이
+    /// 없으면 `None`. `NSScreenNumber` 를 못 읽으면 `Some(0)` — 호출 쪽의
+    /// 디스플레이 선택 로직이 매칭 실패로 폴백 처리한다.
+    pub fn focused_display_id() -> Option<u32> {
+        let mtm = MainThreadMarker::new()?;
+        let main = NSScreen::mainScreen(mtm)?;
+        Some(screen_number(&main))
+    }
+
     /// ⭐ 시스템이 **다크 모드**인가 (`NSApp.effectiveAppearance`).
     ///
     /// 명세 §3.5 마지막 두 행이 요구하는 팔레트 전환의 입력이다. ⚠️ 배경색을
@@ -191,6 +212,10 @@ mod macos_impl {
         None
     }
 
+    pub fn focused_display_id() -> Option<u32> {
+        None
+    }
+
     pub fn is_dark_appearance() -> Option<bool> {
         None
     }
@@ -210,5 +235,6 @@ mod macos_impl {
 }
 
 pub use macos_impl::{
-    is_dark_appearance, mouse_location, screens, should_reduce_motion, ScreenObserver,
+    focused_display_id, is_dark_appearance, mouse_location, screens, should_reduce_motion,
+    ScreenObserver,
 };

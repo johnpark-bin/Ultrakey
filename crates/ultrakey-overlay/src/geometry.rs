@@ -87,6 +87,93 @@ pub fn display_for_point(displays: &[OverlayDisplay], x: f64, y: f64) -> Option<
     })
 }
 
+/// ⭐(이슈 #95) 검색 바를 어느 디스플레이에 표시할지 고른다.
+///
+/// 우선순위(명세 §3.4 확정 규칙):
+/// 1. **마우스 커서가 있는 디스플레이** — 사용자의 시선이 커서를 따르고,
+///    마우스 좌표는 활성화 시점에 읽은 가장 최신의 위치 신호다.
+/// 2. **포커스된 윈도우가 있는 디스플레이**(`focused_display_id`) — 마우스가
+///    다른 화면에 멈춰 있는 키보드 전용 작업(Seek 의 본래 사용 형태)에서도
+///    사용자의 실제 작업 위치를 가리킨다.
+/// 3. **목록의 첫 디스플레이**(메뉴바가 있는 주 디스플레이) — 1·2 신호가
+///    모두 부재할 때의 폴백.
+///
+/// 디스플레이가 하나도 없으면 `None`.
+#[must_use]
+pub fn select_search_bar_display(
+    displays: &[OverlayDisplay],
+    mouse: Option<(f64, f64)>,
+    focused_display_id: Option<u32>,
+) -> Option<&OverlayDisplay> {
+    if let Some((x, y)) = mouse {
+        if let Some(d) = display_for_point(displays, x, y) {
+            return Some(d);
+        }
+    }
+    if let Some(id) = focused_display_id {
+        if let Some(d) = displays.iter().find(|d| d.display_id == id) {
+            return Some(d);
+        }
+    }
+    displays.first()
+}
+
+/// ⭐(이슈 #95) 검색 바의 기본 위치 — 선택된 디스플레이의 **상단부 중앙**.
+///
+/// 가로: 디스플레이 중앙. 세로: 상단에서 20% 지점(§3.4 제안, Spotlight 의
+/// 배치 관행 `(추정)`).
+#[must_use]
+pub fn default_bar_origin(display: &OverlayDisplay) -> (f64, f64) {
+    (
+        display.frame.x + (display.frame.width - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0,
+        display.frame.y + display.frame.height * 0.2,
+    )
+}
+
+/// ⭐(이슈 #95) 세션 열림 시점의 검색 바 좌상단(전역 pt)을 결정한다.
+///
+/// **표시 디스플레이**는 [`select_search_bar_display`] 의 우선순위로 매
+/// 활성화마다 새로 정한다. **저장된 위치**(`stored`, 절대 좌표)는 표시
+/// 디스플레이를 고르는 데 쓰이지 않는다 — 그것이 어느 디스플레이에 있든
+/// 그 디스플레이 원점 기준 **상대 오프셋**만 꺼내, 이번에 선택된
+/// 디스플레이에 적용한다(검색 바가 완전히 들어가도록 클램프). 저장값이
+/// 없거나 어느 디스플레이에도 속하지 않으면(핫플러그로 사라진 화면) 기본
+/// 위치를 쓴다.
+///
+/// 이 규칙이 타협하는 두 요구:
+/// - 이슈 #95 — "입력창이 항상 특정 모니터에 고정돼 뜬다": 디스플레이
+///   선택을 저장값에서 떼어내 매 활성화마다 마우스·포커스 위치를 따른다.
+/// - 명세 §8 — "드래그해 옮긴 위치가 앱을 재시작해도 유지된다": 사용자가
+///   고른 디스플레이 **안에서의** 위치는 상대 오프셋으로 보존된다.
+#[must_use]
+pub fn resolve_search_bar_origin(
+    displays: &[OverlayDisplay],
+    mouse: Option<(f64, f64)>,
+    focused_display_id: Option<u32>,
+    stored: Option<(f64, f64)>,
+) -> (f64, f64) {
+    let Some(target) = select_search_bar_display(displays, mouse, focused_display_id) else {
+        return (0.0, 0.0);
+    };
+
+    let stored_offset = stored.and_then(|(sx, sy)| {
+        let host = display_for_point(displays, sx, sy)?;
+        Some((sx - host.frame.x, sy - host.frame.y))
+    });
+
+    match stored_offset {
+        Some((ox, oy)) => {
+            let max_x = (target.frame.width - crate::session::SEARCH_BAR_WIDTH_PT).max(0.0);
+            let max_y = (target.frame.height - crate::session::SEARCH_BAR_HEIGHT_PT).max(0.0);
+            (
+                target.frame.x + ox.clamp(0.0, max_x),
+                target.frame.y + oy.clamp(0.0, max_y),
+            )
+        }
+        None => default_bar_origin(target),
+    }
+}
+
 /// 전역 좌표 선분을 이 디스플레이 창의 경계로 자르고, 결과를 그 창의 로컬
 /// 좌표로 돌려준다. 교차하지 않으면 `None`.
 ///
@@ -268,6 +355,164 @@ mod tests {
     fn display_for_point_outside_all_is_none() {
         let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
         assert!(display_for_point(&[a], 5000.0, 5000.0).is_none());
+    }
+
+    // ── select_search_bar_display (이슈 #95) ────────────────────────────
+
+    /// ① 마우스가 있는 디스플레이가 우선한다 — 포커스 디스플레이가 달라
+    /// 지정돼 있어도 마우스를 따른다.
+    #[test]
+    fn select_display_mouse_wins_over_focused() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        let picked = select_search_bar_display(&displays, Some((1500.0, 500.0)), Some(1)).unwrap();
+        assert_eq!(picked.display_id, 2);
+    }
+
+    /// 마우스가 어느 디스플레이에도 없으면 ② 포커스 디스플레이로 떨어진다.
+    #[test]
+    fn select_display_falls_back_to_focused_when_mouse_outside() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        let picked = select_search_bar_display(&displays, Some((5000.0, 5000.0)), Some(2)).unwrap();
+        assert_eq!(picked.display_id, 2);
+    }
+
+    /// 마우스가 `None` 이면 ② 포커스 디스플레이를 쓴다.
+    #[test]
+    fn select_display_mouse_none_uses_focused() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        let picked = select_search_bar_display(&displays, None, Some(2)).unwrap();
+        assert_eq!(picked.display_id, 2);
+    }
+
+    /// ①② 신호가 모두 없으면 ③ 첫 디스플레이(메뉴바 주 디스플레이).
+    #[test]
+    fn select_display_falls_back_to_first() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        let picked = select_search_bar_display(&displays, None, None).unwrap();
+        assert_eq!(picked.display_id, 1);
+    }
+
+    /// 포커스 디스플레이 id 가 현재 구성에 없으면(해석 불가) ③ 폴백.
+    #[test]
+    fn select_display_unknown_focused_id_falls_back_to_first() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let displays = [a];
+        let picked = select_search_bar_display(&displays, None, Some(99)).unwrap();
+        assert_eq!(picked.display_id, 1);
+    }
+
+    /// 음수 원점 보조 디스플레이의 마우스도 올바르게 매핑된다.
+    #[test]
+    fn select_display_negative_origin_secondary() {
+        let primary = display(1, 0.0, 0.0, 2880.0, 1800.0);
+        let secondary = display(2, -2560.0, 0.0, 2560.0, 1440.0);
+        let displays = [primary, secondary];
+        let picked = select_search_bar_display(&displays, Some((-1000.0, 300.0)), None).unwrap();
+        assert_eq!(picked.display_id, 2);
+    }
+
+    /// 디스플레이가 없으면 `None`.
+    #[test]
+    fn select_display_empty_is_none() {
+        assert!(select_search_bar_display(&[], Some((0.0, 0.0)), Some(1)).is_none());
+    }
+
+    // ── resolve_search_bar_origin (이슈 #95) ────────────────────────────
+
+    /// 저장값 없이 마우스가 디스플레이 2 에 있으면 그 디스플레이의 상단부
+    /// 중앙(기본 위치)에 뜬다.
+    #[test]
+    fn resolve_origin_default_position_follows_mouse_display() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 2000.0, 1000.0);
+        let displays = [a, b];
+        let (x, y) = resolve_search_bar_origin(&displays, Some((2000.0, 500.0)), None, None);
+        // 디스플레이 2: 폭 2000, 검색 바 400 → 중앙 x = 1000 + 800.
+        assert!(approx_eq(x, 1000.0 + (2000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0));
+        assert!(approx_eq(y, 0.0 + 1000.0 * 0.2));
+    }
+
+    /// ⭐ 핵심 회귀(이슈 #95): 저장 위치가 디스플레이 1 에 있어도, 마우스가
+    /// 디스플레이 2 에 있으면 **디스플레이 2 에 뜨고** 저장 위치의 상대
+    /// 오프셋만 가져온다.
+    #[test]
+    fn resolve_origin_stored_position_does_not_pin_display() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        // 디스플레이 1 안의 (100, 50) 에 저장돼 있다.
+        let stored = Some((100.0, 50.0));
+        let (x, y) = resolve_search_bar_origin(&displays, Some((1500.0, 500.0)), None, stored);
+        // 디스플레이 2 원점 + 오프셋 (100, 50).
+        assert!(approx_eq(x, 1100.0));
+        assert!(approx_eq(y, 50.0));
+    }
+
+    /// 같은 디스플레이에서 드래그한 위치는 그대로 복원된다(§8 드래그
+    /// 위치 유지).
+    #[test]
+    fn resolve_origin_dragged_position_round_trips_on_same_display() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let displays = [a];
+        let stored = Some((321.0, 456.0));
+        let (x, y) = resolve_search_bar_origin(&displays, Some((500.0, 500.0)), None, stored);
+        assert!(approx_eq(x, 321.0));
+        assert!(approx_eq(y, 456.0));
+    }
+
+    /// 저장 오프셋이 선택된 디스플레이보다 크면 검색 바가 완전히 들어가도록
+    /// 클램프된다.
+    #[test]
+    fn resolve_origin_offset_clamped_to_smaller_target_display() {
+        let big = display(1, 0.0, 0.0, 3000.0, 2000.0);
+        let small = display(2, 3000.0, 0.0, 800.0, 600.0);
+        let displays = [big, small];
+        // 큰 화면 구석(2900, 1900)에 저장 — 오프셋 (2900, 1900)은 작은
+        // 화면(800×600)에 그대로 들어가지 않는다.
+        let stored = Some((2900.0, 1900.0));
+        let (x, y) = resolve_search_bar_origin(&displays, Some((3400.0, 300.0)), None, stored);
+        let max_x = 800.0 - crate::session::SEARCH_BAR_WIDTH_PT; // 400
+        let max_y = 600.0 - crate::session::SEARCH_BAR_HEIGHT_PT; // 560
+        assert!(approx_eq(x, 3000.0 + max_x));
+        assert!(approx_eq(y, max_y));
+    }
+
+    /// 저장 위치가 어느 디스플레이에도 속하지 않으면(화면이 사라짐) 없는
+    /// 값 취급 — 선택된 디스플레이의 기본 위치로 떨어진다.
+    #[test]
+    fn resolve_origin_stored_outside_all_displays_ignored() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let displays = [a];
+        let stored = Some((5000.0, 5000.0)); // 핫플러그로 사라진 화면의 흔적
+        let (x, y) = resolve_search_bar_origin(&displays, Some((500.0, 500.0)), None, stored);
+        assert!(approx_eq(x, (1000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0));
+        assert!(approx_eq(y, 1000.0 * 0.2));
+    }
+
+    /// 마우스·포커스 신호가 없고 저장값만 있으면 첫 디스플레이에 오프셋 적용.
+    #[test]
+    fn resolve_origin_no_signals_applies_stored_offset_to_first_display() {
+        let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
+        let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
+        let displays = [a, b];
+        let stored = Some((1100.0, 200.0)); // 디스플레이 2 의 오프셋 (100, 200)
+        let (x, y) = resolve_search_bar_origin(&displays, None, None, stored);
+        assert!(approx_eq(x, 100.0));
+        assert!(approx_eq(y, 200.0));
+    }
+
+    /// 디스플레이가 없으면 (0, 0).
+    #[test]
+    fn resolve_origin_empty_displays_is_zero() {
+        assert_eq!(resolve_search_bar_origin(&[], Some((0.0, 0.0)), Some(1), Some((5.0, 5.0))), (0.0, 0.0));
     }
 
     // ── clip_segment ─────────────────────────────────────────────────────
