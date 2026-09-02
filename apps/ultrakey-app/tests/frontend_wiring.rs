@@ -848,6 +848,41 @@ fn main_rs_의_menu_점_리터럴은_다섯_카탈로그_모두에_있다() {
     }
 }
 
+/// ⭐ F-10 이슈 #92 — 재실행(Finder 더블클릭·`open`)의 설정 창 표시 배선 재발 방지.
+///
+/// 실측 확정(이슈 #92): 실행 중인 앱을 `open` 으로 다시 실행하면 두 번째 프로세스가
+/// **뜨지 않고** `kAEReopenApplication` Apple Event 가 기존 인스턴스로 전달되어
+/// tao `applicationShouldHandleReopen:` → `tauri::RunEvent::Reopen` 이 된다. 이
+/// 이벤트 암이 "로그만 남기고 끝"이면 재실행 시 설정 창이 열리지 않는다(M2 2차
+/// 주석의 잘못된 가정 때문에 실재로 그렇게 회귀했었다). 이 테스트는 그 암이 반드시
+/// `show_settings_window` 로 이어지도록 배선을 잠근다. 순수 로직(파일 시스템·OS
+/// 독립)은 없고 이 이벤트를 실체로 재현할 수도 없어(OS 거동), 소스 텍스트로 암의
+/// 윤곽을 고정한다.
+#[test]
+fn run_이벤트의_재open_암이_설정_창을_연다() {
+    let main_rs = read_main_rs();
+
+    let arm_start = main_rs
+        .find("tauri::RunEvent::Reopen { .. } => {")
+        .expect("main.rs 에 RunEvent::Reopen 암이 없다");
+    let rest = &main_rs[arm_start..];
+    let arm_end = rest
+        .find("_ => {}")
+        .map(|i| i + "_ => {}".len())
+        .unwrap_or(rest.len());
+    let arm = &rest[..arm_end];
+
+    assert!(
+        arm.contains("show_settings_window(app_handle)"),
+        "Reopen 암이 show_settings_window 를 부르지 않는다 — 재실행 시 설정 창이 \
+         열리지 않는다(이슈 #92)"
+    );
+    assert!(
+        arm.contains("opening the settings window"),
+        "Reopen 암이 재실행 처리 로그를 남기지 않는다 — 수동 검증(M4)이 관찰할 신호가 없다"
+    );
+}
+
 /// 메뉴 항목 id(`menu_ids` 모듈)가 §3.3 이 정한 정상 메뉴 구성(`Ignore <앱>` ·
 /// `Settings…` · `Check for Updates…`(F-13) · `About` · `Advanced ▸ (Relaunch)` ·
 /// `Quit Ultrakey`)과 unauthorizedMenu 의 `Authorize` 항목을 전부 갖추고 있는지
