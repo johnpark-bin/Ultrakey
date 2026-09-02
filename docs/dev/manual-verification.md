@@ -1216,6 +1216,7 @@ kd key="(" code=KeyA kc=65 shift=false
 | 8 | `General` 탭 `Advanced` 접이식 펼침 | 진단 버튼(`Open Event Viewer`·`Open Log Folder`) 아래 **번들 ID·설정 파일 경로** 행이 있다(로그 위치는 About 창으로 이동 — D3) |
 | 9 | About 창 닫기(빨간 stoplight 버튼·`⌘W`) | 창이 **숨겨진다**(#88 상주 정책 — 파괴 아님). 트레이 `About` 다시 클릭 시 **같은 창이 최전면으로** 온다 |
 | 10 | `General` 탭 언어 팝업으로 5개 언어 전환 후 About 창 열기 | About 창 라벨이 각 언어로 표시된다. `GitHub`·`GitHub Issues` 만 브랜드라 변하지 않는다 |
+| 11 | ⭐ **About 창을 연 채로**(`General` 탭) 언어를 바꾼다 | **즉시 반영** — 정보 행 라벨·타이틀바(`about.title`)가 새 언어로 바뀐다(#88 상주라 새로 열 필요 없다). About 창을 닫았다 다시 열어도 그 언어가 유지된다 |
 
 > ⚠️ **자동 테스트 없는 근거**: 창 생성·숨김 상주 배선(`WebviewWindowBuilder` +
 > `CloseRequested → prevent_close + hide`)은 Tauri 창 라이브 타입에 붙는 런타임

@@ -47,7 +47,7 @@ use arc_swap::ArcSwap;
 use objc2::MainThreadMarker;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
-use tauri::{LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalSize, State, WebviewWindow, WindowEvent, Wry};
 
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::gate::{AppGate, AppGateController, AppIdentity, AtomicAppGate};
@@ -2120,6 +2120,10 @@ fn settings_set_general_language(
     state.catalog.store(Arc::new(new_catalog));
     rebuild_tray_menu(app, state);
 
+    // ⭐ 이슈 #87 상급 리뷰 #1 — 카탈로그가 바뀌었으므로 상주 About 창 내용·타이틀바를
+    // 즉시 갱신한다(열려 있지 않으면 아무 일도 하지 않는다 — 열릴 때 새 카탈로그를 탐).
+    notify_about_catalog_changed(app, state);
+
     current_settings_state(state)
 }
 
@@ -2723,6 +2727,10 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     state.catalog.store(Arc::new(new_catalog));
 
     rebuild_tray_menu(app, state);
+
+    // ⭐ 이슈 #87 상급 리뷰 #1 — import 로 카탈로그가 교체됐으므로(언어가 바뀌었는지
+    // 여부와 무관하게 방어적으로) 상주 About 창도 갱신한다(열려 있지 않으면 무연산).
+    notify_about_catalog_changed(app, state);
     Ok(())
 }
 
@@ -2989,6 +2997,33 @@ fn eventviewer_clear(state: State<'_, Arc<AppState>>) {
 // ============================================================================
 
 const ABOUT_WINDOW_LABEL: &str = "about";
+
+/// ⭐ 이슈 #87 상급 리뷰 #1 — 상주 About 창의 언어 변경 스테일니스 수정.
+///
+/// About 창은 #88 정책(닫아도 `hide` 상주, 파괴·재생성 없음)이라, 열어 본 적이
+/// 있는 채로 언어를 바꾸면 생성 시 부트스트랩된 문자열·타이틀바가 **앱 재시작까지
+/// 이전 언어로 남는다**(설정 창은 언어 변경 주체라 스스로 재부트스트랩하지만 About
+/// 창에는 그 경로가 없다). 카탈로그가 교체되는 두 시점 — 언어 선택(`settings_set_
+/// general_language`)과 설정 import 교체(`reload_settings_after_replace`) — 에서
+/// 이 함수를 호출해 About 창에 갱신 이벤트를 보낸다.
+///
+/// - 네이티브 타이틀바는 여기서 `set_title`(새 카탈로그의 `about.title`)로 직접
+///   갱신한다(Rust 쪽이 카탈로그를 쥐고 있어 가장 저렴하다).
+/// - 창 내용(정보 행 라벨·번들 여부)은 `about.html` 이 `catalog-changed` 를
+///   `listen` 하여 `about_bootstrap` 을 다시 부르고 다시 그린다.
+/// - 창이 아직 없으면 아무 일도 하지 않는다 — 열릴 때 부트스트랩이 새 카탈로그를
+///   타므로 빈 구간이 없다.
+const CATALOG_CHANGED_EVENT: &str = "catalog-changed";
+
+fn notify_about_catalog_changed(app: &tauri::AppHandle, state: &Arc<AppState>) {
+    let Some(window) = app.get_webview_window(ABOUT_WINDOW_LABEL) else {
+        return;
+    };
+    let catalog = state.catalog.load_full();
+    let _ = window.set_title(catalog.get("about.title"));
+    let _ = window.emit(CATALOG_CHANGED_EVENT, ());
+    tracing::info!("about window notified of catalog change");
+}
 
 /// 트레이 메뉴 `About`·설정 창의 버전 버튼(`#version-btn`)이 여는 독립 정보 창.
 ///

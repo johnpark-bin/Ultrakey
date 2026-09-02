@@ -2777,3 +2777,60 @@ fn main_rs의_app_meta에_app_path_필드와_원천_함수가_있다() {
         "about.html 이 meta.appPath 를 읽지 않는다 — AppMeta 직렬화 이름이 appPath 임이 어긋났다(#87 D3)"
     );
 }
+
+/// ⭐ 이슈 #87 상급 리뷰 #1 — 상주 About 창의 언어 변경 스테일니스 수정이 배선돼
+/// 있다(#88 상주로 부트스트랩이 창 생성 시 1회뿐이라, 열어 본 채로 언어를 바꾸면
+/// 앱 재시작까지 이전 언어로 남는다):
+///
+/// ① Rust 가 카탈로그 교체 시점 둘(언어 선택·설정 import 교체)에
+///    `notify_about_catalog_changed` 를 부른다(네이티브 타이틀바 `set_title` +
+///    `catalog-changed` emit).
+/// ② `about.html` 이 `catalog-changed` 를 listen 하여 `about_bootstrap` 을 다시
+///    불러 정보 행을 갱신한다.
+/// ③ about 창이 listen 하려면 capability 로 `core:event:default`(listen 포함)가
+///    열려 있어야 한다 — 없으면 ACL 이 막아 이 배선이 통째로 조용히 죽는다
+///    (overlay.json 의 같은 근거).
+#[test]
+fn about_창_언어_변경_즉시_반영_배선이_있다() {
+    let main_rs = read_main_rs();
+    for needle in [
+        "fn notify_about_catalog_changed(",
+        "const CATALOG_CHANGED_EVENT: &str = \"catalog-changed\";",
+        "window.set_title(catalog.get(\"about.title\"))",
+        "window.emit(CATALOG_CHANGED_EVENT, ())",
+        // 언어 선택 경로(settings_set_general_language)와 import 교체 경로
+        // (reload_settings_after_replace) 두 지점에 모두 배선돼 있어야 한다.
+        "notify_about_catalog_changed(app, state);\n\n    current_settings_state(state)",
+        "notify_about_catalog_changed(app, state);\n    Ok(())",
+    ] {
+        assert!(
+            main_rs.contains(needle),
+            "main.rs 에 {needle:?} 이 없다 — About 창 언어 갱신 배선이 빠졌다(이슈 #87 상급 #1)"
+        );
+    }
+
+    let about = read_about_html();
+    assert!(
+        about.contains(r#"listen("catalog-changed""#),
+        "about.html 이 catalog-changed 를 listen 하지 않는다 — 재부트스트랩 경로가 없다(이슈 #87 상급 #1)"
+    );
+
+    let cap_path = manifest_dir().join("capabilities/about.json");
+    let cap_raw = std::fs::read_to_string(&cap_path)
+        .unwrap_or_else(|e| panic!("capabilities/about.json 을 읽지 못했다({cap_path:?}): {e}"));
+    let cap: serde_json::Value = serde_json::from_str(&cap_raw)
+        .unwrap_or_else(|e| panic!("capabilities/about.json 파싱 실패({cap_path:?}): {e}"));
+    assert_eq!(
+        cap["windows"],
+        serde_json::json!(["about"]),
+        "capabilities/about.json 의 windows 가 about 창만 가리키지 않는다(이슈 #87 상급 #1)"
+    );
+    let has_event_listen = cap["permissions"]
+        .as_array()
+        .map(|a| a.iter().any(|p| p == "core:event:default"))
+        .unwrap_or(false);
+    assert!(
+        has_event_listen,
+        "capabilities/about.json 에 core:event:default 가 없다 — about 창 listen 이 ACL 에 막힌다(이슈 #87 상급 #1)"
+    );
+}

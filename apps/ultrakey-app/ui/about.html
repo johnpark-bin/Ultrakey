@@ -107,6 +107,7 @@
 // 카탈로그 자체를 가져오는 경로가 죽었을 때 쓰는 최후 수단이라 카탈로그에 기댈 수
 // 없다(settings.html 의 동일 주석 참고).
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
 
@@ -200,6 +201,17 @@ if (!tauri || !tauri.core) {
   });
 
   load();
+
+  // ⭐ 이슈 #87 상급 리뷰 #1 — 언어 변경(카탈로그 교체) 때 Rust 가 이 이벤트를
+  // 보낸다. About 창은 #88 정책(닫아도 hide 상주)이라 창을 다시 만들지 않으므로,
+  // 받으면 `about_bootstrap` 을 다시 불러 정보 행을 갱신한다. 네이티브 타이틀바는
+  // Rust 쪽(`notify_about_catalog_changed`)이 `set_title` 로 함께 갱신한다.
+  listen("catalog-changed", () => {
+    load().catch(() => {});
+  }).catch(() => {
+    // listen 실패(ACL 등)는 치명이 아니다 — 반영만 못 할 뿐, 열린 채 언어를
+    // 바꾸는 경우 말고는 영향이 없다.
+  });
 }
 </script>
 </body>
