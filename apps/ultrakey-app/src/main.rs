@@ -43,7 +43,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use objc2::MainThreadMarker;
 use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIcon;
@@ -58,7 +58,7 @@ use ultrakey_core::perdevice::{
 };
 use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
 use ultrakey_engine::path_b::LedgerStore;
-use ultrakey_engine::{Engine, EngineEvent, TapState};
+use ultrakey_engine::{Engine, EngineEvent, SharedState, TapState};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::{Catalog, Locale};
 use ultrakey_korean::KoreanSettings;
@@ -897,6 +897,7 @@ fn settings_set_per_device(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -1257,6 +1258,10 @@ struct SettingsState {
     /// D-1 — 지금 경로 B 로 caps lock 이 F18 로 리매핑돼 있는가(`settings.presets.
     /// caps_alias.note` 힌트를 UI 가 이 값으로 보인다).
     caps_lock_alias_active: bool,
+    /// ⭐ 이슈 #110 — D-1 이 필요한데 마지막 경로 B 재조정에서 **되읽기 확인이 안
+    /// 됐다**(`caps_lock_kernel_map_missing`). UI 는 `caps_alias.note` 힌트 대신
+    /// `settings.presets.caps_alias.missing` 경고를 보인다.
+    caps_lock_kernel_map_missing: bool,
     general: GeneralView,
     /// F-16 `Korean` 탭.
     korean: KoreanView,
@@ -1282,6 +1287,7 @@ fn build_settings_state(
     auto_update: bool,
     save_error: Option<String>,
     pending_conflict: Option<PendingConflictView>,
+    caps_lock_kernel_map_missing: bool,
 ) -> SettingsState {
     let last_tab = store
         .get::<String>(keys::UI_LAST_TAB)
@@ -1313,6 +1319,7 @@ fn build_settings_state(
         presets: presets_view(presets),
         preset_options: preset_options_view(),
         caps_lock_alias_active: caps_lock_alias.is_some(),
+        caps_lock_kernel_map_missing: caps_lock_alias.is_some() && caps_lock_kernel_map_missing,
         general: general_view(store, auto_update),
         korean: korean_view(korean, store),
         seek: seek_view(seek, quick_press_opens_seek(presets)),
@@ -1679,6 +1686,14 @@ struct AppState {
     catalog: ArcSwap<Catalog>,
     /// 엔진은 권한이 생긴 뒤에야 시작된다 — 그전에는 `None`.
     engine: Mutex<Option<Engine>>,
+    /// ⭐ 이슈 #110 — 실행 중인 엔진의 `SharedState` 사본(락 없는 리프). 설정 창·
+    /// Event Viewer·트레이가 "caps lock 커널 매핑 미적용" 을 판정할 때
+    /// `state.engine` 뮤텍스를 잡지 않기 위해 둔다 — `reconfigure_engine` 이
+    /// `engine` → `store` 순서로 잠그는데, `build_settings_state` 는 `store` 를 쥔
+    /// 채 불리므로 그 안에서 `engine` 을 잡으면 순서가 뒤집혀 교착할 수 있다.
+    /// 엔진이 새로 시작될 때마다 교체되고, 엔진이 없는 동안은 마지막 값이 남는다
+    /// (그때의 표시는 권한 안내·`engine_not_running` 이 먼저 가린다).
+    engine_shared: ArcSwapOption<SharedState>,
     gate: Arc<AtomicAppGate>,
     gate_controller: Arc<AppGateController>,
     monitor: Mutex<Option<PermissionMonitor>>,
@@ -1719,6 +1734,9 @@ struct AppState {
     /// `NSStatusItem` 핸들. 드롭하면 아이콘이 사라지므로 앱 생애주기 내내 들고
     /// 있어야 한다. `setup_tray()` 가 채운다.
     tray: Mutex<Option<TrayIcon<Wry>>>,
+    /// ⭐ 이슈 #110 — 트레이 메뉴가 마지막으로 조립될 때 반영된 "caps lock 커널
+    /// 매핑 미적용" 값. `refresh_tray_caps_status` 가 변경 감지에 쓴다.
+    tray_caps_missing: std::sync::atomic::AtomicBool,
     /// `Ignore <앱>` 항목 — 최전면 앱이 바뀔 때마다 라벨·체크 상태를 갱신해야 해서
     /// 따로 손잡이를 쥔다(`Menu` 는 항목별 개별 갱신 API 가 없다).
     ignore_item: Mutex<Option<CheckMenuItem<Wry>>>,
@@ -1852,6 +1870,7 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
             state.auto_update_checks_enabled(),
             None,
             None,
+            caps_lock_kernel_map_missing(&state),
         );
     let meta = build_app_meta(&app, &store);
     drop(store);
@@ -1950,7 +1969,15 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
     let seek = state.seek.lock().map_err(|e| e.to_string())?.clone();
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
-        &hyperkey, &presets, &korean, &seek, &store, state.auto_update_checks_enabled(), None, None,
+        &hyperkey,
+        &presets,
+        &korean,
+        &seek,
+        &store,
+        state.auto_update_checks_enabled(),
+        None,
+        None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -1976,6 +2003,9 @@ fn reconfigure_engine(
         }
     }
     drop(engine_guard);
+    // ⭐ 이슈 #110 — `Engine::reconfigure` 가 경로 B 를 동기 재적용했으므로 되읽기
+    // 결과가 바뀌었을 수 있다. 엔진 락을 놓은 뒤 트레이 상태 항목을 갱신한다.
+    refresh_tray_caps_status(state);
     if let Err(e) = reconfigure_trackpad(state, hyperkey) {
         tracing::warn!(error = %e, "failed to reconfigure the trackpad gesture listener");
     }
@@ -2311,6 +2341,7 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         state.auto_update_checks_enabled(),
         None,
         None,
+        caps_lock_kernel_map_missing(&state),
     ))
 }
 
@@ -2434,6 +2465,7 @@ fn settings_copy_common_to_device(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(&state),
     ))
 }
 
@@ -2839,6 +2871,14 @@ fn event_viewer_notice(catalog: &Catalog, state: &Arc<AppState>) -> Option<Strin
     if !engine_running {
         return Some(catalog.get("eventviewer.notice.engine_not_running").to_string());
     }
+    // ⭐ 이슈 #110 — D-1 이 필요한데 커널 매핑이 되읽기로 확인되지 않았다.
+    if caps_lock_kernel_map_missing(state) {
+        return Some(
+            catalog
+                .get("eventviewer.notice.caps_kernel_map_missing")
+                .to_string(),
+        );
+    }
     None
 }
 
@@ -3212,6 +3252,7 @@ fn settings_set_hyperkey(
                 state.auto_update_checks_enabled(),
                 None,
                 Some(pending),
+                caps_lock_kernel_map_missing(state),
             ));
         }
     }
@@ -3260,6 +3301,7 @@ fn settings_set_hyperkey(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -3314,6 +3356,7 @@ fn settings_set_preset(
                 state.auto_update_checks_enabled(),
                 None,
                 Some(pending),
+                caps_lock_kernel_map_missing(state),
             ));
         }
     }
@@ -3368,6 +3411,7 @@ fn settings_set_preset(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -3444,6 +3488,7 @@ fn settings_set_korean(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -3734,6 +3779,7 @@ fn settings_set_seek(
         state.auto_update_checks_enabled(),
         save_error,
         None,
+        caps_lock_kernel_map_missing(state),
     ))
 }
 
@@ -4184,6 +4230,7 @@ fn main() {
     let state = Arc::new(AppState {
         catalog: ArcSwap::from_pointee(catalog),
         engine: Mutex::new(None),
+        engine_shared: ArcSwapOption::empty(),
         gate: gate.clone(),
         gate_controller,
         monitor: Mutex::new(None),
@@ -4199,6 +4246,7 @@ fn main() {
         global_hotkey_registered: Mutex::new(None),
         load_notice: Mutex::new(None),
         tray: Mutex::new(None),
+        tray_caps_missing: std::sync::atomic::AtomicBool::new(false),
         ignore_item: Mutex::new(None),
         normal_menu: Mutex::new(None),
         unauthorized_menu: Mutex::new(None),
@@ -4688,6 +4736,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         Ok(engine) => {
             tracing::info!(state = ?engine.tap_state(), "engine started");
             let shared = engine.shared();
+            state.engine_shared.store(Some(Arc::clone(&shared)));
             *slot = Some(engine);
             drop(slot);
 
@@ -4764,8 +4813,48 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                 *state.trackpad.lock().unwrap() =
                     Some(trackpad::spawn(&shared, runtime));
             }
+            // ⭐ 이슈 #110 — 기동 재조정의 되읽기 결과가 이제야 확정됐으므로 트레이
+            // 상태 항목("caps lock 커널 매핑 미적용")을 반영한다.
+            refresh_tray_caps_status(state);
         }
         Err(e) => tracing::error!(error = %e, "failed to start engine"),
+    }
+}
+
+/// ⭐ 이슈 #110 — "caps lock 커널 매핑 미적용" 판정. D-1 이 필요한 설정
+/// (`caps_lock_alias.is_some()`)인데 마지막 경로 B 재조정에서 되읽기 확인이 되지
+/// 않았다(`SharedState::d1_confirmed == false`). 엔진이 없으면 `false` — 그 상태는
+/// 권한 안내·`engine_not_running` 이 따로 알린다.
+fn caps_lock_kernel_map_missing(state: &AppState) -> bool {
+    match state.engine_shared.load_full() {
+        Some(shared) => {
+            shared.config.load().caps_lock_alias.is_some()
+                && !shared.d1_confirmed.load(std::sync::atomic::Ordering::Acquire)
+        }
+        None => false,
+    }
+}
+
+/// ⭐ 이슈 #110 — 트레이 상태 항목은 메뉴를 다시 조립해야 바뀌므로, 판정값이
+/// **바뀐 경우에만** `rebuild_tray_menu` 를 부른다(설정 변경마다 메뉴를 새로
+/// 만들지 않는다). 트레이가 아직 없으면(setup 전) 아무것도 하지 않는다.
+/// ⚠️ 호출자는 `state.engine` 뮤텍스를 쥐고 있지 않아야 한다 — `rebuild_tray_menu`
+/// 가 잡는 `monitor`/`tray`/메뉴 슬롯과의 순서를 새로 만들지 않기 위해서다.
+fn refresh_tray_caps_status(state: &Arc<AppState>) {
+    let missing = caps_lock_kernel_map_missing(state);
+    let previous = state
+        .tray_caps_missing
+        .swap(missing, std::sync::atomic::Ordering::AcqRel);
+    if previous == missing {
+        return;
+    }
+    let handle = state
+        .tray
+        .lock()
+        .ok()
+        .and_then(|t| t.as_ref().map(|t| t.app_handle().clone()));
+    if let Some(handle) = handle {
+        rebuild_tray_menu(&handle, state);
     }
 }
 
@@ -5256,7 +5345,20 @@ fn build_normal_menu(
     catalog: &Catalog,
     front_app: Option<&AppIdentity>,
     front_app_disabled: bool,
+    caps_kernel_map_missing: bool,
 ) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
+    // ⭐ 이슈 #110 — D-1 미확인 상태 안내. `menu.unauthorized.title` 과 같은
+    // 결의 **비활성** 항목이고, 조건이 참일 때만 메뉴 맨 위에 붙인다.
+    let caps_status_item = if caps_kernel_map_missing {
+        Some(MenuItem::new(
+            handle,
+            catalog.get("menu.status.caps_kernel_map_missing"),
+            false,
+            None::<&str>,
+        )?)
+    } else {
+        None
+    };
     let ignore_item = CheckMenuItem::with_id(
         handle,
         menu_ids::IGNORE_APP,
@@ -5331,19 +5433,23 @@ fn build_normal_menu(
         None::<&str>,
     )?;
 
-    let menu = Menu::with_items(
-        handle,
-        &[
-            &ignore_item,
-            &sep_top,
-            &settings_item,
-            &check_for_updates_item,
-            &about_item,
-            &advanced_menu,
-            &sep_bottom,
-            &quit_item,
-        ],
-    )?;
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::with_capacity(10);
+    let caps_status_sep = PredefinedMenuItem::separator(handle)?;
+    if let Some(item) = caps_status_item.as_ref() {
+        items.push(item);
+        items.push(&caps_status_sep);
+    }
+    items.extend_from_slice(&[
+        &ignore_item,
+        &sep_top,
+        &settings_item,
+        &check_for_updates_item,
+        &about_item,
+        &advanced_menu,
+        &sep_bottom,
+        &quit_item,
+    ]);
+    let menu = Menu::with_items(handle, &items)?;
 
     Ok((menu, ignore_item))
 }
@@ -5400,7 +5506,7 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
     drop(store);
 
     let (normal_menu, ignore_item) =
-        build_normal_menu(handle, catalog, None, false)?;
+        build_normal_menu(handle, catalog, None, false, caps_lock_kernel_map_missing(state))?;
     let unauthorized_menu = build_unauthorized_menu(handle, catalog)?;
 
     let state_for_events = state.clone();
@@ -5551,7 +5657,7 @@ fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     // 이 그 일을 전담한다. 새 `ignore_item` 을 조립한 뒤 곧바로 그 함수를 한 번
     // 더 불러 실제 최전면 앱 라벨로 채운다.
     let (normal_menu, ignore_item) =
-        match build_normal_menu(handle, catalog, None, false) {
+        match build_normal_menu(handle, catalog, None, false, caps_lock_kernel_map_missing(state)) {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(error = %e, "failed to rebuild tray normal menu after a language change");
@@ -7145,6 +7251,7 @@ mod tests {
             false,
             Some("디스크 가득 참".to_string()),
             None,
+            false,
         );
 
         let json = serde_json::to_value(&state).unwrap();
@@ -7253,6 +7360,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
         assert_eq!(state.warnings.len(), 1);
         assert_eq!(state.warnings[0].kind, "duplicate");

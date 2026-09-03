@@ -108,6 +108,7 @@
   select:disabled { opacity: .45; cursor: not-allowed; }
 
   .hint { opacity: .65; font-size: 12px; margin: 2px 0 12px; }
+  .hint.caps-alias-missing { opacity: 1; color: #c2410c; }
   .hint.why { font-style: italic; }
   .warn { color: color-mix(in srgb, orange 70%, CanvasText); font-size: 12px; margin: 4px 0; }
 
@@ -2574,8 +2575,14 @@ if (!tauri || !tauri.core) {
     $("synthesize-caps-remap").checked = p.synthesizeCapsLockRemap;
 
     // ② 숨김 2종.
-    renderHiddenNote("presets-caps-alias", state.capsLockAliasActive,
-      "settings.presets.caps_alias.note", "hint");
+    // ⭐ 이슈 #110 — 커널 매핑이 되읽기로 확인되지 않았으면 힌트 대신 경고를 보인다.
+    if (state.capsLockKernelMapMissing) {
+      renderHiddenNote("presets-caps-alias", true,
+        "settings.presets.caps_alias.missing", "hint", "caps-alias-missing");
+    } else {
+      renderHiddenNote("presets-caps-alias", state.capsLockAliasActive,
+        "settings.presets.caps_alias.note", "hint");
+    }
     // §5 엣지 10 — 진짜 backspace 를 낼 수단이 사라진 상태를 사용자에게 알린다.
     renderHiddenNote("presets-delete-warning", p.deleteToForward,
       "settings.presets.delete_warning", "warn");
