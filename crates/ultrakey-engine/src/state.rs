@@ -70,6 +70,13 @@ pub struct SharedState {
     /// ⛔ 리스너가 `store` 하는 값은 `ultrakey-core::trackpad::TrackpadPhase` 이다 —
     /// 이 엔진은 이 값을 쓰지 않고, `GateSnapshot` 으로 스냅샷을 찍어 넘길 뿐이다.
     pub trackpad: Arc<AtomicTrackpadPhase>,
+    /// ⭐ 이슈 #108 자동 복구 안전망 — 직전 `Effect::ToggleCapsLock` 이 실제로 캡스락을
+    /// **켰다**(`toggle_caps_lock_via_path_c` 의 `after==on`)면 `true`. 탭 스레드가
+    /// `apply_effects_in_tap`/`apply_effects_outside_tap` 직후 게시하고, `Watchdog` 이
+    /// `lifecycle::caps_lock_recovery` 판정에 읽기만 한다 — 그 잠금이 `Double tap
+    /// shift`·`Left/right shift`·`Shift + caps lock = caps lock` 류 경로 C 규칙의
+    /// **의도된** 결과이므로 안전망이 되돌리지 않아야 함을 뜻한다.
+    pub caps_lock_owned_lock: AtomicBool,
 }
 
 impl SharedState {
@@ -85,6 +92,7 @@ impl SharedState {
             layout: Arc::new(LayoutResolver::new()),
             korean_ime: AtomicKoreanImeGate::new(),
             trackpad: Arc::new(AtomicTrackpadPhase::new()),
+            caps_lock_owned_lock: AtomicBool::new(false),
         })
     }
 }

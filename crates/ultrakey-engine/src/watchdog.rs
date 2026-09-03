@@ -6,7 +6,11 @@
 //! 탭이 아직 설치되지 않은 동안(`probe` 슬롯이 비어 있는 동안)은 폴링 대상이 없으므로
 //! 아무 것도 하지 않는다 — `NotInstalled`/`Terminated` 상태에서 재활성화를 스팸하지
 //! 않기 위함이다.
+//!
+//! ⭐ 이슈 #108 — 같은 폴링 주기에 caps lock 자동 복구 안전망도 얹는다(새 타이머
+//! 없음). 판정은 [`crate::lifecycle::caps_lock_recovery`](순수 함수)에 위임한다.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -70,6 +74,23 @@ fn watchdog_loop(
             if !p.is_enabled() {
                 tracing::warn!("watchdog: tap detected disabled; requesting re-enable");
                 commands.send(EngineCommand::RecoverTap);
+            }
+        }
+
+        // ⭐ 이슈 #108 자동 복구 안전망. `alias_active` 검사를 가장 먼저 두어, D-1 이
+        // 설치되지 않은 구성(caps lock 이 modifier 소스가 아님)에서는
+        // `caps_lock_state()`(mach 왕복 1회)조차 부르지 않는다 — 새 타이머를 만들지
+        // 않고 이미 있는 폴링 주기(`watchdog_poll_ms`)에 얹는다.
+        let alias_active = shared.config.load().caps_lock_alias.is_some();
+        if alias_active {
+            let observed = ultrakey_platform::hid_lock::caps_lock_state();
+            let owned = shared.caps_lock_owned_lock.load(Ordering::Relaxed);
+            if crate::lifecycle::caps_lock_recovery(alias_active, observed, owned) {
+                tracing::warn!(
+                    "watchdog: caps lock hardware lock observed without a matching \
+                     Effect::ToggleCapsLock; reverting it (issue #108 safety net)"
+                );
+                ultrakey_platform::hid_lock::set_caps_lock_state(false);
             }
         }
     }

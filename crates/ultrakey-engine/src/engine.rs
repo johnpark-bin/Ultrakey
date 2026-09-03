@@ -20,6 +20,7 @@ use ultrakey_core::arbitration::{
 };
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
+use ultrakey_core::keycode::KeyCode;
 use ultrakey_core::settings::EngineConfig;
 use ultrakey_core::time::Millis;
 use ultrakey_core::trackpad::TrackpadPhase;
@@ -549,6 +550,22 @@ fn apply_effects_outside_tap(
     path_c
 }
 
+/// ⭐ 이슈 #108 자동 복구 안전망 — `apply_effects_in_tap`/`apply_effects_outside_tap`
+/// 가 돌려준 경로 C 실측을 보고 `SharedState::caps_lock_owned_lock` 을 갱신한다.
+/// `result==1`(성공)일 때만 반영한다 — 시도조차 안 했거나(0) 실패했으면(2) 이
+/// 잠금의 출처를 우리가 확정할 수 없으므로 기존 값을 건드리지 않는다. F-08.2
+/// (quick press caps lock 액션의 출력이 "caps lock")도 같은 `toggle_caps_lock_via_path_c`
+/// 를 거치므로 자동으로 "의도된 것"으로 잡힌다.
+fn record_caps_lock_ownership(shared: &SharedState, path_c: Option<(u8, u8, u8)>) {
+    if let Some((result, _before, after)) = path_c {
+        if result == 1 {
+            shared
+                .caps_lock_owned_lock
+                .store(after == 1, Ordering::Relaxed);
+        }
+    }
+}
+
 fn build_callback(
     cell: RunLoopConfined<TapThreadState>,
     commands: CommandChannel,
@@ -659,6 +676,7 @@ fn on_tap_event(
 
     apply_outcome_in_tap(&outcome, proxy);
     let path_c = apply_effects_in_tap(&outcome, &table, proxy, &st.on_event);
+    record_caps_lock_ownership(&st.shared, path_c);
 
     // ⭐ 이슈 #19 진단 계측 — `arbitrate` 호출 직후(위)가 아니라 여기, effects 적용
     // 결과까지 알고 난 뒤에 레코드를 만든다(경로 C 실측을 한 레코드에 함께 담기
@@ -682,6 +700,11 @@ fn on_tap_event(
             rule_index,
             disposition: trace::disposition_to_code(outcome.disposition()),
             disposition_flags: trace::disposition_flags_of(outcome.disposition()),
+            // ⭐ 이슈 #108 원인 (b) 진단 — 이 이벤트 처리 직후 정본 눌림 테이블의
+            // 좌/우 shift·caps lock 스냅샷. 같은 스레드 메모리 읽기 3회뿐이다.
+            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8 * trace::PRESSED_MOD_LEFT_SHIFT)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8 * trace::PRESSED_MOD_RIGHT_SHIFT)
+                | (st.arbiter.is_pressed(KeyCode::CAPS_LOCK) as u8 * trace::PRESSED_MOD_CAPS_LOCK),
             ..Default::default()
         };
 
@@ -723,15 +746,21 @@ fn on_tap_event(
 
 /// quick press 타이머 만료 처리 — 탭 콜백이 아니므로 로깅 제약이 없다.
 fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
-    let (outcome, table, on_event) = {
+    let (outcome, table, on_event, shared) = {
         let mut st = cell.borrow_mut();
         let cfg = st.shared.config.load_full();
         let table = st.shared.layout.current();
         let now = Millis(st.start.elapsed().as_millis() as u64);
-        (st.arbiter.on_tick(&cfg, now), table, Arc::clone(&st.on_event))
+        (
+            st.arbiter.on_tick(&cfg, now),
+            table,
+            Arc::clone(&st.on_event),
+            Arc::clone(&st.shared),
+        )
     };
     apply_outcome_outside_tap(&outcome);
-    apply_effects_outside_tap(&outcome, &table, &on_event);
+    let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
+    record_caps_lock_ownership(&shared, path_c);
 }
 
 /// `EngineCommand::RecoverTap` — 트램폴린의 즉시 재활성화 통지를 받아 상태를 반영한다.
@@ -872,14 +901,20 @@ fn drain_commands(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             EngineCommand::ForceResetState => {
-                let (outcome, table, on_event) = {
+                let (outcome, table, on_event, shared) = {
                     let mut st = cell.borrow_mut();
                     let cfg = st.shared.config.load_full();
                     let table = st.shared.layout.current();
-                    (st.arbiter.force_reset(&cfg), table, Arc::clone(&st.on_event))
+                    (
+                        st.arbiter.force_reset(&cfg),
+                        table,
+                        Arc::clone(&st.on_event),
+                        Arc::clone(&st.shared),
+                    )
                 };
                 apply_outcome_outside_tap(&outcome);
-                apply_effects_outside_tap(&outcome, &table, &on_event);
+                let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
+                record_caps_lock_ownership(&shared, path_c);
                 tracing::info!(
                     "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );

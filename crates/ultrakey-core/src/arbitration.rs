@@ -290,6 +290,12 @@ impl Arbiter {
         self.state.register_sources(&cfg.rules);
     }
 
+    /// ⭐ 이슈 #108 계측 전용 — 정본 눌림 테이블의 한 키 상태를 엔진 크레이트에
+    /// 읽기 전용으로 노출한다. 판정 로직 자체는 이 크레이트 밖으로 나가지 않는다.
+    pub fn is_pressed(&self, k: KeyCode) -> bool {
+        self.state.is_pressed(k)
+    }
+
     /// `key` 하나에 대한 quick press 판정 설정. M1 은 규칙 전체에 하나의 설정을 썼지만,
     /// M2 는 키마다 `has_quick_press_action`/`has_double_tap_action` 이 다를 수 있어
     /// (예: caps lock 은 quick press 만, shift 는 double tap 만) 키 단위로 조회한다.

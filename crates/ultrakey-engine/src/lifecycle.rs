@@ -126,6 +126,34 @@ pub fn recover_tap_decision(trusted: bool, reenable_budget_exhausted: bool) -> R
     }
 }
 
+/// ⭐ 이슈 #108 자동 복구(안전망) 판정 — 순수 함수. `Watchdog` 이 매 폴링마다
+/// 이 결과를 물어보고, 참일 때만 `hid_lock::set_caps_lock_state(false)` 를 부른다
+/// (탭 콜백 밖 — §3-a 콜백 금지 규정 밖이다).
+///
+/// - `alias_active` — `EngineConfig::caps_lock_alias.is_some()`(D-1 설치, caps lock 이
+///   modifier 소스로 배정된 동안). `false` 면 캡스락은 여전히 사용자가 직접 켜고 끄는
+///   평범한 키이므로 안전망이 개입하지 않는다 — 이 검사를 가장 먼저 두어 D-1 비활성
+///   구성에서는 `caps_lock_state()`(mach 호출)조차 부르지 않는다.
+/// - `observed` — 이번 폴링에서 읽은 `caps_lock_state()`. 읽기 자체가 실패하면(`None`)
+///   개입하지 않는다 — 실패를 "켜짐"으로 추정해 끄려고 시도하면 성공한 잠금까지
+///   흔들 수 있다.
+/// - `owned` — `SharedState::caps_lock_owned_lock`. 직전에 우리 자신의
+///   `Effect::ToggleCapsLock` 이 이 잠금을 켰다면(`Double tap shift`·`Left/right shift`·
+///   `Shift + caps lock = caps lock` 류 경로 C 규칙의 **의도된** 결과) 참이다 — 그
+///   잠금은 사용자가 명시적으로 만든 것이므로 되돌리지 않는다.
+///
+/// D-1 이 설치된 동안은 물리 caps lock 키가 커널에서 F18 로 이미 바뀌어 있어, 사용자가
+/// 키보드로 진짜 caps lock 을 잠글 수 있는 유일한 수단은 우리 자신의 경로 C
+/// (`Effect::ToggleCapsLock`)뿐이다 — 그래서 `owned` 하나만으로 "의도된 잠금"과 "그
+/// 밖의 모든 잠금"(외부 유틸리티·`hidutil`·절전/화면잠금 중 커널이 직접 토글한 경우
+/// 등, 이슈 #108 원인 (c))을 안전하게 나눌 수 있다. 시간 기반 유효기간을 두지 않는다
+/// — 사용자가 그 잠금을 오래 켜 두어도 안전망이 되돌리면 안 되므로(명세 §5 #20 이
+/// 이미 기각한 "시간 기반 자동 해제"와 같은 문제가 생긴다), `owned` 는 우리가 다음에
+/// 그 상태를 off 로 되돌리거나 다시 on 시킬 때까지 유효한 불리언이다.
+pub fn caps_lock_recovery(alias_active: bool, observed: Option<bool>, owned: bool) -> bool {
+    alias_active && observed == Some(true) && !owned
+}
+
 /// §3-a 재시작 디바운스 판정 — 순수 함수(시간을 인자로 주입해 테스트 가능).
 ///
 /// "직전 복구 시각 + 임계값" 과 지금 시각을 비교한다. 직전 복구가 없었으면(`None`)
@@ -310,5 +338,36 @@ mod tests {
             quick_press_tick_delay_hint(ultrakey_core::event::EventKind::KeyUp, true, 1000, 300),
             Some(300)
         );
+    }
+
+    // --- 이슈 #108 자동 복구 안전망 판정 — (alias_active, observed, owned) 전수 ---
+
+    #[test]
+    fn recovery_fires_only_when_alias_active_and_locked_and_not_owned() {
+        assert!(caps_lock_recovery(true, Some(true), false));
+    }
+
+    #[test]
+    fn recovery_does_not_revert_our_own_intended_lock() {
+        // ⭐ Double tap shift·Left/right shift·Shift + caps lock = caps lock 류 경로 C
+        // 규칙이 방금 낸 의도된 잠금 — 이 케이스가 불리언 설계의 충분성을 증명한다.
+        assert!(!caps_lock_recovery(true, Some(true), true));
+    }
+
+    #[test]
+    fn recovery_skips_when_d1_not_installed() {
+        // caps lock 이 modifier 소스가 아니면 평범한 키다 — 안전망이 개입하지 않는다.
+        assert!(!caps_lock_recovery(false, Some(true), false));
+    }
+
+    #[test]
+    fn recovery_skips_when_not_locked() {
+        assert!(!caps_lock_recovery(true, Some(false), false));
+    }
+
+    #[test]
+    fn recovery_skips_when_read_failed() {
+        // 읽기 실패를 "켜짐"으로 추정하지 않는다 — 성공한 잠금까지 흔들 위험을 피한다.
+        assert!(!caps_lock_recovery(true, None, false));
     }
 }
