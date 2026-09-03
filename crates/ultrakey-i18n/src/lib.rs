@@ -511,6 +511,66 @@ mod tests {
         }
     }
 
+    /// ⭐ 이슈 #117 — 사이드바 탭 라벨·상세 헤딩은 **어떤 로케일에서도 빈
+    /// 문자열이 아니어야 한다**. 위 `탭_라벨과_상세_헤딩_값은_모든_로케일에서_같다`
+    /// 는 빈 값끼리 비교로 통과하므로(둘 다 `""`) 별도 불변식으로 단언한다.
+    /// `settings.tab.` 접두 키(사이드바 라벨 — 부모 `language` 포함)와
+    /// `.heading` 접미 키(패널 헤딩 — `keyboards` 는 탭 라벨 키를 재사용하므로
+    /// heading 키가 존재하지 않는다, lib.rs 상단 근거 주석)를 전수 순회한다.
+    /// 키 목록을 하드코딩하지 않으므로 새 탭이 생겨도 자동으로 커버된다.
+    #[test]
+    fn 모든_탭_라벨과_헤딩은_빈_문자열이_아니다() {
+        for locale in Locale::all() {
+            let value = raw_value(raw_for(*locale));
+            let obj = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{} 카탈로그 최상위는 객체여야 한다", locale.code()));
+            for (key, v) in obj {
+                let is_tab_label = key.starts_with("settings.tab.");
+                let is_heading = key.starts_with("settings.") && key.ends_with(".heading");
+                if !(is_tab_label || is_heading) {
+                    continue;
+                }
+                let value = v.as_str().unwrap_or_else(|| {
+                    panic!("{} 카탈로그의 {key} 값이 문자열이 아니다", locale.code())
+                });
+                assert!(
+                    !value.is_empty(),
+                    "{} 카탈로그의 {key} 가 빈 문자열이다 — 사이드바 라벨·헤딩은 \
+                     채워진 값이어야 한다(이슈 #117)",
+                    locale.code()
+                );
+            }
+        }
+    }
+
+    /// ⭐ 이슈 #117 — 언어 트리 자식 탭 `japanese`·`chinese` 의 라벨·헤딩은
+    /// **각 로케일의 언어로 번역**되어야 한다(`korean` 선례: en `Korean`·es
+    /// `Coreano`·ja `韓国語`·zh `韩语`). endonym 규칙(F-14 §3.1.2-a "자기 언어
+    /// 이름")은 **언어 선택 팝업 한정**이다 — 그 팝업은 "지금 UI 를 읽을 수 없는
+    /// 사람"이 쓰는 컨트롤이라 자기 언어로 표기해야 하지만, 사이드바 라벨·헤딩은
+    /// 이미 UI 를 읽는 사용자를 위한 내비게이션 텍스트라 로케일 번역이 맞다
+    /// (이슈 #117 정정 2026-09-03). 빈 문자열 금지는 위
+    /// `모든_탭_라벨과_헤딩은_빈_문자열이_아니다` 가 전 탭에 대해 이미 단언한다.
+    #[test]
+    fn japanese과_chinese_탭_라벨과_헤딩은_각_로케일_언어로_번역된다() {
+        // (로케일, tab.japanese, japanese.heading, tab.chinese, chinese.heading)
+        let expected = [
+            (Locale::En, "Japanese", "Japanese", "Chinese", "Chinese"),
+            (Locale::Ko, "일본어", "일본어", "중국어", "중국어"),
+            (Locale::Es, "Japonés", "Japonés", "Chino", "Chino"),
+            (Locale::Ja, "日本語", "日本語", "中国語", "中国語"),
+            (Locale::Zh, "日语", "日语", "中文", "中文"),
+        ];
+        for (locale, tab_jp, heading_jp, tab_zh, heading_zh) in expected {
+            let catalog = Catalog::for_locale(locale);
+            assert_eq!(catalog.get("settings.tab.japanese"), tab_jp, "{} 카탈로그 tab.japanese", locale.code());
+            assert_eq!(catalog.get("settings.japanese.heading"), heading_jp, "{} 카탈로그 japanese.heading", locale.code());
+            assert_eq!(catalog.get("settings.tab.chinese"), tab_zh, "{} 카탈로그 tab.chinese", locale.code());
+            assert_eq!(catalog.get("settings.chinese.heading"), heading_zh, "{} 카탈로그 chinese.heading", locale.code());
+        }
+    }
+
     #[test]
     fn from_language_tag_matches_language_subtag_only() {
         assert_eq!(Locale::from_language_tag("ko"), Some(Locale::Ko));
