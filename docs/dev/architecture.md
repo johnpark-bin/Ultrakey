@@ -278,6 +278,21 @@ M2 1차 실측이 확정한 사실: **caps lock 은 누를 때만 `flagsChanged`
 >   `EngineConfig::caps_lock_alias` 를 바꾸므로, 누른 즉시 메모리 정본(`AppState::presets`)과
 >   엔진(`Engine::reconfigure` → 경로 B 재적용)에 반영되어야 한다. 저장만 하면 재실행
 >   전까지 스위치가 아무 효과도 없고, 위 상태로 곧장 들어간다.
+>
+> ⭐ **D-1 보칙 2 — 설치는 확인돼야 설치다 (2026-09-03 추가, 이슈 #110).**
+>
+> - **B-3. 되읽기로 확인한다.** `hidutil --set` 은 매칭 사전이 아무 서비스도 못 잡아도 exit 0
+>   이다. MacBook Air 내장 키보드는 VID/PID 프로퍼티가 없어 열거에서 빠졌고(`count=0`),
+>   원장만 "설치됨" 이던 상태가 caps lock 단독 입력의 control 고착으로 드러났다. 이제
+>   `PathBManager::write_device` 는 `--set` 직후 같은 사전으로 되읽어 우리 항목이 실렸는지
+>   확인하고(`NotApplied`), 전체 재조정의 결과를 `d1_confirmed` 로 게시한다(0대 = 미확인).
+>   앱은 `caps_lock_alias.is_some() && !d1_confirmed` 일 때 "caps lock 커널 매핑 미확인" 을
+>   보인다. 되읽기는 "실렸는가"만 답한다(S-7 — 동작 확인은 여전히 수동 검증).
+> - **B-4. 중재기는 이벤트 모양으로 방어한다.** `caps_lock_alias` 가 켜져 있는데 keycode `0x39`
+>   의 `flagsChanged` 가 오면 그 키보드에 D-1 이 없다는 것이 이벤트로 증명된다(정상이면 F18
+>   KeyDown/KeyUp) → 그 이벤트를 down+up 탭으로 판정한다(`Arbiter::d1_bypassed`,
+>   `key-remapping-engine.md` §5 #26). 전역 플래그로 게이트하지 않는 이유: 혼합 상태(외장
+>   정상·내장 미설치)에서 외장의 홀드까지 죽이고, 핫플러그 직후 stale 하다.
 
 ⚠️ **검증 기기에서는 이 경로를 실측할 수 없다.** Karabiner-Elements 가 `caps_lock ↔ left_control`
 을 **경로 B 보다도 아래**(가상 HID 장치)에서 맞바꾸고 있어, 우리의 `hidutil` 매핑이 볼 caps lock
@@ -486,8 +501,8 @@ S-7(실측, 통제 실험) — IOHID 는 값을 **전혀** 검증하지 않는�
 
 | # | 규칙 | 막는 것 |
 | :--- | :--- | :--- |
-| 1 | `DeviceMatch` 는 `vendor_id`·`product_id` 둘 다 필수 | VID 단독 매칭(S-3) — 타입 수준에서 불가능 |
-| 2 | ⛔ `product_id == 0` 인 쓰기를 **거부** | `IOHIDSystem`(`0x5ac:0x0`)에 대한 하드 가드 — S-3 의 실제 함정 |
+| 1 | `DeviceMatch` 는 `vendor_id`·`product_id` 둘 다 필수. ⭐ 이슈 #110 — 매칭 사전은 여기에 `PrimaryUsagePage:1`/`PrimaryUsage:6` 을 항상 더한 **4키 고정**이다(`matching_json`) | VID 단독 매칭(S-3) — 타입 수준에서 불가능. usage 두 키가 `IOHIDSystem`(usage 65280/23)을 PID 와 무관하게 배제한다 |
+| 2 | ⛔ `0x5ac:0x0`(IOHIDSystem) **정확 일치**인 쓰기를 거부(`perdevice::is_iohidsystem`). ⭐ 이슈 #110 — 옛 형태 `product_id == 0` 전체 거부는 VID/PID 프로퍼티가 없어 `0:0` 으로 열거되는 내장 키보드(S-10)까지 막았다 | `IOHIDSystem`(`0x5ac:0x0`)에 대한 하드 가드 — S-3 의 실제 함정 |
 | 3 | 모든 `src`/`dst` 가 닫힌 어휘에서 나온 값: `page ∈ {0x07, 0x0C, 0xFF, 0xFF01}`, `usage ≤ 0xFFFF` | 스파이크의 `0x9999999999` 류가 저장되는 사고 |
 | 4 | 배열 안 **중복 `src` 금지** | 규칙 5 중재가 보장하지만 마지막에 assert 한다 |
 | 5 | 배열 길이 ≤ 64 | 폭주 방어 |
@@ -495,6 +510,13 @@ S-7(실측, 통제 실험) — IOHID 는 값을 **전혀** 검증하지 않는�
 ⛔ **되읽기 성공을 동작 확인으로 쓰지 않는다**(명세 §3.6 규칙 9). 자동 테스트는 "쓴 값이
 되읽힌다" 까지만 확인할 수 있고, "실제로 그 키를 눌렀을 때 의도한 동작이 난다" 는
 `manual-verification.md` 의 수동 검증이 담당한다.
+
+⭐ **규칙 6 — 쓰기 후 되읽기 확인(2026-09-03, 이슈 #110).** 위와 모순되지 않는다: `--set` 직후
+같은 사전으로 되읽어 **"그 디바이스에 실렸는가"** 만 확인한다(매칭 서비스 ≥ 1, 모든 서비스
+배열 ⊇ 합성 배열). 실패는 `HidMappingError::NotApplied` 로 올리고 원장 ③(정확집합)을 건너뛴다.
+`hidutil --set` 이 매칭 실패에도 exit 0 이라 생긴 구멍(내장 키보드 미설치가 조용히 "성공")을
+막는 것이 목적이다. 디바이스당 서브프로세스가 2→3회로 늘어난다(기동 시 동기 실행 — 1~2대에서
+체감 없음, 기록만 한다).
 
 ### 7.5 결정 D-17-5 — 전역 D-1 잔재의 1회 이관
 
@@ -522,5 +544,7 @@ S-7(실측, 통제 실험) — IOHID 는 값을 **전혀** 검증하지 않는�
 | 9 | Karabiner 등의 가상 디바이스가 `Keyboards` 탭 목록에 나타나는가 | ⭕ **나타나지 않는다.** Karabiner-Elements 가 **실행 중인 상태**(`Karabiner-Core-Service` · `Karabiner-VirtualHIDDevice-Daemon` · DriverKit `dext` 셋 다 살아 있음)에서 `hidutil list` 전체 253행 중 `karabiner`/`pqrs`/`virtual` 에 걸리는 행이 **0건**. 즉 제품 결정이 필요 없다 — 목록에 애초에 오지 않는다 |
 | 7 | `hidutil list` 의 `Built-In` 컬럼의 원천 IOKit 프로퍼티 | 여전히 `(미확정)`. 이 구현은 `Built-In` 을 **식별에 쓰지 않으므로**(식별자는 VID+PID 다) 기능에 영향이 없다 — 읽히면 표시에 쓰고, 못 읽으면 `None` 으로 둔다 |
 
-⚠️ **§9 #1(Apple VID 서드파티 키보드 vs 진짜 Apple 내장 키보드)은 그대로 `(미확정)` 이다** —
-이 기기에는 여전히 내장 키보드가 없다. 스파이크 S-4 의 한계를 그대로 승계한다.
+⚠️ ~~§9 #1(Apple VID 서드파티 키보드 vs 진짜 Apple 내장 키보드)은 그대로 `(미확정)` 이다~~ →
+⭐ **2026-09-03 부분 해소(이슈 #110, 스파이크 S-10)** — MacBook Air `Mac17,4` 의 내장 키보드는
+VID/PID 프로퍼티가 **없어** `0:0` 으로 열거된다(Apple VID `0x5ac` 를 보고하지 않는다). §9 #7
+(`Built-In` 원천)도 같은 실측으로 해소됐다 — 노드 프로퍼티 `Built-In` 그대로.

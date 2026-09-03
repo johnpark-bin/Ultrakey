@@ -48,7 +48,7 @@ ps ax → /Users/…/worktrees/Ultrakey/fix-physical-caps-lock-events/…/Ultrak
 | **S-1** | `--matching {VID,PID}` 가 그 디바이스에만 적용되는가 | ⭕ **된다** | **확정 (실측)** |
 | **S-2** | 물리 디바이스 1개 = IOHID 서비스 몇 개인가 | **여러 개** (A 는 3개) | **확정 (실측)** |
 | **S-3** | VID 단독 매칭으로 충분한가 | ⛔ **위험** — `IOHIDSystem` 을 함께 잡는다 | **확정 (실측)** |
-| **S-4** | VID+PID 가 Apple 내장 키보드와 구분해 주는가 | — | **(미확정)** — 이 기기엔 내장 키보드가 없다 |
+| **S-4** | VID+PID 가 Apple 내장 키보드와 구분해 주는가 | — | **(미확정)** — 이 기기엔 내장 키보드가 없다. ⭐ 2026-09-03 **S-10** 이 MacBook Air 에서 부분 해소: 내장 키보드는 VID/PID 가 **없다**(`0:0`) |
 | **S-5** | 한 디바이스 배열에 규칙 여러 개가 공존하는가 | ⭕ **공존한다** | **확정 (실측)** |
 | **S-6** | 배열은 병합인가 교체인가 | **통째 교체** — 마지막에 쓴 쪽이 이긴다 | **확정 (실측, 비의도 재현 2회)** |
 | **S-7** | IOHID 가 값을 검증하는가 | ⛔ **전혀 안 한다** — 엉터리 값도 그대로 저장 | **확정 (실측, 통제 실험)** |
@@ -260,6 +260,32 @@ VID · PID · 제품명 · Transport · Built-In · RegistryID 를 모두 얻을
 | ⛔ 부족한 것 | **콜백이 이벤트 종류만 넘긴다 — VID/PID/제품명이 없다.** 열거 API 도 없다 |
 
 ⭐ **판정: 감지 기구는 재사용할 수 있으나, 그대로는 쓸 수 없다.** 콜백이 디바이스 속성을 실어 나르도록 확장하고(`io_iterator_t` 에서 `IORegistryEntryCreateCFProperty` 로 `VendorID`·`ProductID`·`Product` 를 읽으면 된다), 현재 붙어 있는 키보드를 **열거**하는 API 를 새로 더해야 한다. `drain_iterator` 가 이미 이터레이터를 순회하므로 확장 지점은 명확하다.
+
+---
+
+## 10-bis. S-10 ⭐ 내장 키보드는 VID/PID 가 **없다** — 이슈 #110 실측 (2026-09-03)
+
+> **기기**: MacBook Air `Mac17,4` · macOS 26.6.2 (25G83). 이 스파이크의 원래 기기(`Mac16,11`)에는 내장 키보드가 없어 S-4 가 `(미확정)` 으로 남았던 자리를 이 실측이 채운다.
+> **⛔ 이 절의 실측은 전부 읽기 전용**(`hidutil list` · `hidutil property --get` · `ioreg` · `keyboard_list_probe`)이다. `--set` 되읽기 결과는 이슈 #110 PR 의 실기기 검증 절(`../dev/manual-verification.md` 항목 21)에 있다.
+
+| # | 확인 | 결과 | 등급 |
+| :--- | :--- | :--- | :--- |
+| S-10-1 | `hidutil list --matching '{"PrimaryUsagePage":1,"PrimaryUsage":6}'` | Services 1행: `AppleHIDKeyboardEventDriverV2` RegistryID `0x100000b4a`, **VendorID `0x0` · ProductID `0x0`**, LocationID `0xe8`(232), Transport `FIFO`, Built-In `1`, Product "Apple Internal Keyboard / Trackpad". Devices 1행: `AppleHIDTransportHIDDevice` RegistryID `0x100000b34`, 같은 값 | **확정 (실측)** |
+| S-10-2 | `ioreg -c AppleHIDTransportHIDDevice -r -d1` — 그 IOHIDDevice 노드(`0x100000b34`, usage 1/6)의 프로퍼티 | `PrimaryUsagePage=1`·`PrimaryUsage=6`·`Built-In=Yes`·`LocationID=232`·`Transport="FIFO"`·`Product=…` 는 있으나 **`VendorID`/`ProductID` 키가 존재하지 않는다.** 같은 클래스의 나머지 5개 노드(usage 1/2·65280/3·65280/11·65280/13·65280/95)도 동일. 즉 `hidutil list` 의 `0x0` 은 **부재를 0 으로 표시한 것**이다 | **확정 (실측)** |
+| S-10-3 | `cargo run -p ultrakey-platform --example keyboard_list_probe`(IOKit 직접 열거, 수정 전 코드) | 두 필터(`DeviceUsage*`·`PrimaryUsage*`) 모두 `0x100000b34` 1개 매칭, `VID=(못 읽음) PID=(못 읽음)` → `list_attached_keyboards()` **0대**. `read_device_properties` 가 VID/PID 부재를 항목 폐기로 다뤘기 때문 — 이슈 #86 원인 후보 (b) 가 여기서 확정된다 | **확정 (실측)** |
+| S-10-4 | 앱 로그(`~/Library/Logs/Ultrakey/ultrakey.log`) | 기동 재조정 3회 모두 `Path B applied to attached devices count=0 d1_active=true devices=[]` — **D-1 설치 시도 자체가 없었다**(규칙 2 가 거부한 것이 아니다) | **확정 (실측)** |
+| S-10-5 | `hidutil property --matching '{"VendorID":0,"ProductID":0,"PrimaryUsagePage":1,"PrimaryUsage":6}' --get UserKeyMapping` | `0x100000b4a` 1행 `(null)` | **확정 (실측)** |
+| S-10-6 | `--matching '{"Built-In":1,"PrimaryUsagePage":1,"PrimaryUsage":6}'` / `'{"LocationID":232,"PrimaryUsagePage":1,"PrimaryUsage":6}'` | 각각 `0x100000b4a` 1행 | **확정 (실측, 이슈 #110 본문)** |
+| S-10-7 | `--matching '{"LocationID":232}'` 단독 / `'{"RegistryID":…}'` | 3행(트랙패드·관리 서비스 포함) / 0행(`RegistryID` 는 매칭 키로 지원되지 않음) | **확정 (실측, 이슈 #110 본문)** |
+| S-10-8 | 전역 `hidutil property --get UserKeyMapping` | `(null)` — 전역 잔재 없음 | **확정 (실측)** |
+| S-10-9 | 수정 후 `keyboard_list_probe`(VID/PID 부재 → 0 폴백) | 열거 1대 `VID=0x0 PID=0x0 Product="Apple Internal Keyboard / Trackpad" Transport=FIFO Built-In=1` | **확정 (실측)** |
+| S-10-10 | 경로 C(`IOHIDSetModifierLockState`, `caps_lock_toggle_probe`)로 잠금을 켰다 되돌리는 동안 세션 스트림(`tap_listen`, `TailAppendEventTap`) 관찰 | `kCGEventFlagsChanged`(type 12) 2건 — **keycode `0xFF`**, flags `0x00010100`(alphaShift on) → `0x00000100`(off). keycode `0x39`(caps lock) 는 **0건**. 즉 경로 C 는 `FlagsChanged` 를 싣지만 물리 caps lock 과 keycode 로 구분된다 — 이슈 #110 방어선(`Arbiter::d1_bypassed`, 조건 `0x39`)이 경로 C 에 되먹이지 않는다 | **확정 (실측)** |
+
+**S-4 에 대한 답(부분).** 이 기기의 내장 키보드는 Apple VID `0x5ac` 를 보고하지 **않는다** — VID/PID 자체가 없다. 따라서 "Apple VID 서드파티 키보드 vs 내장 키보드" 구분 문제는 이 기기에서는 발생하지 않는다(내장은 `0:0`, 서드파티는 `5ac:<pid≠0>`). 다른 Mac 모델(USB/SPI 내장 키보드가 VID/PID 를 보고하는 세대)에서도 같은지는 `(미확정)`.
+
+**§9 #7 에 대한 답.** `Built-In` 은 IOHIDDevice 노드의 프로퍼티 `Built-In`(CFBoolean `Yes`)으로 직접 읽힌다(S-10-2, S-10-9 의 `Built-In=1`). `hid_device.rs::read_bool_property` 가 이미 CFNumber/CFBoolean 둘 다 받으므로 코드 변경 없이 읽혔다.
+
+**⚠️ 함의.** `IOHIDSystem`(S-3)은 VID `0x5ac`/PID `0x0` 이고 내장 키보드는 VID `0x0`/PID `0x0` 이다 — 두 경우를 "PID 가 0" 하나로 묶어 거부하면(D-17-4 규칙 2 의 옛 형태) 내장 키보드에 영원히 쓸 수 없다. usage 1/6 을 매칭 사전에 넣으면 `IOHIDSystem`(usage 65280/23)은 원리적으로 배제된다.
 
 ---
 
