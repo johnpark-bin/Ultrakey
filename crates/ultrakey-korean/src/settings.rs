@@ -124,6 +124,7 @@ impl KoreanSettings {
                 out_keycode: KeyCode::SPACE,
                 // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1) — D-K7 표.
                 out_flags: EventFlags(0x0004_0001),
+                is_input_source_toggle: true, // #127 — ⌃Space 시스템 입력 소스 토글
             });
         }
 
@@ -140,6 +141,7 @@ impl KoreanSettings {
                 out_keycode: KeyCode::SPACE,
                 // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1) — F-16.1 과 동일 출력.
                 out_flags: EventFlags(0x0004_0001),
+                is_input_source_toggle: true, // #127 — ⌃Space 시스템 입력 소스 토글
             });
         }
 
@@ -155,6 +157,7 @@ impl KoreanSettings {
                 out_keycode: KeyCode::RETURN,
                 // ALTERNATE(0x80000) | NX_DEVICERALTKEYMASK(0x40) — D-K14 표.
                 out_flags: EventFlags(0x0008_0040),
+                is_input_source_toggle: false, // #127 — 실제 RETURN 출력, 토글 아님
             });
         }
 
@@ -167,6 +170,7 @@ impl KoreanSettings {
                 out_keycode: KeyCode::ANSI_GRAVE,
                 // ALTERNATE(0x80000) | NX_DEVICELALTKEYMASK(0x20) — D-K7 표.
                 out_flags: EventFlags(0x0008_0020),
+                is_input_source_toggle: false, // #127 — 실제 문자 출력, 토글 아님
             });
         }
 

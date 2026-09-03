@@ -1247,6 +1247,32 @@ impl Arbiter {
                     return false;
                 };
 
+                // ⭐ 이슈 #127 — 입력 소스 전환 토글 규칙(F-16.1·F-16.2)의 autorepeat
+                // KeyDown 은, 같은 trigger_key 래치가 **이미 서 있으면** 재발화하지
+                // 않고 소비만 한다(원본도 하류로 안 보내고, 새 합성도 안 낸다). 최초
+                // down(래치 없음)은 아래로 흘러 평소대로 발화·래치를 세운다 — 래치가
+                // (예: force_reset 으로) 지워진 뒤 도착한 autorepeat down은 "최초
+                // down" 처럼 취급되어 자기 치유한다. `is_input_source_toggle == false`
+                // 인 규칙(F-16.3·F-16.4)은 이 분기를 타지 않고 기존처럼 매 tick
+                // 재발화한다 — 그 출력은 토글이 아니라 실제로 반복 타이핑되는
+                // 문자/제어 키이기 때문이다.
+                if ev.autorepeat && rule.is_input_source_toggle {
+                    // ⭐ P2 리뷰(선택-2) — `latch.id == rule.id` 를 확인한다. 지금은
+                    // F-16 규칙 4종의 trigger_key 가 전부 유일해 항상 같은 규칙의
+                    // 래치만 발견되지만, 장차 같은 trigger_key 를 서로 다른 trigger
+                    // (예: SPACE 의 또 다른 변형)로 등록하는 규칙이 추가되면 이
+                    // 확인이 없을 경우 다른 규칙의 래치가 억제를 잘못 트리거할 수
+                    // 있다.
+                    if let Some(latch) =
+                        self.state.korean_latch(rule.trigger_key).filter(|l| l.id == rule.id)
+                    {
+                        out.layer = Layer::KoreanInput;
+                        out.disposition = Disposition::Consume;
+                        out.rule = Some(latch.id);
+                        return true;
+                    }
+                }
+
                 // 추가 조건 3가지(D-K5) — 전부 성립해야 발화한다. 하나라도 깨지면 이
                 // keyDown 은 통과시키되(원본을 그대로 흘려보낸다), **래치는 건드리지
                 // 않는다** — 자동 반복 도중 조건이 깨져도 이미 나간 down 에 대응하는
@@ -2816,10 +2842,15 @@ mod tests {
         assert_eq!(plain.disposition(), Disposition::Pass, "잔존 래치가 없어야 정상 통과");
     }
 
-    /// T-③(리뷰 ③) — **autorepeat**: 세션 + F-16.1 켬 + ⇧+Space 반복 down → 전부
-    /// Consume + 치환(래치 덮어쓰기, korean-input.md §5#7) — 세션 변형.
+    /// T-③(리뷰 ③, ⭐ 이슈 #127 로 기대값 정정) — **autorepeat**: 세션 + F-16.1 켬 +
+    /// ⇧+Space 반복 down → 원본은 계속 삼키지만(검색어에 공백이 들어가면 안 됨),
+    /// 합성 KeyDown 은 **최초 1회만**(래치가 이미 서 있으면 재발화 안 함) — D-K6 규약을
+    /// "1 press = 정확히 1 chord" 로 유지한다. 이 테스트는 원래 "autorepeat 도 매번
+    /// 치환된다"를 기대값으로 뒀는데, 그것이 바로 #127 실기기에서 관측된 결함(반복
+    /// down 마다 새 ⌃Space 가 나가 입력 소스가 되토글됨)이었다 — 여기서 기대값을
+    /// 고친다.
     #[test]
-    fn input_box_f16_1_autorepeat_substitutes_each_tick() {
+    fn input_box_f16_1_autorepeat_is_consumed_without_re_synthesizing() {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
@@ -2831,13 +2862,158 @@ mod tests {
         let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
         repeat.autorepeat = true;
         let second = arb.arbitrate(&cfg, &repeat, gates, Millis(50));
-        assert_eq!(second.disposition(), Disposition::Consume);
-        assert_eq!(second.emitted().len(), 1, "autorepeat 도 ⌃Space down 으로 치환(래치 덮어쓰기)");
-        assert_eq!(second.emitted()[0].flags, EventFlags(0x0004_0001));
+        assert_eq!(second.disposition(), Disposition::Consume, "원본 SPACE는 계속 삼켜야 한다");
+        assert_eq!(second.emitted().len(), 0, "래치가 이미 섰으면 autorepeat 은 재발화하지 않는다(#127)");
 
         let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(60));
         assert_eq!(up.emitted().len(), 1, "up 은 한 번만 나가야 한다");
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001));
+    }
+
+    /// ⭐ 이슈 #127 — 기준선 재현 테스트(수정 전 실패 확인 완료). 인풋 박스 세션 중
+    /// ⇧+Space 를 225ms 이상 눌러 물리 SPACE autorepeat KeyDown 이 반복 도착해도,
+    /// 합성 ⌃Space KeyDown 은 **정확히 1회**(최초 down)만 나가야 한다 — D-K6 규약
+    /// (최초 down=합성 down, up=합성 up, "1 press = 정확히 1 chord"). 수정 전 코드는
+    /// `evaluate_korean_rules` KeyDown 이 `ev.autorepeat` 를 보지 않아 반복 down마다
+    /// 새 합성 KeyDown 을 방출한다(래치는 덮어쓰기만) — 실기기에서 macOS 입력 소스
+    /// hotkey 가 반복마다 재발화되어 되토글된다(실측: `docs/plan/issue-127-*.md`,
+    /// 세션 2 — 208ms 뒤 Korean→ABC 되돌아감).
+    #[test]
+    fn issue127_input_box_shift_space_autorepeat_synthesizes_keydown_exactly_once() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
+        assert_eq!(first.disposition(), Disposition::Consume, "최초 down 은 F-16.1 발화");
+        assert_eq!(first.emitted().len(), 1, "최초 down 은 합성 KeyDown 1회");
+
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+
+        for i in 1..=3u64 {
+            let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
+            repeat.autorepeat = true;
+            let out = arb.arbitrate(&cfg, &repeat, gates, Millis(10 + i * 30));
+            assert_eq!(
+                out.disposition(),
+                Disposition::Consume,
+                "autorepeat {i}회차도 원본은 삼켜야 한다(검색어에 공백이 들어가면 안 됨)"
+            );
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+        }
+
+        assert_eq!(
+            total_synth_keydowns, 1,
+            "1 press = 정확히 1 합성 KeyDown — autorepeat 은 재발화 금지(#127)"
+        );
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(200));
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+    }
+
+    /// ⭐ 이슈 #127 — 위 기준선의 **계층 3(세션 밖)** 변형. D2 뿐 아니라 계층 3
+    /// `evaluate_korean_rules` 호출부(`:627`)도 같은 함수를 쓰므로 같은 결함·같은
+    /// 수정이 적용돼야 한다.
+    #[test]
+    fn issue127_layer3_shift_space_autorepeat_synthesizes_keydown_exactly_once() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
+        let first = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
+            GateSnapshot::default(),
+            Millis(10),
+        );
+        assert_eq!(first.layer(), Layer::KoreanInput);
+        assert_eq!(first.emitted().len(), 1);
+
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+
+        for i in 1..=3u64 {
+            let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
+            repeat.autorepeat = true;
+            let out = arb.arbitrate(&cfg, &repeat, GateSnapshot::default(), Millis(10 + i * 30));
+            assert_eq!(out.disposition(), Disposition::Consume, "autorepeat {i}회차");
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+        }
+
+        assert_eq!(total_synth_keydowns, 1, "계층 3도 1 press = 정확히 1 합성 KeyDown(#127)");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(200));
+        assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+    }
+
+    /// ⭐ 이슈 #127(P2 리뷰 선택-1) — F-16.2(`Korean(14)`, 한/영 키→⌃Space)도 F-16.1 과
+    /// 같은 `is_input_source_toggle = true` 라 같은 억제가 적용돼야 한다. 세션 중에는
+    /// JIS_KANA 가 계층 1 예외로 원본 통과되어 D2 에 도달하지 않으므로(`seek-activation-
+    /// and-session.md` §3.1 한/영 키 예외) **계층 3(세션 밖)** 로만 확인한다.
+    #[test]
+    fn issue127_layer3_han_eng_autorepeat_synthesizes_keydown_exactly_once() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+
+        let first = arb.arbitrate(
+            &cfg,
+            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
+            GateSnapshot::default(),
+            Millis(0),
+        );
+        assert_eq!(first.layer(), Layer::KoreanInput);
+        assert_eq!(first.emitted().len(), 1);
+
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+
+        for i in 1..=3u64 {
+            let out = arb.arbitrate(
+                &cfg,
+                &key_down_repeat(KeyCode::JIS_KANA, EventFlags::NONE),
+                GateSnapshot::default(),
+                Millis(10 + i * 30),
+            );
+            assert_eq!(out.disposition(), Disposition::Consume, "autorepeat {i}회차");
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
+        }
+
+        assert_eq!(total_synth_keydowns, 1, "F-16.2 도 1 press = 정확히 1 합성 KeyDown(#127)");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(200));
+        assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
+        assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
+    }
+
+    /// ⭐ 이슈 #127(P2 리뷰 선택-1) — F-16.3(`Korean(15)`, 한자 키→RETURN, `is_input_source_toggle
+    /// = false`)도 F-16.4 와 같은 축을 고정한다: autorepeat 마다 매번 재발화해야 한다
+    /// (실제 RETURN 출력 — 토글이 아니다).
+    #[test]
+    fn f16_3_hanja_autorepeat_key_down_is_substituted_every_time() {
+        let cfg = korean_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = GateSnapshot { korean_ime: KoreanImeState::Active, ..Default::default() };
+
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
+        assert_eq!(first.layer(), Layer::KoreanInput);
+        assert_eq!(first.emitted().len(), 1);
+
+        for i in 1..=3u64 {
+            let repeat = arb.arbitrate(&cfg, &key_down_repeat(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(10 * i));
+            assert_eq!(repeat.layer(), Layer::KoreanInput, "반복 {i}회차에서 치환되지 않았다");
+            assert_eq!(repeat.disposition(), Disposition::Consume);
+            assert_eq!(repeat.emitted().len(), 1, "F-16.3 은 토글이 아니라 매 tick 재발화해야 한다");
+            assert_eq!(repeat.emitted()[0].keycode, KeyCode::RETURN);
+        }
     }
 
     /// T-④(리뷰 ④) — **무래치 KeyUp 통과**: 평범한 공백 down(통과) → up 은 래치가
@@ -4695,6 +4871,7 @@ mod tests {
             requires_korean_ime: false,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags(0x0004_0001), // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)
+            is_input_source_toggle: true, // #127 — ⌃Space 시스템 토글
         }
     }
 
@@ -4707,6 +4884,7 @@ mod tests {
             requires_korean_ime: true,
             out_keycode: KeyCode::ANSI_GRAVE,
             out_flags: EventFlags(0x0008_0020), // ALTERNATE(0x80000) | NX_DEVICELALTKEYMASK(0x20)
+            is_input_source_toggle: false, // #127 — 실제 문자 출력, autorepeat 마다 재발화
         }
     }
 
@@ -4719,6 +4897,7 @@ mod tests {
             requires_korean_ime: false,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags(0x0004_0001), // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)
+            is_input_source_toggle: true, // #127 — ⌃Space 시스템 토글
         }
     }
 
@@ -4731,6 +4910,7 @@ mod tests {
             requires_korean_ime: true,
             out_keycode: KeyCode::RETURN,
             out_flags: EventFlags(0x0008_0040), // ALTERNATE(0x80000) | NX_DEVICERALTKEYMASK(0x40)
+            is_input_source_toggle: false, // #127 — 실제 RETURN 출력, autorepeat 마다 재발화
         }
     }
 
