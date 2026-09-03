@@ -1,13 +1,20 @@
-# Ultrakey 릴리즈 파이프라인 — 이슈 #50.
+# Ultrakey 릴리즈 파이프라인 — 이슈 #50. 서명 폴백은 이슈 #123.
 #
 # 트리거는 `v*` 태그 푸시 단일이다(명시적 버전링).
 #   check   태그↔버전 일치 + test + clippy (게이트)
-#   build   universal 빌드 + DMG. 서명·공증 시크릿이 있으면 서명+공증+스테이플,
-#           없으면 미서명 통과 + 경고(실패하지 않는다)
-#   release 직전 릴리즈 태그~현재 태그 커밋 로그를 추출해 드래프트 릴리즈 생성
+#   build   universal 빌드 + DMG. 항상 서명한다 — 서명 시크릿이 있으면 그 인증서로,
+#           없으면 번들 전체 ad-hoc(--sign -)으로 폴백한다(미서명 통과 없음 — 이슈
+#           #123: 미서명 배포는 TCC Accessibility 인가를 구조적으로 영구 실패시킨다).
+#           `codesign --verify --deep --strict` 통과가 배포 게이트다.
+#   release 직전 릴리즈 태그~현재 태그 커밋 로그를 추출해 드래프트 릴리즈 생성,
+#           서명 방식(공증/자체 서명/ad-hoc)별 경고 문구를 노트에 포함한다.
 #
-# 서명·공증은 Tauri 번들러가 자체 처리한다(임시 키체인 생성·서명·공증·스테이플).
-# 게이트 설계 근거는 docs/dev/code-signing.md §8 과 이슈 #50 계획 코멘트 참조.
+# 서명은 워크플로가 build-signed.sh 와 동일한 방식으로 명시적 codesign 을 직접
+# 수행한다(Tauri 번들러에 맡기지 않는다 — 키체인 신뢰 사슬 문제로 번들러의
+# find-identity 가 실패할 수 있다). 실제 공증(notarytool 제출)은 이 워크플로에
+# 구현돼 있지 않다 — `notarized`/`notarized_verified` 출력의 의미 차이는
+# docs/dev/code-signing.md §8 참조.
+# 게이트 설계 근거는 docs/dev/code-signing.md §1·§8 과 이슈 #50/#123 참조.
 name: release
 
 on:
@@ -57,6 +64,7 @@ jobs:
     outputs:
       signed: ${{ steps.build.outputs.signed }}
       notarized: ${{ steps.build.outputs.notarized }}
+      notarized_verified: ${{ steps.build.outputs.notarized_verified }}
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
@@ -92,29 +100,58 @@ jobs:
           # 번들러의 find-identity 신원 해석은 키체인 신뢰 사슬 문제로 실패할 수 있다.
           # 대신 build-signed.sh 와 동일하게 tauri build(번들만) → 명시적 codesign 으로
           # 임시 키체인 안에서 직접 서명한다(Sparkle 중첩 서명 포함).
+          #
+          # ⭐ 이슈 #123 — 미서명 통과는 없앤다. 서명 시크릿(APPLE_CERTIFICATE 그룹)이
+          # 있으면 실제 인증서로, 없으면 번들 전체 ad-hoc(--sign -)으로 반드시
+          # 서명한다. 미서명 번들은 정적/동적 identity 가 어긋나 TCC 인가가 구조적으로
+          # 영구 실패한다(실측: 이슈 #123 본문). ad-hoc 은 cdhash 기반이라 재빌드
+          # (=업데이트)마다 재인가가 필요하지만, 인가 자체는 매번 성립한다 — 자체
+          # 서명(.p12, docs/dev/code-signing.md §8)이 등록돼 있으면 그쪽이 항구적
+          # 해결이므로 우선한다.
           SIGNED=false
           if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ]; then
             SIGNED=true
             echo "::notice::서명 인증서 감지 — 직접 codesign 으로 서명한다"
           else
-            echo "::warning::서명 시크릿 미설정/불완전 — 미서명으로 빌드합니다 (실패 아님)"
+            echo "::warning::서명 시크릿 미설정/불완전 — ad-hoc 서명으로 폴백합니다(이슈 #123, 매 업데이트 재인가 필요)"
           fi
           echo "signed=${SIGNED}" >> "$GITHUB_OUTPUT"
           echo "notarized=${NOTARIZED}" >> "$GITHUB_OUTPUT"
-          # ⭐ 이슈 #99 — 저장소 빌드 분기(명세 §3.5 개정). 정식 서명 빌드(서명 시크릿
-          # 존재 = Developer ID, code-signing.md §8 계약)만 `keychain-store` feature 로
-          # Keychain 저장. 미서명 릴리즈는 개발 빌드와 같이 파일 저장으로 빌드해
-          # 키체인 로그인 프롬프트가 남지 않게 한다.
+          # ⭐ 이슈 #99 → 이슈 #123 로 게이트 기준 변경. 자체 서명도 서명 시크릿이
+          # 있으므로 SIGNED 기준이면 켜져 버린다 — 공증 그룹(NOTARIZED, 사실상
+          # Developer ID)이 있을 때만 keychain-store 로 빌드한다. 자체 서명·ad-hoc
+          # 릴리즈는 개발 빌드와 같은 파일 저장을 유지한다(이슈 #99 의 키체인
+          # 프롬프트 방지 의도 보존).
           FEATURES_ARG=""
-          if [ "$SIGNED" = "true" ]; then
+          if [ "$NOTARIZED" = "true" ]; then
             FEATURES_ARG="--features keychain-store"
           fi
           # FEATURES_ARG 는 feature 활성 시에만 두 단어로 분리돼야 하므로 의도적으로
           # 따옴표 없이 전개한다.
           tauri build --target universal-apple-darwin ${FEATURES_ARG}
-          # ── 서명: build-signed.sh 의 방식을 그대로 재현 ──
+
+          APP_PATH="$(find target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)"
+          test -n "$APP_PATH" || { echo "::error::.app 번들을 찾지 못했습니다"; exit 1; }
+          ENTITLEMENTS="apps/ultrakey-app/entitlements.plist"
+
+          # ── 서명 신원 결정: SIGNED=true 면 인증서, 아니면 ad-hoc("-") ──
+          # 이 아래 전체(Sparkle 포함·중첩 서명·메인 서명·검증·DMG 재생성)는 서명
+          # 방식과 무관하게 공용이다 — 이전에는 SIGNED=true 블록 안에만 있어
+          # 미서명 통과가 가능했다(이슈 #123 원인).
+          KEYCHAIN=""
+          ORIGINAL_KEYCHAINS=""
+          cleanup_keychain() {
+            if [ -n "$KEYCHAIN" ]; then
+              security list-keychains -d user -s ${ORIGINAL_KEYCHAINS} 2>/dev/null || true
+              security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_keychain EXIT
+
+          IDENTITY="-"
           if [ "$SIGNED" = "true" ]; then
             KEYCHAIN=ultrakey-sign.keychain-db
+            ORIGINAL_KEYCHAINS="$(security list-keychains -d user | tr -d '\"')"
             KC_PASS="$(openssl rand -hex 16)"
             security create-keychain -p "$KC_PASS" "$KEYCHAIN"
             security set-keychain-settings -t 900 "$KEYCHAIN"
@@ -128,9 +165,6 @@ jobs:
             CERT_P12_PASS="${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
             security import /tmp/cert.p12 -k "$KEYCHAIN" -f pkcs12 -P "$CERT_P12_PASS" -T /usr/bin/codesign
             security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KEYCHAIN" >/dev/null
-            printf '%s' "${{ secrets.APPLE_CERTIFICATE }}" | base64 -d > /tmp/cert.b64 2>/dev/null || true
-            openssl pkcs12 -in /tmp/cert.p12 -passin "pass:$CERT_P12_PASS" -nokeys -clcerts \
-              -out /tmp/cert.pem -passout pass:
             # 파이프라인 중간 실패(pipefail+grep 매칭 없음)가 전체를 조용히 죽이므로
             # set -e 에 걸리지 않는 형태로 신원을 얻는다.
             IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" \
@@ -140,47 +174,71 @@ jobs:
               IDENTITY="Ultrakey Dev"
             fi
             echo "::notice::서명 신원: ${IDENTITY}"
-            APP_PATH="$(find target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n1)"
-            test -n "$APP_PATH" || { echo "::error::.app 번들을 찾지 못했습니다"; exit 1; }
-            ENTITLEMENTS="apps/ultrakey-app/entitlements.plist"
-            # ⭐ Sparkle.framework 을 번들에 넣고 Ultrakey Dev 로 중첩 서명 — Team ID 불일치
-            # 크래시를 막는 핵심 스텝. tauri bundler 는 frameworks 설정을 Contents/Frameworks
-            # 로 복사하지 않아 fetch-sparkle 산출물을 직접 넣어야 한다(실측: Contents 가
-            # Frameworks 없이 생성됨). dyld 는 메인 앱과 프레임워크의 Team ID 가 다르면
-            # 로드를 거부한다 — 중첩 서명으로 서명 주체를 메인과 맞춘다.
-            if [ -d "apps/ultrakey-app/Sparkle.framework" ]; then
-              mkdir -p "${APP_PATH}/Contents/Frameworks"
-              cp -R apps/ultrakey-app/Sparkle.framework "${APP_PATH}/Contents/Frameworks/"
-              echo "  Sparkle.framework 를 번들에 포함하고 중첩 서명한다"
-            fi
-            # 중첩 코드가 하나라도 있으면 안쪽부터 먼저 서명한 뒤 메인을 다시 서명한다
-            # (build-signed.sh §3 과 동일 — Team ID 불일치 크래시 방지).
-            if [ -d "${APP_PATH}/Contents/Frameworks" ]; then
-              find "${APP_PATH}/Contents/Frameworks" -depth \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) -print0 |
-                while IFS= read -r -d '' nested; do
-                  echo "  서명: ${nested##*/}"
-                  codesign --force --options runtime --sign "$IDENTITY" "${nested}"
-                done
-            fi
-            codesign --force --options runtime --entitlements "${ENTITLEMENTS}" \
-              --sign "$IDENTITY" "${APP_PATH}"
-            codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
-            echo "  ✅ 서명 완료: ${APP_PATH}"
-            # 번들러가 만든 DMG 는 서명 전 .app 을 담고 있으므로, 서명된 .app 으로 재생성한다.
-            DMG_PATH="$(find target/universal-apple-darwin/release/bundle -name '*.dmg' | head -n1)"
-            test -n "$DMG_PATH" || { echo "::error::기존 DMG 를 찾지 못했습니다"; exit 1; }
-            STAGING="$(mktemp -d)"
-            cp -R "${APP_PATH}" "${STAGING}/"
-            ln -s /Applications "${STAGING}/Applications"
-            rm -f "${DMG_PATH}"
-            # 직전 bundle_dmg.sh 가 띄운 디스크 이미지 마운트가 남아 있으면
-            # hdiutil create 가 Resource busy 로 실패한다 — 마운트를 먼저 분리하고,
-            # 잔여 디스크 이미지 헬퍼를 정리한 뒤 재시도한다.
-            hdiutil info | grep -q "$DMG_PATH" && hdiutil detach "$(hdiutil info | awk -v d="$DMG_PATH" '$0 ~ d {print $1; exit}')" 2>/dev/null || true
-            hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}" \
-              || { sleep 5; hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"; }
-            echo "  ✅ 서명된 DMG 재생성: ${DMG_PATH}"
+          else
+            echo "::notice::ad-hoc 서명 신원 사용(identity: -)"
           fi
+
+          # ── Sparkle.framework 포함 + 중첩 서명 — 서명 방식과 무관하게 항상 수행 ──
+          # tauri bundler 는 frameworks 설정을 Contents/Frameworks 로 복사하지 않아
+          # fetch-sparkle 산출물을 직접 넣어야 한다(실측: Contents 가 Frameworks
+          # 없이 생성됨). dyld 는 메인 앱과 프레임워크의 Team ID 가 다르면 로드를
+          # 거부한다 — 중첩 서명으로 서명 주체를 메인과 맞춘다. entitlements 의
+          # disable-library-validation(이슈 #61)이 self-signed·ad-hoc 공통의 빈
+          # Team ID 문제를 해소한다 — build-signed.sh §3 과 동일한 근거로 ad-hoc
+          # 에도 그대로 적용한다.
+          if [ -d "apps/ultrakey-app/Sparkle.framework" ]; then
+            mkdir -p "${APP_PATH}/Contents/Frameworks"
+            cp -R apps/ultrakey-app/Sparkle.framework "${APP_PATH}/Contents/Frameworks/"
+            echo "  Sparkle.framework 를 번들에 포함하고 중첩 서명한다"
+          fi
+          # 중첩 코드가 하나라도 있으면 안쪽부터 먼저 서명한 뒤 메인을 다시 서명한다
+          # (build-signed.sh §3 과 동일 — Team ID 불일치 크래시 방지).
+          if [ -d "${APP_PATH}/Contents/Frameworks" ]; then
+            find "${APP_PATH}/Contents/Frameworks" -depth \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' \) -print0 |
+              while IFS= read -r -d '' nested; do
+                echo "  서명: ${nested##*/}"
+                codesign --force --options runtime --sign "$IDENTITY" "${nested}"
+              done
+          fi
+          codesign --force --options runtime --entitlements "${ENTITLEMENTS}" \
+            --sign "$IDENTITY" "${APP_PATH}"
+
+          # ── 배포 게이트: 서명 방식과 무관하게 필수 통과(이슈 #123) ──
+          codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+          echo "  ✅ 서명 검증 통과: ${APP_PATH}"
+          # spctl 은 자체 서명·ad-hoc 에서 rejected 가 정상이므로 게이트로 쓰지
+          # 않고 정보성 출력만 남긴다.
+          spctl -a -t exec -vv "${APP_PATH}" 2>&1 | sed 's/^/  spctl: /' || true
+
+          # ⭐ 이 워크플로는 notarytool 제출을 수행하지 않는다(범위 밖, 이슈 #123
+          # P2 검토) — NOTARIZED 는 "공증 시크릿이 존재한다"만 의미하고 "실제로
+          # 공증됐다"를 보장하지 않는다. 릴리즈 노트에 "공증됨, 조치 불필요"를
+          # 잘못 표시하지 않도록 스테이플 여부를 직접 검증해 별도 플래그로 남긴다.
+          NOTARIZED_VERIFIED=false
+          if xcrun stapler validate "${APP_PATH}" >/tmp/staple-validate.log 2>&1; then
+            NOTARIZED_VERIFIED=true
+            echo "::notice::공증 스테이플 검증 통과"
+          else
+            echo "::notice::공증 스테이플 없음/검증 실패(자체 서명·ad-hoc 에서는 정상) — $(tail -n1 /tmp/staple-validate.log 2>/dev/null || true)"
+          fi
+          echo "notarized_verified=${NOTARIZED_VERIFIED}" >> "$GITHUB_OUTPUT"
+
+          # ── DMG 재생성: 서명 방식과 무관하게 항상 수행 ──
+          # 번들러가 만든 DMG 는 서명 전 .app 을 담고 있으므로, 서명된 .app 으로 재생성한다.
+          DMG_PATH="$(find target/universal-apple-darwin/release/bundle -name '*.dmg' | head -n1)"
+          test -n "$DMG_PATH" || { echo "::error::기존 DMG 를 찾지 못했습니다"; exit 1; }
+          STAGING="$(mktemp -d)"
+          chmod 755 "${STAGING}"
+          cp -R "${APP_PATH}" "${STAGING}/"
+          ln -s /Applications "${STAGING}/Applications"
+          rm -f "${DMG_PATH}"
+          # 직전 bundle_dmg.sh 가 띄운 디스크 이미지 마운트가 남아 있으면
+          # hdiutil create 가 Resource busy 로 실패한다 — 마운트를 먼저 분리하고,
+          # 잔여 디스크 이미지 헬퍼를 정리한 뒤 재시도한다.
+          hdiutil info | grep -q "$DMG_PATH" && hdiutil detach "$(hdiutil info | awk -v d="$DMG_PATH" '$0 ~ d {print $1; exit}')" 2>/dev/null || true
+          hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}" \
+            || { sleep 5; hdiutil create -volname "Ultrakey" -srcfolder "${STAGING}" -ov -format UDZO "${DMG_PATH}"; }
+          echo "  ✅ DMG 재생성: ${DMG_PATH}"
       - name: DMG 산출물 확인
         run: |
           set -euo pipefail
@@ -209,6 +267,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SIGNED: ${{ needs.build.outputs.signed }}
+          NOTARIZED_VERIFIED: ${{ needs.build.outputs.notarized_verified }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -216,8 +275,16 @@ jobs:
           # 첫 릴리즈(직전 태그 없음) 는 전체 이력으로 폴백한다.
           PREV_TAG="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
           {
-            if [ "$SIGNED" != "true" ]; then
-              printf '> ⚠️ **미서명 빌드** — 서명·공증 시크릿이 설정되지 않았습니다. 배포 전 서명된 빌드로 교체하세요.\n\n'
+            # ⭐ 이슈 #123 — 서명 방식별 3단계 경고. NOTARIZED_VERIFIED 는 build job 이
+            # `xcrun stapler validate` 로 실제 스테이플 여부를 확인한 값이다 — 공증
+            # 시크릿 존재만으로는 "공증됨"을 표시하지 않는다(이 워크플로는 notarytool
+            # 제출을 수행하지 않으므로, 시크릿만으로는 실제 공증 여부를 보장 못한다).
+            if [ "$SIGNED" = "true" ] && [ "$NOTARIZED_VERIFIED" = "true" ]; then
+              : # 공증 스테이플 확인됨 — 경고 없음
+            elif [ "$SIGNED" = "true" ]; then
+              printf '> ⚠️ **자체 서명 빌드(미공증)** — 처음 실행 시 macOS Gatekeeper 가 차단할 수 있습니다. 차단 화면이 뜨면 **시스템 설정 → 개인정보 보호 및 보안** 에서 "그래도 열기" 를 누르거나, 터미널에서 `xattr -dr com.apple.quarantine /Applications/Ultrakey.app` 으로 quarantine 속성을 제거한 뒤 다시 실행하세요.\n\n'
+            else
+              printf '> ⚠️ **ad-hoc 서명 폴백 빌드** — 서명 시크릿이 설정되지 않아 임시 서명으로 배포되었습니다. 처음 실행 시 **시스템 설정 → 개인정보 보호 및 보안** 에서 "그래도 열기" 를 누르거나 `xattr -dr com.apple.quarantine /Applications/Ultrakey.app` 으로 quarantine 을 해제하세요. ⚠️ 서명 주체가 빌드마다 달라지므로 **다음 업데이트를 설치하면 손쉬운 사용 등 이미 승인한 권한을 다시 승인**해야 합니다.\n\n'
             fi
             if [ -n "$PREV_TAG" ]; then
               git log --no-merges --pretty=format:'* %s' "${PREV_TAG}..${TAG}"
