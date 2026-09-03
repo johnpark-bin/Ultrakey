@@ -659,6 +659,12 @@ fn on_tap_event(
         seek_shortcut_mods: st.shared.seek_shortcut_mods.load(Ordering::Acquire),
         korean_app_excluded: st.shared.gate.is_korean_disabled(),
         korean_ime: st.shared.korean_ime.load(),
+        // ⭐ F-19(D-7·D-4) — 언어별 앱 게이트·일본어 IME·키보드 타입. 기존과 같은
+        // O(1) 원자값 로드 패턴(korean 계열의 병렬)이다.
+        japanese_app_excluded: st.shared.gate.is_japanese_disabled(),
+        chinese_app_excluded: st.shared.gate.is_chinese_disabled(),
+        japanese_ime: st.shared.japanese_ime.load(),
+        is_jis: st.shared.is_jis.load(),
         trackpad_hyper_active: trackpad_phase == TrackpadPhase::Engaged,
         trackpad_freeze_cursor: matches!(
             trackpad_phase,

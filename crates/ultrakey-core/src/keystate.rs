@@ -8,7 +8,7 @@
 use crate::flags::EventFlags;
 use crate::keycode::KeyCode;
 use crate::quickpress::QuickPressState;
-use crate::rules::{ModifierKind, RuleAction, RuleId, RuleTable};
+use crate::rules::{LanguageTrigger, ModifierKind, RuleAction, RuleId, RuleTable};
 
 /// 동시에 추적 가능한 quick press 소스 키의 최대 개수. M1 은 hyper/meh/bleh 최대 3개뿐이라
 /// 8개면 여유롭다 — 필요해지면 이 상수만 올리면 된다.
@@ -17,6 +17,13 @@ const MAX_TRACKED_KEYS: usize = 8;
 /// ⭐ F-16 "치환 중" 래치의 최대 동시 개수(`docs/spec/korean-input.md` §3.3·§5#9, D-K6).
 /// F-16 규칙은 4종(space/lang1/lang2/grave)뿐이라 4면 절대 넘치지 않는다.
 const MAX_KOREAN_LATCH: usize = 4;
+
+/// ⭐ F-19 "치환 중" 래치의 최대 동시 개수(`docs/spec/language-presets.md` §3, D-K6 동형).
+/// F-19 의 KeyDown 치환 규칙(F-19.5·F-19.6)이 트리거로 주장하는 **고유 키코드** 수:
+/// F-19.5 는 0x5D/0x2A(2 개), F-19.6 20행은 from 키 14개(0x13·0x16·0x1A·0x1C·0x19·0x1D·
+/// 0x1B·0x18·0x5D·0x21·0x1E·0x29·0x27·0x2A). 합집합 14개 < 16. AloneTap 규칙(F-19.1~4·7)
+/// 은 QuickPress 발화가 키 down+up 을 통째로 내므로 래치가 필요 없다.
+const MAX_LANGUAGE_LATCH: usize = 16;
 
 /// keyDown 이 치환을 발화시켰을 때 세우는 래치 하나 — 대응하는 keyUp 이 도착하면
 /// **조건을 다시 평가하지 않고** 이 값 그대로 keyUp 을 합성한다(D-K6). 힙 할당 없이
@@ -64,6 +71,10 @@ pub struct KeyStateTable {
     /// F-16 "치환 중" 래치(D-K6). 빈틈이 있을 수 있다 — `korean_rules` 는 최대 4종뿐이라
     /// 슬롯처럼 앞에서부터 채우는 불변식을 둘 필요가 없다.
     korean_latches: [Option<KoreanLatch>; MAX_KOREAN_LATCH],
+    /// ⭐ F-19 "치환 중" 래치(명세 §3, D-K6 동형). F-16 래치와 **별도 배열**인 이유:
+    /// 트리거 키코드가 겹치는 구성(예: F-19.6 과 F-16 이 같은 물리 키를 소스로 주장 — 충돌
+    /// 대화상자가 막지만)이어도 두 래치가 서로 덮어쓰지 않도록 안전하게 독립시킨다.
+    language_latches: [Option<KoreanLatch>; MAX_LANGUAGE_LATCH],
 }
 
 impl KeyStateTable {
@@ -72,6 +83,7 @@ impl KeyStateTable {
             pressed: [0; 4],
             slots: [None; MAX_TRACKED_KEYS],
             korean_latches: [None; MAX_KOREAN_LATCH],
+            language_latches: [None; MAX_LANGUAGE_LATCH],
         }
     }
 
@@ -105,6 +117,43 @@ impl KeyStateTable {
     /// `trigger_key` 의 래치를 지운다. keyUp 을 치환해 내보낸 뒤 호출한다.
     pub(crate) fn clear_korean_latch(&mut self, trigger_key: KeyCode) {
         for slot in self.korean_latches.iter_mut() {
+            if slot.is_some_and(|l| l.trigger_key == trigger_key) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// ⭐ F-19 — `trigger_key` 에 걸린 언어 규칙 "치환 중" 래치가 있으면 그 값.
+    /// `KoreanLatch` 구조체를 재사용한다(트리거 키·출력 키코드·플래그·id 로 모양이 동일).
+    pub fn language_latch(&self, trigger_key: KeyCode) -> Option<KoreanLatch> {
+        self.language_latches
+            .iter()
+            .flatten()
+            .find(|l| l.trigger_key == trigger_key)
+            .copied()
+    }
+
+    /// 래치를 세운다. 같은 `trigger_key` 항목이 이미 있으면 덮어쓴다(자동 반복 대비,
+    /// F-16 §5#7). 빈 슬롯이 없으면(설계상 발생할 수 없다 — `MAX_LANGUAGE_LATCH` 는
+    /// F-19 트리거 키 14개에 여유가 있다) 조용히 무시한다.
+    pub(crate) fn set_language_latch(&mut self, latch: KoreanLatch) {
+        if let Some(existing) = self
+            .language_latches
+            .iter_mut()
+            .flatten()
+            .find(|l| l.trigger_key == latch.trigger_key)
+        {
+            *existing = latch;
+            return;
+        }
+        if let Some(slot) = self.language_latches.iter_mut().find(|s| s.is_none()) {
+            *slot = Some(latch);
+        }
+    }
+
+    /// `trigger_key` 의 언어 래치를 지운다.
+    pub(crate) fn clear_language_latch(&mut self, trigger_key: KeyCode) {
+        for slot in self.language_latches.iter_mut() {
             if slot.is_some_and(|l| l.trigger_key == trigger_key) {
                 *slot = None;
             }
@@ -280,6 +329,34 @@ impl KeyStateTable {
             }
         }
 
+        // ⭐ F-19 — 언어 규칙의 `AloneTap` 트리거 키(caps lock·좌/우⌘)도 같은 FSM 을 탄다.
+        // F-16 의 "modifier 부재" 판정은 keyDown 도착 시점에 트리거 키 자신까지 함께
+        // 눌렸는지로 판정했지만, F-19 의 단독 탭("이 키만, 다른 modifier 없음")은
+        // **탭/홀드 경계**가 필요하다 — ⌘+W 를 누르면 홀드로 확정돼 우⌘가 modifier 로
+        // 남아야 하고(명세 §3.6, H5), 단독 탭일 때만 발화해야 한다. 그래서 F-08.2 와
+        // 같은 QuickPress FSM 슬롯으로 등록하고, 발화는 `handle_tracked_key_event` 의
+        // QuickPress 이벤트가 담당한다. `rule_flags` 는 비우고(합성 flags 를 얹지 않는다,
+        // P5, F-19.2 의 우⌘는 물리 modifier 가 이미 native flags 를 낸다) `has_quick_press`
+        // 만 등록한다.
+        for rule in &rules.language_rules {
+            if let LanguageTrigger::AloneTap { key } = rule.trigger {
+                if let Some(existing) = new_slots[..n].iter_mut().flatten().find(|s| s.key == key) {
+                    existing.has_quick_press = true;
+                } else if n < MAX_TRACKED_KEYS {
+                    let preserved_state = self.machine(key);
+                    new_slots[n] = Some(MachineSlot {
+                        key,
+                        rule_flags: EventFlags::NONE,
+                        kind: None,
+                        has_quick_press: true,
+                        has_double_tap: false,
+                        state: preserved_state,
+                    });
+                    n += 1;
+                }
+            }
+        }
+
         self.slots = new_slots;
     }
 
@@ -294,6 +371,8 @@ impl KeyStateTable {
         // D-K6 — 래치도 전부 지운다. 리셋 이후 도착하는 keyUp 은 더 이상 대응하는
         // keyDown 치환이 없으므로 원본 그대로 흘려보내야 한다.
         self.korean_latches = [None; MAX_KOREAN_LATCH];
+        // ⭐ F-19 — 언어 규칙 래치도 같은 규약으로 전부 지운다.
+        self.language_latches = [None; MAX_LANGUAGE_LATCH];
     }
 
     /// 현재 `HoldConfirmed` 인 모든 modifier 규칙의 flags 를 OR 로 합산한 값.

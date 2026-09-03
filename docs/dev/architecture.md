@@ -308,8 +308,11 @@ M2 는 여기에 **프리셋이 FSM 을 필요로 하는 키**를 합집합으�
 | hyper/meh/bleh 소스 키 | 계층 2 hold 판정(M1 그대로) |
 | caps lock (F-08.1 또는 F-08.2 가 켜짐) | quick press ↔ hold 리매핑 배타 판정(R1) |
 | left shift / right shift (F-08.8 또는 F-08.11 이 켜짐) | quick press 문자 출력, double tap 판정 |
+| ⭐ F-19 캡스락·좌/우⌘ (언어 규칙 `AloneTap` — F-19.1·F-19.3·F-19.7 이 캡스락, F-19.2·F-19.4 가 우⌘, F-19.4 가 좌⌘) | 단독 탭/홀드 경계(F-19 §3.6 — ⌘+W 는 홀드로 확정돼 modifier 로 남아야 한다) |
 
-`MAX_TRACKED_KEYS = 8` 은 최악의 경우(hyper·meh·bleh 3 + caps lock + 좌우 shift = 6)에도 여유가 있다.
+⚠️ **`MAX_TRACKED_KEYS = 8` 의 최악 경우는 정확히 만석(8)이다**: hyper+meh+bleh 개별 소스 3 +
+캡스락(F-08 또는 F-19) + 좌·우 shift + 좌·우 ⌘. `register_sources` 는 초과분을 조용히 버리므로,
+추가 추적 키를 필요로 하는 새 기능이 들어오면 이 상수를 먼저 올려라(M2 지적 반영).
 
 ⭐ **M1 이 뚫어만 두고 배선하지 않은 구멍을 여기서 막는다.** `QuickPressState::on_other_key_down`
 (§3-c 표 3행, **v1.62 예방의 핵심**)은 M1 에서 **한 번도 호출되지 않았다** — `has_quick_press_action`
@@ -357,6 +360,28 @@ M2 는 `has_quick_press_action` 을 실제로 채우므로, **추적 대상이 �
 | **P10** | **forward delete 3종(F-08.12/13/14)은 배타적이지 않다.** 셋 다 켜지면 F-08.13 만으로 이미 delete 가 항상 forward delete 이므로 나머지 둘은 관측 가능한 차이를 만들지 않는다. 이것을 막지 않고 **사실로 문서화**한다 — 진짜 backspace 를 낼 수단이 사라지는 것은 F-08.13 단독의 결과다 | R6, §5 엣지 10 |
 | **P11** | **caps lock 토글 3종(F-08.8/9/10)의 출력은 전부 경로 C** (`IOHIDSetModifierLockState`)다. 키 합성이 아니다 — D-1 로 caps lock 키가 F18 로 리매핑돼 있어도 이 경로는 영향받지 않는다 | §3.2 F-08.8/9/10, §6 |
 | **P12** | **설정 충돌은 대화형 배타 선택으로 해소한다**(자동 우선순위가 아니다). §6.5 | R8 |
+
+### 6.4-b ⭐ F-16·F-19 규칙표 P13~P23 — F-16/F-19 구현이 확정한 것 (2026-09-03)
+
+> ⭐ **P13~P16 은 F-16(한국어 입력)이, P17~P23 은 F-19(언어별 프리셋)가 확정했다.**
+> F-16 의 규칙표 자리는 기존에 문서화되지 않았다(그 위임이 `docs/spec/korean-input.md` §3.4 에
+> P13~P16 배정을 "제안"만 하고 architecture.md 를 갱신하지 않음 — 이 위임이 소급 보충한다).
+> 평가 순서는 `RuleId` 전순서(`Preset(_) < Korean(_) < Language(_) < Hyperkey`)로 고정된다
+> (정렬된 `RuleTable` — §6.4 서두).
+
+| # | 규칙 | 명세 근거 |
+| :--- | :--- | :--- |
+| **P13** | **F-16.1(⇧+Space)은 `space` keyDown 을 shift 를 뺀 `control`+`space` 로 치환한다** — modifier 부재(정본 눌림 테이블)·앱 제외 게이트만, 한국어 IME 조건 없음(편도 키 방지). Preset 조합보다 뒤, F-19 보다 앞 | korean-input.md §3.1 |
+| **P14** | **F-16.2(한/영)는 `lang1`(0x68) keyDown 을 ⌃Space 로 치환한다** — modifier 부재·앱 제외 게이트만. 한국어 IME 조건을 걸면 편도 키가 된다 | korean-input.md §3.1·§3.2 |
+| **P15** | **F-16.3(한자)는 `lang2`(0x66) 를 ⌥Return 으로 치환하되, 앱 제외 게이트 + 한국어 IME 활성이 **둘 다** 필요하다** — 출력이 `return` 이라 오발 시 되돌릴 수 없다(fail-closed: 판정 불가면 발화하지 않는다) | korean-input.md §3.1·§3.3 |
+| **P16** | **F-16.4(₩→`)는 `grave` keyDown 을 ⌥grave 로 치환한다** — modifier 부재(단축키 보호)·한국어 IME 활성, fail-closed. 키Up 은 "치환 중" 래치로 짝을 맞춘다(§3.3 D-K6) | korean-input.md §3.1·§3.3 |
+| **P17** | **F-19.1(캡스락=한/영)은 캡스락 AloneTap → ⌃Space 재주입** — 단독 탭은 QuickPress FSM 이, 길게는 홀드(본래 캡스락)를 결정. 앱 게이트(Korean)| language-presets.md §3.1·§3.6 |
+| **P18** | **F-19.2(우⌘=한/영)는 우⌘ AloneTap → ⌃Space 재주입** — ⌘+W 조합은 홀드로 확정돼 본래 modifier 로 남는다 | language-presets.md §3.1·§3.6 |
+| **P19** | **F-19.3(캡스락=英数/かな)은 캡스락 AloneTap → `japanese_eisuu`(0x66, ja 소스 활성) 또는 `japanese_kana`(0x68, 그 외)** — 무해한 IME 키라 판정 불가도 かな(fail-open 과 구분) | language-presets.md §3.2 |
+| **P20** | **F-19.4(⌘ 단독=英数/かな)는 안 A — 좌⌘ AloneTap → 0x66, 우⌘ AloneTap → 0x68(고정 매핑)**. 비-ja/en 소스 무동작 위험(안 B)을 피하기 위해 IME 게이트를 읽지 않는다(정적 출력) | language-presets.md §3.2 F-19.4 · §9 #6 해소 |
+| **P21** | **F-19.5(¥↔\) 는 NoModifier 키 → ⌥+키, OptionOnly 키 → 원키 의 2×2 반전** — JIS(0x5D) 행은 JIS 키보드에서만, US(0x2A) 행은 JIS 가 아닐 때만. ⛔ `international3 → \` 직접 매핑 금지(option 경유 합성) | language-presets.md §3.2·§5 #10 |
+| **P22** | **F-19.6(JIS→US) 는 20행 정적 심볼 치환(모두 JIS 전용)** — 비-AloneTap 단순 치환은 KeyDown/KeyUp 래치로 소비(계층 3 안, F-16 뒤·계층 4 앞). `RuleId::Language(22)` | language-presets.md §3.2.1 |
+| **P23** | **F-19.7(캡스락=중/영) 은 캡스락 AloneTap → ⌃Space 재주입** — ⌃Space 재주입은 CJK 직접 전환(`select_input_source`) 과 다르다(명세 §8 부정형) | language-presets.md §3.3
 
 ### 6.5 충돌 감지 대화상자 3종
 

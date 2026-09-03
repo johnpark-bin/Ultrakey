@@ -289,6 +289,9 @@ pub fn layer_to_code(layer: Layer) -> u8 {
         // ⭐ F-06 — 트랙패드 프리즈 소비 자리(`trackpad-hyper-gesture.md` §3.2.1).
         // 코드 7은 F-16(6) 뒤에 붙인다 — 기존 코드 재배치 금지(위 주석과 같은 이유).
         Layer::TrackpadFreeze => 7,
+        // ⭐ F-19 — 언어별 프리셋(`docs/spec/language-presets.md`). 코드 8은
+        // TrackpadFreeze(7) 뒤에 붙인다 — 기존 코드 재배치 금지 관례 그대로.
+        Layer::LanguageInput => 8,
     }
 }
 
@@ -302,6 +305,7 @@ pub fn layer_from_code(code: u8) -> Option<Layer> {
         5 => Layer::Passthrough,
         6 => Layer::KoreanInput,
         7 => Layer::TrackpadFreeze,
+        8 => Layer::LanguageInput,
         _ => return None,
     })
 }
@@ -316,6 +320,7 @@ fn layer_name(code: u8) -> &'static str {
         Some(Layer::Passthrough) => "Passthrough",
         Some(Layer::KoreanInput) => "KoreanInput",
         Some(Layer::TrackpadFreeze) => "TrackpadFreeze",
+        Some(Layer::LanguageInput) => "LanguageInput",
         None => "Unknown",
     }
 }
@@ -329,6 +334,8 @@ pub fn rule_to_code(rule: Option<RuleId>) -> (u8, u8) {
         Some(RuleId::Preset(n)) => (1, n),
         Some(RuleId::Korean(n)) => (2, n),
         Some(RuleId::Hyperkey) => (3, 0),
+        // ⭐ F-19 — 코드 4 는 기존 코드 재배치 금지 관례대로 뒤에 붙인다.
+        Some(RuleId::Language(n)) => (4, n),
     }
 }
 
@@ -340,6 +347,7 @@ fn rule_identifier(kind: u8, index: u8) -> Option<String> {
         1 => Some(format!("preset:{index}")),
         2 => Some(format!("korean:{index}")),
         3 => Some("hyperkey".to_string()),
+        4 => Some(format!("language:{index}")),
         _ => None,
     }
 }

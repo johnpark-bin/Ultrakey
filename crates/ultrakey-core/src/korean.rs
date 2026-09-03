@@ -32,11 +32,19 @@ pub enum KoreanImeState {
 ///   [`KoreanImeState::Active`].
 /// - 그 밖은 전부 [`KoreanImeState::Inactive`].
 pub fn classify_input_source_languages(langs: &[String]) -> KoreanImeState {
+    classify_input_source_languages_for(langs, "ko")
+}
+
+/// [`classify_input_source_languages`] 를 언어 태그 일반화한 것 — F-19.3 이
+/// "일본어 입력 소스 활성"을 같은 3상태 fail-closed 로 판정할 때 쓴다
+/// (`docs/spec/language-presets.md` §3 F-19.3). `want` 는 `"ko"`·`"ja"` 같은
+/// 언어 서브태그다.
+pub fn classify_input_source_languages_for(langs: &[String], want: &str) -> KoreanImeState {
     let Some(first) = langs.first() else {
         return KoreanImeState::Unknown;
     };
     let subtag = first.split('-').next().unwrap_or(first);
-    if subtag.eq_ignore_ascii_case("ko") {
+    if subtag.eq_ignore_ascii_case(want) {
         KoreanImeState::Active
     } else {
         KoreanImeState::Inactive

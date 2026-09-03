@@ -1,5 +1,7 @@
 //! ⭐ F-10 앱별 비활성화 게이트 — `key-remapping-engine.md` §3-f, `docs/dev/architecture.md` §2.3.
-//! + ⭐ F-16 한국어 전용 앱 제외 게이트(`docs/spec/korean-input.md` §3.5, D-K3).
+//! ⭐ F-16 한국어 전용 앱 제외 게이트(`docs/spec/korean-input.md` §3.5, D-K3) 와
+//! ⭐ F-19 일본어·중국어 전용 앱 제외 게이트(`docs/spec/language-presets.md` §3.5, D-7) 를
+//! 함께 담는다.
 //!
 //! 이 모듈은 의도적으로 **비대칭**이다: 콜백(탭 스레드)이 읽는 [`AtomicAppGate`] 는 원자값
 //! 하나만 갖고 락이 전혀 없다(O(1)·무할당). 반대로 이를 갱신하는 [`AppGateController`] 는
@@ -40,14 +42,23 @@ pub trait AppGate: Send + Sync {
     /// F-16 규칙을 평가하지 않는다. `is_remapping_disabled()` 와 달리 hyper 등 다른
     /// 계층에는 영향을 주지 않는다.
     fn is_korean_disabled(&self) -> bool;
+    /// ⭐ D-7 — F-19 일본어 전용 앱 제외(`docs/spec/language-presets.md` §3.5).
+    /// `true` 면 F-19.3·F-19.4 규칙을 평가하지 않는다.
+    fn is_japanese_disabled(&self) -> bool;
+    /// ⭐ D-7 — F-19 중국어 전용 앱 제외. `true` 면 F-19.7 규칙을 평가하지 않는다.
+    fn is_chinese_disabled(&self) -> bool;
 }
 
-/// `AtomicBool` 두 개로 구현된 게이트. 판정 자체는 [`AppGateController`] 가 미리 계산해
+/// `AtomicBool` 세 개로 구현된 게이트. 판정 자체는 [`AppGateController`] 가 미리 계산해
 /// 여기에 게시(publish)한다 — 콜백은 이 값들을 읽기만 한다.
 pub struct AtomicAppGate {
     disabled: AtomicBool,
     /// ⭐ D-K3. `disabled` 와 별도 비트인 이유는 모듈 문서 참고.
     korean_disabled: AtomicBool,
+    /// ⭐ D-7. F-19 언어별 앱 제외 — 한국어와 별도 비트인 이유는 같은 모듈 문서 참고
+    /// (원격 데스크톱에서 언어 키 처리만 끄고 hyper 는 계속 써야 한다).
+    japanese_disabled: AtomicBool,
+    chinese_disabled: AtomicBool,
 }
 
 impl AtomicAppGate {
@@ -55,6 +66,8 @@ impl AtomicAppGate {
         AtomicAppGate {
             disabled: AtomicBool::new(false),
             korean_disabled: AtomicBool::new(false),
+            japanese_disabled: AtomicBool::new(false),
+            chinese_disabled: AtomicBool::new(false),
         }
     }
 }
@@ -73,6 +86,14 @@ impl AppGate for AtomicAppGate {
     fn is_korean_disabled(&self) -> bool {
         self.korean_disabled.load(Ordering::Acquire)
     }
+
+    fn is_japanese_disabled(&self) -> bool {
+        self.japanese_disabled.load(Ordering::Acquire)
+    }
+
+    fn is_chinese_disabled(&self) -> bool {
+        self.chinese_disabled.load(Ordering::Acquire)
+    }
 }
 
 /// 메인 스레드가 소유하는 가변 상태. 최전면 앱과 비활성화 목록을 여기서만 바꾼다.
@@ -85,6 +106,12 @@ struct ControllerState {
     /// ⭐ D-K3 — 목록 자체는 `ultrakey-korean` 크레이트가 소유하고 앱이 주입한다.
     /// `ultrakey-core` 는 정책을 모른다 — 여기 하드코딩하지 않는다.
     korean_excluded_bundle_ids: Vec<String>,
+    /// ⭐ D-7 — F-19 일본어 전환류(F-19.3·F-19.4)의 제외 게이트 켜짐/끔.
+    /// `korean_exclusion_enabled` 와 같은 기능군 단위 토글이다.
+    japanese_exclusion_enabled: bool,
+    japanese_excluded_bundle_ids: Vec<String>,
+    chinese_exclusion_enabled: bool,
+    chinese_excluded_bundle_ids: Vec<String>,
 }
 
 /// F-10 이 갱신하는 쪽. 메인 스레드에서만 호출된다(메뉴바 UI 는 M3).
@@ -104,6 +131,13 @@ impl AppGateController {
                 // 한국어 키 처리 끄기"는 F-16 항목 중 유일한 기본 켜짐이다.
                 korean_exclusion_enabled: true,
                 korean_excluded_bundle_ids: Vec::new(),
+                // ⭐ D-7 — F-19 진환류(F-19.3·F-19.4·F-19.7)도 같은 패턴. 기본
+                // 켜짐은 명세 §3.5 가 F-16 §3.5 패턴을 "그대로 재사용"하라고 했으므로
+                // 한국어와 동일하게 `true` 다.
+                japanese_exclusion_enabled: true,
+                japanese_excluded_bundle_ids: Vec::new(),
+                chinese_exclusion_enabled: true,
+                chinese_excluded_bundle_ids: Vec::new(),
             }),
         }
     }
@@ -127,6 +161,31 @@ impl AppGateController {
                 None => false,
             };
         self.gate.korean_disabled.store(korean_disabled, Ordering::Release);
+
+        // ⭐ D-7 — japanese/chinese 도 같은 계산 (독립 목록).
+        let japanese_disabled = state.japanese_exclusion_enabled
+            && match &state.front_app {
+                Some(app) => state
+                    .japanese_excluded_bundle_ids
+                    .iter()
+                    .any(|id| id == &app.bundle_id),
+                None => false,
+            };
+        self.gate
+            .japanese_disabled
+            .store(japanese_disabled, Ordering::Release);
+
+        let chinese_disabled = state.chinese_exclusion_enabled
+            && match &state.front_app {
+                Some(app) => state
+                    .chinese_excluded_bundle_ids
+                    .iter()
+                    .any(|id| id == &app.bundle_id),
+                None => false,
+            };
+        self.gate
+            .chinese_disabled
+            .store(chinese_disabled, Ordering::Release);
     }
 
     /// `NSWorkspaceDidActivateApplicationNotification` 수신 시 호출(§3-f).
@@ -156,6 +215,35 @@ impl AppGateController {
     pub fn set_korean_excluded_apps(&self, bundle_ids: Vec<String>) {
         let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
         state.korean_excluded_bundle_ids = bundle_ids;
+        self.republish(&state);
+    }
+
+    /// ⭐ D-7 — "원격 데스크톱 클라이언트에서 일본어 키 처리 끄기" 켜짐/끔(F-19.3·F-19.4).
+    pub fn set_japanese_exclusion_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        state.japanese_exclusion_enabled = enabled;
+        self.republish(&state);
+    }
+
+    /// ⭐ D-7 — 일본어 전용 앱 제외 목록 전체 교체. 목록은 `ultrakey-language-presets`
+    /// 가 소유한다(korean 형 재사용).
+    pub fn set_japanese_excluded_apps(&self, bundle_ids: Vec<String>) {
+        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        state.japanese_excluded_bundle_ids = bundle_ids;
+        self.republish(&state);
+    }
+
+    /// ⭐ D-7 — "원격 데스크톱 클라이언트에서 중국어 키 처리 끄기" 켜짐/끔(F-19.7).
+    pub fn set_chinese_exclusion_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        state.chinese_exclusion_enabled = enabled;
+        self.republish(&state);
+    }
+
+    /// ⭐ D-7 — 중국어 전용 앱 제외 목록 전체 교체.
+    pub fn set_chinese_excluded_apps(&self, bundle_ids: Vec<String>) {
+        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        state.chinese_excluded_bundle_ids = bundle_ids;
         self.republish(&state);
     }
 

@@ -62,6 +62,7 @@ use ultrakey_engine::{Engine, EngineEvent, SharedState, TapState};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
 use ultrakey_i18n::{Catalog, Locale};
 use ultrakey_korean::KoreanSettings;
+use ultrakey_language_presets::{ChineseSettings, JapaneseSettings};
 use ultrakey_permissions::{
     dev_build_warning, onboarding_copy, open_accessibility_settings, out_of_sync_copy,
     PermissionMonitor, PermissionState,
@@ -525,8 +526,63 @@ struct KoreanView {
     /// ⭐ K5 — 앱에 내장된 기본 목록(`ultrakey-korean::apps::default_excluded_bundle_ids`).
     /// 오버라이드 부재 시 UI 가 이 값을 편집기에 채워 넣는다.
     default_excluded_bundle_ids: Vec<String>,
+    /// ⭐ F-19.1 `캡스락 탭 = 한/영 전환` — ko 노드 소속(F-19 명세 §3.0). 저장 키 `korean.*`.
+    caps_lock_switches_input_source: bool,
+    /// ⭐ F-19.2 `오른쪽 command = 한/영 전환`.
+    right_command_switches_input_source: bool,
 }
 
+/// ⭐ F-19 `日本語` 노드(F-19.3~F-19.6) — 프런트용 뷰.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct JapaneseView {
+    caps_lock_toggles_eisu_kana: bool,
+    command_toggles_eisu_kana: bool,
+    swap_yen_backslash: bool,
+    jis_as_us_symbols: bool,
+    /// ⭐ D-7 — 앱 제외 목록 오버라이드(`japanese.excludedBundleIds`). `None` = 기본
+    /// 목록(`ultrakey_korean::default_excluded_bundle_ids` — F-16 제외 정책 재사용,
+    /// Q5). `Some(list)` = 사용자 편집분.
+    excluded_bundle_ids: Option<Vec<String>>,
+    /// 오버라이드 부재 시 UI 가 보여줄 기본 목록.
+    default_excluded_bundle_ids: Vec<String>,
+}
+
+fn japanese_view(j: &JapaneseSettings, store: &SettingsStore) -> JapaneseView {
+    JapaneseView {
+        caps_lock_toggles_eisu_kana: j.caps_lock_toggles_eisu_kana,
+        command_toggles_eisu_kana: j.command_toggles_eisu_kana,
+        swap_yen_backslash: j.swap_yen_backslash,
+        jis_as_us_symbols: j.jis_as_us_symbols,
+        excluded_bundle_ids: store.get(keys::JAPANESE_EXCLUDED_BUNDLE_IDS),
+        default_excluded_bundle_ids: ultrakey_korean::default_excluded_bundle_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+/// ⭐ F-19 `中文` 노드(F-19.7) — 프런트용 뷰.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChineseView {
+    caps_lock_switches_input_source: bool,
+    excluded_bundle_ids: Option<Vec<String>>,
+    default_excluded_bundle_ids: Vec<String>,
+}
+
+fn chinese_view(c: &ChineseSettings, store: &SettingsStore) -> ChineseView {
+    ChineseView {
+        caps_lock_switches_input_source: c.caps_lock_switches_input_source,
+        excluded_bundle_ids: store.get(keys::CHINESE_EXCLUDED_BUNDLE_IDS),
+        default_excluded_bundle_ids: ultrakey_korean::default_excluded_bundle_ids()
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    }
+}
+
+/// ⭐ F-19 ko 노드 — F-19.1·F-19.2 도 `korean.*` 키라 `KoreanView` 에 함께 실린다.
 fn korean_view(k: &KoreanSettings, store: &SettingsStore) -> KoreanView {
     // K5 — 저장된 오버라이드 목록(부재 = None). 정규화는 `resolve_excluded_bundle_ids`
     // 쪽에서 하므로 여기서는 원본을 그대로 실어 보낸다.
@@ -544,6 +600,9 @@ fn korean_view(k: &KoreanSettings, store: &SettingsStore) -> KoreanView {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        // ⭐ F-19.1·F-19.2 — ko 노드 신규(F-19 명세 §3.0, 저장 키 `korean.*`).
+        caps_lock_switches_input_source: k.caps_lock_switches_input_source,
+        right_command_switches_input_source: k.right_command_switches_input_source,
     }
 }
 
@@ -863,6 +922,8 @@ fn settings_set_per_device(
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     let save_error = {
@@ -883,6 +944,8 @@ fn settings_set_per_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         false,
     )?;
@@ -892,6 +955,8 @@ fn settings_set_per_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -1015,6 +1080,25 @@ fn disable_label_key_for_setting(store_key: &str) -> &'static str {
         k if k == keys::HYPERKEY_HYPER_ENABLED => "settings.hyperkey.hyper.label",
         k if k == keys::HYPERKEY_MEH_ENABLED => "settings.hyperkey.meh.label",
         k if k == keys::HYPERKEY_BLEH_ENABLED => "settings.hyperkey.bleh.label",
+        // ⭐ F-19 — 언어 규칙 충돌(`languageKeycodeShared`)의 배타/해소 대상.
+        // F-19.1~F-19.7 저장 키 → 탭 전용 카탈로그 라벨.
+        k if k == keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE => {
+            "settings.korean.caps_switch"
+        }
+        k if k == keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE => {
+            "settings.korean.right_cmd"
+        }
+        k if k == keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA => {
+            "settings.japanese.caps_eisu_kana"
+        }
+        k if k == keys::JAPANESE_COMMAND_TOGGLES_EISU_KANA => {
+            "settings.japanese.cmd_eisu_kana"
+        }
+        k if k == keys::JAPANESE_SWAP_YEN_BACKSLASH => "settings.japanese.yen_backslash",
+        k if k == keys::JAPANESE_JIS_AS_US_SYMBOLS => "settings.japanese.jis_us",
+        k if k == keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE => {
+            "settings.chinese.caps_switch"
+        }
         other => {
             // 방어적 — conflicts.rs 가 이 네 개 밖의 키를 내놓는 일은 없어야 한다.
             tracing::error!(key = other, "unknown settings key in conflict resolution list");
@@ -1040,12 +1124,46 @@ fn pending_conflict_view(
     }
 }
 
+/// ⭐ F-19 언어 규칙 충돌(`LanguageConflict`)을 프런트 페이로드로 옮긴다 —
+/// `kind` 는 카탈로그 `settings.presets.conflict.title.<kind>` 키와 맞물린다
+/// (`languageKeycodeShared`). `to_disable`(끌 상대) 저장 키는
+/// [`disable_label_key_for_setting`] 으로 라벨 키를 만든다.
+fn language_shared_conflict_view(
+    conflict: &ultrakey_language_presets::LanguageConflict,
+    key: &str,
+    value: &serde_json::Value,
+) -> PendingConflictView {
+    PendingConflictView {
+        kind: conflict.kind.as_str(),
+        key: key.to_string(),
+        value: value.clone(),
+        disable_label_keys: conflict
+            .to_disable
+            .iter()
+            .map(|k| disable_label_key_for_setting(k).to_string())
+            .collect(),
+    }
+}
+
 /// hyper/meh/bleh 중 **활성화된** 슬롯의 소스가 caps lock 인가(architecture.md §6
 /// "caps_is_modifier_source" 정의 그대로).
 fn caps_is_modifier_source(h: &HyperkeySettings) -> bool {
     (h.hyper.enabled && h.hyper.source == SourceKey::CapsLock)
         || (h.meh.enabled && h.meh.source == SourceKey::CapsLock)
         || (h.bleh.enabled && h.bleh.source == SourceKey::CapsLock)
+}
+
+/// ⭐ F-19(H3) — 캡스락을 **단독 탭 트리거**로 주장하는 언어 규칙이 하나라도
+/// 켜져 있는가(F-19.1 캡스락=한/영 · F-19.3 캡스락=英数/かな · F-19.7 캡스락=중/영).
+/// 그러면 캡스락의 릴리즈를 FSM 이 봐야 하므로 D-1 alias(F18)가 필요하다(§5 #20).
+fn language_caps_lock_tap(
+    korean: &KoreanSettings,
+    japanese: &JapaneseSettings,
+    chinese: &ChineseSettings,
+) -> bool {
+    korean.caps_lock_switches_input_source
+        || japanese.caps_lock_toggles_eisu_kana
+        || chinese.caps_lock_switches_input_source
 }
 
 /// caps lock 을 소스로 쓰고 있는 **활성** hyper/meh/bleh 슬롯의 저장 키 목록.
@@ -1087,8 +1205,15 @@ fn compute_caps_lock_alias(
     presets: &PresetSettings,
     caps_is_source: bool,
     seek_remap_is_caps_lock: bool,
+    language_caps_lock_tap: bool,
 ) -> Option<KeyCode> {
-    let needs_alias = presets.needs_caps_lock_alias(caps_is_source) || seek_remap_is_caps_lock;
+    // ⭐ F-19(H3) — 캡스락 단독 탭 규칙(F-19.1·F-19.3·F-19.7)도 캡스락의
+    // 릴리즈를 FSM 이 봐야 하므로 D-1 alias 가 필요하다(캡스락은 래칭 키 —
+    // `key-remapping-engine.md` §5 #20). `synthesize_caps_lock_remap` 이 켜져
+    // 있으면(경로 A 강제) 기존 alias 의미론과 같게 무시한다.
+    let needs_alias = presets.needs_caps_lock_alias(caps_is_source)
+        || seek_remap_is_caps_lock
+        || language_caps_lock_tap;
     if needs_alias && !presets.synthesize_caps_lock_remap {
         Some(KeyCode::F18)
     } else {
@@ -1263,8 +1388,12 @@ struct SettingsState {
     /// `settings.presets.caps_alias.missing` 경고를 보인다.
     caps_lock_kernel_map_missing: bool,
     general: GeneralView,
-    /// F-16 `Korean` 탭.
+    /// F-16 `Korean` 탭(ko 노드 — F-19.1·F-19.2 포함).
     korean: KoreanView,
+    /// ⭐ F-19 `日本語` 노드.
+    japanese: JapaneseView,
+    /// ⭐ F-19 `中文` 노드.
+    chinese: ChineseView,
     /// F-01 `Seek` 탭.
     seek: SeekView,
     /// 값을 아직 적용하지 않은 충돌(architecture.md §6.5) — `Some` 이면 그 앞의
@@ -1282,6 +1411,8 @@ fn build_settings_state(
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    japanese: &JapaneseSettings,
+    chinese: &ChineseSettings,
     seek: &SeekSettings,
     store: &SettingsStore,
     auto_update: bool,
@@ -1294,7 +1425,12 @@ fn build_settings_state(
         .unwrap_or_else(|| "hyperkey".to_string());
     let caps_is_source = caps_is_modifier_source(hyperkey);
     let seek_remap_is_caps_lock = seek.remap_key == Some(SourceKey::CapsLock);
-    let caps_lock_alias = compute_caps_lock_alias(presets, caps_is_source, seek_remap_is_caps_lock);
+    let caps_lock_alias = compute_caps_lock_alias(
+        presets,
+        caps_is_source,
+        seek_remap_is_caps_lock,
+        language_caps_lock_tap(korean, japanese, chinese),
+    );
 
     let mut warnings: Vec<WarningView> =
         hyperkey.validate().into_iter().map(warning_view).collect();
@@ -1322,6 +1458,8 @@ fn build_settings_state(
         caps_lock_kernel_map_missing: caps_lock_alias.is_some() && caps_lock_kernel_map_missing,
         general: general_view(store, auto_update),
         korean: korean_view(korean, store),
+        japanese: japanese_view(japanese, store),
+        chinese: chinese_view(chinese, store),
         seek: seek_view(seek, quick_press_opens_seek(presets)),
         pending_conflict,
         per_device: build_per_device_view(store),
@@ -1458,7 +1596,7 @@ fn key_affects_modifier_rules(key: &str) -> bool {
 /// 때문이다(단일 크기 고정 + 사용자 조절 크기 영속, 아래 `SETTINGS_WINDOW_DEFAULT`
 /// 참고). 그래도 "프런트가 아는 탭을 Rust 도 아는가"라는 검증 자체는 여전히
 /// 필요해 이 화이트리스트로 남긴다.
-const KNOWN_TABS: &[&str] = &["seek", "hyperkey", "presets", "korean", "keyboards", "general"];
+const KNOWN_TABS: &[&str] = &["seek", "hyperkey", "presets", "korean", "japanese", "chinese", "keyboards", "general"];
 
 fn is_known_tab(tab: &str) -> bool {
     KNOWN_TABS.contains(&tab)
@@ -1495,6 +1633,8 @@ fn build_engine_config(
     presets: &PresetSettings,
     korean: &KoreanSettings,
     seek: &SeekSettings,
+    japanese: &JapaneseSettings,
+    chinese: &ChineseSettings,
     store: &SettingsStore,
 ) -> EngineConfig {
     let mut config = EngineConfig::default();
@@ -1508,11 +1648,23 @@ fn build_engine_config(
     config.rules.simple_remaps = preset_rules.simple_remaps;
     config.rules.source_actions = preset_rules.source_actions;
     let seek_remap_is_caps_lock = seek.remap_key == Some(SourceKey::CapsLock);
-    config.caps_lock_alias =
-        compute_caps_lock_alias(presets, caps_is_source, seek_remap_is_caps_lock);
+    config.caps_lock_alias = compute_caps_lock_alias(
+        presets,
+        caps_is_source,
+        seek_remap_is_caps_lock,
+        language_caps_lock_tap(korean, japanese, chinese),
+    );
     // F-16 — `korean.disableInRemoteDesktop` 은 여기 들어오지 않는다(엔진 설정이
     // 아니라 게이트다, D-K3) — `gate_controller.set_korean_exclusion_enabled` 이 따로 처리한다.
     config.rules.korean_rules = korean.to_rules();
+    // ⭐ F-19 — 언어 규칙을 ko(ko 노드 `korean.*` 키) + ja + zh 세 소스에서 합쳐
+    // 넣는다. 각자 `RuleId` 오름차순으로 반환하므로 순서 불변식은 병합 후에도 유지된다
+    // (`RuleId::Language(_)` 끼리의 payload 비교로 정렬된다).
+    let mut language_rules = korean.to_language_rules();
+    language_rules.extend(japanese.to_language_rules());
+    language_rules.extend(chinese.to_language_rules());
+    language_rules.sort_by_key(|r| r.id);
+    config.rules.language_rules = language_rules;
     // ⭐ K9(이슈 #73, D-K18) — modifier+문자키 → 영어 소문자 옵션은 규칙이 아니라
     // 중재기의 행동 플래그다(`EngineConfig::korean_modifier_lowercase`).
     config.korean_modifier_lowercase = korean.modifier_key_types_lowercase;
@@ -1709,6 +1861,10 @@ struct AppState {
     presets: Mutex<PresetSettings>,
     /// F-16 `Korean` 탭의 메모리 정본. `hyperkey`/`presets` 와 같은 캐시 규약을 쓴다.
     korean: Mutex<KoreanSettings>,
+    /// ⭐ F-19 `日本語` 노드의 메모리 정본(F-19.3~F-19.6). `korean` 과 같은 캐시 규약.
+    japanese: Mutex<ultrakey_language_presets::JapaneseSettings>,
+    /// ⭐ F-19 `中文` 노드의 메모리 정본(F-19.7).
+    chinese: Mutex<ultrakey_language_presets::ChineseSettings>,
     /// F-01 `Seek` 탭의 메모리 정본. `hyperkey`/`presets`/`korean` 과 같은 캐시 규약.
     seek: Mutex<SeekSettings>,
     /// Seek 워커(`seek.rs`)로 신호를 보내는 채널. 엔진이 아직 시작되지 않았으면
@@ -1858,6 +2014,8 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
+    let japanese = *state.japanese.lock().unwrap();
+    let chinese = *state.chinese.lock().unwrap();
     let seek = state.seek.lock().unwrap().clone();
     let store = state.store.lock().unwrap();
     let settings_state =
@@ -1865,6 +2023,8 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
             &hyperkey,
             &presets,
             &korean,
+            &japanese,
+            &chinese,
             &seek,
             &store,
             state.auto_update_checks_enabled(),
@@ -1966,12 +2126,16 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
     let hyperkey = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek = state.seek.lock().map_err(|e| e.to_string())?.clone();
     let store = state.store.lock().map_err(|e| e.to_string())?;
     Ok(build_settings_state(
         &hyperkey,
         &presets,
         &korean,
+        &japanese,
+        &chinese,
         &seek,
         &store,
         state.auto_update_checks_enabled(),
@@ -1982,20 +2146,25 @@ fn current_settings_state(state: &Arc<AppState>) -> Result<SettingsState, String
 }
 
 /// hyperkey.* 변경 뒤 `Engine::reconfigure` + (필요하면) `force_reset_state` 를
-/// 함께 호출한다. presets.*/korean.*/seek.* 경로가 전부 이 함수를 공유해 엔진
-/// 반영 로직이 여러 곳에 흩어지지 않게 한다.
+/// 함께 호출한다. presets.*/korean.*/japanese.*/chinese.*/seek.* 경로가 전부 이
+/// 함수를 공유해 엔진 반영 로직이 여러 곳에 흩어지지 않게 한다.
+/// ⭐ F-19 — japanese/chinese 설정을 추가로 받는다(setting 가족 5 + state = 8).
+#[allow(clippy::too_many_arguments)]
 fn reconfigure_engine(
     state: &Arc<AppState>,
     hyperkey: &HyperkeySettings,
     presets: &PresetSettings,
     korean: &KoreanSettings,
+    japanese: &JapaneseSettings,
+    chinese: &ChineseSettings,
     seek: &SeekSettings,
     force_reset: bool,
 ) -> Result<(), String> {
     let engine_guard = state.engine.lock().map_err(|e| e.to_string())?;
     if let Some(engine) = engine_guard.as_ref() {
         let store = state.store.lock().map_err(|e| e.to_string())?;
-        let config = build_engine_config(hyperkey, presets, korean, seek, &store);
+        let config =
+            build_engine_config(hyperkey, presets, korean, seek, japanese, chinese, &store);
         drop(store);
         engine.reconfigure(config);
         if force_reset {
@@ -2099,6 +2268,14 @@ fn settings_set(
 
     if key.starts_with("korean.") {
         return settings_set_korean(&state, &key, &value);
+    }
+
+    if key.starts_with("japanese.") {
+        return settings_set_japanese(&state, &key, &value);
+    }
+
+    if key.starts_with("chinese.") {
+        return settings_set_chinese(&state, &key, &value);
     }
 
     if key.starts_with("perDevice.") {
@@ -2315,6 +2492,8 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     {
@@ -2327,6 +2506,8 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         false,
     )?;
@@ -2336,6 +2517,8 @@ fn settings_unset(state: State<'_, Arc<AppState>>, key: String) -> Result<Settin
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -2390,6 +2573,8 @@ fn settings_copy_common_to_device(
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     let mut store = state.store.lock().map_err(|e| e.to_string())?;
@@ -2451,6 +2636,8 @@ fn settings_copy_common_to_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         false,
     )?;
@@ -2460,6 +2647,8 @@ fn settings_copy_common_to_device(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -2714,33 +2903,59 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     // ⚠️ `seek` 도 함께 되살린다 — F-01(이슈 #39 와 병렬로 머지된 M3-3)이 `AppState`
     // 에 네 번째 메모리 정본을 더했다. 빠뜨리면 import 가 Seek 설정만 조용히
     // 반영하지 않는 "부분 교체"가 되어 §3.4 결정 4(교체)가 깨진다.
-    let (hyperkey, presets, korean, seek, disabled_apps, korean_excluded) = {
+    let (hyperkey, presets, korean, japanese, chinese, seek, disabled_apps, korean_excluded, japanese_excluded, chinese_excluded) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let hyperkey = HyperkeySettings::from_store(&store);
         let presets = PresetSettings::from_store(&store);
         let korean = KoreanSettings::from_store(&store);
+        let japanese = JapaneseSettings::from_store(&store);
+        let chinese = ChineseSettings::from_store(&store);
         let seek = SeekSettings::from_store(&store);
         let disabled_apps: Vec<String> =
             store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
         // ⭐ K5(D-K17) — 목록 오버라이드도 import 로 바뀔 수 있다. 같은 잠금 안에서
-        // 함께 읽는다.
+        // 함께 읽는다. F-19(D-7) — japanese/chinese 제외 목록도 같은 규약.
         let korean_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
             store
                 .get::<Vec<String>>(keys::KOREAN_EXCLUDED_BUNDLE_IDS)
                 .as_deref(),
         );
-        (hyperkey, presets, korean, seek, disabled_apps, korean_excluded)
+        let japanese_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+            store
+                .get::<Vec<String>>(keys::JAPANESE_EXCLUDED_BUNDLE_IDS)
+                .as_deref(),
+        );
+        let chinese_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+            store
+                .get::<Vec<String>>(keys::CHINESE_EXCLUDED_BUNDLE_IDS)
+                .as_deref(),
+        );
+        (
+            hyperkey,
+            presets,
+            korean,
+            japanese,
+            chinese,
+            seek,
+            disabled_apps,
+            korean_excluded,
+            japanese_excluded,
+            chinese_excluded,
+        )
     };
 
     *state.hyperkey.lock().map_err(|e| e.to_string())? = hyperkey.clone();
     *state.presets.lock().map_err(|e| e.to_string())? = presets;
     *state.korean.lock().map_err(|e| e.to_string())? = korean;
+    *state.japanese.lock().map_err(|e| e.to_string())? = japanese;
+    *state.chinese.lock().map_err(|e| e.to_string())? = chinese;
     *state.seek.lock().map_err(|e| e.to_string())? = seek.clone();
 
     // ⭐ 게이트도 boot 만큼 되돌린다 — `general.disabledApps`/
     // `korean.disableInRemoteDesktop` 도 import 로 바뀔 수 있는 값이다(D-K3 과
     // 같은 이유로 엔진 설정이 아니라 게이트라 `reconfigure_engine` 이 대신
     // 해주지 않는다). ⭐ K5(D-K17) — 제외 목록 오버라이드도 마찬가지다.
+    // F-19(D-7) — japanese/chinese 제외 목록도 같이 재주입한다.
     state.gate_controller.set_disabled_apps(disabled_apps);
     state
         .gate_controller
@@ -2748,10 +2963,16 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
     state
         .gate_controller
         .set_korean_exclusion_enabled(korean.disable_in_remote_desktop);
+    state
+        .gate_controller
+        .set_japanese_excluded_apps(japanese_excluded);
+    state
+        .gate_controller
+        .set_chinese_excluded_apps(chinese_excluded);
 
     // 규칙 테이블이 통째로 바뀔 수 있으므로 항상 force_reset 한다
     // (`settings_set_preset`/`settings_set_korean` 과 같은 이유).
-    reconfigure_engine(state, &hyperkey, &presets, &korean, &seek, true)?;
+    reconfigure_engine(state, &hyperkey, &presets, &korean, &japanese, &chinese, &seek, true)?;
 
     // 5) `general.language` 가 import 로 바뀌었으면 카탈로그도 교체한다
     // (A-2 언어 선택 경로, `settings_set_general_language` 와 같은 판정).
@@ -3241,12 +3462,16 @@ fn settings_set_hyperkey(
             let pending = pending_conflict_view(conflict, key, value);
             let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
             let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+            let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+            let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
             let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
                 &korean_snapshot,
+                &japanese_snapshot,
+                &chinese_snapshot,
                 &seek_snapshot,
                 &store,
                 state.auto_update_checks_enabled(),
@@ -3265,6 +3490,8 @@ fn settings_set_hyperkey(
     };
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 3) 엔진 반영.
@@ -3274,6 +3501,8 @@ fn settings_set_hyperkey(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         key_affects_modifier_rules(key),
     )?;
@@ -3296,6 +3525,8 @@ fn settings_set_hyperkey(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -3345,12 +3576,16 @@ fn settings_set_preset(
         {
             let pending = pending_conflict_view(conflict, key, value);
             let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+            let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+            let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
             let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
             let store = state.store.lock().map_err(|e| e.to_string())?;
             return Ok(build_settings_state(
                 &hyperkey_snapshot,
                 &presets_before,
                 &korean_snapshot,
+                &japanese_snapshot,
+                &chinese_snapshot,
                 &seek_snapshot,
                 &store,
                 state.auto_update_checks_enabled(),
@@ -3368,6 +3603,8 @@ fn settings_set_preset(
         *presets
     };
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 3) 엔진 반영 — presets.* 변경은 항상 규칙 테이블을 바꾼다(단순 슬라이더도
@@ -3378,6 +3615,8 @@ fn settings_set_preset(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         true,
     )?;
@@ -3406,6 +3645,8 @@ fn settings_set_preset(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -3429,6 +3670,8 @@ fn settings_set_korean(
 ) -> Result<SettingsState, String> {
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
     let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
 
     // 1)
@@ -3444,6 +3687,8 @@ fn settings_set_korean(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         true,
     )?;
@@ -3483,6 +3728,8 @@ fn settings_set_korean(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -3556,6 +3803,337 @@ fn validate_and_apply_korean(
         return Err(format!("unknown settings key: {key}"));
     }
     apply_korean_setting(korean, key, value)
+}
+
+// ============================================================================
+// F-19 `settings_set` 의 `japanese.*`/`chinese.*` 경로.
+// ============================================================================
+
+/// 현재 켜져 있는 언어 프리셋 저장 키 목록(F-16 의 `korean.hanEng…` 규칙 제외 —
+/// 충돌 감지는 F-19 규칙끼리만 본다). `detect_language_conflict` 의 `active_keys`
+/// 인자다 — F-19.1·F-19.2 는 `korean.*` 키에 살지만 정의는 F-19 규칙이라 포함한다
+/// (명세 §3.0 — ko 노드 신규분의 ID 는 Language 계열).
+fn active_language_preset_keys(state: &Arc<AppState>) -> Vec<&'static str> {
+    let korean = state.korean.lock().unwrap();
+    let japanese = state.japanese.lock().unwrap();
+    let chinese = state.chinese.lock().unwrap();
+    let mut active = Vec::new();
+    if korean.caps_lock_switches_input_source {
+        active.push(keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE);
+    }
+    if korean.right_command_switches_input_source {
+        active.push(keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE);
+    }
+    if japanese.caps_lock_toggles_eisu_kana {
+        active.push(keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA);
+    }
+    if japanese.command_toggles_eisu_kana {
+        active.push(keys::JAPANESE_COMMAND_TOGGLES_EISU_KANA);
+    }
+    if japanese.swap_yen_backslash {
+        active.push(keys::JAPANESE_SWAP_YEN_BACKSLASH);
+    }
+    if japanese.jis_as_us_symbols {
+        active.push(keys::JAPANESE_JIS_AS_US_SYMBOLS);
+    }
+    if chinese.caps_lock_switches_input_source {
+        active.push(keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE);
+    }
+    active
+}
+
+/// `settings_set` 의 `japanese.*` 경로(F-19, P19~P22). `settings_set_korean` 과 같은
+/// 5단계 골격에, **F-19 키코드 충돌 감지**(명세 §5 #1 — 같은 물리 키를 소스로 주장하는
+/// 규칙이 둘 이상이면 `pendingConflict` 를 돌려준다)가 들어간다.
+fn settings_set_japanese(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
+
+    // 1) 충돌 감지 — 적용 전에.
+    if let Some(new_value) = value.as_bool() {
+        let active = active_language_preset_keys(state);
+        if let Some(conflict) = ultrakey_language_presets::detect_language_conflict(
+            &active,
+            presets_snapshot.caps_quick_press.enabled,
+            key,
+            new_value,
+        ) {
+            let pending = language_shared_conflict_view(&conflict, key, value);
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            return Ok(build_settings_state(
+                &hyperkey_snapshot,
+                &presets_snapshot,
+                &korean_snapshot,
+                &japanese_snapshot,
+                &chinese_snapshot,
+                &seek_snapshot,
+                &store,
+                state.auto_update_checks_enabled(),
+                None,
+                Some(pending),
+                caps_lock_kernel_map_missing(state),
+            ));
+        }
+    }
+
+    // 2) 메모리 갱신.
+    let japanese_snapshot = {
+        let mut japanese = state.japanese.lock().map_err(|e| e.to_string())?;
+        validate_and_apply_japanese(&mut japanese, key, value)?;
+        *japanese
+    };
+
+    // 3) 엔진 반영 — japanese.* 변경은 규칙 테이블을 바꾼다.
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
+        &seek_snapshot,
+        true,
+    )?;
+
+    // 3-b) F-19 목록 오버라이드(`japanese.excludedBundleIds`)는 게이트다(D-7) —
+    // 들어온 값으로 통째로 재주입한다(저장 실패 시 화면·게이트 어긋남 방지).
+    if key == keys::JAPANESE_EXCLUDED_BUNDLE_IDS {
+        let ids: Vec<String> = serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))?;
+        state
+            .gate_controller
+            .set_japanese_excluded_apps(ultrakey_korean::resolve_excluded_bundle_ids(Some(&ids)));
+    }
+
+    // 4) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "failed to save setting");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 5)
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
+        &seek_snapshot,
+        &store,
+        state.auto_update_checks_enabled(),
+        save_error,
+        None,
+        caps_lock_kernel_map_missing(state),
+    ))
+}
+
+/// `settings_set_japanese` 의 1~2단계(키 검증 + 메모리 갱신)만 담당하는 순수 함수.
+fn apply_japanese_setting(
+    japanese: &mut JapaneseSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        k if k == keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA => {
+            japanese.caps_lock_toggles_eisu_kana = parse(value, key)?
+        }
+        k if k == keys::JAPANESE_COMMAND_TOGGLES_EISU_KANA => {
+            japanese.command_toggles_eisu_kana = parse(value, key)?
+        }
+        k if k == keys::JAPANESE_SWAP_YEN_BACKSLASH => {
+            japanese.swap_yen_backslash = parse(value, key)?
+        }
+        k if k == keys::JAPANESE_JIS_AS_US_SYMBOLS => {
+            japanese.jis_as_us_symbols = parse(value, key)?
+        }
+        k if k == keys::JAPANESE_EXCLUDED_BUNDLE_IDS => {
+            // 게이트 주입용 저장 데이터 — `KoreanSettings::excludedBundleIds` 와
+            // 같은 이유로 필드가 아니라 저장소에서 읽는다. 배열 원소 검증만.
+            let ids: Vec<String> = parse(value, key)?;
+            for id in &ids {
+                if ultrakey_korean::normalize_bundle_id(id).is_none() {
+                    return Err(format!("빈 번들 ID 는 저장할 수 없다({key})"));
+                }
+            }
+        }
+        _ => return Err(format!("{key} cannot be changed through this command")),
+    }
+    Ok(())
+}
+
+fn validate_and_apply_japanese(
+    japanese: &mut JapaneseSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("unknown settings key: {key}"));
+    }
+    apply_japanese_setting(japanese, key, value)
+}
+
+/// `settings_set` 의 `chinese.*` 경로(F-19, P23). `settings_set_japanese` 와 같은
+/// 골격 — 충돌 감지(F-19.7 캡스락) + 5단계.
+fn settings_set_chinese(
+    state: &Arc<AppState>,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<SettingsState, String> {
+    let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
+    let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
+    let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
+    let seek_snapshot = state.seek.lock().map_err(|e| e.to_string())?.clone();
+
+    // 1) 충돌 감지 — F-19.7(캡스락)이 F-19.1/19.3/19.7 과 같은 물리 키를 소스로
+    // 주장할 수 있다(명세 §5 #1).
+    if let Some(new_value) = value.as_bool() {
+        let active = active_language_preset_keys(state);
+        if let Some(conflict) = ultrakey_language_presets::detect_language_conflict(
+            &active,
+            presets_snapshot.caps_quick_press.enabled,
+            key,
+            new_value,
+        ) {
+            let pending = language_shared_conflict_view(&conflict, key, value);
+            let store = state.store.lock().map_err(|e| e.to_string())?;
+            return Ok(build_settings_state(
+                &hyperkey_snapshot,
+                &presets_snapshot,
+                &korean_snapshot,
+                &japanese_snapshot,
+                &chinese_snapshot,
+                &seek_snapshot,
+                &store,
+                state.auto_update_checks_enabled(),
+                None,
+                Some(pending),
+                caps_lock_kernel_map_missing(state),
+            ));
+        }
+    }
+
+    // 2) 메모리 갱신.
+    let chinese_snapshot = {
+        let mut chinese = state.chinese.lock().map_err(|e| e.to_string())?;
+        validate_and_apply_chinese(&mut chinese, key, value)?;
+        *chinese
+    };
+
+    // 3) 엔진 반영.
+    reconfigure_engine(
+        state,
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
+        &seek_snapshot,
+        true,
+    )?;
+
+    // 3-b) F-19.7 목록 오버라이드(`chinese.excludedBundleIds`) 게이트 재주입(D-7).
+    if key == keys::CHINESE_EXCLUDED_BUNDLE_IDS {
+        let ids: Vec<String> = serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))?;
+        state
+            .gate_controller
+            .set_chinese_excluded_apps(ultrakey_korean::resolve_excluded_bundle_ids(Some(&ids)));
+    }
+
+    // 4) 저장.
+    let save_error = {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        match store.set(key, value) {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!(key = %key, error = %e, "failed to save setting");
+                Some(e.to_string())
+            }
+        }
+    };
+
+    // 5)
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    Ok(build_settings_state(
+        &hyperkey_snapshot,
+        &presets_snapshot,
+        &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
+        &seek_snapshot,
+        &store,
+        state.auto_update_checks_enabled(),
+        save_error,
+        None,
+        caps_lock_kernel_map_missing(state),
+    ))
+}
+
+/// `settings_set_chinese` 의 1~2단계(키 검증 + 메모리 갱신)만 담당하는 순수 함수.
+fn apply_chinese_setting(
+    chinese: &mut ChineseSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    fn parse<T: serde::de::DeserializeOwned>(
+        value: &serde_json::Value,
+        key: &str,
+    ) -> Result<T, String> {
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("설정 값 타입이 맞지 않는다({key}): {e}"))
+    }
+
+    match key {
+        k if k == keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE => {
+            chinese.caps_lock_switches_input_source = parse(value, key)?
+        }
+        k if k == keys::CHINESE_EXCLUDED_BUNDLE_IDS => {
+            let ids: Vec<String> = parse(value, key)?;
+            for id in &ids {
+                if ultrakey_korean::normalize_bundle_id(id).is_none() {
+                    return Err(format!("빈 번들 ID 는 저장할 수 없다({key})"));
+                }
+            }
+        }
+        _ => return Err(format!("{key} cannot be changed through this command")),
+    }
+    Ok(())
+}
+
+fn validate_and_apply_chinese(
+    chinese: &mut ChineseSettings,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if !keys::all().contains(&key) {
+        return Err(format!("unknown settings key: {key}"));
+    }
+    apply_chinese_setting(chinese, key, value)
 }
 
 // ============================================================================
@@ -3732,6 +4310,8 @@ fn settings_set_seek(
     let hyperkey_snapshot = state.hyperkey.lock().map_err(|e| e.to_string())?.clone();
     let presets_snapshot = *state.presets.lock().map_err(|e| e.to_string())?;
     let korean_snapshot = *state.korean.lock().map_err(|e| e.to_string())?;
+    let japanese_snapshot = *state.japanese.lock().map_err(|e| e.to_string())?;
+    let chinese_snapshot = *state.chinese.lock().map_err(|e| e.to_string())?;
 
     // 1)
     let seek_snapshot = {
@@ -3746,6 +4326,8 @@ fn settings_set_seek(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         true,
     )?;
@@ -3774,6 +4356,8 @@ fn settings_set_seek(
         &hyperkey_snapshot,
         &presets_snapshot,
         &korean_snapshot,
+        &japanese_snapshot,
+        &chinese_snapshot,
         &seek_snapshot,
         &store,
         state.auto_update_checks_enabled(),
@@ -3805,23 +4389,48 @@ fn settings_resolve_conflict(
         let presets_before = *state.presets.lock().map_err(|e| e.to_string())?;
         if key.starts_with("presets.") {
             ultrakey_presets::detect_conflict(&presets_before, &caps_slots, &key, new_value)
+                .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default()
+        } else if key.starts_with("korean.")
+            || key.starts_with("japanese.")
+            || key.starts_with("chinese.")
+        {
+            // ⭐ F-19 — 언어 규칙 충돌(같은 물리 키를 소스로 주장하는 규칙 ≥2, 명세 §5 #1).
+            // F-19.1/19.3/19.7 ↔ F-08.2 캡스락 quick press 크로스 패밀리도 여기서
+            // 걸러진다(presets 스냅샷의 `caps_quick_press.enabled` 를 넘긴다).
+            let active = active_language_preset_keys(&state);
+            ultrakey_language_presets::detect_language_conflict(
+                &active,
+                presets_before.caps_quick_press.enabled,
+                &key,
+                new_value,
+            )
+            .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
         } else if new_value {
             // ⭐ 반대 방향 — hyper/meh/bleh 슬롯을 caps lock 소스로 켜려는데
             // `Remap caps lock to:` 가 이미 켜져 있는 경우(대칭 처리).
             ultrakey_presets::detect_modifier_slot_conflict(&presets_before)
+                .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default()
         } else {
-            None
+            Vec::new()
         }
-        .map(|c| c.to_disable.iter().map(|s| s.to_string()).collect())
-        .unwrap_or_default()
     };
 
     // ⭐ 배타 대상은 `presets.*` 일 수도 `hyperkey.*` 일 수도 있다 — 각각 자기 경로로
-    // 끈다(엔진 반영·write-through 는 양쪽 경로가 이미 책임진다).
+    // 끈다(엔진 반영·write-through 는 양쪽 경로가 이미 책임진다). ⭐ F-19 — 언어
+    // 규칙이 배타 대상이면 `korean.*`/`japanese.*`/`chinese.*` 자기 경로로 끈다.
     for disable_key in &to_disable {
         let off = serde_json::Value::Bool(false);
         if disable_key.starts_with("presets.") {
             settings_set_preset(&state, disable_key, &off)?;
+        } else if disable_key.starts_with("korean.") {
+            settings_set_korean(&state, disable_key, &off)?;
+        } else if disable_key.starts_with("japanese.") {
+            settings_set_japanese(&state, disable_key, &off)?;
+        } else if disable_key.starts_with("chinese.") {
+            settings_set_chinese(&state, disable_key, &off)?;
         } else {
             settings_set_hyperkey(&state, disable_key, &off)?;
         }
@@ -3829,6 +4438,12 @@ fn settings_resolve_conflict(
 
     if key.starts_with("presets.") {
         settings_set_preset(&state, &key, &value)
+    } else if key.starts_with("korean.") {
+        settings_set_korean(&state, &key, &value)
+    } else if key.starts_with("japanese.") {
+        settings_set_japanese(&state, &key, &value)
+    } else if key.starts_with("chinese.") {
+        settings_set_chinese(&state, &key, &value)
     } else {
         settings_set_hyperkey(&state, &key, &value)
     }
@@ -4239,6 +4854,8 @@ fn main() {
         hyperkey: Mutex::new(HyperkeySettings::default()),
         presets: Mutex::new(PresetSettings::default()),
         korean: Mutex::new(KoreanSettings::default()),
+        japanese: Mutex::new(ultrakey_language_presets::JapaneseSettings::default()),
+        chinese: Mutex::new(ultrakey_language_presets::ChineseSettings::default()),
         seek: Mutex::new(SeekSettings::default()),
         seek_tx: Mutex::new(None),
         trackpad: Mutex::new(None),
@@ -4364,6 +4981,11 @@ fn main() {
             // 로 읽힌다(D-K9 각주, `KoreanSettings::from_store` 가 처리한다).
             let korean_settings = KoreanSettings::from_store(&settings_store);
             *state.korean.lock().unwrap() = korean_settings;
+            // ⭐ F-19 — ja/zh 설정도 같은 "부재 = 기본값" 조립 규약.
+            let japanese_settings = JapaneseSettings::from_store(&settings_store);
+            *state.japanese.lock().unwrap() = japanese_settings;
+            let chinese_settings = ChineseSettings::from_store(&settings_store);
+            *state.chinese.lock().unwrap() = chinese_settings;
             // ⭐ F-01 Seek — 같은 "부재 = 기본값" 조립 규약(명세 §4 "오기 정정").
             let seek_settings = SeekSettings::from_store(&settings_store);
             *state.seek.lock().unwrap() = seek_settings.clone();
@@ -4388,6 +5010,24 @@ fn main() {
             state
                 .gate_controller
                 .set_korean_exclusion_enabled(korean_settings.disable_in_remote_desktop);
+            // ⭐ F-19(D-7) — ja/zh 제외 목록도 같은 방식으로 부팅 복원(기본 목록은
+            // F-16 과 동일한 "원격 세션" 정책 — Q5, 명세 §3.5).
+            let japanese_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+                settings_store
+                    .get::<Vec<String>>(keys::JAPANESE_EXCLUDED_BUNDLE_IDS)
+                    .as_deref(),
+            );
+            state
+                .gate_controller
+                .set_japanese_excluded_apps(japanese_excluded);
+            let chinese_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
+                settings_store
+                    .get::<Vec<String>>(keys::CHINESE_EXCLUDED_BUNDLE_IDS)
+                    .as_deref(),
+            );
+            state
+                .gate_controller
+                .set_chinese_excluded_apps(chinese_excluded);
 
             // ⭐ A-2(이슈 #39, §3.1.2-a) — 저장된 `general.language` 가 있으면 그
             // 로케일로 카탈로그를 교체한다. 없으면 main() 이 이미 만들어 둔
@@ -4713,10 +5353,20 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let hyperkey = state.hyperkey.lock().unwrap().clone();
     let presets = *state.presets.lock().unwrap();
     let korean = *state.korean.lock().unwrap();
+    let japanese = *state.japanese.lock().unwrap();
+    let chinese = *state.chinese.lock().unwrap();
     let seek_settings = state.seek.lock().unwrap().clone();
     let config = {
         let store = state.store.lock().unwrap();
-        build_engine_config(&hyperkey, &presets, &korean, &seek_settings, &store)
+        build_engine_config(
+            &hyperkey,
+            &presets,
+            &korean,
+            &seek_settings,
+            &japanese,
+            &chinese,
+            &store,
+        )
     };
 
     // F-17 — `LedgerStore` 구현(`perDevice._managed`, 계약 §B.2). 엔진이 이것을
@@ -6292,6 +6942,8 @@ mod tests {
             &PresetSettings::default(),
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.modifier_rules.len(), 1);
@@ -6315,6 +6967,8 @@ mod tests {
             &presets,
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.combo_rules.len(), 1);
@@ -6332,6 +6986,8 @@ mod tests {
             &PresetSettings::default(),
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(none_needed.caps_lock_alias, None);
@@ -6345,6 +7001,8 @@ mod tests {
             &needs_alias,
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(with_alias.caps_lock_alias, Some(KeyCode::F18));
@@ -6359,6 +7017,8 @@ mod tests {
             &synthesize_on,
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(with_synthesize.caps_lock_alias, None);
@@ -6381,6 +7041,8 @@ mod tests {
             &presets,
             &KoreanSettings::default(),
             &seek_targets_caps_lock,
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(
@@ -6398,6 +7060,8 @@ mod tests {
             &presets,
             &KoreanSettings::default(),
             &seek_targets_f13,
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(without_alias.caps_lock_alias, None);
@@ -6412,6 +7076,8 @@ mod tests {
             &synthesize_on,
             &KoreanSettings::default(),
             &seek_targets_caps_lock,
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(overridden.caps_lock_alias, None);
@@ -6429,6 +7095,8 @@ mod tests {
             &PresetSettings::default(),
             &korean,
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SettingsStore::in_memory(),
         );
         assert_eq!(config.rules.korean_rules.len(), 1);
@@ -6454,6 +7122,8 @@ mod tests {
             &PresetSettings::default(),
             &KoreanSettings::default(),
             &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &store,
         );
 
@@ -6719,11 +7389,11 @@ mod tests {
     #[test]
     fn compute_caps_lock_alias_matrix() {
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), false, false),
+            compute_caps_lock_alias(&PresetSettings::default(), false, false, false),
             None
         );
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), true, false),
+            compute_caps_lock_alias(&PresetSettings::default(), true, false, false),
             Some(KeyCode::F18)
         );
 
@@ -6731,7 +7401,7 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        assert_eq!(compute_caps_lock_alias(&synthesize, true, false), None);
+        assert_eq!(compute_caps_lock_alias(&synthesize, true, false, false), None);
     }
 
     /// ⭐ F-01 — `seek_remap_is_caps_lock` 하나만으로도 다른 이유 없이 F18 alias 가
@@ -6740,11 +7410,11 @@ mod tests {
     #[test]
     fn compute_caps_lock_alias_seek_remap_is_caps_lock_forces_alias() {
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), false, true),
+            compute_caps_lock_alias(&PresetSettings::default(), false, true, false),
             Some(KeyCode::F18)
         );
         assert_eq!(
-            compute_caps_lock_alias(&PresetSettings::default(), false, false),
+            compute_caps_lock_alias(&PresetSettings::default(), false, false, false),
             None,
             "seek_remap_is_caps_lock 이 false 면 이 이유만으로는 alias 가 켜지지 않는다"
         );
@@ -6754,10 +7424,29 @@ mod tests {
             ..PresetSettings::default()
         };
         assert_eq!(
-            compute_caps_lock_alias(&synthesize, false, true),
+            compute_caps_lock_alias(&synthesize, false, true, false),
             None,
             "Advanced 토글이 켜지면 seek_remap_is_caps_lock 이유도 무시된다"
         );
+    }
+
+    // ⭐ F-19 — 언어 프리셋(캡스락 단독 탭 규칙)이 켜지면 D-1 alias 가 필요하다.
+    #[test]
+    fn compute_caps_lock_alias_language_caps_lock_tap_forces_alias() {
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), false, false, true),
+            Some(KeyCode::F18)
+        );
+        assert_eq!(
+            compute_caps_lock_alias(&PresetSettings::default(), false, false, false),
+            None
+        );
+        // Advanced 토글이 켜지면 다른 이유들과 마찬가지로 무시된다.
+        let synthesize = PresetSettings {
+            synthesize_caps_lock_remap: true,
+            ..PresetSettings::default()
+        };
+        assert_eq!(compute_caps_lock_alias(&synthesize, false, false, true), None);
     }
 
     // preset_options_view() — 팝업 6종 개수(50/48/2/2/4/4)와 labelKey 배정.
@@ -7246,6 +7935,8 @@ mod tests {
             &hyperkey,
             &presets,
             &korean,
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &seek,
             &store,
             false,
@@ -7355,6 +8046,8 @@ mod tests {
             &hyperkey,
             &PresetSettings::default(),
             &KoreanSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
             &SeekSettings::default(),
             &store,
             false,

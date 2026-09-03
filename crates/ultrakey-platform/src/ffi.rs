@@ -407,3 +407,18 @@ extern "C" {
     pub(crate) static kSecValueData: Option<&'static CFString>;
     pub(crate) static kSecReturnData: Option<&'static CFString>;
 }
+
+// ============================================================================
+// CoreGraphics — F-19(D-4) 키보드 타입 판정
+// ============================================================================
+//
+// 근거: `CoreGraphics.framework/.../CGEventSource.h` 65행 —
+// `CG_EXTERN CGEventSourceKeyboardType CGEventSourceGetKeyboardType(
+//     CGEventSourceRef __nullable source) API_AVAILABLE(macos(10.4));`
+// `CGEventSourceKeyboardType` 은 `uint32_t`(같은 헤더 488행 실측).
+// ⚠️ 반환 상수(ANSI=40/ISO=41/JIS=42) 는 SDK 헤더에 매크로가 없다 — 값의 근거는
+// `keyboard_type.rs` 모듈 문서를 참고(Apple 공개 문서값, `(추정)`).
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    pub(crate) fn CGEventSourceGetKeyboardType(source: *mut c_void) -> u32;
+}

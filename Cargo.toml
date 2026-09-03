@@ -8,6 +8,7 @@ members = [
     "crates/ultrakey-hyperkey",
     "crates/ultrakey-presets",
     "crates/ultrakey-korean",
+    "crates/ultrakey-language-presets",
     "crates/ultrakey-permissions",
     "crates/ultrakey-i18n",
     "crates/ultrakey-seek",
@@ -36,6 +37,7 @@ ultrakey-layout      = { path = "crates/ultrakey-layout" }
 ultrakey-hyperkey    = { path = "crates/ultrakey-hyperkey" }
 ultrakey-presets     = { path = "crates/ultrakey-presets" }
 ultrakey-korean      = { path = "crates/ultrakey-korean" }
+ultrakey-language-presets = { path = "crates/ultrakey-language-presets" }
 ultrakey-permissions = { path = "crates/ultrakey-permissions" }
 ultrakey-i18n        = { path = "crates/ultrakey-i18n" }
 ultrakey-seek        = { path = "crates/ultrakey-seek" }

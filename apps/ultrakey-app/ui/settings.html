@@ -62,6 +62,12 @@
   .sidebar button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
   .sidebar button:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
 
+  /* ⭐ F-19(명세 §4.1) — `언어` 트리: 부모 disclosure 버튼 + 자식 탭 묶음.
+     자식은 들여쓰고 부모는 일반 폴더 버튼처럼(선택 상태 없음 — role=tab 이 아니다). */
+  .sidebar .tab-children { display: flex; flex-direction: column; }
+  .sidebar .tab-children button { padding-left: 22px; }
+  #tab-language-parent { font-weight: 600; }
+
   /* ⭐ 탭 아이콘(이슈 #40 ②) — 자산 파일 없는 **인라인 SVG 선화**다. 색을
      하드코딩하지 않고 `stroke: currentColor` 만 쓰므로 :root 의
      `color-scheme: light dark` 가 정한 전경색을 그대로 따라간다 — 라이트에서
@@ -356,10 +362,27 @@
       <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="7" rx="8.5" ry="3.5"/><path d="M3.5 12c0 1.93 3.81 3.5 8.5 3.5s8.5-1.57 8.5-3.5"/><path d="M3.5 17c0 1.93 3.81 3.5 8.5 3.5s8.5-1.57 8.5-3.5"/></svg>
       <span id="tab-presets-label"></span>
     </button>
-    <button role="tab" id="tab-korean" data-tab="korean" aria-selected="false" aria-controls="panel-korean" tabindex="-1">
-      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 5h8.5l-2.5 14"/><path d="M16.5 3v18"/><path d="M16.5 11.5h4.5"/></svg>
-      <span id="tab-korean-label"></span>
+    <!-- ⭐ F-19(명세 §4.1) — `언어` disclosure 부모(탭 아님) + 자식 탭 3종.
+         부모는 role=tab 이 아니고 data-tab·aria-controls 가 없다 — 선택 불가,
+         KNOWN_TABS/TABS 에도 없다. `tab-index` 는 자식 3종이 실제 탭이다. -->
+    <button type="button" id="tab-language-parent" aria-expanded="true" aria-controls="tab-language-children" tabindex="-1">
+      <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 5.5h6.5l2 3H21.5v10a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5v-11a2 2 0 0 1 2-2Z"/><path d="M9 13.5h.01M12 12.5h.01M15 13.5h.01"/></svg>
+      <span id="tab-language-label"></span>
     </button>
+    <div id="tab-language-children" class="tab-children">
+      <button role="tab" id="tab-korean" data-tab="korean" aria-selected="false" aria-controls="panel-korean" tabindex="-1">
+        <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 5h8.5l-2.5 14"/><path d="M16.5 3v18"/><path d="M16.5 11.5h4.5"/></svg>
+        <span id="tab-korean-label"></span>
+      </button>
+      <button role="tab" id="tab-japanese" data-tab="japanese" aria-selected="false" aria-controls="panel-japanese" tabindex="-1">
+        <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4.5h16M4 9.5h16M4 14.5h10M4 19.5h16"/><path d="M17 16.5v4"/><path d="M15.5 16.5h3"/></svg>
+        <span id="tab-japanese-label"></span>
+      </button>
+      <button role="tab" id="tab-chinese" data-tab="chinese" aria-selected="false" aria-controls="panel-chinese" tabindex="-1">
+        <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 9.5h16M4 14h16M4 18.5h16"/><path d="M12 4v16"/><path d="M8 8l-2 8M16 8l2 8"/></svg>
+        <span id="tab-chinese-label"></span>
+      </button>
+    </div>
     <button role="tab" id="tab-keyboards" data-tab="keyboards" aria-selected="false" aria-controls="panel-keyboards" tabindex="-1">
       <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="13" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h.01M9.5 13.5h.01M13 13.5h.01M16.5 13.5h.01M8 16.5h8"/></svg>
       <span id="tab-keyboards-label"></span>
@@ -770,10 +793,114 @@
 
       <hr />
 
+      <!-- ⭐ F-19 ko 노드 신규(F-19.1·F-19.2, 언어-presets.md §3.0) — 저장 키는
+           `korean.*` 네임스페이스라 이 패널에 둔다. 정의는 F-19 명세(동작 §3.1),
+           저장 규약 · 충돌은 F-19 §5. -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-caps-switch" data-key="korean.capsLockSwitchesInputSource" />
+          <span id="korean-caps-switch-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-caps-switch-hint"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="korean-right-cmd" data-key="korean.rightCommandSwitchesInputSource" />
+          <span id="korean-right-cmd-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="korean-right-cmd-hint"></p>
+
+      <hr />
+
       <!-- §3.6 행동 기반 진단 + §7 오른쪽 command 안내. 어느 항목에도 종속되지
            않는 탭 공통 안내라 맨 아래에 둔다. -->
       <p class="hint" id="korean-not-working-hint"></p>
       <p class="hint" id="korean-right-command-hint"></p>
+    </section>
+
+    <!-- ⭐ F-19 `日本語` 패널(언어-presets.md §3.2) — F-19.3~F-19.6 체크박스 4개 +
+         앱 제외 목록 편집기(D-7). ko 패널(panel-korean)의 컨트롤 카탈로그 관례를 그대로
+         따른다(체크박스 + .hint 부제 + 가변 목록 편집기). -->
+    <section id="panel-japanese" class="tabpanel" role="tabpanel" aria-labelledby="tab-japanese" hidden>
+      <h1 id="japanese-heading"><span id="japanese-heading-text"></span></h1>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="japanese-caps-eisu-kana" data-key="japanese.capsLockTogglesEisuKana" />
+          <span id="japanese-caps-eisu-kana-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="japanese-caps-eisu-kana-hint"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="japanese-cmd-eisu-kana" data-key="japanese.commandTogglesEisuKana" />
+          <span id="japanese-cmd-eisu-kana-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="japanese-cmd-eisu-kana-hint"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="japanese-yen-backslash" data-key="japanese.swapYenBackslash" />
+          <span id="japanese-yen-backslash-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="japanese-yen-backslash-hint"></p>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="japanese-jis-us" data-key="japanese.jisAsUsSymbols" />
+          <span id="japanese-jis-us-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="japanese-jis-us-hint"></p>
+
+      <hr />
+
+      <!-- ⭐ F-19.3·F-19.4 앱 제외 게이트(D-7) — `japanese.excludedBundleIds` 목록
+           편집기(ko 패널의 korean-excluded-* 컨트롤 유형 재사용). -->
+      <h2 class="group" id="japanese-excluded-heading"></h2>
+      <div id="japanese-excluded-list"></div>
+      <p class="hint" id="japanese-excluded-empty" hidden></p>
+      <div class="row">
+        <button id="japanese-excluded-add-btn" type="button"></button>
+        <button id="japanese-excluded-reset-btn" type="button" hidden></button>
+      </div>
+
+      <hr />
+
+      <p class="hint" id="japanese-not-working-hint"></p>
+    </section>
+
+    <!-- ⭐ F-19 `中文` 패널(언어-presets.md §3.3) — F-19.7 체크박스 1개 + 앱 제외
+         목록 편집기(D-7). -->
+    <section id="panel-chinese" class="tabpanel" role="tabpanel" aria-labelledby="tab-chinese" hidden>
+      <h1 id="chinese-heading"><span id="chinese-heading-text"></span></h1>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="chinese-caps-switch" data-key="chinese.capsLockSwitchesInputSource" />
+          <span id="chinese-caps-switch-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="chinese-caps-switch-hint"></p>
+
+      <hr />
+
+      <h2 class="group" id="chinese-excluded-heading"></h2>
+      <div id="chinese-excluded-list"></div>
+      <p class="hint" id="chinese-excluded-empty" hidden></p>
+      <div class="row">
+        <button id="chinese-excluded-add-btn" type="button"></button>
+        <button id="chinese-excluded-reset-btn" type="button" hidden></button>
+      </div>
+
+      <hr />
+
+      <p class="hint" id="chinese-not-working-hint"></p>
     </section>
 
     <!-- Keyboards 탭 — F-17(per-device-settings.md) §3.1 순서 그대로(Korean 다음,
@@ -1209,7 +1336,7 @@ if (!tauri || !tauri.core) {
 } else {
   const { invoke } = tauri.core;
 
-  const TABS = ["seek", "hyperkey", "presets", "korean", "keyboards", "general"];
+  const TABS = ["seek", "hyperkey", "presets", "korean", "japanese", "chinese", "keyboards", "general"];
   let activeTab = "hyperkey";
 
   function applyStrings() {
@@ -1218,7 +1345,10 @@ if (!tauri || !tauri.core) {
     $("tab-seek-label").textContent = t("settings.tab.seek");
     $("tab-hyperkey-label").textContent = t("settings.tab.hyperkey");
     $("tab-presets-label").textContent = t("settings.tab.presets");
+    $("tab-language-label").textContent = t("settings.tab.language");
     $("tab-korean-label").textContent = t("settings.tab.korean");
+    $("tab-japanese-label").textContent = t("settings.tab.japanese");
+    $("tab-chinese-label").textContent = t("settings.tab.chinese");
     $("tab-keyboards-label").textContent = t("settings.tab.keyboards");
     $("tab-general-label").textContent = t("settings.tab.general");
 
@@ -1319,6 +1449,35 @@ if (!tauri || !tauri.core) {
     $("korean-modifier-lowercase-hint").textContent = t("settings.korean.modifier_lowercase.hint");
     $("korean-not-working-hint").textContent = t("settings.korean.not_working.hint");
     $("korean-right-command-hint").textContent = t("settings.korean.right_command.hint");
+    // ⭐ F-19 ko 노드 신규(F-19.1·F-19.2) — 저장 키는 `korean.*` 이지만 정의는 F-19.
+    $("korean-caps-switch-label").textContent = t("settings.korean.caps_switch");
+    $("korean-caps-switch-hint").textContent = t("settings.korean.caps_switch.hint");
+    $("korean-right-cmd-label").textContent = t("settings.korean.right_cmd");
+    $("korean-right-cmd-hint").textContent = t("settings.korean.right_cmd.hint");
+
+    // ⭐ F-19 `日本語` 노드(F-19.3~F-19.6) — 패널 문자열 전체.
+    $("japanese-heading-text").textContent = t("settings.japanese.heading");
+    $("japanese-caps-eisu-kana-label").textContent = t("settings.japanese.caps_eisu_kana");
+    $("japanese-caps-eisu-kana-hint").textContent = t("settings.japanese.caps_eisu_kana.hint");
+    $("japanese-cmd-eisu-kana-label").textContent = t("settings.japanese.cmd_eisu_kana");
+    $("japanese-cmd-eisu-kana-hint").textContent = t("settings.japanese.cmd_eisu_kana.hint");
+    $("japanese-yen-backslash-label").textContent = t("settings.japanese.yen_backslash");
+    $("japanese-yen-backslash-hint").textContent = t("settings.japanese.yen_backslash.hint");
+    $("japanese-jis-us-label").textContent = t("settings.japanese.jis_us");
+    $("japanese-jis-us-hint").textContent = t("settings.japanese.jis_us.hint");
+    $("japanese-not-working-hint").textContent = t("settings.japanese.not_working.hint");
+    $("japanese-excluded-heading").textContent = t("settings.japanese.excluded.group");
+    $("japanese-excluded-add-btn").textContent = t("settings.japanese.excluded.addRow");
+    $("japanese-excluded-reset-btn").textContent = t("settings.japanese.excluded.reset");
+
+    // ⭐ F-19 `中文` 노드(F-19.7) — 패널 문자열 전체.
+    $("chinese-heading-text").textContent = t("settings.chinese.heading");
+    $("chinese-caps-switch-label").textContent = t("settings.chinese.caps_switch");
+    $("chinese-caps-switch-hint").textContent = t("settings.chinese.caps_switch.hint");
+    $("chinese-not-working-hint").textContent = t("settings.chinese.not_working.hint");
+    $("chinese-excluded-heading").textContent = t("settings.chinese.excluded.group");
+    $("chinese-excluded-add-btn").textContent = t("settings.chinese.excluded.addRow");
+    $("chinese-excluded-reset-btn").textContent = t("settings.chinese.excluded.reset");
 
     // ⭐ Keyboards 탭(F-17) — 탭 헤딩은 별도 `.heading` 키를 새로 만들지 않고
     // 탭 라벨과 같은 문구이므로 `settings.tab.keyboards` 를 재사용한다(다른
@@ -2624,23 +2783,80 @@ if (!tauri || !tauri.core) {
   // (부재 = 기본). 저장 값은 정규화(공백 제거·빈 행 제외·중복 제거)한 뒤 보낸다 —
   // 백엔드 `resolve_excluded_bundle_ids` 와 같은 규칙(그 함수가 정본).
   function koreanExcludedRowsOf(korean) {
-    return Array.isArray(korean.excludedBundleIds)
-      ? korean.excludedBundleIds.slice()
-      : (korean.defaultExcludedBundleIds || []).slice();
+    return languageExcludedRowsOf("korean", korean);
   }
 
+  // ⭐ F-19(D-7) — 언어별 제외 목록의 "표시할 행" 일반 헬퍼. 오버라이드
+  // (excludedBundleIds 배열)가 있으면 그대로, 없으면 백엔드 기본 목록을 보여준다.
+  function languageExcludedRowsOf(lang, settings) {
+    return Array.isArray(settings.excludedBundleIds)
+      ? settings.excludedBundleIds.slice()
+      : (settings.defaultExcludedBundleIds || []).slice();
+  }
+
+  function languageExcludedIsOverride(lang, settings) {
+    return Array.isArray(settings.excludedBundleIds);
+  }
+
+  // ko 래퍼 — 기존 ko 전용 호출부(korean-excluded-* 이벤트 등)와의 호환.
   function koreanExcludedIsOverride(korean) {
-    return Array.isArray(korean.excludedBundleIds);
+    return languageExcludedIsOverride("korean", korean);
   }
 
   // 화면의 완성된 행(비지 않은 입력)을 저장 배열로 수집한다. 빈 행은 저장하지
   // 않는다 — §3.4.1 항목 4(가변 목록 편집기의 빈 행 미저장 규약)를 그대로 따른다.
-  // 중복 제거·공백 제거는 백엔드(`resolve_excluded_bundle_ids`)가 또 하지만, 화면과
-  // 게이트를 즉시 일치시키기 위해 여기서도 같은 규칙을 적용한다.
+  // ⭐ F-19(D-7) — ko/ja/zh 공용 `collectLanguageExcludedRows(lang)` 의 ko 래퍼.
   function collectKoreanExcludedRows() {
+    return collectLanguageExcludedRows("korean");
+  }
+
+  // ⭐ F-19(D-7) — ko/ja/zh 공용 `saveLanguageExcludedRows(lang)` 의 ko 래퍼.
+  function saveKoreanExcludedRows() {
+    saveLanguageExcludedRows("korean");
+  }
+
+  // 행 하나 — [텍스트 입력] + 삭제 버튼. ⭐ F-19(D-7) — ko/ja/zh 공용
+  // `buildLanguageExcludedRow(lang, value)` 의 ko 래퍼(placeholder·aria 는 ko 카탈로그).
+  function buildKoreanExcludedRow(value) {
+    return buildLanguageExcludedRow("korean", value);
+  }
+
+  function renderKoreanExcludedList(korean) {
+    renderLanguageExcludedList("korean", korean);
+  }
+
+  // ⭐ F-19 — ko/ja/zh 공용 앱 제외 목록 편집기(D-7). `lang` 은 저장 키
+  // 접두사(`korean`/`japanese`/`chinese`)와 화면 id 접두사(`korean-excluded-*` 등)를
+  // 함께 가리킨다. ko 는 [renderKoreanExcludedList] 래퍼로, ja/zh 는 renderState 가
+  // 직접 호출한다. ⛔ 새 컨트롤 유형이 아니라 F-16 의 가변 길이 목록 편집기(명세
+  // §3.5 — "F-16 이 이미 만든 편집기를 공유한다")를 매개변수화한 것뿐이다.
+  function renderLanguageExcludedList(lang, settings) {
+    const list = $(`${lang}-excluded-list`);
+    const rows = languageExcludedRowsOf(lang, settings);
+
+    // ⭐ 편집 중인 행을 재렌더로 지우지 않는다 — ko 의 이슈 #31 ② 와 같은 억제 판정.
+    // 저장 응답으로 renderState 가 다시 불릴 때, 저장소의 값(정규화된 배열)과 화면의
+    // 완성된 행 집합이 같으면 다시 만들지 않는다.
+    const rendered = Array.from(list.querySelectorAll(`.${lang}-excluded-input`)).map((el) => el.value.trim()).filter((v) => v.length > 0);
+    const same = rendered.length === rows.length && rendered.every((v, i) => v === rows[i]);
+    if (!same) {
+      list.innerHTML = "";
+      for (const row of rows) {
+        list.append(buildLanguageExcludedRow(lang, row));
+      }
+    }
+    const domRowCount = list.querySelectorAll(`.${lang}-excluded-row`).length;
+    $(`${lang}-excluded-empty`).hidden = domRowCount > 0;
+    // 되돌리기 버튼은 오버라이드가 존재할 때만 뜬다.
+    $(`${lang}-excluded-reset-btn`).hidden = !languageExcludedIsOverride(lang, settings);
+  }
+
+  // 화면의 완성된 행(비지 않은 입력)을 저장 배열로 수집 — [collectKoreanExcludedRows]
+  // 의 일반화(빈 행 미저장 규약·중복 제거·공백 제거 동일).
+  function collectLanguageExcludedRows(lang) {
     const rows = [];
     const seen = new Set();
-    for (const input of $("korean-excluded-list").querySelectorAll("input[type=text]")) {
+    for (const input of $(`${lang}-excluded-list`).querySelectorAll(`input[type=text]`)) {
       const trimmed = input.value.trim();
       if (!trimmed || seen.has(trimmed)) continue;
       seen.add(trimmed);
@@ -2649,81 +2865,40 @@ if (!tauri || !tauri.core) {
     return rows;
   }
 
-  function saveKoreanExcludedRows() {
-    const rows = collectKoreanExcludedRows();
+  // 저장 데이터키({lang}.excludedBundleIds) 클로저로 저장까지 함께 묶는다.
+  function saveLanguageExcludedRows(lang) {
+    const rows = collectLanguageExcludedRows(lang);
     if (rows.length === 0) {
-      // 0행 = 명시적 빈 오버라이드("아무 앱도 제외하지 않음")다 — D-K17: 빈 배열도
-      // 저장 값이다(부재와 다르다). 단, 화면에 행이 남아 있으면 그것은 "지우는
-      // 중"이지 "전부 지웠다"가 아니므로 아직 저장하지 않는다(이슈 #31 ① 의 세
-      // 번째 방어선과 같은 방어 — 행을 × 로 전부 지우면 이 경로로 온다).
-      const domRowCount = $("korean-excluded-list").querySelectorAll(".korean-excluded-row").length;
+      const domRowCount = $(`${lang}-excluded-list`).querySelectorAll(`.${lang}-excluded-row`).length;
       if (domRowCount > 0) return;
     }
-    commit("korean.excludedBundleIds", rows);
+    commit(`${lang}.excludedBundleIds`, rows);
   }
 
-  // 행 하나 — [텍스트 입력] + 삭제 버튼. placeholder 는 카탈로그에서 온다.
-  function buildKoreanExcludedRow(value) {
+  // 행 하나 — [텍스트 입력] + 삭제 버튼. [buildKoreanExcludedRow] 의 일반화.
+  function buildLanguageExcludedRow(lang, value) {
     const wrapper = document.createElement("div");
-    wrapper.className = "korean-excluded-row";
-
+    wrapper.className = `${lang}-excluded-row`;
     const row = document.createElement("div");
-    // ⚠️ 공백이 든 className 문자열 리터럴은 하드코딩 영어 문장 탐지기에 걸린다 —
-    // classList.add 로 토큰을 나눠 넣어 그 오탐을 피한다(buildKeyRemapRow 의 같은 규약).
-    row.classList.add("row", "korean-excluded-row-inner");
-
+    row.classList.add("row", `${lang}-excluded-row-inner`);
     const input = document.createElement("input");
     input.type = "text";
-    input.className = "korean-excluded-input";
-    input.placeholder = t("settings.korean.excluded.rowPlaceholder");
+    input.className = `${lang}-excluded-input`;
+    input.placeholder = t(`settings.${lang}.excluded.rowPlaceholder`);
     input.value = value;
     input.spellcheck = false;
-
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "keyremap-row-remove";
     removeBtn.textContent = "×";
-    removeBtn.setAttribute("aria-label", t("settings.korean.excluded.removeRow"));
+    removeBtn.setAttribute("aria-label", t(`settings.${lang}.excluded.removeRow`));
     removeBtn.addEventListener("click", () => {
       wrapper.remove();
-      saveKoreanExcludedRows();
+      saveLanguageExcludedRows(lang);
     });
-
     row.append(input, removeBtn);
     wrapper.append(row);
     return wrapper;
-  }
-
-  function renderKoreanExcludedList(korean) {
-    const list = $("korean-excluded-list");
-    const rows = koreanExcludedRowsOf(korean);
-
-    // ⭐ 편집 중인 행을 재렌더로 지우지 않는다 — 이슈 #31 ② 와 같은 억제 판정.
-    // 저장 응답으로 renderState 가 다시 불릴 때, 저장소의 값(정규화된 배열)과 화면의
-    // 완성된 행 집합이 같으면 다시 만들지 않는다 — 방금 쓴 값이 그대로 돌아온 것이기
-    // 때문이다. 다르면(외부 변경·import·되돌리기) 목록을 새로 만든다.
-    const rendered = Array.from(list.querySelectorAll(".korean-excluded-input")).map((el) => el.value.trim()).filter((v) => v.length > 0);
-    const same = rendered.length === rows.length && rendered.every((v, i) => v === rows[i]);
-    if (!same) {
-      list.innerHTML = "";
-      for (const row of rows) {
-        list.append(buildKoreanExcludedRow(row));
-      }
-    }
-    // 빈 목록 안내는 화면에 실제로 있는 행 기준(위와 같은 이유).
-    const domRowCount = list.querySelectorAll(".korean-excluded-row").length;
-    $("korean-excluded-empty").hidden = domRowCount > 0;
-    // 되돌리기 버튼은 오버라이드가 존재할 때만 뜬다 — 부재는 이미 기본 목록이므로
-    // 되돌릴 대상이 없다(② 숨김, F-17 복귀 버튼과 같은 규약).
-    $("korean-excluded-reset-btn").hidden = !koreanExcludedIsOverride(korean);
-  }
-
-  // 행 추가·삭제·내용 변경 각각이 저장 1회다(F-15 §3.1.1 — 컨트롤 단위 즉시
-  // write-through, F-17 §3.4.1 의 행 단위 해석과 같다).
-  function addKoreanExcludedRow() {
-    $("korean-excluded-list").append(buildKoreanExcludedRow(""));
-    const inputs = $("korean-excluded-list").querySelectorAll(".korean-excluded-input");
-    if (inputs.length > 0) inputs[inputs.length - 1].focus();
   }
 
   // ② 숨김 — trackpad.enabled 가 꺼지면 두 체크박스 행을 DOM 에서 완전히
@@ -2991,6 +3166,21 @@ if (!tauri || !tauri.core) {
     // ⭐ K5(이슈 #73) — 제외 대상 목록 편집기.
     renderKoreanExcludedList(state.korean);
 
+    // ⭐ F-19 ko 노드 신규(F-19.1·F-19.2) — 저장 키 `korean.*` 로 이 패널에 산다.
+    $("korean-caps-switch").checked = state.korean.capsLockSwitchesInputSource;
+    $("korean-right-cmd").checked = state.korean.rightCommandSwitchesInputSource;
+
+    // ⭐ F-19 `日本語` 노드(F-19.3~F-19.6) — 체크박스 + 앱 제외 목록 편집기(D-7).
+    $("japanese-caps-eisu-kana").checked = state.japanese.capsLockTogglesEisuKana;
+    $("japanese-cmd-eisu-kana").checked = state.japanese.commandTogglesEisuKana;
+    $("japanese-yen-backslash").checked = state.japanese.swapYenBackslash;
+    $("japanese-jis-us").checked = state.japanese.jisAsUsSymbols;
+    renderLanguageExcludedList("japanese", state.japanese);
+
+    // ⭐ F-19 `中文` 노드(F-19.7) — 체크박스 + 앱 제외 목록 편집기(D-7).
+    $("chinese-caps-switch").checked = state.chinese.capsLockSwitchesInputSource;
+    renderLanguageExcludedList("chinese", state.chinese);
+
     // F-10 — 실제로 동작하는 항목들(자동 업데이트는 F-13 으로 활성, F-12 라이선스 컨트롤만 비활성).
     $("launch-on-login").checked = state.general.launchOnLogin;
     $("auto-update").checked = state.general.autoUpdate;
@@ -3125,6 +3315,17 @@ if (!tauri || !tauri.core) {
     syncFnStatePolling();
   }
 
+  // ⭐ F-19(명세 §4.1) — `언어` 부모는 disclosure 전용(탭 아님)이다. 클릭하면
+  // 자식 컨테이너만 펼침/접힘하고, `settings_set_tab` 은 부르지 않는다(부모는 탭이
+  // 아니고 persist 대상도 아니다 — 기억하는 것은 `ui.lastTab` 자식뿐). 기본 펼침.
+  const languageParent = $("tab-language-parent");
+  const languageChildren = $("tab-language-children");
+  languageParent.addEventListener("click", () => {
+    const expanded = languageParent.getAttribute("aria-expanded") !== "true";
+    languageParent.setAttribute("aria-expanded", String(expanded));
+    languageChildren.hidden = !expanded;
+  });
+
   $("tablist").addEventListener("keydown", (ev) => {
     const idx = TABS.indexOf(activeTab);
     let next = null;
@@ -3179,21 +3380,28 @@ if (!tauri || !tauri.core) {
       tf("settings.presets.quick_press_duration.value", [Number(ev.target.value)]);
   });
 
-  // ⭐ K5(이슈 #73) — 제외 목록 편집기의 배선. 행 추가 버튼·되돌리기 버튼·행 입력의
-  // change(포커스를 잃을 때 저장 1회 — F-17 §3.4.1 "행의 from/to 변경이 저장 1회"와
-  // 같은 규약). 빈 행은 저장되지 않으므로 입력 도중에 쓰지 않는다.
-  $("korean-excluded-add-btn").addEventListener("click", addKoreanExcludedRow);
-  $("korean-excluded-list").addEventListener("change", (ev) => {
-    if (ev.target && ev.target.classList.contains("korean-excluded-input")) {
-      saveKoreanExcludedRows();
-    }
-  });
-  // 되돌리기 = 오버라이드 키 삭제(부재 = 기본 12종, D-K17). `settings_set` 에
-  // null 을 보낸다 — `commit` 경로에서 null 은 그대로 저장되고 `KoreanView` 는
-  // `excludedBundleIds: null` 로 되돌려 주므로, 화면이 기본 목록으로 다시 그려진다.
-  $("korean-excluded-reset-btn").addEventListener("click", () => {
-    commit("korean.excludedBundleIds", null);
-  });
+  // ⭐ K5(이슈 #73) + F-19(D-7) — ko/ja/zh 제외 목록 편집기의 배선. 행 추가
+  // 버튼·되돌리기 버튼·행 입력의 change(포커스를 잃을 때 저장 1회 — F-17 §3.4.1
+  // "행의 from/to 변경이 저장 1회"와 같은 규약). 빈 행은 저장되지 않으므로 입력
+  // 도중에 쓰지 않는다.
+  for (const lang of ["korean", "japanese", "chinese"]) {
+    $(`${lang}-excluded-add-btn`).addEventListener("click", () => {
+      $(`${lang}-excluded-list`).append(buildLanguageExcludedRow(lang, ""));
+      const inputs = $(`${lang}-excluded-list`).querySelectorAll(`.${lang}-excluded-input`);
+      if (inputs.length > 0) inputs[inputs.length - 1].focus();
+    });
+    $(`${lang}-excluded-list`).addEventListener("change", (ev) => {
+      if (ev.target && ev.target.classList.contains(`${lang}-excluded-input`)) {
+        saveLanguageExcludedRows(lang);
+      }
+    });
+    // 되돌리기 = 오버라이드 키 삭제(부재 = 기본 목록, D-K17). `settings_set` 에
+    // null 을 보낸다 — `commit` 경로에서 null 은 그대로 저장되고 뷰는
+    // `excludedBundleIds: null` 로 되돌려 주므로, 화면이 기본 목록으로 다시 그려진다.
+    $(`${lang}-excluded-reset-btn`).addEventListener("click", () => {
+      commit(`${lang}.excludedBundleIds`, null);
+    });
+  }
 
   $("conflict-cancel").addEventListener("click", async () => {
     hideConflict();

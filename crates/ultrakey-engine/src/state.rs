@@ -11,6 +11,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use ultrakey_core::gate::AtomicAppGate;
+use ultrakey_core::jis::AtomicJisGate;
 use ultrakey_core::korean::AtomicKoreanImeGate;
 use ultrakey_core::settings::EngineConfig;
 use ultrakey_core::trackpad::AtomicTrackpadPhase;
@@ -66,6 +67,15 @@ pub struct SharedState {
     pub seek_shortcut_mods: AtomicU64,
     pub layout: Arc<LayoutResolver>,
     pub korean_ime: AtomicKoreanImeGate,
+    /// ⭐ F-19(D-7) — 일본어 입력기 활성 판정. `korean_ime` 과 같은 패턴: 메인 스레드가
+    /// `kTISPropertyInputSourceLanguages` 를 판정해 게시하고, 콜백은 O(1) 로드만 한다.
+    /// `KoreanImeState` 3상태를 재사용한다(현재 소스의 언어가 무엇이냐만 다르다).
+    pub japanese_ime: AtomicKoreanImeGate,
+    /// ⭐ F-19(D-4) — 키보드 타입 게이트(JIS/NotJis/Unknown). 메인 스레드가
+    /// `ultrakey_platform::keyboard_type::current_keyboard_is_jis()` 로 판정해 게시하고,
+    /// 콜백은 O(1) 로드만 한다. `Unknown`(기본)은 fail-closed — JIS 행·US 행 전부
+    /// 미발화(둘 다 파괴적인 실패 모드라 안전 방향이 유일하다, `jis.rs` 모듈 문서).
+    pub is_jis: AtomicJisGate,
     /// ⭐ F-06 — 트랙패드 제스처 게이트. 리스너 스레드가 게시하고 콜백은 읽기만 한다.
     /// ⛔ 리스너가 `store` 하는 값은 `ultrakey-core::trackpad::TrackpadPhase` 이다 —
     /// 이 엔진은 이 값을 쓰지 않고, `GateSnapshot` 으로 스냅샷을 찍어 넘길 뿐이다.
@@ -98,6 +108,8 @@ impl SharedState {
             seek_shortcut_mods: AtomicU64::new(0),
             layout: Arc::new(LayoutResolver::new()),
             korean_ime: AtomicKoreanImeGate::new(),
+            japanese_ime: AtomicKoreanImeGate::new(),
+            is_jis: AtomicJisGate::new(),
             trackpad: Arc::new(AtomicTrackpadPhase::new()),
             caps_lock_owned_lock: AtomicBool::new(false),
             d1_confirmed: AtomicBool::new(false),

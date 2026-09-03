@@ -25,6 +25,7 @@ ultrakey-layout = { workspace = true }
 ultrakey-hyperkey = { workspace = true }
 ultrakey-presets = { workspace = true }
 ultrakey-korean = { workspace = true }
+ultrakey-language-presets = { workspace = true }
 ultrakey-permissions = { workspace = true }
 ultrakey-i18n = { workspace = true }
 ultrakey-seek = { workspace = true }
