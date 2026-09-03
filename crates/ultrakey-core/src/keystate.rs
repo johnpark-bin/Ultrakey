@@ -389,6 +389,30 @@ impl KeyStateTable {
         }
         flags
     }
+
+    /// ⭐ 이슈 #125 — `active_synth_flags()` 와 달리 **물리적으로 지금 눌려 있는**
+    /// 소스 키의 `HoldConfirmed` 슬롯만 합산한다. Seek 세션 게이트가 `is_tracked`
+    /// (FSM 진입)를 가려, 세션 중 소스 키를 실제로 뗐는데도 FSM 슬롯이
+    /// `HoldConfirmed` 로 잔류하는 stale 상태가 생길 수 있다(`arbitration.rs` D2
+    /// 가드 문서 참고) — 정본 눌림 비트셋(`pressed`)은 세션과 무관하게 항상
+    /// 정확하므로(`arbitrate_with_kind` 최상단이 세션 게이트보다 앞서 갱신), 이
+    /// 메서드로 그 stale 슬롯을 걸러낸다.
+    ///
+    /// ⚠️ `active_synth_flags()` 자체는 고치지 않는다 — 이 테이블은 "눌림
+    /// 비트셋"과 "FSM 슬롯 상태"를 독립된 필드로 둔다(모듈 문서). 세션 밖에서는
+    /// `HoldConfirmed` 전이·해제가 항상 FSM 을 통해서만 일어나 `HoldConfirmed`
+    /// ⇒ `is_pressed(key)==true` 가 이미 성립하므로, 이 메서드는 그 경로에서
+    /// `active_synth_flags()` 와 동일한 값을 낸다 — 실제로 갈라지는 것은 stale
+    /// 케이스뿐이다.
+    pub fn active_synth_flags_of_pressed_slots(&self) -> EventFlags {
+        let mut flags = EventFlags::NONE;
+        for slot in self.slots.iter().flatten() {
+            if matches!(slot.state, QuickPressState::HoldConfirmed) && self.is_pressed(slot.key) {
+                flags |= slot.rule_flags;
+            }
+        }
+        flags
+    }
 }
 
 impl Default for KeyStateTable {

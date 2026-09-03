@@ -350,6 +350,14 @@ impl Arbiter {
         self.state.active_synth_flags()
     }
 
+    /// ⭐ 이슈 #125 계측 전용 — `active_synth_flags_of_pressed_slots`(pressed-필터
+    /// D2 판정 값)을 엔진 크레이트에 읽기 전용으로 노출한다. `active_synth_flags`
+    /// 와 같은 패턴 — 이 두 값이 세션 중 갈리면(원본은 non-empty, pressed-필터는
+    /// empty) stale hyper 슬롯이 D2 를 막고 있었다는 뜻이다(트레이스로 사후 판정).
+    pub fn active_synth_flags_of_pressed_slots(&self) -> EventFlags {
+        self.state.active_synth_flags_of_pressed_slots()
+    }
+
     /// `key` 하나에 대한 quick press 판정 설정. M1 은 규칙 전체에 하나의 설정을 썼지만,
     /// M2 는 키마다 `has_quick_press_action`/`has_double_tap_action` 이 다를 수 있어
     /// (예: caps lock 은 quick press 만, shift 는 double tap 만) 키 단위로 조회한다.
@@ -1249,7 +1257,16 @@ impl Arbiter {
                 if rule.requires_korean_ime && gates.korean_ime != KoreanImeState::Active {
                     return false;
                 }
-                if !self.state.active_synth_flags().is_empty() {
+                // ⭐ 이슈 #125 — `active_synth_flags()` 가 아니라 pressed-필터
+                // 판정을 쓴다. Seek 세션 게이트가 `is_tracked` 를 가려, 세션 중
+                // hyper 소스 키를 실제로 뗐는데도(정본 눌림 테이블은 세션과
+                // 무관하게 이미 갱신됨) FSM 슬롯만 `HoldConfirmed` 로 잔류하는
+                // stale 상태가 생긴다 — 이 가드가 그 stale 슬롯까지 "진짜 hyper
+                // 활성"으로 오판해 F-16.1 을 계속 막아 왔다(`keystate.rs`
+                // `active_synth_flags_of_pressed_slots` 문서 참고). 진짜로 물리적
+                // 눌려 있는 hyper(T8, `input_box_f16_1_does_not_fire_while_hyper_active`)
+                // 는 이 판정으로도 그대로 막힌다 — 물리 눌림 여부로만 갈린다.
+                if !self.state.active_synth_flags_of_pressed_slots().is_empty() {
                     return false;
                 }
 
@@ -2657,6 +2674,69 @@ mod tests {
         assert_ne!(out.layer(), Layer::KoreanInput, "hyper 활성 중 F-16.1 은 발화하지 않아야 한다");
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
+    }
+
+    /// ⭐ 이슈 #125 — 기준선(P1 실측) : hyper 가 **세션이 열리기 전**에 hold 로
+    /// 확정된 뒤, **세션이 열린 동안** 물리적으로 뗀다. 이슈 #121 F5 가 지목한
+    /// "세션 게이트가 `is_tracked` 를 가린다"는 사실 때문에 이 릴리즈는
+    /// `handle_tracked_key_event` 에 도달하지 못해 FSM 슬롯이 `HoldConfirmed` 로
+    /// 잔류한다 — **그러나 정본 눌림 테이블(`is_pressed`)은 `arbitrate_with_kind`
+    /// 최상단(세션 게이트보다 앞, :456-460)에서 무조건 갱신되므로 이미 `false`
+    /// 다.** 즉 "물리적으로 눌려 있지 않은데 `active_synth_flags()` 가 비어있지
+    /// 않다"는 상태가 성립한다 — 이것이 D2 가드(`evaluate_korean_rules`,
+    /// arbitration.rs:1252)를 막는 stale 슬롯이다.
+    ///
+    /// 이 테스트는 **수정 전** 실패한다(D2 가 미발화) — 그 실패 자체가 사슬의
+    /// 코드 재현이다. 수정 후에는 통과해야 한다: stale 슬롯(물리적으로 안 눌림)은
+    /// D2 를 막지 않고, T8(진짜 hold — 물리적으로 눌려 있음)은 계속 막아야 한다.
+    #[test]
+    fn issue125_stale_hyper_after_session_release_no_longer_blocks_f16_1() {
+        let mut cfg = korean_config();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::F13,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_WITH_SHIFT,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        // 세션 밖 — F13 이 hyper 로 hold 확정된다(T8 과 동일 준비).
+        arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert!(!arb.state.active_synth_flags().is_empty(), "F13 이 hyper 로 확정돼야 한다");
+
+        // 세션이 열린다(인풋 박스) — F5: 세션 게이트가 `is_tracked` 앞이라 아래
+        // F13 KeyUp 은 FSM 이 아니라 계층 1(SeekKey)로 소비된다.
+        let gates = input_box_gates(false);
+        let release = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::NONE), gates, Millis(5));
+        assert_eq!(release.layer(), Layer::SeekSession, "세션 중 F13 릴리즈는 SeekKey 로 소비된다(F5)");
+
+        // 정본 눌림 테이블은 세션과 무관하게 갱신된다(:456-460) — F13 은 이제
+        // 물리적으로 눌려 있지 않다.
+        assert!(!arb.state.is_pressed(KeyCode::F13), "정본 눌림 테이블은 세션 중에도 갱신된다");
+
+        // ⭐ P2 리뷰 반영 — 채택안(후보 ②)은 `active_synth_flags()` 자체를 고치지
+        // 않는다: FSM 슬롯은 의도적으로 `HoldConfirmed` 로 남는다(§3 "FSM 슬롯
+        // 잔류는 안전한가" — quickpress.rs 전이표로 자기 치유 확인됨). 그래서
+        // 원본 `active_synth_flags()` 는 **계속 비어있지 않아야 정상**이고, D2
+        // 전용 신규 메서드 `active_synth_flags_of_pressed_slots()` 만 물리
+        // 눌림으로 걸러 비어있어야 한다 — 이 구분이 후보 ①(전면 리셋)과
+        // 후보 ②를 가르는 지점이다.
+        assert!(
+            !arb.state.active_synth_flags().is_empty(),
+            "후보 ②는 슬롯 상태 자체는 건드리지 않는다 — 원본 active_synth_flags 는 여전히 non-empty"
+        );
+        assert!(
+            arb.state.active_synth_flags_of_pressed_slots().is_empty(),
+            "F13 이 물리적으로 뗀 뒤에는 pressed-필터 판정이 stale 을 걸러내야 한다"
+        );
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
+        assert_eq!(
+            out.layer(),
+            Layer::KoreanInput,
+            "stale hyper 는 D2(F-16.1)를 막으면 안 된다 — 1회 탭 발화"
+        );
+        assert_eq!(out.disposition(), Disposition::Consume);
     }
 
     /// T10 — 인풋 박스 + F-16.1 켬 + **한/영 키(0x68)** → 계속 **Pass**(#76 예외가
