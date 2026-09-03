@@ -2781,6 +2781,303 @@ mod tests {
         assert!(out.effects().is_empty());
     }
 
+    // ── ⭐(이슈 #118) — F-19 언어 프리셋 **전체 로드** 상태의 인풋 박스 언어 전환 키
+    //    회귀 재발 방지 (T-118 시리즈. 계획 `docs/plan/issue-118-seek-langswitch.md` §4) ──
+
+    /// T-118 셋업 — F-19.5(¥↔\) 의 규칙 4개. `ultrakey-language-presets::settings::
+    /// yen_backslash_rules` 와 동형(JIS 행 `0x5D`·US 행 `0x2A`, ⌥ 경유 합성).
+    fn f19_5_yen_backslash_rules() -> Vec<LanguageRule> {
+        let mut rules = Vec::new();
+        for (key, jis) in [(KeyCode::JIS_YEN, true), (KeyCode::ANSI_BACKSLASH, false)] {
+            rules.push(LanguageRule {
+                id: RuleId::Language(21),
+                trigger: LanguageTrigger::NoModifier { key },
+                app_gate: None,
+                requires_jis: Some(jis),
+                // ⇧ ⌃⌥⌘ 가 없는 raw `key` → ⌥+key (0x0008_0020 = ALTERNATE | NX_DEVICELALTKEYMASK)
+                out: LanguageOut::Key { keycode: key, flags: EventFlags(0x0008_0020) },
+            });
+            rules.push(LanguageRule {
+                id: RuleId::Language(21),
+                trigger: LanguageTrigger::OptionOnly { key },
+                app_gate: None,
+                requires_jis: Some(jis),
+                out: LanguageOut::Key { keycode: key, flags: EventFlags::NONE },
+            });
+        }
+        rules
+    }
+
+    /// T-118 셋업 — F-19.6(JIS→US 20행) 의 규칙 전체. `ultrakey-language-presets::settings::
+    /// jis_to_us_symbol_rules` 의 하드코딩 20행과 동형. 전 행 `requires_jis: Some(true)`.
+    fn f19_6_jis_us_rows() -> Vec<LanguageRule> {
+        type Row = (KeyCode, bool, KeyCode, u64);
+        const ROWS: &[Row] = &[
+            // shift+2 `"` → `@`
+            (KeyCode::ANSI_2, true, KeyCode::ANSI_LEFT_BRACKET, 0x0000_0000),
+            // shift+6 `&` → `^`
+            (KeyCode::ANSI_6, true, KeyCode::ANSI_EQUAL, 0x0000_0000),
+            // shift+7 `'` → `&`
+            (KeyCode::ANSI_7, true, KeyCode::ANSI_6, 0x0002_0002),
+            // shift+8 `(` → `*`
+            (KeyCode::ANSI_8, true, KeyCode::ANSI_QUOTE, 0x0002_0002),
+            // shift+9 `)` → `(`
+            (KeyCode::ANSI_9, true, KeyCode::ANSI_8, 0x0002_0002),
+            // shift+0 `0` → `)`
+            (KeyCode::ANSI_0, true, KeyCode::ANSI_9, 0x0002_0002),
+            // shift+- `=` → `_`
+            (KeyCode::ANSI_MINUS, true, KeyCode::JIS_UNDERSCORE, 0x0000_0000),
+            // `^` → `=`
+            (KeyCode::ANSI_EQUAL, false, KeyCode::ANSI_MINUS, 0x0002_0002),
+            // shift+^ `~` → `+`
+            (KeyCode::ANSI_EQUAL, true, KeyCode::ANSI_SEMICOLON, 0x0002_0002),
+            // ¥ → `
+            (KeyCode::JIS_YEN, false, KeyCode::ANSI_LEFT_BRACKET, 0x0002_0002),
+            // shift+¥ `|` → `~`  ⭐ T-118-3 이 이 행을 쓴다
+            (KeyCode::JIS_YEN, true, KeyCode::ANSI_EQUAL, 0x0002_0002),
+            // `@` → `[`
+            (KeyCode::ANSI_LEFT_BRACKET, false, KeyCode::ANSI_RIGHT_BRACKET, 0x0000_0000),
+            // shift+@ `` ` `` → `{`
+            (KeyCode::ANSI_LEFT_BRACKET, true, KeyCode::ANSI_RIGHT_BRACKET, 0x0002_0002),
+            // `[` → `]`
+            (KeyCode::ANSI_RIGHT_BRACKET, false, KeyCode::ANSI_BACKSLASH, 0x0000_0000),
+            // shift+[ `{` → `}`
+            (KeyCode::ANSI_RIGHT_BRACKET, true, KeyCode::ANSI_BACKSLASH, 0x0002_0002),
+            // shift+; `+` → `:`
+            (KeyCode::ANSI_SEMICOLON, true, KeyCode::ANSI_QUOTE, 0x0000_0000),
+            // `:` → `'`
+            (KeyCode::ANSI_QUOTE, false, KeyCode::ANSI_7, 0x0002_0002),
+            // shift+: `*` → `"`
+            (KeyCode::ANSI_QUOTE, true, KeyCode::ANSI_2, 0x0002_0002),
+            // `]` → `\` (⌥¥ 경유 합성)
+            (KeyCode::ANSI_BACKSLASH, false, KeyCode::JIS_YEN, 0x0008_0020),
+            // shift+] `}` → `|`
+            (KeyCode::ANSI_BACKSLASH, true, KeyCode::JIS_YEN, 0x0002_0002),
+        ];
+        ROWS.iter()
+            .map(|&(from, shift, to, flags)| LanguageRule {
+                id: RuleId::Language(22),
+                trigger: if shift {
+                    LanguageTrigger::ShiftOnly { key: from }
+                } else {
+                    LanguageTrigger::NoModifier { key: from }
+                },
+                app_gate: None,
+                requires_jis: Some(true),
+                out: LanguageOut::Key { keycode: to, flags: EventFlags(flags) },
+            })
+            .collect()
+    }
+
+    /// T-118 셋업 — F-19.1~F-19.7 규칙 **전부** 로드한 `EngineConfig`. `ultrakey-korean::
+    /// KoreanSettings::to_language_rules()`(F-19.1·F-19.2) + `ultrakey-language-presets::
+    /// JapaneseSettings::to_language_rules()`(F-19.3~F-19.6) + `ChineseSettings::
+    /// to_language_rules()`(F-19.7) 의 합집합을 **하드코딩**한다 — `korean_config()`(F-16
+    /// 하드코딩)와 같은 관례고, core 테스트는 설정 크레이트에 의존하지 않는다.
+    fn f19_all_presets_config() -> EngineConfig {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.language_rules = vec![
+            // F-19.1 ko — 캡스락 단독 탭 → ⌃Space (Language(17))
+            LanguageRule {
+                id: RuleId::Language(17),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
+                app_gate: Some(LanguageGate::Korean),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
+            },
+            // F-19.2 ko — 우⌘ 단독 탭 → ⌃Space (Language(18))
+            LanguageRule {
+                id: RuleId::Language(18),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
+                app_gate: Some(LanguageGate::Korean),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
+            },
+            // F-19.3 ja — 캡스락 단독 탭 → 英数/かな (Language(19))
+            LanguageRule {
+                id: RuleId::Language(19),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
+                app_gate: Some(LanguageGate::Japanese),
+                requires_jis: None,
+                out: LanguageOut::EisuOrKana,
+            },
+            // F-19.4 ja — ⌘ 단독 탭: 좌⌘=英数·우⌘=かな (Language(20), 안 A)
+            LanguageRule {
+                id: RuleId::Language(20),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::LEFT_COMMAND },
+                app_gate: Some(LanguageGate::Japanese),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::JIS_EISU, flags: EventFlags::NONE },
+            },
+            LanguageRule {
+                id: RuleId::Language(20),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
+                app_gate: Some(LanguageGate::Japanese),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::JIS_KANA, flags: EventFlags::NONE },
+            },
+        ];
+        cfg.rules.language_rules.extend(f19_5_yen_backslash_rules()); // F-19.5
+        cfg.rules.language_rules.extend(f19_6_jis_us_rows());         // F-19.6
+        cfg.rules.language_rules.push(LanguageRule {
+            // F-19.7 zh — 캡스락 단독 탭 → ⌃Space (Language(23))
+            id: RuleId::Language(23),
+            trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
+            app_gate: Some(LanguageGate::Chinese),
+            requires_jis: None,
+            out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
+        });
+        cfg.rules.language_rules.sort_by_key(|r| r.id);
+        cfg
+    }
+
+    /// T-118 셋업 — F-19 전체 + F-16.1(⇧+Space → ⌃Space). 인풋 박스 D2 와 세션 밖
+    /// F-16 경로의 F-19 공존 비회귀 전용.
+    fn f16_1_with_f19_all_presets_config() -> EngineConfig {
+        let mut cfg = f19_all_presets_config();
+        cfg.rules.korean_rules = vec![korean_rule_shift_space()];
+        cfg
+    }
+
+    /// T-118-1 — F-19 전체 로드 + 인풋 박스 + **⌃Space·⌃⌥Space·⌃⇧Space(D1 계열 전부)**
+    /// → **Pass**(시스템 입력 소스 전환, SeekKey 없음). F-19 규칙·AloneTap FSM 이 소비하지
+    /// 않는다 — 기존 T1/T2/T2-b 가 F-19 미로드 상태만 고정하던 갭을 막는다(리뷰 G3).
+    #[test]
+    fn input_box_f19_loaded_control_space_family_passes_d1() {
+        let cfg = f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        for hex in [0x0004_0001u64, 0x000C_0001, 0x0006_0001] {
+            let flags = EventFlags(hex);
+            let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, flags), input_box_gates(false), Millis(0));
+            assert_eq!(out.layer(), Layer::SeekSession, "{hex:#x} — D1 통과 지점");
+            assert_eq!(out.disposition(), Disposition::Pass);
+            assert!(out.effects().is_empty(), "{hex:#x} — SeekKey 금지");
+            let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, flags), input_box_gates(false), Millis(1));
+            assert_eq!(up.disposition(), Disposition::Pass, "{hex:#x} KeyUp 도 Pass — 키 페어");
+        }
+    }
+
+    /// T-118-2 — F-19 전체 로드 + F-16.1 켬 + 인풋 박스 + **⇧+Space** → D2 발화(⌃Space
+    /// 치환 짝). F-19 규칙이 가로채지 않는다 — 계층 1 재평가가 우선인 설계 유지.
+    #[test]
+    fn input_box_f19_loaded_f16_1_shift_space_still_substitutes() {
+        let cfg = f16_1_with_f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
+        assert_eq!(down.layer(), Layer::KoreanInput, "D2 발화 — F-19 소비 금지");
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].keycode, KeyCode::SPACE);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "⇧ 제거 + ⌃ 치환");
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(15));
+        assert_eq!(up.layer(), Layer::KoreanInput);
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "래치가 같은 치환으로 짝을 맞춘다");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(20));
+    }
+
+    /// T-118-2b — F-19 전체 로드 + **F-16.1 꺼짐(기본 구성)** + 인풋 박스 + ⇧+Space →
+    /// **Pass**(검색어 공백). F-19 규칙이 SPACE 를 소비하지 않음을 **기본 구성**에서 직접
+    /// 고정(리뷰 G3 — 사용자 실사용 기본 구성이 여기다).
+    #[test]
+    fn input_box_f19_loaded_f16_1_off_shift_space_passes() {
+        let cfg = f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.emitted().is_empty(), "치환 이벤트 금지");
+        assert!(out.effects().is_empty(), "F-19 가 SPACE 를 소비하면 안 된다");
+    }
+
+    /// T-118-3 — F-19.6(JIS→US 20행) 의 경계: ⛔ **`is_jis = Jis` 게이트 명시 필수**
+    /// (`language_jis_met` 는 `Unknown` 에서 fail-closed — `arbitration.rs:1304-1312`).
+    /// ① 세션 밖 ⇧+¥(JIS_YEN) → F-19.6 발화(심볼 치환, LanguageInput) ② 세션 중(인풋
+    /// 박스) → 계층 1 이 먼저라 **평가 자체가 안 됨** → Consume + SeekKey. JIS_YEN 은
+    /// 프린터블이 아니다(`seek_input_box.rs:112-162`).
+    #[test]
+    fn f19_6_shift_yen_fires_outside_session_but_not_in_input_box() {
+        let cfg = f19_all_presets_config();
+        let jis_gates = GateSnapshot { is_jis: crate::jis::JisState::Jis, ..Default::default() };
+
+        // ① 세션 밖 — shift+¥(| → ~ = shift+=) 행 11.
+        let mut out_arb = Arbiter::new(&cfg);
+        out_arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), jis_gates, Millis(0));
+        let down = out_arb.arbitrate(&cfg, &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), jis_gates, Millis(10));
+        assert_eq!(down.layer(), Layer::LanguageInput, "F-19.6 발화");
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].keycode, KeyCode::ANSI_EQUAL);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0002_0002), "shift+=(~) 치환");
+        let up = out_arb.arbitrate(&cfg, &key_up(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), jis_gates, Millis(15));
+        assert_eq!(up.disposition(), Disposition::Consume, "래치가 KeyUp 짝을 소비");
+        assert_eq!(up.emitted()[0].keycode, KeyCode::ANSI_EQUAL);
+        out_arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), jis_gates, Millis(20));
+
+        // ② 세션 중(인풋 박스) — 계층 1 소비. F-19 평가(계층 3)는 short-circuit 으로 미도달.
+        let mut in_arb = Arbiter::new(&cfg);
+        let out = in_arb.arbitrate(&cfg, &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert!(out.emitted().is_empty(), "F-19 치환 방출 금지");
+        assert_eq!(out.effects().len(), 1);
+        assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
+    }
+
+    /// T-118-4 — F-19 캡스락 AloneTap(F-19.1·F-19.3·F-19.7 이 CAPS_LOCK 을 등록) 로드 +
+    /// 인풋 박스 + 캡스락 down/up → 세션 게이트가 FSM **앞**이라 AloneTap 발화하지
+    /// 않는다 — Consume + SeekKey, 추적 FSM 은 Idle 유지(리뷰 N3).
+    #[test]
+    fn input_box_f19_caps_lock_alone_tap_never_fires_in_session() {
+        let cfg = f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        assert!(arb.state.has_quick_press(KeyCode::CAPS_LOCK), "캡스락이 추적 슬롯에 등록돼야 한다");
+        let gates = input_box_gates(false);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), gates, Millis(0));
+        assert_eq!(down.layer(), Layer::SeekSession);
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert!(down.emitted().is_empty(), "AloneTap(⌃Space 합성) 이 세션 중 발화하면 안 된다");
+        assert_eq!(down.effects().len(), 1);
+
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::CAPS_LOCK, EventFlags::NONE), gates, Millis(10));
+        assert_eq!(up.disposition(), Disposition::Consume);
+        assert!(up.emitted().is_empty());
+
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "세션 중 FSM 개입 금지 — Idle 유지");
+        assert_eq!(arb.state.machine(KeyCode::RIGHT_COMMAND), QuickPressState::Idle);
+    }
+
+    /// T-118-5 — F-19 전체 로드 + **세션 밖** ⌃Space → 원본 그대로 **Pass**(Passthrough).
+    /// F-19 는 SPACE 를 트리거로 주장하지 않으므로(§2 F4) 간섭이 없다 — 기존 행동 고정.
+    #[test]
+    fn f19_loaded_out_of_session_control_space_passes() {
+        let cfg = f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.layer(), Layer::Passthrough);
+        assert_eq!(out.disposition(), Disposition::Pass);
+        assert!(out.effects().is_empty());
+    }
+
+    /// T-118-6 — F-19 전체 로드 + F-16.1 켬 + **세션 밖** ⇧+Space → 계층 3 F-16.1 정상
+    /// 발화(⌃Space 치환). F-19 공존 하 세션 밖(F-16 경로) 비회귀 고정(리뷰 G3).
+    #[test]
+    fn f19_loaded_out_of_session_f16_1_shift_space_fires() {
+        let cfg = f16_1_with_f19_all_presets_config();
+        let mut arb = Arbiter::new(&cfg);
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(10));
+        assert_eq!(down.layer(), Layer::KoreanInput, "세션 밖 F-16.1 은 F-19 와 공존해도 발화");
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted().len(), 1);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), GateSnapshot::default(), Millis(20));
+    }
+
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
     #[test]
     fn force_reset_emits_off_for_active_modifiers() {
