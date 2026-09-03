@@ -328,6 +328,12 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
                 "wake notification received; scheduling a delayed tap recheck"
             );
             sched.schedule(delay, DelayedJob::Recover);
+            // ⭐ 이슈 #108 원인 (a) — 절전 중 커널이 경로 B(D-1 포함) 매핑을 유실했을
+            // 가능성을 닫는다(BT 키보드가 핫플러그 재열거 없이 재개되는 경우 등,
+            // 검증 불가능한 가설이라 계측 대신 재적용으로 닫는다). `apply_all` 은
+            // 멱등이고 이미 승인된 커맨드 드레인 경로(`ReapplyHidMapping`)를 그대로
+            // 재사용한다 — 새 코드 경로를 만들지 않는다.
+            sched.schedule(delay, DelayedJob::ReapplyHidMapping(None));
         }
         SystemEvent::ScreenUnlocked => {
             let delay = sched.shared().config.load().timings.session_delay_ms;
