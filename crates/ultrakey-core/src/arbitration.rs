@@ -16,7 +16,10 @@ use crate::keycode::KeyCode;
 use crate::keystate::{KeyStateTable, KoreanLatch};
 use crate::korean::{self, KoreanImeState, KoreanTrigger};
 use crate::quickpress::{QuickPressConfig, QuickPressEvent, QuickPressState};
-use crate::rules::{ComboRule, HoldCondition, ModifierKind, RuleAction, RuleId};
+use crate::rules::{
+    ComboRule, HoldCondition, LanguageGate, LanguageOut, LanguageRule, LanguageTrigger, ModifierKind,
+    RuleAction, RuleId,
+};
 use crate::settings::EngineConfig;
 use crate::time::Millis;
 
@@ -55,6 +58,18 @@ pub struct GateSnapshot {
     /// ⭐ D-K2 — 한국어 입력기 활성 판정(`korean.rs`). `Unknown` 이 기본값이자
     /// fail-closed 다: 판정 불가 상태에서 한국어 전용 규칙은 발화하지 않는다.
     pub korean_ime: KoreanImeState,
+    /// ⭐ D-7 — F-19 일본어 전용 앱 제외 비트(`docs/spec/language-presets.md` §3.5).
+    /// `true` 면 F-19.3·F-19.4 규칙을 평가하지 않는다.
+    pub japanese_app_excluded: bool,
+    /// ⭐ D-7 — F-19 중국어 전용 앱 제외 비트. `true` 면 F-19.7 규칙을 평가하지 않는다.
+    pub chinese_app_excluded: bool,
+    /// ⭐ F-19.3 — 일본어 입력기 활성 판정(`korean.rs::classify_input_source_languages_for`).
+    /// `KoreanImeState` 3상태를 재사용한다. `Default` 는 `Unknown`(fail-closed).
+    pub japanese_ime: KoreanImeState,
+    /// ⭐ D-4 — 키보드 타입 게이트(`jis.rs`). `Jis` 면 JIS 행만, `NotJis` 면 US 행만,
+    /// `Unknown`(기본)이면 **양쪽 다 발화하지 않는다**(fail-closed — 양쪽 실패 모드가
+    /// 파괴적이다: US 행이 JIS 의 `]` 키를, JIS 행이 ANSI 의 심볼행을 강탈한다).
+    pub is_jis: crate::jis::JisState,
     /// ⭐ F-06 — 트랙패드 제스처가 hyper 를 요청 중인가(`trackpad-hyper-gesture.md` §3.4).
     /// 트랙패드 리스너가 `Engaged` 로 전이하는 동안만 `true` 다. 물리 키 소스와는
     /// 별개 소스이며, 이 값은 "hyper 요청"만 담당하고 실제 `EventFlags` 합성은
@@ -130,6 +145,9 @@ pub enum Layer {
     /// `SimpleRemap` 앞. 계층 3 안에서 `RuleId::Preset` 이 `RuleId::Korean` 보다 먼저
     /// 평가되므로(`rules.rs`), F-08.4 같은 Preset 조합이 F-16 규칙보다 항상 이긴다.
     KoreanInput,
+    /// ⭐ F-19 언어별 프리셋(`docs/spec/language-presets.md` §3) — `KoreanInput` 다음,
+    /// `SimpleRemap` 앞. `RuleId::Language(_)` 는 `Korean(_)` 뒤에 정렬된다.
+    LanguageInput,
     /// F-06 트랙패드 제스처 프리즈(`trackpad-hyper-gesture.md` §3.2.1) — 제스처 진행
     /// 중 마우스 이동 이벤트를 소비하는 자리. 계층 1 앞의 게이트성 소비다.
     TrackpadFreeze,
@@ -540,8 +558,12 @@ impl Arbiter {
 
         // 계층 2/3 통합 소스 키 핸들러(architecture.md §6.4 P1) — 추적 키(hyper/meh/bleh
         // 소스 또는 프리셋 액션 소스) 자신의 이벤트는 이 핸들러 하나가 결정한다.
+        // ⭐ F-19 — 언어 규칙의 `AloneTap` 트리거 키(caps lock·좌/우⌘)도 "단독 탭/홀드"
+        // 경계가 필요하므로 같은 FSM 슬롯으로 추적한다(명세 §3.6, D-3 — P1 "추적 키
+        // 자신의 이벤트는 FSM 하나가 결정한다"를 지킨다. 별도 FSM 을 만들지 않는다).
         let is_tracked = cfg.rules.modifier_rule_for(ev.keycode).is_some()
-            || cfg.rules.source_actions_for(ev.keycode).is_some();
+            || cfg.rules.source_actions_for(ev.keycode).is_some()
+            || cfg.rules.has_language_alone_tap(ev.keycode);
         if is_tracked && (kind == EventKind::KeyDown || kind == EventKind::KeyUp) {
             return self.handle_tracked_key_event(cfg, ev, kind, gates, now);
         }
@@ -587,6 +609,13 @@ impl Arbiter {
         // Preset 이 먼저 평가되므로 `RuleId::Preset` 소속 규칙(예: F-08.4)이 항상
         // F-16 규칙보다 결정론적으로 이긴다(§3.4 표).
         if self.evaluate_korean_rules(cfg, ev, kind, gates, &mut out) {
+            return out;
+        }
+
+        // ⭐ 계층 3 안의 F-19 언어별 프리셋 규칙(비-AloneTap, `docs/spec/language-presets.md`
+        // §3, P17~P23) — `evaluate_korean_rules` 다음, `evaluate_simple_remap` 앞.
+        // RuleId `Language(_)` 는 `Korean(_)` 뒤에 정렬되므로 결정론적 순서 정합.
+        if self.evaluate_language_rules(cfg, ev, kind, gates, &mut out) {
             return out;
         }
 
@@ -792,6 +821,11 @@ impl Arbiter {
                         out.layer = Layer::PresetCombo;
                         if let Some(action) = source_actions.and_then(|sa| sa.quick_press) {
                             Self::push_full_action(&mut out, action);
+                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out)
+                        {
+                            // ⭐ F-19 — 단독 탭 발화(down+up 쌍)를 다룬 경우.
+                            out.disposition = Disposition::Consume;
+                            return out;
                         }
                     }
                     Some(QuickPressEvent::DoubleTap) => {
@@ -823,6 +857,11 @@ impl Arbiter {
                         out.layer = Layer::PresetCombo;
                         if let Some(action) = source_actions.and_then(|sa| sa.quick_press) {
                             Self::push_full_action(&mut out, action);
+                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out)
+                        {
+                            // ⭐ F-19 — 단독 탭 발화(down+up 쌍)를 다룬 경우.
+                            out.disposition = Disposition::Consume;
+                            return out;
                         }
                     }
                     // WaitingSecondTap 진입(대기 중, 이벤트 없음)과 Suppressed → Idle
@@ -1244,6 +1283,191 @@ impl Arbiter {
                 shift_pressed && !other_modifier_pressed
             }
         }
+    }
+
+    // ── ⭐ F-19 언어별 프리셋 규칙(P17~P23, `docs/spec/language-presets.md` §3) ──────────
+
+    /// F-19 규칙의 언어 게이트가 현재 앱을 제외했는가(D-7). `None`(F-19.5·F-19.6)은
+    /// 항상 `false` — 타이핑 문자 규칙이라 원격 세션에서도 동작해야 한다(명세 §3.5).
+    fn language_gate_excluded(&self, rule: &LanguageRule, gates: GateSnapshot) -> bool {
+        match rule.app_gate {
+            None => false,
+            Some(LanguageGate::Korean) => gates.korean_app_excluded,
+            Some(LanguageGate::Japanese) => gates.japanese_app_excluded,
+            Some(LanguageGate::Chinese) => gates.chinese_app_excluded,
+        }
+    }
+
+    /// F-19 `requires_jis` 조건(H4, D-4) — `Unknown` 이면 **어느 쪽도 만족하지 않는다**
+    /// (fail-closed, `jis.rs` 모듈 문서 — 양쪽 실패 모드가 파괴적이다). `None` 은
+    /// 키보드 타입 게이트가 없는 규칙(F-19.1~4·F-19.7)이라 항상 통과한다.
+    fn language_jis_met(&self, requires_jis: Option<bool>, gates: GateSnapshot) -> bool {
+        use crate::jis::JisState;
+        matches!(
+            (requires_jis, gates.is_jis),
+            (None, _)
+                | (Some(true), JisState::Jis)
+                | (Some(false), JisState::NotJis)
+        )
+    }
+
+    /// `LanguageTrigger` 성립 조건(비-AloneTap) — `korean_trigger_met` 와 같은 정본
+    /// 눌림 테이블 판정(§3, P3). `NoModifier`·`ShiftOnly` 는 F-16 과 같은 조건이고,
+    /// `OptionOnly` 는 마찬가지로 "option(좌·우 아무거나) 만" — 다른 modifier 없음.
+    fn language_trigger_met(&self, trigger: &LanguageTrigger) -> bool {
+        use crate::korean::MODIFIER_KEYS;
+        match trigger {
+            LanguageTrigger::NoModifier { .. } => {
+                !MODIFIER_KEYS.iter().any(|k| self.state.is_pressed(*k))
+            }
+            LanguageTrigger::ShiftOnly { .. } => {
+                let shift_pressed = self.state.is_pressed(KeyCode::LEFT_SHIFT)
+                    || self.state.is_pressed(KeyCode::RIGHT_SHIFT);
+                let other_modifier_pressed = MODIFIER_KEYS.iter().any(|k| {
+                    *k != KeyCode::LEFT_SHIFT
+                        && *k != KeyCode::RIGHT_SHIFT
+                        && self.state.is_pressed(*k)
+                });
+                shift_pressed && !other_modifier_pressed
+            }
+            LanguageTrigger::OptionOnly { .. } => {
+                let option_pressed = self.state.is_pressed(KeyCode::LEFT_OPTION)
+                    || self.state.is_pressed(KeyCode::RIGHT_OPTION);
+                let other_modifier_pressed = MODIFIER_KEYS.iter().any(|k| {
+                    *k != KeyCode::LEFT_OPTION && *k != KeyCode::RIGHT_OPTION
+                        && self.state.is_pressed(*k)
+                });
+                option_pressed && !other_modifier_pressed
+            }
+            // AloneTap 은 이 경로가 아니라 QuickPress FSM(handle_tracked_key_event)에서
+            // 발화한다 — 여기 도달하면 규칙 테이블 구성 오류다(만들지 말 것).
+            LanguageTrigger::AloneTap { .. } => unreachable!(
+                "AloneTap 규칙은 evaluate_language_rules 가 아니라 QuickPress 경로가 소비한다"
+            ),
+        }
+    }
+
+    /// `LanguageOut` 을 실제 키코드+flags 로 확정한다.
+    fn resolve_language_out(rule: &LanguageRule, gates: GateSnapshot) -> (KeyCode, EventFlags) {
+        match rule.out {
+            LanguageOut::Key { keycode, flags } => (keycode, flags),
+            // F-19.3 — 일본어 입력 소스가 활성이면 英数(0x66), 아니면 かな(0x68).
+            // `Unknown`(판정 불가)은 "아니면 かな"(명세 문구) — 무해한 IME 키라
+            // F-16.3 의 fail-closed return 과 구분된다(L4).
+            LanguageOut::EisuOrKana => {
+                let kana = KeyCode::JIS_KANA;
+                let eisuu = KeyCode::JIS_EISU;
+                if gates.japanese_ime == KoreanImeState::Active {
+                    (eisuu, EventFlags::NONE)
+                } else {
+                    (kana, EventFlags::NONE)
+                }
+            }
+        }
+    }
+
+    /// ⭐ F-19 비-AloneTap 규칙(`NoModifier`/`ShiftOnly`/`OptionOnly`)을 KeyDown/KeyUp
+    /// 래치로 소비한다 — `evaluate_korean_rules`(D-K6)와 같은 구조: KeyDown 이 치환을
+    /// 발화하면 언어 래치를 세우고, 대응하는 KeyUp 은 조건을 다시 평가하지 않고 그대로
+    /// 합성한다. 앱 제외 게이트·JIS 조건은 발화 시점에만 검사한다(자동 반복 도중
+    /// 조건이 깨져도 이미 나간 down 의 짝이살아 있다).
+    fn evaluate_language_rules(
+        &mut self,
+        cfg: &EngineConfig,
+        ev: &InputEvent,
+        kind: EventKind,
+        gates: GateSnapshot,
+        out: &mut Outcome,
+    ) -> bool {
+        match kind {
+            EventKind::KeyUp => {
+                let Some(latch) = self.state.language_latch(ev.keycode) else {
+                    return false;
+                };
+                out.layer = Layer::LanguageInput;
+                out.disposition = Disposition::Consume;
+                out.rule = Some(latch.id);
+                out.push(SynthEvent {
+                    kind: EventKind::KeyUp,
+                    keycode: latch.out_keycode,
+                    flags: latch.out_flags,
+                });
+                self.state.clear_language_latch(ev.keycode);
+                true
+            }
+            EventKind::KeyDown => {
+                let Some(rule) = cfg.rules.language_rules.iter().find(|r| {
+                    // AloneTap 은 이 경로가 아니다 — 아래에서 걸러낸다.
+                    !matches!(r.trigger, LanguageTrigger::AloneTap { .. })
+                        && Self::language_trigger_key(r)
+                            == Some(ev.keycode)
+                        && self.language_trigger_met(&r.trigger)
+                }) else {
+                    return false;
+                };
+                if self.language_gate_excluded(rule, gates)
+                    || !self.language_jis_met(rule.requires_jis, gates)
+                    || !self.state.active_synth_flags().is_empty()
+                {
+                    return false;
+                }
+                let (o_keycode, o_flags) = Self::resolve_language_out(rule, gates);
+                out.layer = Layer::LanguageInput;
+                out.disposition = Disposition::Consume;
+                out.rule = Some(rule.id);
+                out.push(SynthEvent {
+                    kind: EventKind::KeyDown,
+                    keycode: o_keycode,
+                    flags: o_flags,
+                });
+                self.state.set_language_latch(KoreanLatch {
+                    trigger_key: ev.keycode,
+                    out_keycode: o_keycode,
+                    out_flags: o_flags,
+                    id: rule.id,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `LanguageTrigger` 에서 트리거 물리 키를 꺼낸다 — `AloneTap` 은 은
+    /// `handle_tracked_key_event` 가 처리하므로 `None`.
+    fn language_trigger_key(rule: &LanguageRule) -> Option<KeyCode> {
+        match rule.trigger {
+            LanguageTrigger::AloneTap { key } => Some(key),
+            LanguageTrigger::NoModifier { key }
+            | LanguageTrigger::ShiftOnly { key }
+            | LanguageTrigger::OptionOnly { key } => Some(key),
+        }
+    }
+
+    /// ⭐ F-19 `AloneTap` 단독 탭 발화 — `handle_tracked_key_event` 의 QuickPress
+    /// 이벤트에서 호출된다. 발화 조건(H5, 명세 §3.6): ① 앱 게이트 ② JIS 조건 ③ 합성
+    /// modifier 부재(`active_synth_flags` 빈 — hyper 합성 중엔 발화하지 않는다).
+    /// 단독 탭 자체는 FSM 이 이미 보장한다(다른 키가 눌리면 `HoldConfirmed` 로 전이).
+    fn fire_language_alone_tap(
+        &mut self,
+        cfg: &EngineConfig,
+        key: KeyCode,
+        gates: GateSnapshot,
+        out: &mut Outcome,
+    ) -> bool {
+        let Some(rule) = cfg.rules.language_alone_taps_for(key).into_iter().next() else {
+            return false;
+        };
+        if self.language_gate_excluded(rule, gates)
+            || !self.language_jis_met(rule.requires_jis, gates)
+            || !self.state.active_synth_flags().is_empty()
+        {
+            return false;
+        }
+        let (o_keycode, o_flags) = Self::resolve_language_out(rule, gates);
+        out.layer = Layer::LanguageInput;
+        out.rule = Some(rule.id);
+        Self::push_key_action(out, o_keycode, o_flags);
+        true
     }
 
     /// 계층 4 — 단순 리매핑.

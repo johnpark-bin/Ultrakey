@@ -10,6 +10,7 @@ pub mod arbitration;
 pub mod event;
 pub mod flags;
 pub mod gate;
+pub mod jis;
 pub mod keycode;
 pub mod keystate;
 pub mod korean;

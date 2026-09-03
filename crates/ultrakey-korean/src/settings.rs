@@ -11,10 +11,13 @@ use serde::{Deserialize, Serialize};
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::keycode::KeyCode;
 use ultrakey_core::korean::KoreanTrigger;
-use ultrakey_core::rules::{KoreanRule, RuleId};
+use ultrakey_core::rules::{
+    KoreanRule, LanguageGate, LanguageOut, LanguageRule, LanguageTrigger, RuleId,
+};
 use ultrakey_core::settings::{keys, SettingsStore};
 
-/// `Korean` 탭 전체 — F-16.1~F-16.4 체크박스 4개 + 항목 5(원격 데스크톱 제외 토글).
+/// `Korean` 탭 전체 — F-16.1~F-16.4 체크박스 4개 + 항목 5(원격 데스크톱 제외 토글)
+/// + ⭐ F-19.1·F-19.2(ko 노드 신규, 정의는 F-19 명세).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KoreanSettings {
     /// F-16.1 `Shift + Space 로 입력 소스 변경`. 기본 ☐.
@@ -40,6 +43,13 @@ pub struct KoreanSettings {
     /// `to_rules` 가 아니라 `EngineConfig` 쪽 플래그로 흘러간다.
     #[serde(default)]
     pub modifier_key_types_lowercase: bool,
+    /// ⭐ F-19.1 `캡스락 탭 = 한/영 전환` — ko 노드 소속(F-19 명세 §3.0 정의).
+    /// 기본 ☐. 저장 키는 `korean.*` 네임스페이스.
+    #[serde(default)]
+    pub caps_lock_switches_input_source: bool,
+    /// ⭐ F-19.2 `오른쪽 command = 한/영 전환` — ko 노드 소속. 기본 ☐.
+    #[serde(default)]
+    pub right_command_switches_input_source: bool,
 }
 
 fn default_disable_in_remote_desktop() -> bool {
@@ -55,6 +65,8 @@ impl Default for KoreanSettings {
             won_key_types_backtick: false,
             disable_in_remote_desktop: true,
             modifier_key_types_lowercase: false,
+            caps_lock_switches_input_source: false,
+            right_command_switches_input_source: false,
         }
     }
 }
@@ -84,6 +96,13 @@ impl KoreanSettings {
                 .unwrap_or(true),
             modifier_key_types_lowercase: store
                 .get(keys::KOREAN_MODIFIER_KEY_TYPES_LOWERCASE)
+                .unwrap_or_default(),
+            // ⭐ F-19.1·F-19.2 — 부재 = 기본값(☐). 일반 "부재 = 기본값" 규약 그대로.
+            caps_lock_switches_input_source: store
+                .get(keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE)
+                .unwrap_or_default(),
+            right_command_switches_input_source: store
+                .get(keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE)
                 .unwrap_or_default(),
         }
     }
@@ -148,6 +167,41 @@ impl KoreanSettings {
                 out_keycode: KeyCode::ANSI_GRAVE,
                 // ALTERNATE(0x80000) | NX_DEVICELALTKEYMASK(0x20) — D-K7 표.
                 out_flags: EventFlags(0x0008_0020),
+            });
+        }
+
+        rules.sort_by_key(|r| r.id);
+        rules
+    }
+
+    /// ⭐ F-19.1·F-19.2 — ko 노드 신규 규칙(정의는 `docs/spec/language-presets.md` §3.0,
+    /// 저장 키는 `korean.*` 네임스페이스). `RuleId::Language(17)`·`Language(18)` 로
+    /// F-16 의 `Korean(13..16)` 뒤에 오도록 발행한다. 기존 `to_rules()`(F-16) 는
+    /// 건드리지 않는다 — 두 메서드의 결과는 `build_engine_config` 가 따로 합친다.
+    pub fn to_language_rules(&self) -> Vec<LanguageRule> {
+        let mut rules = Vec::new();
+
+        if self.caps_lock_switches_input_source {
+            // F-19.1 — 캡스락 단독 탭 → ⌃Space(영문·한국어 어느 쪽이든 전환).
+            // "modifier 부재" 는 F-19 AloneTap 의 FSM(단독 탭/홀드 경계)이 보장한다.
+            rules.push(LanguageRule {
+                id: RuleId::Language(17),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
+                app_gate: Some(LanguageGate::Korean),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
+            });
+        }
+
+        if self.right_command_switches_input_source {
+            // F-19.2 — 오른쪽 command 단독 탭 → ⌃Space. hyper 소스 중재는
+            // `active_synth_flags` 검사(arbitration.rs) + 충돌 대화상자가 담당(명세 §3.6).
+            rules.push(LanguageRule {
+                id: RuleId::Language(18),
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
+                app_gate: Some(LanguageGate::Korean),
+                requires_jis: None,
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
             });
         }
 
@@ -294,6 +348,8 @@ mod tests {
             won_key_types_backtick: true,
             disable_in_remote_desktop: true,
             modifier_key_types_lowercase: false,
+            caps_lock_switches_input_source: false,
+            right_command_switches_input_source: false,
         };
         let rules = s.to_rules();
         assert_eq!(rules.len(), 4, "F-16.1~F-16.4 네 규칙 전부가 나와야 한다: {rules:?}");

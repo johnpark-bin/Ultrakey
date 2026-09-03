@@ -94,7 +94,7 @@ F-16(이슈 #20)은 이미 사용자의 Karabiner 규칙 4종을 정본으로 �
 | `eisuufn.json` (international) | EisuuFN | 英数 키 → `fn` 레이어 스위치(단독이면 英数) | d·f | 중간 |
 | `kanafn.json` (international) | KanaFN | かな 키 → `fn` 레이어: fn+ijkl 방향키·fn+h; ⌫/⌦·fn+op PgUp/Dn·fn+,. Home/End·fn+n Enter | d·f | 낮음~중간 (fn mandatory) |
 | `jis_to_ascii.json` (international) | JIS配列をASCII配列風にする設定 | 英数→`⌘`·かな→`⌘`(단독이면 원 키), `⌘`↔`⌥` 스왑, ¥(`international3`) → `` ` `` | b·d·f | 낮음~중간 |
-| `jis_to_us_symbols.json` (alternative-keyboard-layouts) | Japanese JIS to US Keyboard: Remap Symbol Keys | JIS 심볼 키 18 종 → US 배열(symbol row 대응) | b | 낮음~중간 (keyboard_type_if jis) |
+| `jis_to_us_symbols.json` (alternative-keyboard-layouts) | Japanese JIS to US Keyboard: Remap Symbol Keys | JIS 심볼 키 18 종 → US 배열(symbol row 대응) — ⚠️ **"18 종" 은 오기, 원문은 20 행**(2026-09-03 fetch 대조 — "18 종" 정정은 `docs/spec/language-presets.md` §3.2.1 참고) | b | 낮음~중간 (keyboard_type_if jis) |
 | `jis_pretend_remote_us.json` (device-specific) | US (remote) ← JIS (local) | 원격(Chrome/AnyDesk) 접속 중에만 JIS → US 심볼 19 종 | b | 중간 (frontmost_application_if) |
 | `swap_yen_and_backslash.json` (international) | Swap ¥ and \ … on US Keyboards | `\` ↔ `⌥\`(¥) 스왑 — US 키보드의 일본어 로마자 입력용 | b | 낮음 |
 | `swap_yen_and_backslash_jis.json` (international) | Swap ¥ and \ always on JIS | JIS 판 — `international3`(¥) ↔ `⌥international3`(\) | b | 낮음 |

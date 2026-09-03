@@ -142,6 +142,16 @@ impl KeyCode {
     ///
     /// 등급: [`KeyCode::JIS_KANA`] 와 동일 — `(웹 조사 확정 + SDK 헤더 실측, 실기기 미검증)`.
     pub const JIS_EISU: KeyCode = KeyCode(0x66);
+    /// JIS 키보드의 `¥` 키(`kVK_JIS_Yen`, 로컬 SDK `Events.h` 324행 실측).
+    /// F-19.5(¥↔\)·F-19.6(행 10/11)의 트리거·출력 키다(`docs/spec/language-presets.md`
+    /// §3.2). ⚠️ Karabiner 카탈로그의 `international3` 이름은 **HID usage** 를 가리키므로
+    /// macOS virtual keycode 인 이 상수와 혼동하지 않는다 — JIS 키보드에서 우리 탭에
+    /// 도착하는 값은 `0x5D` 다.
+    pub const JIS_YEN: KeyCode = KeyCode(0x5D);
+    /// JIS 키보드의 `_` 키(`kVK_JIS_Underscore`, 로컬 SDK `Events.h` 325행 실측).
+    /// F-19.6 행 7 의 출력 키(`shift+-` → `_`)다. Karabiner 의 `international1` 과
+    /// 같은 물리 키지만 HID usage 이름이므로 위와 같은 주의가 적용된다.
+    pub const JIS_UNDERSCORE: KeyCode = KeyCode(0x5E);
     pub const RETURN: KeyCode = KeyCode(0x24);
     pub const TAB: KeyCode = KeyCode(0x30);
     pub const ESCAPE: KeyCode = KeyCode(0x35);

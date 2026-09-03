@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
-use ultrakey_core::korean::classify_input_source_languages;
+use ultrakey_core::korean::{classify_input_source_languages, classify_input_source_languages_for};
 use ultrakey_core::perdevice::DeviceId;
 use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, HotplugEventKind, KeyboardHotplugWatcher};
 use ultrakey_platform::text_input_source::{observe_input_source_changes, InputSourceObserver};
@@ -275,7 +275,8 @@ fn warn_if_not_main_thread() {
     );
 }
 
-/// 레이아웃 테이블을 재구축하고 한국어 IME 게이트를 게시한다.
+/// 레이아웃 테이블을 재구축하고 한국어·일본어 IME 게이트와 키보드 타입 게이트를
+/// 게시한다.
 ///
 /// ⭐ **기동 시 1회(`SystemHooks::start`)와 입력 소스 변경 알림(옵저버 콜백)이 이
 /// 함수 하나를 공유한다** — 두 벌로 복제하면 한쪽만 고쳐지는 사고가 난다(이 저장소가
@@ -283,6 +284,12 @@ fn warn_if_not_main_thread() {
 /// 결함 탓에 기동 직후에는 레이아웃 테이블이 한 번도 만들어지지 않아, 사용자가 입력
 /// 소스를 바꾸기 전까지 게이트가 `Unknown` 인 채로 fail-closed 되어 F-16.4 가 영원히
 /// 발화하지 않았다.
+///
+/// ⭐ F-19(D-7·D-4): 같은 함수가 ①일본어 IME 판정(`japanese_ime`) ②키보드 타입 판정
+/// (`is_jis`) 도 함께 게시한다 — 입력 소스 변경은 키보드 타입이 바뀐다는 뜻은 아니지만,
+/// keycode 상수값이 확정된 유일한 기동 시점이기도 하고 두 게이트 모두 "게시한 값"만
+/// 의미가 있어 한 곳에서 갱신하는 것이 안전하다(키보드 핫플러그 시에도 이 함수는
+/// `hotplug`가 재호출한다).
 ///
 /// ⚠️ 콜백이 아니라 메인 스레드 동기 호출이므로 `tracing` 로깅 제약(§2.2)이 적용되지
 /// 않는다 — `original_source_id`·`languages[0]`·판정 결과를 남긴다. 실기기 검증
@@ -294,6 +301,20 @@ fn refresh_input_source(shared: &SharedState) {
     let state = classify_input_source_languages(languages);
     shared.korean_ime.store(state);
 
+    // ⭐ F-19(D-7) — 일본어 입력기 활성. `classify_input_source_languages_for` 로
+    // 같은 언어 목록에서 "ja" 를 판정한다(첫 원소만 보는 규약 동일).
+    let japanese_state = classify_input_source_languages_for(languages, "ja");
+    shared.japanese_ime.store(japanese_state);
+
+    // ⭐ F-19(D-4) — 키보드 타입. 판정 실패(`None`)면 Unknown 을 게시해 fail-closed
+    // 로 남긴다 — JIS·US 행 모두 미발화(둘 다 파괴적인 실패 모드다, `jis.rs` 문서).
+    let is_jis = ultrakey_platform::keyboard_type::current_keyboard_is_jis();
+    shared.is_jis.store(match is_jis {
+        Some(true) => ultrakey_core::jis::JisState::Jis,
+        Some(false) => ultrakey_core::jis::JisState::NotJis,
+        None => ultrakey_core::jis::JisState::Unknown,
+    });
+
     tracing::info!(
         rebuilt,
         used_ascii_fallback = table.used_ascii_fallback(),
@@ -301,7 +322,9 @@ fn refresh_input_source(shared: &SharedState) {
         original_source_id = table.original_source_id(),
         first_language = languages.first().map(String::as_str).unwrap_or(""),
         korean_ime = ?state,
-        "input source refreshed; layout table rebuilt and Korean IME gate published"
+        japanese_ime = ?japanese_state,
+        is_jis = ?is_jis,
+        "input source refreshed; layout table rebuilt and IME/keyboard-type gates published"
     );
 }
 

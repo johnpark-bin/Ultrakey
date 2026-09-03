@@ -591,9 +591,10 @@ mod tests {
             .iter()
             .map(|c| match c.id {
                 RuleId::Preset(n) => n,
-                // 이 크레이트(`ultrakey-presets`)는 `Korean` id 를 만들지 않는다
-                // (`ultrakey-korean` 소관) — 도달할 수 없는 대비값일 뿐이다.
-                RuleId::Korean(_) => u8::MAX,
+                // 이 크레이트(`ultrakey-presets`)는 `Korean`/`Language` id 를 만들지 않는다
+                // (`ultrakey-korean`/`ultrakey-language-presets` 소관) — 도달할 수 없는
+                // 대비값일 뿐이다.
+                RuleId::Korean(_) | RuleId::Language(_) => u8::MAX,
                 RuleId::Hyperkey => u8::MAX,
             })
             .collect();

@@ -129,6 +129,36 @@ pub const KOREAN_EXCLUDED_BUNDLE_IDS: &str = "korean.excludedBundleIds";
 /// 확장이다(명세 §3.7).
 pub const KOREAN_MODIFIER_KEY_TYPES_LOWERCASE: &str = "korean.modifierKeyTypesLowercase";
 
+// ── F-19 언어별 프리셋(`language-presets.md` §3·§4.3, D-6) ───────────────
+//
+// 저장 키 네임스페이스: ko 노드 소속(F-19.1·F-19.2)은 정의는 F-19 이지만 저장 키는
+// `korean.*` 를 확장한다(명세 §3.0 — "정의는 이 명세, 저장 키는 korean.*"). ja·zh 는
+// `japanese.*`·`chinese.*` 신설 네임스페이스. **전부 "부재 = 기본값(☐)"** — 기본이 ☑ 인
+// 키는 하나도 없다(F-16 §4.2 "기본 ☑ 반전" 주의는 F-19 에 해당하지 않는다, 명세 §4.3).
+
+/// F-19.1 `캡스락 탭 = 한/영 전환` — 체크박스. 기본값 ☐. 저장 키가 `korean.*` 인 이유는
+/// ko 노드 소속(명세 §3.0)이다.
+pub const KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE: &str = "korean.capsLockSwitchesInputSource";
+/// F-19.2 `오른쪽 command = 한/영 전환` — 체크박스. 기본값 ☐. 상동.
+pub const KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE: &str =
+    "korean.rightCommandSwitchesInputSource";
+/// F-19.3 `캡스락 = 英数/かな 토글` — 체크박스. 기본값 ☐.
+pub const JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA: &str = "japanese.capsLockTogglesEisuKana";
+/// F-19.4 `⌘ 단독 탭 = 英数/かな` — 체크박스. 기본값 ☐. 좌⌘=英数·우⌘=かな 고정(P2 확정
+/// 안 A) — 하나의 값이 규칙 두 개를 켠다.
+pub const JAPANESE_COMMAND_TOGGLES_EISU_KANA: &str = "japanese.commandTogglesEisuKana";
+/// F-19.5 `¥ ↔ \ / 백틱 치환` — 체크박스. 기본값 ☐.
+pub const JAPANESE_SWAP_YEN_BACKSLASH: &str = "japanese.swapYenBackslash";
+/// F-19.6 `JIS 키보드를 US 배열처럼` — 체크박스. 기본값 ☐. 심볼 치환 20행.
+pub const JAPANESE_JIS_AS_US_SYMBOLS: &str = "japanese.jisAsUsSymbols";
+/// F-19 앱 제외 게이트(F-19.3·F-19.4 대상) 목록 오버라이드 — `korean.excludedBundleIds`
+/// 형과 동일(부재 = 기본 목록, 존재 시 통째 대체). 값은 번들 ID 문자열 배열.
+pub const JAPANESE_EXCLUDED_BUNDLE_IDS: &str = "japanese.excludedBundleIds";
+/// F-19.7 `캡스락 = 중/영 전환` — 체크박스. 기본값 ☐.
+pub const CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE: &str = "chinese.capsLockSwitchesInputSource";
+/// F-19 앱 제외 게이트(F-19.7 대상) 목록 오버라이드.
+pub const CHINESE_EXCLUDED_BUNDLE_IDS: &str = "chinese.excludedBundleIds";
+
 // ── F-03 Seek 오버레이(`seek-overlay-ui.md` §3.4, 이슈 #34) ──
 //
 // ⭐ **부재 = 기본값** (F-15 §3.6). 검색 바를 한 번도 옮기지 않았으면 이 두 키가
@@ -254,6 +284,17 @@ pub fn all() -> &'static [&'static str] {
         KOREAN_DISABLE_IN_REMOTE_DESKTOP,
         KOREAN_EXCLUDED_BUNDLE_IDS,
         KOREAN_MODIFIER_KEY_TYPES_LOWERCASE,
+        // ⭐ F-19 — ko 노드 소속 신규분(F-19.1·F-19.2).
+        KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE,
+        KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE,
+        // ⭐ F-19 — ja·zh 네임스페이스.
+        JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA,
+        JAPANESE_COMMAND_TOGGLES_EISU_KANA,
+        JAPANESE_SWAP_YEN_BACKSLASH,
+        JAPANESE_JIS_AS_US_SYMBOLS,
+        JAPANESE_EXCLUDED_BUNDLE_IDS,
+        CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE,
+        CHINESE_EXCLUDED_BUNDLE_IDS,
         SEEK_SEARCH_BAR_X,
         SEEK_SEARCH_BAR_Y,
         SEEK_TOGGLE_SHORTCUT_CODE,
@@ -289,6 +330,7 @@ mod tests {
     // **저장 키**는 명세 그대로 `korean.*` 다(D-K11, 이 파일이 다루는 것은 저장 키다).
     // F-17 이 `perDevice.*` 를 더한다(§3.3) — 동적 세그먼트(`perDevice.<vid>:<pid>.*`)
     // 는 `all()` 에 나열되지 않지만(위 주석 참고), 접두사 규칙 자체는 여기서도 지킨다.
+    // F-19 가 `japanese.*`·`chinese.*` 를 더한다(명세 §4.3 — F-19.1·F-19.2 만 `korean.*`).
     #[test]
     fn all_keys_follow_prefix_convention() {
         for key in all() {
@@ -300,7 +342,10 @@ mod tests {
                     || key.starts_with("korean.")
                     // F-03 Seek 오버레이(이슈 #34) — 검색 바 위치.
                     || key.starts_with("seek.")
-                    || key.starts_with("perDevice."),
+                    || key.starts_with("perDevice.")
+                    // F-19 언어별 프리셋(이슈 #115) — ja·zh 네임스페이스.
+                    || key.starts_with("japanese.")
+                    || key.starts_with("chinese."),
                 "접두사 규칙을 벗어난 키: {key}"
             );
         }

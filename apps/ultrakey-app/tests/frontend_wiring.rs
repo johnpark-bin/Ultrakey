@@ -502,8 +502,8 @@ fn settings_html_문서가_탭_전환은_창_크기를_바꾸지_않는다고_�
     );
 }
 
-/// `main.rs` 의 `KNOWN_TABS` 화이트리스트가 `korean`·`keyboards` 를 아는지
-/// 소스 텍스트로 재확인한다. 실제 판정 로직(`is_known_tab`)의 동작 자체는
+/// `main.rs` 의 `KNOWN_TABS` 화이트리스트가 `korean`·`japanese`·`chinese`·`keyboards` 를
+/// 아는지 소스 텍스트로 재확인한다. 실제 판정 로직(`is_known_tab`)의 동작 자체는
 /// `src/main.rs` 유닛 테스트(`tests::is_known_tab_knows_all_six_tabs`,
 /// `tests::every_tab_in_settings_html_is_a_known_tab`)가 검증한다 — 여기서는
 /// "그 화이트리스트가 이 탭들을 다루는가"라는 배선 자체를 재발 방지 관점에서
@@ -516,9 +516,12 @@ fn main_rs_의_known_tabs가_korean과_keyboards를_안다() {
     let main_rs = read_main_rs();
     assert!(
         main_rs.contains(
-            "const KNOWN_TABS: &[&str] = &[\"seek\", \"hyperkey\", \"presets\", \"korean\", \"keyboards\", \"general\"];"
+            "const KNOWN_TABS: &[&str] = \
+             &[\"seek\", \"hyperkey\", \"presets\", \"korean\", \"japanese\", \"chinese\", \
+               \"keyboards\", \"general\"];"
         ),
-        "main.rs 의 KNOWN_TABS 화이트리스트가 예상한 6개 탭을 그대로 담고 있지 않다"
+        "main.rs 의 KNOWN_TABS 화이트리스트가 예상한 8개 탭(자식 korean·japanese·chinese 포함)을 \
+         그대로 담고 있지 않다"
     );
 }
 
@@ -1267,9 +1270,9 @@ fn settings_html_에_keyboards_탭_버튼_패널이_tabs_배열_순서대로_있
         "settings.html 에 Keyboards 탭 패널(id=\"panel-keyboards\")이 없다"
     );
     assert!(
-        html.contains(r#"["seek", "hyperkey", "presets", "korean", "keyboards", "general"]"#),
-        "settings.html 의 TABS 배열이 Korean 다음·General 앞 순서로 \"keyboards\" 를 \
-         갖고 있지 않다(명세 §3.1)"
+        html.contains(r#"["seek", "hyperkey", "presets", "korean", "japanese", "chinese", "keyboards", "general"]"#),
+        "settings.html 의 TABS 배열이 Korean·Japanese·Chinese 다음, General 앞 순서로 \
+         \"keyboards\" 를 갖고 있지 않다(명세 §3.1 + F-19 §4.1 언어 트리)"
     );
 }
 

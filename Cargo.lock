@@ -4372,6 +4372,7 @@ dependencies = [
  "ultrakey-hyperkey",
  "ultrakey-i18n",
  "ultrakey-korean",
+ "ultrakey-language-presets",
  "ultrakey-layout",
  "ultrakey-license",
  "ultrakey-overlay",
@@ -4437,6 +4438,15 @@ dependencies = [
 
 [[package]]
 name = "ultrakey-korean"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ultrakey-core",
+]
+
+[[package]]
+name = "ultrakey-language-presets"
 version = "0.1.1"
 dependencies = [
  "serde",

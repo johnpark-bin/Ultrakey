@@ -475,10 +475,11 @@ mod tests {
         }
     }
 
-    /// ⭐ 이슈 #45 — 전 로케일에서 **탭 라벨 값 == 상세 헤딩 값**이다(이슈가
+/// ⭐ 이슈 #45 — 전 로케일에서 **탭 라벨 값 == 상세 헤딩 값**이다(이슈가
     /// 해소한 "사이드바는 영문인데 상세 헤딩은 한국어" 어긋남의 재발 방지).
     /// `Keyboards` 는 헤딩이 탭 라벨 키 자체를 재사용하므로(`settings.html` 의
-    //  근거 주석 참고 — 명세 §4.1 키 예산) 애초에 어긋날 구조가 없다.
+    /// 근거 주석 참고 — 명세 §4.1 키 예산) 애초에 어긋날 구조가 없다.
+    /// ⭐ F-19 — `japanese`·`chinese` 자식 탭도 label==heading(endonym) 을 지킨다.
     /// ⚠️ `es` 의 `General` 처럼 공교롭게 영어와 철자가 같은 번역이 있으므로
     /// "비영어 로케일이면 값이 영어와 달라야 한다"는 형태의 검사는 틀리다 —
     /// 여기서 고정하는 불변식은 라벨↔헤딩 일치뿐이다.
@@ -489,7 +490,7 @@ mod tests {
             let obj = value
                 .as_object()
                 .unwrap_or_else(|| panic!("{} 카탈로그 최상위는 객체여야 한다", locale.code()));
-            for tab in ["presets", "korean", "general"] {
+            for tab in ["presets", "korean", "general", "japanese", "chinese"] {
                 let label = obj
                     .get(&format!("settings.tab.{tab}"))
                     .and_then(|v| v.as_str())

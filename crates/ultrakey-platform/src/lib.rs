@@ -28,6 +28,7 @@ pub mod hid_mapping;
 pub mod hotplug;
 pub mod image_preprocess;
 pub mod keychain;
+pub mod keyboard_type;
 pub mod login_item;
 pub mod multitouch;
 pub mod overlay_window;
