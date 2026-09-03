@@ -718,6 +718,16 @@ fn on_tap_event(
             pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8 * trace::PRESSED_MOD_LEFT_SHIFT)
                 | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8 * trace::PRESSED_MOD_RIGHT_SHIFT)
                 | (st.arbiter.is_pressed(KeyCode::CAPS_LOCK) as u8 * trace::PRESSED_MOD_CAPS_LOCK),
+            // ⭐ 이슈 #121 — ⌃⌥⌘ 여섯 키 스냅샷(F-16.1 ShiftOnly 의 "다른 modifier
+            // 미눌림" 판정) + 합성 hyper 활성 스냅샷(발화 조건 3). `is_pressed` 와
+            // `active_synth_flags` 는 같은 스레드 메모리 읽기일 뿐이다(#108 관례).
+            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8 * trace::PRESSED_MOD_LEFT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8 * trace::PRESSED_MOD_RIGHT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8 * trace::PRESSED_MOD_LEFT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8 * trace::PRESSED_MOD_RIGHT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8 * trace::PRESSED_MOD_LEFT_COMMAND)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8 * trace::PRESSED_MOD_RIGHT_COMMAND),
+            synth_flags_active: (!st.arbiter.active_synth_flags().is_empty()) as u8,
             ..Default::default()
         };
 

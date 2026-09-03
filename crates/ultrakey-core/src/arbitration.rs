@@ -342,6 +342,14 @@ impl Arbiter {
         self.state.is_pressed(k)
     }
 
+    /// ⭐ 이슈 #121 계측 전용 — `active_synth_flags`(HoldConfirmed 슬롯의 합성 flags
+    /// OR)를 엔진 크레이트에 읽기 전용으로 노출한다. F-16.1 발화 조건 3
+    /// (`evaluate_korean_rules`, `arbitration.rs:1244-1246`)의 스냅샷을 트레이스가
+    /// 찍기 위한 접근자다 — `is_pressed` 와 같은 패턴이고 판정 로직은 노출하지 않는다.
+    pub fn active_synth_flags(&self) -> EventFlags {
+        self.state.active_synth_flags()
+    }
+
     /// `key` 하나에 대한 quick press 판정 설정. M1 은 규칙 전체에 하나의 설정을 썼지만,
     /// M2 는 키마다 `has_quick_press_action`/`has_double_tap_action` 이 다를 수 있어
     /// (예: caps lock 은 quick press 만, shift 는 double tap 만) 키 단위로 조회한다.
@@ -3076,6 +3084,231 @@ mod tests {
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
         arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), GateSnapshot::default(), Millis(20));
+    }
+
+    // ── ⭐(이슈 #121) — 사용자 실기기 설정 전량 재현: F-16.1 + F-08 프리셋 + hyper(우⌘) ─────
+    //
+    // 증상: Seek 인풋 박스에서 ⇧+Space(F-16.1)가 **정확히 3번째 탭**에만 입력 소스가
+    // 전환되고 1·2번째엔 안 된다(사용자 실측). 테스트 당시 **여러 언어 전환 설정이 켜진
+    // 상태** — "shift 를 소스로 쓰는 F-08 규칙이 켜져 shift 이벤트를 FSM 이 추적해
+    // ⇧+Space 를 삼킨다"는 가설이 이슈에 기록돼 있다.
+    //
+    // 사용자 실 설정(`~/Library/Application Support/app.ultrakey.Ultrakey/settings.json`,
+    // 2026-09-03 실측):
+    //   korean.shiftSpaceSwitchesInputSource: true   → F-16.1 (⇧+Space)
+    //   korean.wonKeyTypesBacktick: true             → F-16.4 (₩→백틱)
+    //   hyperkey.hyper.enabled=true · source=RightCommand · includeShiftInHyper=false
+    //   presets.capsLockRemap.enabled=true  (target=LeftControl 기본)   → F-08.1
+    //   presets.capsQuickPress.enabled=true (action=CapsLock 기본)      → F-08.2
+    //   presets.capsHjklArrows.enabled=true (key_set=Hjkl 기본)         → F-08.6
+    //   presets.leftRightShiftToCaps=true                               → F-08.9
+    //   presets.shiftCapsToCaps=true                                    → F-08.10
+    //   presets.homeEndOnLines=true                                     → F-08.16
+    //   presets.doubleTapShiftToCaps=false · shiftQuickPressBrackets=false
+    //   perDevice 리매핑(⌘↔⌥ 스왑 등) — shift·space 키코드를 건드리지 않으므로
+    //   이 테스트의 ⇧+Space 경로에는 개입하지 않음(D-1 커널 리매핑이 탭 앞에서 적용).
+    //   D-1: 캡스락 의존 규칙 다수 → `caps_lock_alias = Some(F18)`.
+    //
+    // ⛔ 이 테스트들은 "세션 게이트가 FSM(is_tracked)보다 먼저"라는 구조 때문에, 이
+    // 설정 전량을 동시에 로드해도 세션 중 ⇧+Space 는 D2(F-16.1 재평가)가 **1번째 탭부터**
+    // 발화해야 한다는 사실을 **고정**한다. "3번째에만 동작"이 중재 계층의 탭 간
+    // 상태(래치·FSM 슬롯)로 설명되지 않음을 재현으로 확인한다.
+    fn issue121_user_settings_config() -> EngineConfig {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.korean_rules = vec![korean_rule_shift_space(), korean_rule_won_grave()];
+        cfg.rules.combo_rules = vec![
+            // F-08.6 — 캡스락 + H/J/K/L = ◀ ▼ ▲ ▶
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_H, action: RuleAction::Key { keycode: KeyCode::LEFT_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_J, action: RuleAction::Key { keycode: KeyCode::DOWN_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_K, action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_L, action: RuleAction::Key { keycode: KeyCode::RIGHT_ARROW, flags: EventFlags::NONE } },
+            // F-08.9 — 좌/우 shift 동시 = caps lock (양방향)
+            ComboRule { id: RuleId::Preset(9), hold: HoldCondition::Key(KeyCode::RIGHT_SHIFT), trigger: KeyCode::LEFT_SHIFT, action: RuleAction::ToggleCapsLock },
+            ComboRule { id: RuleId::Preset(9), hold: HoldCondition::Key(KeyCode::LEFT_SHIFT), trigger: KeyCode::RIGHT_SHIFT, action: RuleAction::ToggleCapsLock },
+            // F-08.10 — shift + caps lock = caps lock
+            ComboRule { id: RuleId::Preset(10), hold: HoldCondition::EitherShift, trigger: KeyCode::CAPS_LOCK, action: RuleAction::ToggleCapsLock },
+        ];
+        cfg.rules.combo_rules.sort_by_key(|r| r.id);
+        cfg.rules.simple_remaps = vec![
+            SimpleRemap { id: RuleId::Preset(16), from: KeyCode::HOME, to: KeyCode::LEFT_ARROW, add_flags: EventFlags::COMMAND },
+            SimpleRemap { id: RuleId::Preset(16), from: KeyCode::END, to: KeyCode::RIGHT_ARROW, add_flags: EventFlags::COMMAND },
+        ];
+        // F-08.1(캡스락→좌컨트롤 hold_remap) + F-08.2(quick press caps = caps lock)
+        cfg.rules.source_actions = vec![SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: Some(RuleAction::ToggleCapsLock),
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
+        }];
+        // F-05 — 우⌘ 소스 hyper (includeShiftInHyper=false → HYPER_NO_SHIFT)
+        cfg.rules.modifier_rules = vec![ModifierRule {
+            source: KeyCode::RIGHT_COMMAND,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::HYPER_NO_SHIFT,
+        }];
+        cfg.caps_lock_alias = Some(KeyCode::F18);
+        cfg
+    }
+
+    /// ⭐ 이슈 #121 핵심 단언 — 사용자 실 설정 전량 하에서 인풋 박스 ⇧+Space 는
+    /// **1번째 탭부터** F-16.1 이 ⌃Space 로 치환·소비한다(반복 탭도 동일). F-08.9 의
+    /// LEFT_SHIFT 조합 규칙·캡스락 FSM·hyper 슬롯이 세션 중 ⇧+Space 를 삼키지 않으며,
+    /// **사용자 실 토글 단축키(⌥Space)가 게이트에 등록된 상태에서도** 토글 조합으로
+    /// 오인되지 않는다(리뷰 반영 — `is_seek_shortcut_combo` 를 실 설정 전량에서 검증).
+    /// 좌/우 shift 양쪽을 각각 1회씩 포함한다.
+    #[test]
+    fn issue121_user_settings_shift_space_fires_on_every_tap_in_input_box() {
+        let cfg = issue121_user_settings_config();
+        let mut arb = Arbiter::new(&cfg);
+        // U14 — 사용자 실 토글 단축키 ⌥Space 가 게이트에 등록된 상태.
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: false,
+            seek_shortcut_keycode: KeyCode::SPACE.0,
+            seek_shortcut_mods: EventFlags::ALTERNATE.0,
+            ..Default::default()
+        };
+
+        for tap in 0..3u64 {
+            let base = 100 * tap;
+            arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(base));
+            let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(base + 10));
+            assert_eq!(down.layer(), Layer::KoreanInput, "탭 {tap}: D2 발화");
+            assert_eq!(down.disposition(), Disposition::Consume, "탭 {tap}: 삼키면 1·2번째 전환이 죽는다");
+            assert_eq!(down.emitted().len(), 1, "탭 {tap}: ⌃Space down 1개");
+            assert_eq!(down.emitted()[0].kind, EventKind::KeyDown, "탭 {tap}");
+            assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "탭 {tap}: ⇧ 제거 + ⌃ 치환");
+
+            let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(base + 15));
+            assert_eq!(up.layer(), Layer::KoreanInput, "탭 {tap}: 래치 KeyUp");
+            assert_eq!(up.disposition(), Disposition::Consume, "탭 {tap}");
+            assert_eq!(up.emitted()[0].kind, EventKind::KeyUp, "탭 {tap}");
+            assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "탭 {tap}: 래치가 같은 치환으로 짝");
+
+            arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(base + 20));
+        }
+
+        // 우shift 변형 — 사용자가 어느 shift 를 누르는지 미기록이므로 양쪽을 고정한다.
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::RIGHT_SHIFT, 0x0002_0004), gates, Millis(400));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0004)), gates, Millis(410));
+        assert_eq!(down.layer(), Layer::KoreanInput, "우shift 변형: D2 발화");
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0004)), gates, Millis(415));
+        assert_eq!(up.disposition(), Disposition::Consume, "우shift 변형: 래치 KeyUp");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::RIGHT_SHIFT), gates, Millis(420));
+    }
+
+    /// ⭐ 이슈 #121 보조 — 같은 설정에서 **F-16.1 만 꺼지면**(부재 = 기본) ⇧+Space 는
+    /// 검색어 공백으로 **통과**한다(전환 미발생). 사용자 실측("1·2번째 안 됨")이 F-16.1
+    /// 꺼짐 구성이었던 것이 아닌지 — 즉 "켜진 설정 목록"의 교차 검증으로 쓴다.
+    #[test]
+    fn issue121_user_settings_f16_1_off_shift_space_passes_as_space() {
+        let mut cfg = issue121_user_settings_config();
+        cfg.rules.korean_rules = vec![korean_rule_won_grave()]; // F-16.1 제거 — F-16.4 만
+        let mut arb = Arbiter::new(&cfg);
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass, "F-08 프리셋이 SPACE 를 삼키면 안 된다");
+        assert!(out.effects().is_empty(), "검색어 공백");
+    }
+
+    /// ⭐ 이슈 #121 비회귀 — 같은 설정으로 **세션 밖**: ① shift+a 는 정상 통과
+    /// (F-08.9 좌우 shift 조합이 단독 shift 를 삼키지 않음) ② ⇧+Space 는 계층 3
+    /// F-16.1 이 정상 발화. 인풋 박스 수정이 세션 밖으로 새지 않아야 한다는 범위
+    /// 제약의 기준선이다.
+    #[test]
+    fn issue121_user_settings_out_of_session_unchanged() {
+        let cfg = issue121_user_settings_config();
+        let mut arb = Arbiter::new(&cfg);
+        let out = GateSnapshot::default();
+
+        // ① shift+a — 일반 타이핑 대문자.
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), out, Millis(0));
+        let a = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)), out, Millis(10));
+        assert_eq!(a.disposition(), Disposition::Pass, "shift+a 통과(대문자)");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), out, Millis(20));
+
+        // ② ⇧+Space — 세션 밖 계층 3 F-16.1 발화(⌃Space 치환).
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), out, Millis(30));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), out, Millis(40));
+        assert_eq!(down.layer(), Layer::KoreanInput, "세션 밖 F-16.1 발화");
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), out, Millis(45));
+        assert_eq!(up.disposition(), Disposition::Consume);
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), out, Millis(50));
+    }
+
+    /// ⭐ 이슈 #121 (리뷰 6번 반영) — **세션 열림 직전(진입 직후 첫 탭)**: ⌥Space 로
+    /// 세션을 여는 순간 게이트가 시퀀스 도중에 전환되고 곧바로 첫 ⇧+Space 탭이 온다.
+    /// ⌥ down(세션 밖, 미추적 → Pass) → 게이트 전환 → space down/up + ⌥ up 이 세션
+    /// 소비(SeekKey — 재입력 토글 판정) → 눌림 테이블에 ⌥ 잔류 없음 → 첫 ⇧+Space 탭이
+    /// 1회 발화. `arbitrate` 의 "눌림 테이블 = 세션 게이트 앞 갱신" 보장을 사용자 실
+    /// 설정 전량에서 고정한다.
+    #[test]
+    fn issue121_session_open_prefix_first_tap_still_fires() {
+        let cfg = issue121_user_settings_config();
+        let mut arb = Arbiter::new(&cfg);
+        let closed = GateSnapshot::default();
+
+        // ① 세션 밖 — ⌥ down. LEFT_OPTION 은 미추적 키라 원본 통과(눌림 테이블 갱신).
+        let opt_down = arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020), closed, Millis(0));
+        assert_eq!(opt_down.disposition(), Disposition::Pass, "세션 밖 ⌥ 는 통과");
+
+        // ② 게이트 전환(⌥Space 재입력 = 세션 열림) — space down/up·⌥ up 이
+        // 인풋 박스 세션에서 소비된다(SeekKey — 재입력 토글 경로).
+        let open = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            seek_semicolon_cycles: false,
+            seek_shortcut_keycode: KeyCode::SPACE.0,
+            seek_shortcut_mods: EventFlags::ALTERNATE.0,
+            ..Default::default()
+        };
+        let space_down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0008_0020)), open, Millis(10));
+        assert_eq!(space_down.disposition(), Disposition::Consume, "⌥Space down 은 토글 조합으로 소비");
+        let space_up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0008_0020)), open, Millis(15));
+        assert_eq!(space_up.disposition(), Disposition::Consume);
+        let opt_up = arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_OPTION), open, Millis(20));
+        assert_eq!(opt_up.disposition(), Disposition::Consume, "⌥ up 도 세션 소비");
+        assert!(!arb.state.is_pressed(KeyCode::LEFT_OPTION), "⌥ 잔류 금지 — 첫 탭 ShiftOnly 의 '다른 modifier 미눌림'");
+
+        // ③ 첫 ⇧+Space 탭 — ⌥ 잔류 없이 1회 발화.
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), open, Millis(30));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), open, Millis(40));
+        assert_eq!(down.layer(), Layer::KoreanInput, "진입 직후 첫 탭: D2 발화");
+        assert_eq!(down.disposition(), Disposition::Consume);
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), open, Millis(45));
+        assert_eq!(up.disposition(), Disposition::Consume, "래치 KeyUp");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), open, Millis(50));
+    }
+
+    /// ⭐ 이슈 #121 (리뷰 6번 반영) — **특성화**: 눌림 테이블에 stale modifier(⌥)가
+    /// 남으면 F-16.1 `ShiftOnly` 의 "다른 modifier 미눌림" 조건이 깨져 D2 가 발화하지
+    /// 않고 ⇧+Space 는 검색어 공백으로 통과한다. 이것이 후보 (E)(실기기 이벤트 드롭이
+    /// 남긴 stale 눌림)가 **중재 계층에서** 1·2번째 탭을 만들 수 있는 정확한 결과
+    /// 사슬이다. 여기서 고칠 대상은 런타임 드롭이며 이 PR 범위 밖 — 이 테스트는 현재
+    /// 결정론적 동작을 닻으로 내린다.
+    #[test]
+    fn issue121_stale_modifier_blocks_shift_only_characterization() {
+        let cfg = issue121_user_settings_config();
+        let mut arb = Arbiter::new(&cfg);
+        let gates = input_box_gates(false);
+
+        // 릴리즈가 유실된 stale ⌥ 눌림을 재현(실기기 드롭 시나리오).
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020), gates, Millis(0));
+
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
+        assert_ne!(out.layer(), Layer::KoreanInput, "stale ⌥ 가 ShiftOnly 를 깨면 D2 미발화");
+        assert_eq!(out.layer(), Layer::SeekSession);
+        assert_eq!(out.disposition(), Disposition::Pass, "검색어 공백으로 통과");
+        assert!(out.effects().is_empty());
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(25));
+        assert_eq!(up.disposition(), Disposition::Pass, "래치도 없으므로 KeyUp 통과");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(30));
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
