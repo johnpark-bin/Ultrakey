@@ -205,6 +205,10 @@ impl Engine {
             }
 
             let shared = SharedState::new(config, gate);
+            // ⭐ 이슈 #110 — 되읽기 확인 결과를 게시한다(앱 상태 표시용).
+            shared
+                .d1_confirmed
+                .store(path_b.d1_confirmed(), Ordering::Release);
             let on_event: Arc<dyn Fn(EngineEvent) + Send + Sync> = Arc::from(on_event);
             let tap_state = Arc::new(AtomicTapState::new(TapState::NotInstalled));
             let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
@@ -283,6 +287,9 @@ impl Engine {
             tracing::warn!(error = %e, "Path B (F-17 per-device array) reapply failed");
         }
         self.shared.config.store(Arc::new(config));
+        self.shared
+            .d1_confirmed
+            .store(self.path_b.d1_confirmed(), Ordering::Release);
         self.commands.send(EngineCommand::Reconfigure);
     }
 
@@ -934,9 +941,9 @@ fn drain_commands(
                 // 이 경로를 타므로, 이 커맨드 perform 콜백(탭 이벤트 콜백 자체는 아니다)
                 // 안에서 hidutil 서브프로세스를 동기 호출해도 §2.2 가 금지하는 "매 이벤트
                 // 임계 경로"에는 해당하지 않는다 — M1 부터 이어진 판단이다.
-                let (path_b, cfg) = {
+                let (path_b, cfg, shared) = {
                     let st = cell.borrow();
-                    (st.path_b.clone(), st.shared.config.load_full())
+                    (st.path_b.clone(), st.shared.config.load_full(), Arc::clone(&st.shared))
                 };
                 let result = match &device {
                     Some(dev) => path_b.apply_device(&cfg, dev),
@@ -945,6 +952,9 @@ fn drain_commands(
                         path_b.apply_all(&cfg, &attached)
                     }
                 };
+                shared
+                    .d1_confirmed
+                    .store(path_b.d1_confirmed(), Ordering::Release);
                 match result {
                     Ok(()) => tracing::info!(?device, "Path B (F-17) reapply completed"),
                     Err(e) => tracing::warn!(error = %e, ?device, "Path B (F-17) reapply failed"),

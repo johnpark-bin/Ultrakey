@@ -831,12 +831,12 @@ M1 에는 이 엔진이 설치하는 경로 B 규칙이 **0개**여서 위 1·3 
 
 | # | 조작 | 기대 |
 | :--- | :--- | :--- |
-| 1 | caps lock 프리셋을 하나 켠 뒤 `hidutil property --get UserKeyMapping` | `Src=30064771129`, `Dst=30064771181` 이 **나타난다** |
+| 1 | caps lock 프리셋을 하나 켠 뒤 `hidutil property --matching '{"VendorID":<vid>,"ProductID":<pid>,"PrimaryUsagePage":1,"PrimaryUsage":6}' --get UserKeyMapping`(⭐ F-17 이후 D-1 은 디바이스 한정이라 매칭 없는 `--get` 은 `(null)` 이다 — 내장 키보드는 `<vid>`/`<pid>` 에 `0`/`0`, 이슈 #110) | 그 디바이스의 키보드 서비스 행에 `Src=30064771129`, `Dst=30064771181` 이 **나타난다** |
 | 2 | ⭐ 설정 창 `General` 탭 → 최하단 `Advanced` 접이식을 펼치고 `Synthesize Caps Lock Remap` 을 **켠다**(이슈 #77 — 트레이 메뉴엔 이 항목이 없다), 그리고 다시 조회 | ⭐ **그 매핑이 즉시 사라진다.** 앱을 다시 띄울 필요가 없다 |
 | 3 | 다시 **끈다**, 조회 | 매핑이 다시 나타난다 |
 | 4 | 매핑이 걸린 채로 앱을 `kill -9` → 설정 화면에서 `Synthesize Caps Lock Remap` 이 켜진 상태로 재실행 | 시작 시 재조정이 **우리 매핑을 걷어낸다**(부록 A #1). 로그: `우리가 설치한 D-1 매핑만 제거했다` |
 | 5 | ⭐ 사용자가 직접 건 **다른** 매핑(예: `hidutil property --set` 로 넣은 임의 쌍)이 함께 있는 상태에서 4 를 반복 | ⛔ **그 매핑은 그대로 남아 있어야 한다**(부록 A #3). 우리 서명과 일치하는 항목만 사라진다 |
-| 6 | 앱 정상 종료 후 조회 | 우리 매핑은 없고 남의 매핑은 남아 있다 |
+| 6 | 앱 정상 종료 후 조회(같은 `--matching` 4키 사전으로) | 우리 매핑은 없고 남의 매핑은 남아 있다 |
 
 ⛔ **2·4 가 이슈 #19 증상 B 의 회귀 방지 지점이다.** 이 둘이 깨지면 `caps lock → F18` 이
 커널에 남은 채 중재기는 그것을 caps lock 으로 되돌릴 alias 를 잃어, **물리 caps lock 이
@@ -3159,3 +3159,66 @@ lock`·`Shift + caps lock = caps lock` 중 하나) 을 켜서 D-1(`caps lock →
 - **시스템 설정 보조 키 remap 의 정확한 plist 저장 위치** — 확인하지 못했다(추정). D-17-6 의 동작은 저장 위치와 무관하게 성립한다(M3 근거).
 - **"Caps Lock 으로 입력 소스 전환"의 짧게/길게 판정 임계시간** — 공개 문서 없음(추정, 75ms 는 다른 지연값과 혼동하지 않도록 이 문서에 단정하지 않는다). M4 는 임계값을 몰라도 "전환 자체가 일어나는가"만 보므로 성립한다.
 - **한국어 106키 물리 키보드의 세션 중 한/영 키** — korean-input.md §5 #1 과 같은 기기 제약(이 항목은 온스크린 입력 소스 전환으로 대체해 확인한다).
+
+---
+
+## 항목 21 — 내장 키보드 D-1 설치 확인 + caps lock 단독 입력 (이슈 #110)
+
+> ⭐ **근거**: `../spec/key-remapping-engine.md` §3-a2·§5 항목 26 · `../spec/per-device-settings.md`
+> §3.2·§3.6 규칙 3-bis · `../research/per-device-hid-spike.md` S-10 · `../dev/architecture.md` §6.1
+> D-1 보칙 2(B-3·B-4). 자동 단위 테스트(`ultrakey-core` `issue_110_*` 6종 ·
+> `validate_accepts_built_in_keyboard_with_zero_vid_and_pid` · `ultrakey-platform`
+> `accepts_built_in_keyboard_with_zero_vid_pid`·`matching_json_*` · `ultrakey-engine`
+> `verify_readback_*`·`apply_all_keeps_writing_remaining_devices_after_one_fails`·
+> `d1_confirmed_*`·`apply_device_never_changes_d1_confirmed`)는 macOS 없이 `cargo test --workspace`
+> 로 통과한다 — 이 항목은 그 테스트가 다루지 못하는 **실기기(내장 키보드가 있는 Mac)** 만 다룬다.
+
+### 사전 준비
+
+```sh
+./scripts/build-signed.sh
+open <경로>/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+caps lock 에 의존하는 프리셋을 켜 D-1 이 필요하게 한다(이 절차의 기준 설정: `Remap caps lock to: left control`·
+`Caps lock + HJKL = 방향키`·`Shift + caps lock = caps lock`). 내장 키보드의 4키 매칭 사전:
+
+```sh
+D='{"VendorID":0,"ProductID":0,"PrimaryUsagePage":1,"PrimaryUsage":6}'
+hidutil property --matching "$D" --get UserKeyMapping     # M0 기준선 — 앱 기동 전엔 (null)
+```
+
+⛔ **`hidutil --set` 을 손으로 부르지 않는다** — 이 절차의 매핑은 전부 앱이 소유하고 앱이 되돌린다.
+
+### M0~M9 수동 절차
+
+| # | 시나리오 | 조작 | 기대 결과 | 판정 근거 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M0** | 기준선 | 앱 기동 전 위 `--get` + `settings.json` 의 `perDevice._managed` 를 복사해 둔다 | `(null)` 또는 빈 배열. 원장 원본 보존 | S-10-5 |
+| **M1** | 열거 | `cargo run -p ultrakey-platform --example keyboard_list_probe` | `PrimaryUsage` 필터에서 **1대**, `VID=0x0 PID=0x0 Built-In=1 Product="Apple Internal Keyboard / Trackpad"` | S-10-9 |
+| **M2** | 기동 재조정 로그 | 앱 기동 후 로그 | `Path B applied to attached devices count=1 attached=1 d1_active=true d1_confirmed=true devices=["0:0"]` | §3.6 규칙 3-bis |
+| **M3** | D-1 설치 확인 | M0 명령 재실행 | `RegistryID 100000b4a`(기기마다 다름) **1행**에 `HIDKeyboardModifierMappingSrc = 30064771129`(0x700000039) · `Dst = 30064771181`(0x70000006D) | 완료 조건 ① |
+| **M4** | caps 단독 탭 | caps lock 을 짧게 1회 → 텍스트 필드에 `h j k l` | **문자 `hjkl`** (방향키 아님, control 없음). Event Viewer 에 `F18` KeyDown/KeyUp 이 보이고 raw `0x39 FlagsChanged` 는 **0건** | 완료 조건 ② · §5 #26 |
+| **M5** | 홀드 보존 | caps 를 누른 채 `h` | `←` (F-08.4) — D-1 정상 환경의 홀드는 방어선의 영향을 받지 않는다 | §5 #26 (c) |
+| **M6** | Shift+caps | `Shift + caps` → `hjkl` → 다시 `Shift + caps` | 잠금만 토글(대문자 `HJKL`, LED) · control 고착 없음 · 두 번째로 해제. `ioreg -c AppleHIDKeyboardEventDriverV2 -r -d1 \| grep -i CapsLockState` 가 `No→Yes→No` | 완료 조건 ③ |
+| **M7** | 경로 C 되먹임 없음 | Event Viewer 를 켜고 M6 반복 | `Effect::ToggleCapsLock` 직후 raw `keycode=0x39 FlagsChanged` 가 **없다**(실측: 경로 C 는 keycode `0xFF` 를 낸다, S-10-10) | S-10-10 |
+| **M8** | 원장 | `settings.json` 의 `perDevice._managed` | `"0:0": [{src:30064771129, dst:30064771181}]` 이 생기고, 붙어 있지 않은 디바이스의 기존 항목(예: `"5ac:24f"`)은 **그대로 남는다** | §3.6 규칙 6 |
+| **M9** | 원상복구 | caps 프리셋을 전부 끈다(또는 `General ▸ Advanced ▸ Synthesize Caps Lock Remap` 켬) → M0 명령 → 앱 정상 종료 → 한 번 더 | 두 번 다 빈 배열/`(null)`. 원장에서 `0:0` 이 빠진다 | 부록 A-bis #2·#6 |
+
+### 폴백(방어선) 자체를 보려면 — 선택
+
+D-1 이 실제로 빠진 상태를 만들 수 있는 유일한 안전한 방법은 **이 PR 이전 빌드**를 띄우는 것이다
+(이 빌드에서는 되읽기 확인이 통과하므로 폴백이 밟히지 않는다). 그 상태에서 caps 단독 탭은
+control on/off 쌍으로 끝나 HJKL 이 문자로 입력되고, 설정 창 Presets 탭의 caps 힌트 자리에
+`settings.presets.caps_alias.missing` 경고, Event Viewer 상단에
+`eventviewer.notice.caps_kernel_map_missing`, 트레이 맨 위에 비활성 항목
+`menu.status.caps_kernel_map_missing` 이 보여야 한다. ⚠️ 이 상태에서 caps 탭·`Shift+caps` 마다
+커널이 건 하드웨어 잠금이 잠깐 켜졌다가 #108 안전망이 1초 안에 되돌린다(LED 깜빡임) — §5 #26 이
+사실로 적어 둔 한계다.
+
+### ⚠️ 이 절차로 확인할 수 없는 것
+
+- **외장 키보드(S-2, 서비스 3개)에서 4키 사전이 키보드 서비스 1개에만 쓰는 것으로 충분한가** — 이 기기에 외장 키보드가 없어 `(추정)`. 확인 방법: 외장 키보드를 붙이고 M3 의 `<vid>/<pid>` 로 `--get` 해 1행만 나오는지, 그 키보드에서 M4·M5 가 성립하는지 본다.
+- **구버전이 외장의 12/1·1/2 서비스에 남긴 D-1 사본** — 이 앱은 더 이상 지우지 않는다(§3.2 한계). 필요하면 사용자가 `hidutil property --matching '{"VendorID":…,"ProductID":…}' --set '{"UserKeyMapping":[]}'` 로 직접 비운다(남의 매핑이 함께 있으면 그 배열을 보존해 다시 쓴다).
+- **VID/PID 가 없는 디바이스가 둘인 구성** — `0:0` 을 공유한다(§3.2 한계). 실기기 없음.

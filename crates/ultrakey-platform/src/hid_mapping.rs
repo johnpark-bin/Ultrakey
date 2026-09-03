@@ -22,6 +22,11 @@
 //! 디바이스의 배열을 통째로 갈아치운다. 그래서 [`HidMappingBackend`] 의 모든
 //! 메서드가 [`DeviceMatch`]`{vendor_id, product_id}` 를 **필수 인자로** 받는다
 //! — VID 단독 매칭이 타입 수준에서 표현 불가능해진다(CONTRACT.md D-17-1).
+//! ⭐ 이슈 #110 — 실제 매칭 사전은 여기에 `PrimaryUsagePage:1`/`PrimaryUsage:6` 을
+//! 항상 더한 4키다(`matching_json`): VID/PID 프로퍼티가 없는 내장 키보드(`0:0`,
+//! 스파이크 S-10)를 키보드 서비스 하나로 정확히 잡고, `IOHIDSystem`(usage 65280/23)
+//! 을 PID 와 무관하게 배제한다. 쓰기 뒤에는 되읽기로 실렸는지 확인한다
+//! (`HidMappingError::NotApplied`, `ultrakey_engine::path_b::verify_readback`).
 //! 유일한 예외는 [`HidutilBackend::migrate_clear_global_d1`] 이며, 그것이 이
 //! 코드베이스 전체에서 **유일하게 허용된 매칭 없는 `--set`** 이다 — 그래서
 //! 트레이트가 아니라 구체 타입에만 둔다(CONTRACT.md D-17-5).
@@ -50,6 +55,22 @@ pub enum HidMappingError {
     /// 쓰기 전에 거부해야 한다. 이 오류가 나면 **쓰지 않는다**.
     #[error("디바이스 한정 매핑 검증 실패: {reason}")]
     InvalidMapping { reason: String },
+    /// ⭐ 이슈 #110 — `--set` 이 exit 0 으로 끝났지만 **되읽기에 우리 매핑이 없다.**
+    /// `hidutil` 은 매칭 사전이 아무 서비스도 잡지 못해도 조용히 성공으로 끝나므로
+    /// (이 기기의 내장 키보드가 정확히 그랬다 — 원장에는 "설치됨"으로 남고 커널에는
+    /// 없었다), 쓰기 직후 `read_current` 로 우리 항목이 실제로 그 디바이스에
+    /// 실렸는지 확인해야 한다. `matched_services == 0` 이면 매칭 사전이 디바이스를
+    /// 못 잡은 것이고, 아니면 어느 서비스의 배열에 `missing` 이 빠져 있는 것이다.
+    /// ⚠️ 이것은 S-7("되읽기 성공 = 동작 확인" 금지)과 어긋나지 않는다 — 여기서
+    /// 되읽기는 "그 디바이스에 실렸는가"만 확인하고, 동작 확인은 여전히 수동 검증이다.
+    #[error(
+        "쓰기 후 되읽기에 우리 매핑이 없다(device={device}, matched_services={matched_services}, missing={missing:?})"
+    )]
+    NotApplied {
+        device: String,
+        matched_services: usize,
+        missing: Vec<KeyMapping>,
+    },
 }
 
 /// 한 디바이스에 대한 `--matching {...} --get UserKeyMapping` 되읽기 결과.
@@ -106,13 +127,27 @@ impl HidutilBackend {
         String::from_utf8(output.stdout).map_err(|_| HidMappingError::InvalidUtf8)
     }
 
-    /// `--matching '{"VendorID":…,"ProductID":…}'` 의 JSON 문자열(스파이크 S-1·S-3).
+    /// `--matching '{"VendorID":…,"ProductID":…,"PrimaryUsagePage":1,"PrimaryUsage":6}'`
+    /// 의 JSON 문자열(스파이크 S-1·S-3·S-10).
+    ///
     /// ⚠️ VID 단독 매칭은 `IOHIDSystem`(0x5ac:0x0)을 함께 잡아 사실상 전역
     /// 쓰기가 된다(S-3) — `DeviceMatch` 의 두 필드가 모두 필수이므로 이 함수는
     /// 항상 둘 다 넣는다.
+    ///
+    /// ⭐ **이슈 #110 — usage 두 키를 항상 함께 넣는다.** MacBook Air 내장 키보드는
+    /// VID/PID 프로퍼티가 없어 `0:0` 으로 열거되는데(S-10), `{"VendorID":0,
+    /// "ProductID":0}` 만으로는 어떤 서비스가 잡힐지 보증할 수 없다. `PrimaryUsagePage
+    /// 1`/`PrimaryUsage 6`(키보드 컬렉션, 열거 필터 `hotplug.rs::
+    /// build_keyboard_matching_dict` 와 동일)을 더하면 (a) 내장 키보드는 정확히
+    /// 그 키보드 서비스 1행(`0x100000b4a`, 실측)만 잡히고, (b) `IOHIDSystem`(usage
+    /// 65280/23)은 PID 와 무관하게 원리적으로 배제된다 — S-3 방어가 VID+PID 에
+    /// 더해 usage 로 한 겹 더 생긴다. 외장 키보드(S-2, 서비스 3개)에서는 키보드
+    /// 컬렉션 서비스 1개에만 쓰게 된다 — 키보드 페이지 src 의 리매핑을 적용하는
+    /// 것은 그 서비스이므로 충분하다 `(추정 — F108Pro 미부착으로 이 세션에서
+    /// 실측하지 못함, docs/research/per-device-hid-spike.md S-10)`.
     fn matching_json(device: &DeviceMatch) -> String {
         format!(
-            "{{\"VendorID\":{},\"ProductID\":{}}}",
+            "{{\"VendorID\":{},\"ProductID\":{},\"PrimaryUsagePage\":1,\"PrimaryUsage\":6}}",
             device.vendor_id, device.product_id
         )
     }
@@ -193,14 +228,15 @@ fn validate_device_mappings(
     device: &DeviceMatch,
     mappings: &[KeyMapping],
 ) -> Result<(), HidMappingError> {
-    // 규칙 2 — `product_id == 0` 은 `IOHIDSystem`(0x5ac:0x0) 의사 디바이스를
-    // 가리킬 수 있다(스파이크 S-3) — 하드 가드로 거부한다.
-    if device.product_id == 0 {
+    // 규칙 2 — `0x5ac:0x0` 은 `IOHIDSystem` 의사 디바이스다(스파이크 S-3) — 하드
+    // 가드로 거부한다. ⭐ 이슈 #110 — 옛 형태(`product_id == 0` 전체 거부)는 VID/PID
+    // 프로퍼티가 없어 `0:0` 으로 열거되는 내장 키보드(S-10)까지 막았다. 정본 판정은
+    // `ultrakey_core::perdevice::validate` 와 같다.
+    if ultrakey_core::perdevice::is_iohidsystem(device) {
         return Err(HidMappingError::InvalidMapping {
             reason: format!(
-                "product_id == 0 은 IOHIDSystem 의사 디바이스를 가리킬 수 있어 거부한다 \
-                 (vendor_id=0x{:x})",
-                device.vendor_id
+                "0x{:x}:0x{:x} 는 IOHIDSystem 의사 디바이스라 거부한다(스파이크 S-3)",
+                device.vendor_id, device.product_id
             ),
         });
     }
@@ -450,12 +486,30 @@ mod tests {
 
     #[test]
     fn matching_json_shape() {
-        // §3.2 — 매칭 사전에는 반드시 VendorID 와 ProductID 를 함께 넣는다(S-3).
+        // §3.2 — 매칭 사전에는 반드시 VendorID 와 ProductID 를 함께 넣고(S-3), 이슈
+        // #110 이후로는 키보드 usage 두 키도 항상 함께 넣는다(S-10).
         let json = HidutilBackend::matching_json(&DeviceMatch {
             vendor_id: 0x5ac,
             product_id: 0x24f,
         });
-        assert_eq!(json, "{\"VendorID\":1452,\"ProductID\":591}");
+        assert_eq!(
+            json,
+            "{\"VendorID\":1452,\"ProductID\":591,\"PrimaryUsagePage\":1,\"PrimaryUsage\":6}"
+        );
+    }
+
+    #[test]
+    fn matching_json_for_built_in_keyboard_without_vid_pid_keeps_usage_keys() {
+        // 이슈 #110 — 내장 키보드(VID/PID 부재 → 0:0)도 같은 4키 사전이다. 이 사전이
+        // 실기기에서 정확히 키보드 서비스 1행을 잡는 것은 S-10-5 실측.
+        let json = HidutilBackend::matching_json(&DeviceMatch {
+            vendor_id: 0,
+            product_id: 0,
+        });
+        assert_eq!(
+            json,
+            "{\"VendorID\":0,\"ProductID\":0,\"PrimaryUsagePage\":1,\"PrimaryUsage\":6}"
+        );
     }
 
     // ── 매칭 있는(디바이스 한정) 출력(§0.1, 실측) ──
@@ -547,6 +601,14 @@ mod tests {
         // 스파이크 S-3 — VID 0x5ac/PID 0x0 은 IOHIDSystem 의사 디바이스다.
         let err = validate_device_mappings(&device(0x5ac, 0), &[]).unwrap_err();
         assert!(matches!(err, HidMappingError::InvalidMapping { .. }));
+    }
+
+    #[test]
+    fn accepts_built_in_keyboard_with_zero_vid_pid() {
+        // 이슈 #110 — 내장 키보드는 VID/PID 프로퍼티가 없어 0:0 이다(S-10). 규칙 2 는
+        // IOHIDSystem(0x5ac:0x0)만 거부해야 한다.
+        assert!(validate_device_mappings(&device(0, 0), &[]).is_ok());
+        assert!(validate_device_mappings(&device(0x1234, 0), &[]).is_ok());
     }
 
     #[test]

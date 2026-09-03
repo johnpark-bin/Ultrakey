@@ -49,6 +49,12 @@ pub struct KeyMapping {
 /// 매칭 사전 — `VendorID`+`ProductID` 둘 다 필수(§3.2, 규칙 3). ⭐ 두 필드 모두
 /// 필수인 이유는 VID 단독 매칭(스파이크 S-3 — `IOHIDSystem` 을 함께 잡아 사실상
 /// 전역 쓰기가 된다)을 **타입으로 표현 불가능**하게 막기 위해서다(D-17-1).
+///
+/// ⭐ 이슈 #110 — 실제 `hidutil --matching` 사전은 이 두 값에 `PrimaryUsagePage:1`/
+/// `PrimaryUsage:6` 을 항상 더한 **4키**다(`ultrakey_platform::hid_mapping::
+/// HidutilBackend::matching_json`). 내장 키보드는 VID/PID 프로퍼티가 없어 `(0, 0)`
+/// 이다(스파이크 S-10) — 그래서 이 타입은 0 값을 거부하지 않고, `IOHIDSystem`
+/// 가드는 [`is_iohidsystem`]`(0x5ac, 0)` 정확 일치로만 건다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DeviceMatch {
     pub vendor_id: u32,
@@ -489,11 +495,23 @@ pub const MAX_MAPPINGS: usize = 64;
 /// 쓰지 않지만, CONTRACT.md D-17-4 규칙 3 이 명시한 허용 집합이라 그대로 반영한다.
 const ALLOWED_PAGES: [u64; 4] = [0x07, 0x0C, 0xFF, 0xFF01];
 
+/// `IOHIDSystem` 의사 디바이스(스파이크 S-3 실측: VID `0x5ac` / PID `0x0` /
+/// UsagePage 65280 / Usage 23). 여기에 쓰면 사실상 전역 쓰기다.
+///
+/// ⭐ 이슈 #110 — 판정을 `product_id == 0` 에서 **`(0x5ac, 0)` 정확 일치**로 좁혔다.
+/// MacBook Air 내장 키보드는 VID/PID 프로퍼티가 없어 `0:0` 으로 열거되는데
+/// (`docs/research/per-device-hid-spike.md` S-10), 옛 판정은 그것까지 막아 D-1 이
+/// 내장 키보드에 영원히 설치되지 못했다. `0:0` 과 `0x5ac:0x0` 은 VID 로 구분된다.
+pub fn is_iohidsystem(device: &DeviceMatch) -> bool {
+    device.vendor_id == 0x5ac && device.product_id == 0
+}
+
 /// 검증 실패 — 조용히 넘기지 않고 거부한다(D-17-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
     /// 규칙 2 — `IOHIDSystem`(`0x5ac:0x0`)에 대한 쓰기를 막는 하드 가드.
-    #[error("product_id is 0; writes to IOHIDSystem (the global pseudo-device) are forbidden")]
+    /// ⭐ 이슈 #110 — `0x5ac:0x0` 정확 일치만 거부한다(내장 키보드 `0:0` 은 통과).
+    #[error("device is IOHIDSystem (0x5ac:0x0); writes to the global pseudo-device are forbidden")]
     ZeroProductId,
     /// 규칙 3 — 닫힌 어휘 밖의 usage page.
     #[error("unknown usage page: value={value:#x}, page={page:#x}")]
@@ -525,7 +543,7 @@ fn validate_usage_value(value: u64) -> Result<(), ValidationError> {
 /// 쓰기 직전 게이트 — D-17-4 의 5개 규칙 전부(규칙 1 은 [`DeviceMatch`] 의 두 필드가
 /// 모두 필수라 타입으로 이미 강제된다 — 여기서는 나머지 4개를 값 수준에서 확인한다).
 pub fn validate(device: &DeviceMatch, mappings: &[KeyMapping]) -> Result<(), ValidationError> {
-    if device.product_id == 0 {
+    if is_iohidsystem(device) {
         return Err(ValidationError::ZeroProductId);
     }
     if mappings.len() > MAX_MAPPINGS {
@@ -984,6 +1002,26 @@ mod tests {
             validate(&device, &mappings),
             Err(ValidationError::ZeroProductId)
         );
+    }
+
+    // 이슈 #110 — 내장 키보드는 VID/PID 프로퍼티가 없어 `0:0` 이다(스파이크 S-10).
+    // 규칙 2 는 IOHIDSystem(`0x5ac:0x0`)만 거부해야 하고, `0:0` 은 통과해야 한다.
+    #[test]
+    fn validate_accepts_built_in_keyboard_with_zero_vid_and_pid() {
+        let built_in = DeviceMatch {
+            vendor_id: 0,
+            product_id: 0,
+        };
+        let mappings = vec![KeyMapping {
+            src: SourceKey::CapsLock.hid_usage().unwrap(),
+            dst: SourceKey::F18.hid_usage().unwrap(),
+        }];
+        assert_eq!(validate(&built_in, &mappings), Ok(()));
+        assert!(!is_iohidsystem(&built_in));
+        assert!(is_iohidsystem(&DeviceMatch {
+            vendor_id: 0x5ac,
+            product_id: 0
+        }));
     }
 
     #[test]

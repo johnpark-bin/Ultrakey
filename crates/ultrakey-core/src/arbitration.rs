@@ -201,6 +201,34 @@ impl Outcome {
         }
     }
 
+    /// ⭐ 이슈 #110 — D-1 우회 탭 환원(`Arbiter::d1_bypassed`)의 두 판정(down, up)을
+    /// 하나로 합친다. 원본은 소비하고(`Consume`), 합성 이벤트는 down 것 뒤에 up 것을
+    /// 이어 붙이며, 계층·규칙 표식은 down 것을 쓴다.
+    ///
+    /// ⛔ **`Effect::ToggleCapsLock` 은 떨어뜨린다.** 이 분기는 물리 caps lock 이 커널에
+    /// 그대로 도달한 경우라 하드웨어 잠금은 **커널이 이미 토글했다**(탭은 세션 층이라
+    /// 그보다 뒤에 본다). 여기서 경로 C 를 다시 부르면 (a) 읽고-반전하는 구현이라
+    /// 잠금이 도로 뒤집히고, (b) 경로 C 가 세션에 싣는 `FlagsChanged` 가 이 분기를
+    /// 다시 밟는 되먹임 가능성을 구조적으로 열어 둔다(실측상 keycode `0xFF` 라 지금은
+    /// 안 밟지만, 이 한 줄이 그 의존을 없앤다). 커널이 건 잠금은 우리 소유가 아니므로
+    /// 이슈 #108 안전망(`Watchdog`, `caps_lock_owned_lock == false`)이 폴링 주기 안에
+    /// 되돌린다 — 즉 **이 폴백에서 caps lock 은 잠금 키로도 동작하지 않는다**(잠깐
+    /// 켜졌다 꺼진다). 폴백의 목적은 고착 방지이고, 잠금까지 살리는 길은 D-1 설치
+    /// (방향 1)뿐이다.
+    fn merge_tap(down: Outcome, up: Outcome) -> Outcome {
+        let mut out = Outcome::new(down.layer, Disposition::Consume);
+        out.rule = down.rule;
+        for ev in down.emitted().iter().chain(up.emitted()) {
+            out.push(*ev);
+        }
+        for e in down.effects().iter().chain(up.effects()) {
+            if *e != Effect::ToggleCapsLock {
+                out.push_effect(*e);
+            }
+        }
+        out
+    }
+
     pub fn emitted(&self) -> &[SynthEvent] {
         &self.buf[..self.len]
     }
@@ -336,12 +364,69 @@ impl Arbiter {
         let resolved = Self::resolve_caps_lock_alias(cfg, ev_in);
         let ev = &resolved;
 
+        // ⭐ 이슈 #110 — D-1 우회 방어선. 근거는 [`Self::d1_bypassed`] 문서에 있다.
+        if Self::d1_bypassed(cfg, ev_in) {
+            let down = self.arbitrate_with_kind(cfg, ev, EventKind::KeyDown, gates, now);
+            let up = self.arbitrate_with_kind(cfg, ev, EventKind::KeyUp, gates, now);
+            return Outcome::merge_tap(down, up);
+        }
+
+        // ⭐ `FlagsChanged` 는 여기서 down/up 으로 환원한다 — 그 근거는
+        // [`Self::normalize_kind`] 문서에 있다.
+        let kind = self.normalize_kind(ev);
+        self.arbitrate_with_kind(cfg, ev, kind, gates, now)
+    }
+
+    /// ⭐ 이슈 #110 — 이 이벤트는 **D-1 이 설치되지 않은 키보드의 물리 caps lock** 인가.
+    ///
+    /// `cfg.caps_lock_alias` 가 켜져 있으면(caps lock 에 의존하는 규칙이 하나라도
+    /// 있어 커널에 `caps lock → F18` 을 걸어 둔 상태) 물리 caps lock 은 탭에 **F18
+    /// `KeyDown`/`KeyUp`** 으로 도착한다(`docs/dev/architecture.md` §6.1). 그런데도
+    /// keycode `0x39`(caps lock 자신)의 `FlagsChanged` 가 왔다면, 그 이벤트를 낸
+    /// 키보드에는 D-1 이 없다는 것이 **이벤트 자체로 증명**된다 — MacBook Air 내장
+    /// 키보드(VID/PID 프로퍼티 부재 → 열거 누락 → D-1 미설치, 이슈 #110)가 정확히
+    /// 이 모양이었다. 그 이벤트를 종전대로 눌림 테이블로 down/up 환원하면 래칭 키의
+    /// 뗌이 다음 누름까지 오지 않아(§5 #20) F-08.1 이 합성한 control 이 **고착**된다.
+    ///
+    /// 대응: 이 이벤트 하나를 **down+up 쌍(탭)** 으로 중재한다. 시간 기반 추정이
+    /// 아니라 결정론적 하강이므로 §5 #20 의 기각 사유("누른 채 유지와 구분 불가")에
+    /// 걸리지 않는다 — 홀드는 애초에 이 키보드에서 성립할 수 없는 동작이다.
+    ///
+    /// 왜 전역 플래그(`PathBManager::d1_confirmed`)가 아니라 이벤트 모양인가:
+    /// (1) 디바이스별로 정확하다 — 외장 키보드는 D-1 정상·내장은 미설치인 혼합
+    /// 상태에서도 각 이벤트가 옳게 갈린다(플래그로는 외장의 홀드까지 죽인다).
+    /// (2) 스레드 간 상태가 없다 — `cfg` 와 `ev` 만 본다(§2.2 콜백 규약과 무관).
+    /// (3) D-1 정상 환경의 홀드를 원리적으로 건드리지 않는다 — 그 환경에서 이 조건은
+    /// 참이 될 수 없다.
+    ///
+    /// ⭐ 실측(2026-09-03, `caps_lock_toggle_probe` + `tap_listen`): 경로 C
+    /// (`IOHIDSetModifierLockState`)가 잠금을 바꿀 때 세션 스트림에 실리는
+    /// `FlagsChanged` 는 keycode **`0xFF`** 다 — `0x39` 가 아니다. 즉 우리 자신의
+    /// `Effect::ToggleCapsLock` 이 이 분기를 다시 밟는 되먹임은 없다. 그래도
+    /// [`Outcome::merge_tap`] 은 이 분기에서 나온 `ToggleCapsLock` 을 떨어뜨린다 —
+    /// 근거는 그 함수 문서에.
+    ///
+    /// `alias == None`(caps lock 의존 규칙 없음)이면 조건이 거짓이라 기존 경로
+    /// 그대로다 — M1 스타일 설정(caps 를 hyper 소스로 쓰되 `Synthesize Caps Lock
+    /// Remap` 을 켠 경우)의 토글 동작은 바뀌지 않는다.
+    fn d1_bypassed(cfg: &EngineConfig, raw: &InputEvent) -> bool {
+        cfg.caps_lock_alias.is_some()
+            && raw.kind == EventKind::FlagsChanged
+            && raw.keycode == KeyCode::CAPS_LOCK
+    }
+
+    /// [`Self::arbitrate`] 본체 — `kind` 는 이미 `KeyDown`/`KeyUp` 으로 환원된 값
+    /// (또는 키가 아닌 이벤트의 원래 kind)이다.
+    fn arbitrate_with_kind(
+        &mut self,
+        cfg: &EngineConfig,
+        ev: &InputEvent,
+        kind: EventKind,
+        gates: GateSnapshot,
+        now: Millis,
+    ) -> Outcome {
         // 정본 상태 갱신 — 이후 모든 계층이 "이 갱신 이후의" 상태를 공유해서 읽는다.
         // v1.20 예방의 핵심: hyper 판정과 preset 판정이 서로 다른 사본을 보지 않는다.
-        // ⭐ `FlagsChanged` 는 여기서 down/up 으로 환원한다 — 그 근거는
-        // [`Self::flags_changed_is_press`] 문서에 있다.
-        let kind = self.normalize_kind(ev);
-
         match kind {
             EventKind::KeyDown => self.state.set_pressed(ev.keycode, true),
             EventKind::KeyUp => self.state.set_pressed(ev.keycode, false),
@@ -3257,6 +3342,134 @@ mod tests {
     /// 목록 밖이라 이름 상수가 없다 — ⌃C 조합의 예시로 A 가 아닌 다른 문자 키를 고른
     /// 것뿐이고, 판정 로직에서 이 키 자체가 특별한 의미를 갖지는 않는다.
     const ANSI_C: KeyCode = KeyCode(0x08);
+
+    // ── ⭐ 이슈 #110 — D-1 우회 방어선(물리 caps lock 이 F18 로 바뀌지 않고 도착) ──
+
+    /// 이 기기(MacBook Air 내장 키보드, D-1 미설치)의 실제 설정 — F-08.1 caps → left
+    /// control, F-08.4 caps+hjkl 방향키 중 `caps + H = ←`, F-08.10 `Shift + caps lock =
+    /// caps lock`. quick press·double tap 액션은 없다.
+    fn issue_110_cfg() -> EngineConfig {
+        let mut cfg = d1_cfg();
+        cfg.rules.source_actions.push(SourceKeyActions {
+            key: KeyCode::CAPS_LOCK,
+            quick_press: None,
+            double_tap: None,
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
+        });
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(4),
+            hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
+            trigger: KeyCode::ANSI_H,
+            action: RuleAction::Key { keycode: KeyCode::LEFT_ARROW, flags: EventFlags::NONE },
+        });
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(10),
+            hold: HoldCondition::EitherShift,
+            trigger: KeyCode::CAPS_LOCK,
+            action: RuleAction::ToggleCapsLock,
+        });
+        cfg
+    }
+
+    /// T7 — 물리 caps lock `FlagsChanged`(D-1 우회)는 한 Outcome 안에서 control on/off
+    /// 쌍으로 끝나고, 눌림 테이블은 뗌으로 남으며, 뒤이은 `H` 는 control 없이 문자로
+    /// 통과한다(사용자 보고 "caps 짧게 누른 뒤 HJKL 이 방향키" 의 정반대).
+    #[test]
+    fn issue_110_raw_caps_flags_changed_becomes_control_tap_and_does_not_stick() {
+        let cfg = issue_110_cfg();
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.emitted().len(), 2, "{:?}", out.emitted());
+        assert!(out.emitted().iter().all(|e| e.kind == EventKind::FlagsChanged && e.keycode == KeyCode::LEFT_CONTROL));
+        assert!(out.emitted()[0].flags.contains(EventFlags::CONTROL), "첫 번째는 control 눌림");
+        assert!(!out.emitted()[1].flags.contains(EventFlags::CONTROL), "두 번째는 control 뗌");
+        assert!(!arb.is_pressed(KeyCode::CAPS_LOCK), "눌림 테이블은 뗌으로 끝나야 한다");
+
+        // 뒤이은 H — control 도 방향키도 아니다.
+        let h = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_H, EventFlags::NONE), GateSnapshot::default(), Millis(200));
+        assert_eq!(h.disposition(), Disposition::Pass, "{h:?}");
+        assert!(h.emitted().is_empty());
+        assert_eq!(h.rule(), None);
+    }
+
+    /// T8 — caps 에 quick press 액션이 있으면 같은 `now` 의 down/up 이 hold 가 아니라
+    /// quick press 로 판정된다(quickpress.rs: `now - since < quick_press_duration`).
+    /// 결정론적이고 고착도 없다 — 이 규약을 테스트로 못박는다.
+    #[test]
+    fn issue_110_raw_caps_with_quick_press_action_fires_quick_press_not_hold() {
+        let mut cfg = issue_110_cfg();
+        cfg.rules.source_actions[0].quick_press = Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE });
+        let mut arb = Arbiter::new(&cfg);
+
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.disposition(), Disposition::Consume);
+        let esc: Vec<_> = out.emitted().iter().filter(|e| e.keycode == KeyCode::ESCAPE).collect();
+        assert_eq!(esc.len(), 2, "escape down/up 한 쌍: {:?}", out.emitted());
+        assert!(out.emitted().iter().all(|e| e.keycode != KeyCode::LEFT_CONTROL), "hold 는 확정되지 않는다");
+        assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle);
+    }
+
+    /// T9 — `Shift + caps lock = caps lock`: 조합은 매칭되지만 이 분기에서
+    /// `ToggleCapsLock` 은 떨어진다(커널이 이미 하드웨어 잠금을 토글했다 —
+    /// `Outcome::merge_tap` 문서). control 합성도 없고 눌림 테이블도 뗌이다.
+    #[test]
+    fn issue_110_shift_caps_in_fallback_drops_toggle_and_leaves_no_control() {
+        let cfg = issue_110_cfg();
+        let mut arb = Arbiter::new(&cfg);
+
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT | EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(10));
+        assert_eq!(out.disposition(), Disposition::Consume);
+        assert_eq!(out.rule(), Some(RuleId::Preset(10)), "조합 자체는 매칭된다");
+        assert!(out.effects().is_empty(), "ToggleCapsLock 은 이 분기에서 떨어진다: {:?}", out.effects());
+        assert!(out.emitted().is_empty(), "control 합성 없음: {:?}", out.emitted());
+        assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "Suppressed → Idle 로 닫힌다");
+    }
+
+    /// T9b — 같은 raw 이벤트를 연속으로 넣어도 매번 독립된 탭이다(고착·누적 없음).
+    #[test]
+    fn issue_110_consecutive_raw_caps_events_never_accumulate_state() {
+        let cfg = issue_110_cfg();
+        let mut arb = Arbiter::new(&cfg);
+        for i in 0..3u64 {
+            let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(i * 100));
+            assert_eq!(out.emitted().len(), 2, "매번 control on/off 쌍: {:?}", out.emitted());
+            assert!(out.effects().is_empty());
+            assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
+        }
+    }
+
+    /// T10 — D-1 정상 환경(F18 KeyDown/KeyUp)은 이 분기를 타지 않는다: 홀드 중 `H` 는
+    /// `caps + H = ←` 로 발화한다(기존 홀드 동작 보존).
+    #[test]
+    fn issue_110_bypass_does_not_touch_d1_normal_hold() {
+        let cfg = issue_110_cfg();
+        let mut arb = Arbiter::new(&cfg);
+
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(down.emitted().len(), 1, "hold 시작 — control 눌림 하나만");
+        assert!(arb.is_pressed(KeyCode::CAPS_LOCK));
+        let h = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_H, EventFlags::NONE), GateSnapshot::default(), Millis(100));
+        assert_eq!(h.rule(), Some(RuleId::Preset(4)));
+        assert!(h.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_ARROW));
+        arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(200));
+        assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
+    }
+
+    /// T11 — alias 가 없으면(caps 의존 규칙 없음 / `Synthesize Caps Lock Remap`) 분기
+    /// 조건이 거짓이라 종전 눌림 테이블 환원 그대로다(첫 이벤트 = 눌림).
+    #[test]
+    fn issue_110_bypass_is_inert_without_alias() {
+        let mut cfg = issue_110_cfg();
+        cfg.caps_lock_alias = None;
+        let mut arb = Arbiter::new(&cfg);
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
+        assert!(arb.is_pressed(KeyCode::CAPS_LOCK), "alias 없이는 종전 동작(첫 FlagsChanged = 눌림)");
+    }
 
     /// `Remap caps lock to: left control` 이 D-1 아래에서 실제로 도착하는 F18 의
     /// KeyDown/KeyUp 을 옳게 처리한다: 대상이 modifier(`left control`)이므로 `FlagsChanged`
