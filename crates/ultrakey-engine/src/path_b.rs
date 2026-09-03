@@ -143,6 +143,9 @@ pub struct PathBManager {
     /// D-17-5 — 전역 마이그레이션은 이 매니저의 수명 동안 **정확히 한 번**만
     /// 시도한다(`reconcile_on_start` 가 여러 번 불려도 재시도하지 않는다).
     migrated: AtomicBool,
+    /// ⭐ 이슈 #110 — "D-1 이 필요한 모든 붙어 있는 키보드에 실제로 실렸다" 가 마지막
+    /// 전체 재조정에서 **되읽기로 확인**됐는가. 의미는 [`Self::d1_confirmed`] 문서에.
+    d1_confirmed: AtomicBool,
 }
 
 impl PathBManager {
@@ -156,7 +159,27 @@ impl PathBManager {
             migration,
             ledger,
             migrated: AtomicBool::new(false),
+            d1_confirmed: AtomicBool::new(false),
         }
+    }
+
+    /// ⭐ 이슈 #110 — D-1 커널 매핑이 **확인된** 상태인가.
+    ///
+    /// `true` 의 뜻: 마지막 전체 재조정(`reconcile_on_start`/`apply_all`)에서
+    /// (a) D-1 이 필요 없었거나(`d1_for == None`), (b) 붙어 있는 키보드가 하나 이상
+    /// 있었고 **그 전부**에 쓰기 + 되읽기(`HidMappingError::NotApplied` 없음)가
+    /// 성공했다. 붙어 있는 키보드가 **0대**면 `false` 다 — 열거가 내장 키보드를
+    /// 놓친 상황(이슈 #110 인과 사슬 0번)이 정확히 "설치 시도 자체가 없었음"이라,
+    /// 그것을 "확인됨"으로 보이면 안 된다. 핫플러그 1대 재적용(`apply_device`)은
+    /// 이 값을 **바꾸지 않는다**(다음 전체 재조정 — 설정 변경·절전 복귀 — 에서
+    /// 다시 계산된다).
+    ///
+    /// 소비자: 엔진이 `SharedState::d1_confirmed` 로 복사해 앱이 트레이·환경설정·
+    /// Event Viewer 에 "caps lock 커널 매핑 미적용" 을 보이는 데 쓴다. ⛔ 중재
+    /// 판정에는 쓰지 않는다 — 방어선은 이벤트 모양으로 판정한다
+    /// (`ultrakey_core::arbitration::Arbiter::arbitrate` 의 D-1 우회 탭 환원).
+    pub fn d1_confirmed(&self) -> bool {
+        self.d1_confirmed.load(Ordering::Acquire)
     }
 
     /// 기동 시 재조정 — ① 전역 D-1 잔재 1회 이관 → ② 붙어 있는 디바이스 전부 재계산·쓰기.
@@ -195,13 +218,31 @@ impl PathBManager {
         let d1 = d1_for(cfg);
         let mut count = 0usize;
         let mut device_ids: Vec<String> = Vec::with_capacity(attached.len());
+        // ⭐ 이슈 #110 — 한 디바이스가 실패해도 **나머지는 계속 쓴다.** 예전에는 첫
+        // 실패에서 `?` 로 빠져 뒤 디바이스가 D-1 을 못 받았다(내장 키보드가 목록
+        // 첫 항목이면 외장 키보드 전부가 희생된다). 첫 오류만 보존해 마지막에 돌려준다.
+        let mut first_err: Option<HidMappingError> = None;
         for info in attached {
             let device = DeviceId::new(info.vendor_id, info.product_id);
             let composition = compose(&device, &settings, d1);
-            self.write_device(&device, &composition.mappings)?;
-            device_ids.push(device.as_str().to_string());
-            count += 1;
+            match self.write_device(&device, &composition.mappings) {
+                Ok(()) => {
+                    device_ids.push(device.as_str().to_string());
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        device = device.as_str(),
+                        "Path B write to this device failed; continuing with the others"
+                    );
+                    first_err.get_or_insert(e);
+                }
+            }
         }
+        // `d1_confirmed` 의미는 `Self::d1_confirmed` 문서에 — 0대는 확인이 아니다.
+        let confirmed = d1.is_none() || (!attached.is_empty() && first_err.is_none());
+        self.d1_confirmed.store(confirmed, Ordering::Release);
         // ⭐ 이슈 #108 원인 (e) 진단 — 어떤 디바이스에 D-1 이 실제로 깔렸는지는 지금까지
         // 로그에 전혀 남지 않았다(engine.rs 의 완료 로그는 `?device` 가 `None` 뿐이라
         // 디바이스별 내역이 없다). Karabiner 가상 HID 등 예상 밖 디바이스가 매칭
@@ -210,11 +251,16 @@ impl PathBManager {
         // 링·새 상태 없이 기존 `tracing` 로만).
         tracing::info!(
             count,
+            attached = attached.len(),
             d1_active = d1.is_some(),
+            d1_confirmed = confirmed,
             devices = ?device_ids,
             "Path B applied to attached devices"
         );
-        Ok(count)
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(count),
+        }
     }
 
     /// 핫플러그 1대 재적용. `device` 가 방금 연결됐다는 전제(호출자, §3.6 규칙 8)로
@@ -227,6 +273,10 @@ impl PathBManager {
         let settings = PerDeviceSettings::new(&cfg.per_device_values);
         let d1 = d1_for(cfg);
         let composition = compose(device, &settings, d1);
+        // ⭐ 이슈 #110 — 여기서는 `d1_confirmed` 를 **건드리지 않는다**(P2 교정). 핫플러그
+        // 직후에는 IOHID 서비스가 아직 프로퍼티 매칭에 잡히지 않아 되읽기가 0행일 수
+        // 있다 — 그 순간의 실패를 "미적용"으로 박아 두면 다음 전체 재조정까지 거짓
+        // 경고가 남는다. 플래그는 전체 재조정(`apply_all_inner`)만 계산한다.
         self.write_device(device, &composition.mappings)
     }
 
@@ -357,6 +407,14 @@ impl PathBManager {
 
         self.backend.apply(&device.to_match(), &merged)?;
 
+        // ②' ⭐ 이슈 #110 — 쓰기 직후 되읽어 **우리 항목이 그 디바이스에 실제로
+        // 실렸는지** 확인한다. `hidutil --set` 은 매칭 사전이 아무 서비스도 못 잡아도
+        // exit 0 으로 끝난다 — 지금까지는 그것을 성공으로 믿어 원장에는 "설치됨",
+        // 커널에는 "없음" 인 상태가 조용히 생겼다. 실패하면 ③(정확집합)을 건너뛴다 —
+        // 원장은 ①의 상위집합인 채로 남아 다음 재조정이 다시 시도한다.
+        let readback = self.backend.read_current(&device.to_match())?;
+        verify_readback(device, composed, &readback)?;
+
         // ③ 쓰기 후 — 정확집합으로 되돌린다. composed 가 비면 이 디바이스를 원장에서
         // 완전히 뺀다(더 이상 우리가 관리하지 않는다).
         let mut ledger = self.ledger.load();
@@ -374,6 +432,47 @@ impl PathBManager {
         }
 
         Ok(())
+    }
+}
+
+/// ⭐ 이슈 #110 — 쓰기 후 되읽기 판정(순수 함수, 단위 테스트 대상).
+///
+/// - `composed` 가 비어 있으면(정리) 항상 성공 — 확인할 우리 항목이 없다.
+/// - 매칭된 서비스가 0개면 실패(`NotApplied { matched_services: 0 }`) — 매칭 사전이
+///   그 디바이스를 잡지 못했다(이 기기의 내장 키보드가 옛 사전에서 정확히 이랬다).
+/// - 어느 서비스든 배열에 `composed` 항목 하나라도 없으면 실패(`missing` 에 그
+///   항목들). 남의 매핑이 함께 있는 것은 무관하다.
+///
+/// ⚠️ 스파이크 S-7(규칙 9) 과의 관계 — 되읽기는 "그 디바이스에 실렸는가"만
+/// 말해 주지 "동작하는가"는 말해 주지 않는다. 이 함수는 전자만 판정한다.
+pub fn verify_readback(
+    device: &DeviceId,
+    composed: &[KeyMapping],
+    read: &ultrakey_platform::hid_mapping::DeviceMappingRead,
+) -> Result<(), HidMappingError> {
+    if composed.is_empty() {
+        return Ok(());
+    }
+    if read.services.is_empty() {
+        return Err(HidMappingError::NotApplied {
+            device: device.as_str().to_string(),
+            matched_services: 0,
+            missing: composed.to_vec(),
+        });
+    }
+    let missing: Vec<KeyMapping> = composed
+        .iter()
+        .copied()
+        .filter(|m| read.services.iter().any(|(_, arr)| !arr.contains(m)))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(HidMappingError::NotApplied {
+            device: device.as_str().to_string(),
+            matched_services: read.services.len(),
+            missing,
+        })
     }
 }
 
@@ -399,6 +498,11 @@ mod tests {
         /// `apply()` 진입 시점(② 커널 쓰기 직전)에 한 번 부르는 훅 — 그 순간의
         /// 원장을 관찰하기 위해 쓴다(2단계 영속화 검증, `FakeLedger` 를 캡처해 둔다).
         on_apply: Option<Arc<dyn Fn() + Send + Sync>>,
+        /// ⭐ 이슈 #110 — 이 목록의 디바이스는 `hidutil --set` 이 exit 0 으로 끝나지만
+        /// 매칭 사전이 아무 서비스도 못 잡는 상황을 흉내 낸다: `apply` 는 성공하고
+        /// `read_current` 는 **서비스 0개**를 돌려준다(옛 사전이 내장 키보드에
+        /// 대해 정확히 이랬다).
+        unmatched: Vec<(u32, u32)>,
     }
 
     impl FakeBackend {
@@ -413,6 +517,13 @@ mod tests {
 
     impl HidMappingBackend for FakeBackend {
         fn read_current(&self, device: &DeviceMatch) -> Result<DeviceMappingRead, HidMappingError> {
+            if self.unmatched.contains(&(device.vendor_id, device.product_id)) {
+                return Ok(DeviceMappingRead {
+                    services: vec![],
+                    aggregated: vec![],
+                    partial: false,
+                });
+            }
             let map = self.by_device.lock().unwrap();
             let mappings = map
                 .get(&(device.vendor_id, device.product_id))
@@ -1043,6 +1154,165 @@ mod tests {
                 .aggregated;
             assert!(left.is_empty(), "명시적 끔은 매핑이 없어야 한다: {left:?}");
         }
+    }
+
+    // ── ⭐ 이슈 #110 — 쓰기 후 되읽기 검증 + d1_confirmed + 실패해도 계속 ───────
+
+    fn read_of(services: Vec<(u64, Vec<KeyMapping>)>) -> DeviceMappingRead {
+        let aggregated = services
+            .iter()
+            .flat_map(|(_, m)| m.iter().copied())
+            .collect();
+        DeviceMappingRead {
+            services,
+            aggregated,
+            partial: false,
+        }
+    }
+
+    #[test]
+    fn verify_readback_fails_when_no_service_matched() {
+        // 옛 매칭 사전이 내장 키보드에 대해 정확히 이랬다 — --set 은 exit 0, 되읽기는 0행.
+        let err = verify_readback(&device_a(), &[d1()], &read_of(vec![])).unwrap_err();
+        assert!(
+            matches!(err, HidMappingError::NotApplied { matched_services: 0, .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn verify_readback_fails_when_any_service_lacks_our_mapping() {
+        let foreign = mapping(1, 2);
+        let read = read_of(vec![(1, vec![d1(), foreign]), (2, vec![foreign])]);
+        let err = verify_readback(&device_a(), &[d1()], &read).unwrap_err();
+        match err {
+            HidMappingError::NotApplied {
+                matched_services,
+                missing,
+                ..
+            } => {
+                assert_eq!(matched_services, 2);
+                assert_eq!(missing, vec![d1()]);
+            }
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
+    #[test]
+    fn verify_readback_passes_when_every_service_contains_composed_plus_foreign() {
+        let foreign = mapping(1, 2);
+        let read = read_of(vec![(1, vec![foreign, d1()]), (2, vec![d1(), foreign])]);
+        assert!(verify_readback(&device_a(), &[d1()], &read).is_ok());
+    }
+
+    #[test]
+    fn verify_readback_passes_for_empty_composed_even_without_services() {
+        // 정리(빈 배열)는 확인할 우리 항목이 없다.
+        assert!(verify_readback(&device_a(), &[], &read_of(vec![])).is_ok());
+    }
+
+    #[test]
+    fn write_device_readback_failure_keeps_ledger_superset_and_lowers_d1_confirmed() {
+        let dev = device_a();
+        let m = dev.to_match();
+        let backend = FakeBackend {
+            unmatched: vec![(m.vendor_id, m.product_id)],
+            ..Default::default()
+        };
+        let ledger = FakeLedger::default();
+        let mgr = PathBManager::new(Box::new(backend), None, Box::new(ledger.clone()));
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+
+        let err = mgr.apply_all(&cfg, &[info(&dev)]).unwrap_err();
+        assert!(matches!(err, HidMappingError::NotApplied { .. }), "{err}");
+        assert!(!mgr.d1_confirmed(), "되읽기에 없으면 D-1 은 미확인이다");
+        // ③(정확집합)을 건너뛰었으므로 원장은 ①의 상위집합(우리 것 포함)으로 남는다 —
+        // 다음 재조정이 다시 시도할 수 있게.
+        assert_eq!(ledger.load().get(&dev).cloned().unwrap_or_default(), vec![d1()]);
+    }
+
+    #[test]
+    fn apply_all_keeps_writing_remaining_devices_after_one_fails() {
+        let built_in = DeviceId::new(0, 0);
+        let external = device_a();
+        let backend = FakeBackend {
+            unmatched: vec![(0, 0)],
+            ..Default::default()
+        };
+        let ledger = FakeLedger::default();
+        let mgr = PathBManager::new(Box::new(backend), None, Box::new(ledger));
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+
+        // 내장(실패)이 목록 앞에 있어도 외장은 D-1 을 받아야 한다.
+        let err = mgr
+            .apply_all(&cfg, &[info(&built_in), info(&external)])
+            .unwrap_err();
+        assert!(matches!(err, HidMappingError::NotApplied { .. }), "{err}");
+        let written = mgr
+            .backend
+            .read_current(&external.to_match())
+            .unwrap()
+            .aggregated;
+        assert_eq!(written, vec![d1()], "뒤 디바이스도 써져야 한다");
+        assert!(!mgr.d1_confirmed());
+    }
+
+    #[test]
+    fn d1_confirmed_is_false_with_no_attached_keyboard_and_true_after_verified_write() {
+        let dev = DeviceId::new(0, 0);
+        let mgr = PathBManager::new(
+            Box::new(FakeBackend::default()),
+            None,
+            Box::new(FakeLedger::default()),
+        );
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+
+        // 붙어 있는 키보드 0대 — 이슈 #110 의 실제 상황. 성공처럼 보이면 안 된다.
+        mgr.apply_all(&cfg, &[]).unwrap();
+        assert!(!mgr.d1_confirmed());
+
+        // 내장 키보드 0:0 이 열거되고 되읽기까지 통과 — 확인됨.
+        mgr.apply_all(&cfg, &[info(&dev)]).unwrap();
+        assert!(mgr.d1_confirmed());
+
+        // D-1 이 필요 없는 설정이면 확인할 것이 없으므로 참.
+        mgr.apply_all(&EngineConfig::default(), &[]).unwrap();
+        assert!(mgr.d1_confirmed());
+    }
+
+    #[test]
+    fn apply_device_never_changes_d1_confirmed() {
+        let ok_dev = device_a();
+        let bad_dev = DeviceId::new(0, 0);
+        let backend = FakeBackend {
+            unmatched: vec![(0, 0)],
+            ..Default::default()
+        };
+        let mgr = PathBManager::new(Box::new(backend), None, Box::new(FakeLedger::default()));
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+        mgr.apply_all(&cfg, &[info(&ok_dev)]).unwrap();
+        assert!(mgr.d1_confirmed());
+
+        mgr.apply_device(&cfg, &ok_dev).unwrap();
+        assert!(mgr.d1_confirmed(), "핫플러그 성공은 값을 바꾸지 않는다");
+
+        assert!(mgr.apply_device(&cfg, &bad_dev).is_err());
+        assert!(
+            mgr.d1_confirmed(),
+            "핫플러그 직후의 일시 실패(서비스 미등록)를 미확인으로 박지 않는다 — 전체 재조정만 계산한다"
+        );
     }
 
     // ── d1_for() 판정 — 기존 desired_mappings_for() 판정을 그대로 재사용 ──────

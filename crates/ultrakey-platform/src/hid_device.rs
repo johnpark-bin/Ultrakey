@@ -110,15 +110,26 @@ mod macos_impl {
     /// `entry` 에서 `VendorID`/`ProductID`/`Product`/`Transport`/`Built-In` 을 읽어
     /// [`DeviceInfo`] 를 만든다.
     ///
-    /// ⛔ **VID/PID 를 읽지 못하면 `None`** — 식별자가 없는 항목은 쓸 수 없으므로
-    /// 버린다. 나머지 필드(제품명·전송 방식·내장 여부)는 읽지 못해도 `None` 으로
-    /// 두고 항목 자체는 살린다.
+    /// ⭐ **이슈 #110 — `VendorID`/`ProductID` 프로퍼티가 *없으면* 0 으로 폴백한다.**
+    /// MacBook Air(`Mac17,4`) 내장 키보드의 IOHIDDevice 노드
+    /// (`AppleHIDTransportHIDDevice`, usage 1/6, Built-In Yes)에는 두 프로퍼티가
+    /// **아예 존재하지 않는다**(`ioreg -c AppleHIDTransportHIDDevice -r -d1` 실측).
+    /// `hidutil list` 는 이를 `0x0`/`0x0` 으로 표시하고 `--matching
+    /// '{"VendorID":0,"ProductID":0,…}'` 도 그 서비스를 잡는다 — 즉 커널/`hidutil`
+    /// 의 관례는 "부재 = 0" 이다. 종전 코드는 부재를 `None`(항목 폐기)으로 다뤄
+    /// 내장 키보드가 열거에서 통째로 빠졌고, 그 결과 D-1 이 설치되지 않아 caps lock
+    /// 단독 입력이 control 고착을 냈다(이슈 #110 인과 사슬 0번; 이슈 #86 원인 후보
+    /// (b) 확정). 프로퍼티가 **있는데** 숫자로 읽히지 않는 경우는 종전대로
+    /// `None`(식별자 손상 — 쓸 수 없다).
+    ///
+    /// 나머지 필드(제품명·전송 방식·내장 여부)는 읽지 못해도 `None` 으로 두고
+    /// 항목 자체는 살린다.
     ///
     /// 열거(`list_attached_keyboards`)와 핫플러그 콜백(`hotplug.rs`) 양쪽이 이
-    /// 함수를 공유한다.
+    /// 함수를 공유한다 — 폴백도 두 경로에 함께 적용된다.
     pub(crate) fn read_device_properties(entry: IoObjectT) -> Option<DeviceInfo> {
-        let vendor_id = read_u32_property(entry, K_IOHID_VENDOR_ID_KEY)?;
-        let product_id = read_u32_property(entry, K_IOHID_PRODUCT_ID_KEY)?;
+        let vendor_id = read_u32_property_or_zero_if_absent(entry, K_IOHID_VENDOR_ID_KEY)?;
+        let product_id = read_u32_property_or_zero_if_absent(entry, K_IOHID_PRODUCT_ID_KEY)?;
         let product_name = read_string_property(entry, K_IOHID_PRODUCT_KEY);
         let transport = read_string_property(entry, K_IOHID_TRANSPORT_KEY);
         let built_in = read_bool_property(entry, K_IOHID_BUILT_IN_KEY);
@@ -167,6 +178,20 @@ mod macos_impl {
 
     fn read_u32_property(entry: IoObjectT, key: &str) -> Option<u32> {
         let value = create_cf_property(entry, key)?;
+        u32_from_cf(value)
+    }
+
+    /// [`read_u32_property`] 와 같되 **프로퍼티 부재**만 `Some(0)` 으로 돌려준다
+    /// (이슈 #110 — 내장 키보드의 VID/PID 부재는 `hidutil` 관례대로 0 이다).
+    /// 프로퍼티가 있는데 숫자가 아니면 여전히 `None`.
+    fn read_u32_property_or_zero_if_absent(entry: IoObjectT, key: &str) -> Option<u32> {
+        match create_cf_property(entry, key) {
+            None => Some(0),
+            Some(value) => u32_from_cf(value),
+        }
+    }
+
+    fn u32_from_cf(value: CFRetained<CFType>) -> Option<u32> {
         let number = value.downcast::<CFNumber>().ok()?;
         u32::try_from(number.as_i64()?).ok()
     }

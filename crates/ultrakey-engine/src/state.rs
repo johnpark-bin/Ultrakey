@@ -77,6 +77,13 @@ pub struct SharedState {
     /// shift`·`Left/right shift`·`Shift + caps lock = caps lock` 류 경로 C 규칙의
     /// **의도된** 결과이므로 안전망이 되돌리지 않아야 함을 뜻한다.
     pub caps_lock_owned_lock: AtomicBool,
+    /// ⭐ 이슈 #110 — D-1 커널 매핑이 되읽기로 **확인된** 상태인가
+    /// (`PathBManager::d1_confirmed` 의 사본). 엔진이 경로 B 재조정 직후마다
+    /// 게시하고, 앱이 트레이·환경설정·Event Viewer 의 "caps lock 커널 매핑 미적용"
+    /// 표시에 읽는다(표시 조건 `config.caps_lock_alias.is_some() && !d1_confirmed`).
+    /// ⛔ 탭 콜백의 중재 판정은 이 값을 **읽지 않는다** — 방어선은 이벤트 모양으로
+    /// 판정한다(`Arbiter::arbitrate` 의 D-1 우회 탭 환원).
+    pub d1_confirmed: AtomicBool,
 }
 
 impl SharedState {
@@ -93,6 +100,7 @@ impl SharedState {
             korean_ime: AtomicKoreanImeGate::new(),
             trackpad: Arc::new(AtomicTrackpadPhase::new()),
             caps_lock_owned_lock: AtomicBool::new(false),
+            d1_confirmed: AtomicBool::new(false),
         })
     }
 }
