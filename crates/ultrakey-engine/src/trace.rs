@@ -90,6 +90,17 @@ pub struct TapTrace {
     /// 사후에 이 비트마스크로 바로 확인할 수 있다 — 같은 스레드 메모리 읽기 3회뿐이라
     /// (원자 로드조차 아니다) 매 레코드에 채워도 비용이 없다.
     pub pressed_mods: u8,
+    /// ⭐ 이슈 #121 — `pressed_mods`(shift·caps)에 더해 ⌃⌥⌘ 여섯 키의 눌림 스냅샷
+    /// (bit0=좌⌃ bit1=우⌃ bit2=좌⌥ bit3=우⌥ bit4=좌⌘ bit5=우⌘). F-16.1 `ShiftOnly`
+    /// 판정(`arbitration.rs:1277-1284`)은 "shift 눌림 **그리고 다른 modifier
+    /// 미눌림**"을 요구하므로, 1·2번째 탭이 D2 를 통과하지 못한 원인이 stale ⌘/⌥/⌃
+    /// 눌림인지 이 비트로 사후 판정한다.
+    pub pressed_mods_other: u8,
+    /// ⭐ 이슈 #121 — 이 이벤트 처리 직후 `active_synth_flags` 가 비어 있는가
+    /// (0=비어있음 1=무언가 활성). F-16.1 발화 조건 3(`arbitration.rs:1244-1246`)의
+    /// 스냅샷 — hyper 슬롯(사용자 설정은 우⌘ 소스)이 세션을 넘어 `HoldConfirmed` 로
+    /// 잔류하면 D2 가 발화하지 않는데, 그 상태를 이 비트로 확정한다.
+    pub synth_flags_active: u8,
 }
 
 /// [`TapTrace::pressed_mods`] 비트 배정 — 이 상수들이 계측 생산부(engine.rs)와
@@ -97,6 +108,14 @@ pub struct TapTrace {
 pub const PRESSED_MOD_LEFT_SHIFT: u8 = 1 << 0;
 pub const PRESSED_MOD_RIGHT_SHIFT: u8 = 1 << 1;
 pub const PRESSED_MOD_CAPS_LOCK: u8 = 1 << 2;
+
+/// [`TapTrace::pressed_mods_other`] 비트 배정 — `pressed_mods` 와 같은 관례.
+pub const PRESSED_MOD_LEFT_CONTROL: u8 = 1 << 0;
+pub const PRESSED_MOD_RIGHT_CONTROL: u8 = 1 << 1;
+pub const PRESSED_MOD_LEFT_OPTION: u8 = 1 << 2;
+pub const PRESSED_MOD_RIGHT_OPTION: u8 = 1 << 3;
+pub const PRESSED_MOD_LEFT_COMMAND: u8 = 1 << 4;
+pub const PRESSED_MOD_RIGHT_COMMAND: u8 = 1 << 5;
 
 // ============================================================================
 // 링 버퍼 — 원시 자료구조는 ultrakey-platform 소유, 여기는 TapTrace 전용 래퍼.
@@ -499,20 +518,40 @@ pub struct ViewerRecord {
     /// "rightShift"·"capsLock") 푼 목록. 이벤트 처리 직후 정본 눌림 테이블이 눌림으로
     /// 믿고 있던 키들이다.
     pub pressed_mods: Vec<String>,
+    /// ⭐ 이슈 #121 — 이벤트 처리 직후 합성 modifier(hyper 홀드)가 활성이었는가.
+    pub synth_active: bool,
 }
 
-/// [`TapTrace::pressed_mods`] 비트마스크를 사람이 읽을 이름 목록으로 푼다. 드레인
-/// 스레드 전용(할당한다).
-fn pressed_mods_names(bits: u8) -> Vec<String> {
+/// [`TapTrace::pressed_mods`]·[`TapTrace::pressed_mods_other`] 비트마스크를 사람이
+/// 읽을 이름 목록으로 푼다. 드레인 스레드 전용(할당한다).
+fn pressed_mods_names(shift_bits: u8, other_bits: u8) -> Vec<String> {
     let mut out = Vec::new();
-    if bits & PRESSED_MOD_LEFT_SHIFT != 0 {
+    if shift_bits & PRESSED_MOD_LEFT_SHIFT != 0 {
         out.push("leftShift".to_string());
     }
-    if bits & PRESSED_MOD_RIGHT_SHIFT != 0 {
+    if shift_bits & PRESSED_MOD_RIGHT_SHIFT != 0 {
         out.push("rightShift".to_string());
     }
-    if bits & PRESSED_MOD_CAPS_LOCK != 0 {
+    if shift_bits & PRESSED_MOD_CAPS_LOCK != 0 {
         out.push("capsLock".to_string());
+    }
+    if other_bits & PRESSED_MOD_LEFT_CONTROL != 0 {
+        out.push("leftControl".to_string());
+    }
+    if other_bits & PRESSED_MOD_RIGHT_CONTROL != 0 {
+        out.push("rightControl".to_string());
+    }
+    if other_bits & PRESSED_MOD_LEFT_OPTION != 0 {
+        out.push("leftOption".to_string());
+    }
+    if other_bits & PRESSED_MOD_RIGHT_OPTION != 0 {
+        out.push("rightOption".to_string());
+    }
+    if other_bits & PRESSED_MOD_LEFT_COMMAND != 0 {
+        out.push("leftCommand".to_string());
+    }
+    if other_bits & PRESSED_MOD_RIGHT_COMMAND != 0 {
+        out.push("rightCommand".to_string());
     }
     out
 }
@@ -591,7 +630,8 @@ fn decode_viewer_record(t: &TapTrace, at_ms: u64) -> ViewerRecord {
         emitted,
         effects,
         path_c: viewer_path_c(t),
-        pressed_mods: pressed_mods_names(t.pressed_mods),
+        pressed_mods: pressed_mods_names(t.pressed_mods, t.pressed_mods_other),
+        synth_active: t.synth_flags_active != 0,
     }
 }
 
@@ -763,7 +803,8 @@ fn log_trace(t: &TapTrace) {
             caps_lock_state_name(t.path_c_before),
             caps_lock_state_name(t.path_c_after)
         ),
-        pressed_mods = %format_args!("{:?}", pressed_mods_names(t.pressed_mods)),
+        pressed_mods = %format_args!("{:?}", pressed_mods_names(t.pressed_mods, t.pressed_mods_other)),
+        synth_active = t.synth_flags_active != 0,
         "tap trace"
     );
 }

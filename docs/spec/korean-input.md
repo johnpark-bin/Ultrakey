@@ -102,6 +102,7 @@
 - caps lock 의 `alphaShift`(`0x10000`) 비트는 **눌림이 아니라 잠금 상태**이므로 이 판정에서 제외한다(`key-remapping-engine.md` §5 #21).
 - F-05 가 합성한 hyper/meh/bleh flags 가 활성이면 F-16.4 는 **발화하지 않는다**.
 - ⭐ **세션 중 발화 예외 (이슈 #101)**: 위 표의 조건은 **Seek 세션 밖** 기준이다 — 세션 중에는 계층 1 이 short-circuit 하므로 F-16 규칙은 원래 평가되지 않는다. 이 원칙에 대한 **유일한 예외가 F-16.1 이다**: 다국어 Seek 세션(인풋 박스 모드) 중에는 세션 게이트가 SPACE 키에 한해 같은 규칙·조건·래치를 그 자리에서 재평가한다(F-16.2~F-16.4 는 예외가 아니며, 한/영 키는 원본 통과·한자·백틱은 세션 중 발화 금지가 그대로다 — `seek-activation-and-session.md` §3.1 ③).
+- ⭐⭐ **이슈 #121 실측 — 사용자 실 설정 전량 재현 하에서도 인풋 박스 ⇧+Space 는 1번째 탭부터 발화한다 (결정 기록)**: 사용자 실기기 설정(`korean.shiftSpaceSwitchesInputSource: true`·`presets.leftRightShiftToCaps`·`presets.shiftCapsToCaps`·hyper(우⌘)·D-1 캡스락 alias)을 재현한 T-121 시리즈가 "⇧+Space 1회 탭 = ⌃Space 치환 1회 방출"을 고정한다. shift 를 소스로 쓰는 F-08 규칙이 켜져 있어도, `is_tracked`(FSM)는 **세션 게이트 뒤**라 세션 중 shift 이벤트가 FSM 에 도달할 수 없고, F-08.9(좌/우 shift 동시)·F-08.10(shift+캡스락)의 트리거 조건은 단독 ⇧+Space 와 만나지 않는다(F-08.8 double tap·F-08.11 quick press 는 사용자 설정에서 꺼짐). **"정확히 3번째 탭에만 동작"의 실기기 매커니즘은 `(미확정)`** — 탭 스레드 런타임 상태·웹뷰 IME·시스템 hotkey 후보는 `docs/plan/issue-121-seek-shiftspace-tap.md` §8 M0~M9 로 확인한다. 이 PR 의 프로덕션 변경은 트레이스 계측 필드 확장뿐(판정 로직 무변경).
 
 ⭐ **왜 출력이 "유니코드 문자 직접 주입"이 아니라 "같은 keycode + option 플래그"인가.**
 
