@@ -511,6 +511,66 @@ mod tests {
         }
     }
 
+    /// ⭐ 이슈 #117 — 사이드바 탭 라벨·상세 헤딩은 **어떤 로케일에서도 빈
+    /// 문자열이 아니어야 한다**. 위 `탭_라벨과_상세_헤딩_값은_모든_로케일에서_같다`
+    /// 는 빈 값끼리 비교로 통과하므로(둘 다 `""`) 별도 불변식으로 단언한다.
+    /// `settings.tab.` 접두 키(사이드바 라벨 — 부모 `language` 포함)와
+    /// `.heading` 접미 키(패널 헤딩 — `keyboards` 는 탭 라벨 키를 재사용하므로
+    /// heading 키가 존재하지 않는다, lib.rs 상단 근거 주석)를 전수 순회한다.
+    /// 키 목록을 하드코딩하지 않으므로 새 탭이 생겨도 자동으로 커버된다.
+    #[test]
+    fn 모든_탭_라벨과_헤딩은_빈_문자열이_아니다() {
+        for locale in Locale::all() {
+            let value = raw_value(raw_for(*locale));
+            let obj = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{} 카탈로그 최상위는 객체여야 한다", locale.code()));
+            for (key, v) in obj {
+                let is_tab_label = key.starts_with("settings.tab.");
+                let is_heading = key.starts_with("settings.") && key.ends_with(".heading");
+                if !(is_tab_label || is_heading) {
+                    continue;
+                }
+                let value = v.as_str().unwrap_or_else(|| {
+                    panic!("{} 카탈로그의 {key} 값이 문자열이 아니다", locale.code())
+                });
+                assert!(
+                    !value.is_empty(),
+                    "{} 카탈로그의 {key} 가 빈 문자열이다 — 사이드바 라벨·헤딩은 \
+                     채워진 값이어야 한다(이슈 #117)",
+                    locale.code()
+                );
+            }
+        }
+    }
+
+    /// ⭐ 이슈 #117 — 언어 트리 자식 탭 `japanese`·`chinese` 의 라벨·헤딩은
+    /// **5 카탈로그 전부에서 언어 endonym**(`日本語`·`中文`) 그대로여야 한다
+    /// (명세 §4.1 "자식은 언어 endonym", F-14 §3.1.2-a "자기 언어 이름" —
+    /// es·ja·zh 에서도 번역하지 않는다). `seek과_hyperkey_…_원문_그대로다` 와
+    /// 같은 형태의 재발 방지 장치다. ⚠️ `korean` 은 F-16 시절부터의 번역 라벨
+    /// 선례라 여기서 검사하지 않는다(명세 §4.1 korean 예외 주석, §9 #10).
+    #[test]
+    fn japanese과_chinese_탭_라벨과_헤딩은_모든_로케일에서_endonym_그대로다() {
+        for locale in Locale::all() {
+            let catalog = Catalog::for_locale(*locale);
+            for (key, endonym) in [
+                ("settings.tab.japanese", "日本語"),
+                ("settings.japanese.heading", "日本語"),
+                ("settings.tab.chinese", "中文"),
+                ("settings.chinese.heading", "中文"),
+            ] {
+                assert_eq!(
+                    catalog.get(key),
+                    endonym,
+                    "{} 카탈로그의 {key} 가 endonym({endonym})과 다르다 — \
+                     언어명은 자기 이름이라 번역하지 않는다(명세 §4.1, 이슈 #117)",
+                    locale.code()
+                );
+            }
+        }
+    }
+
     #[test]
     fn from_language_tag_matches_language_subtag_only() {
         assert_eq!(Locale::from_language_tag("ko"), Some(Locale::Ko));
