@@ -728,6 +728,9 @@ fn on_tap_event(
                 | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8 * trace::PRESSED_MOD_LEFT_COMMAND)
                 | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8 * trace::PRESSED_MOD_RIGHT_COMMAND),
             synth_flags_active: (!st.arbiter.active_synth_flags().is_empty()) as u8,
+            // ⭐ 이슈 #125 — 같은 스레드 메모리 읽기 한 번 더(#108/#121 관례 그대로,
+            // 비용 없음). D2 가 실제로 쓰는 pressed-필터 값의 스냅샷.
+            synth_flags_active_pressed: (!st.arbiter.active_synth_flags_of_pressed_slots().is_empty()) as u8,
             ..Default::default()
         };
 

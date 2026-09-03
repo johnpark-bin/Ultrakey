@@ -101,6 +101,14 @@ pub struct TapTrace {
     /// 스냅샷 — hyper 슬롯(사용자 설정은 우⌘ 소스)이 세션을 넘어 `HoldConfirmed` 로
     /// 잔류하면 D2 가 발화하지 않는데, 그 상태를 이 비트로 확정한다.
     pub synth_flags_active: u8,
+    /// ⭐ 이슈 #125 — `synth_flags_active` 와 같은 시점의 pressed-필터 값(0=비어있음
+    /// 1=무언가 활성) — `arbitration.rs` D2 가드가 실제로 쓰는 값
+    /// (`active_synth_flags_of_pressed_slots`). 이 필드와 `synth_flags_active` 가
+    /// 갈리면(원본 1, 이 필드 0) hyper 슬롯이 `HoldConfirmed` 로 잔류했지만 소스
+    /// 키는 물리적으로 이미 뗀 stale 상태였다는 뜻 — 실기기에서 stale 을 확정하는
+    /// 데 쓴다(`docs/plan/issue-125-seek-shiftspace-hyper-stale.md` M-절차). 기존
+    /// `synth_flags_active` 필드는 손대지 않는다(이슈 #121 과의 비교 가능성 보존).
+    pub synth_flags_active_pressed: u8,
 }
 
 /// [`TapTrace::pressed_mods`] 비트 배정 — 이 상수들이 계측 생산부(engine.rs)와
@@ -520,6 +528,9 @@ pub struct ViewerRecord {
     pub pressed_mods: Vec<String>,
     /// ⭐ 이슈 #121 — 이벤트 처리 직후 합성 modifier(hyper 홀드)가 활성이었는가.
     pub synth_active: bool,
+    /// ⭐ 이슈 #125 — `synth_active` 의 pressed-필터 버전(D2 가드가 실제로 쓰는
+    /// 값). `synth_active` 와 갈리면(true/false) stale hyper 슬롯 확정.
+    pub synth_active_pressed: bool,
 }
 
 /// [`TapTrace::pressed_mods`]·[`TapTrace::pressed_mods_other`] 비트마스크를 사람이
@@ -632,6 +643,7 @@ fn decode_viewer_record(t: &TapTrace, at_ms: u64) -> ViewerRecord {
         path_c: viewer_path_c(t),
         pressed_mods: pressed_mods_names(t.pressed_mods, t.pressed_mods_other),
         synth_active: t.synth_flags_active != 0,
+        synth_active_pressed: t.synth_flags_active_pressed != 0,
     }
 }
 
@@ -805,6 +817,7 @@ fn log_trace(t: &TapTrace) {
         ),
         pressed_mods = %format_args!("{:?}", pressed_mods_names(t.pressed_mods, t.pressed_mods_other)),
         synth_active = t.synth_flags_active != 0,
+        synth_active_pressed = t.synth_flags_active_pressed != 0,
         "tap trace"
     );
 }
