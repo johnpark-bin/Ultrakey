@@ -3124,4 +3124,38 @@ tail -f ~/Library/Logs/Ultrakey/ultrakey.log
 
 - **원본 SuperKey 의 다국어 검색** — 원본은 영어 단일(`seek-text-detection.md` §5 #10)이라 대조할 원본 동작이 없다(README 갈라짐 표 D10).
 - **중국어·일본어·스페인어 OCR 의 실제 지연·신뢰도** — 한국어(3.1s)만 실측. `seek-ocr-latency-spike.md` 의 방법으로 각 언어 1 회 재현 측정해 `seek-text-detection.md` §3.2.2 `(추정)` 을 갱신한다.
+
+## 항목 20 — caps lock 하드웨어 잠금 자동 복구 (이슈 #108)
+
+> ⭐ **근거**: `../spec/key-remapping-engine.md` §5 항목 24·25 · `../dev/architecture.md` §6.1 D-1 ·
+> §7.2 D-17-6. 자동 단위 테스트(`stale_shift_release_does_not_flip_to_keydown`·
+> `either_shift_still_holds_when_other_side_is_down`·`crates/ultrakey-engine/src/lifecycle.rs`
+> `caps_lock_recovery` 표 테스트)는 macOS 없이 `cargo test` 로 이미 통과한다 — 이 항목은 그
+> 테스트가 다루지 못하는 **실기기·실제 macOS 설정**과의 상호작용만 다룬다.
+
+### 사전 준비
+
+```sh
+./scripts/build-signed.sh
+open <경로>/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+caps lock 에 의존하는 프리셋(`Double tap shift = caps lock`·`Left shift + right shift = caps
+lock`·`Shift + caps lock = caps lock` 중 하나) 을 켜서 D-1(`caps lock → F18`)이 설치되게 한다.
+
+### M1~M4 수동 절차
+
+| # | 시나리오 | 조작 | 기대 결과 | 판정 근거 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1** | 진짜 하드웨어 잠금인지 확인 | 증상 재현(또는 `hidutil` 등으로 강제 토글) 직후 | `ioreg -c IOHIDSystem -r -d1 \| grep -i CapsLock`(또는 `HIDCapsLockState`)로 실제 잠금 상태를 확인한다. **하드웨어 잠금이 아니라 이벤트 flags 층위만의 표시**(§5 #21, `getModifierState("CapsLock")` 은 참인데 `HIDCapsLockState` 는 `No`)라면 이 이슈가 아니라 #21 의 재발이다 — 증상을 먼저 이 구분으로 분류한다 | §5 #24·#21 |
+| **M2** | Karabiner dext 검출 + D-1 설치 확인 | `../dev/manual-verification.md` §6-0-bis 의 `ioreg -c IOHIDDevice -r -d1 \| grep -c "Karabiner DriverKit VirtualHIDKeyboard"` 로 dext 존재를 먼저 확인한다(1 이상이면 존재). 존재하면 `hidutil list`(또는 `IOHIDDeviceGetService` 계열)로 그 dext 가 keyboard usage(page 1/usage 6)로 잡히는지, `hidutil property --matching {"VendorID":…,"ProductID":…} --get UserKeyMapping` 으로 그 디바이스에도 D-1(`0x700000039→0x70000006D`)이 걸려 있는지 확인한다 | dext 가 keyboard usage 로 잡히면 D-1 이 자동으로 설치돼 있어야 한다(§5 #25, `apply_all_inner` 무차별 설치) — 안 잡혀 있으면 원인 (e) 재현으로 이슈 코멘트에 기록한다 | §5 #25 · §6-0-bis |
+| **M3** | 시스템 설정 보조 키 remap 과의 충돌 | 시스템 설정 `키보드 ▸ 보조 키` 에서 caps lock 을 다른 키(예: `⎋`)로 바꿔 둔 채, 위 프리셋 중 하나를 켠다 | D-1 이 그 자리를 가져간다 — `hidutil property --matching {...} --get UserKeyMapping` 에 D-1 매핑만 남고 시스템 설정 쪽 remap 은 사라진다(D-17-6, "우리가 이긴다"). 이것은 **의도된 동작**이다 — 남의 매핑이 사라졌다고 결함으로 보고하지 않는다 | §5 #25 · `../dev/architecture.md` §7.2 D-17-6 |
+| **M4** | macOS "Caps Lock 으로 입력 소스 전환" 리트머스 | 시스템 설정 `키보드 ▸ 텍스트 입력 ▸ 편집` 에서 "Caps Lock 키로 입력 소스 전환"을 켠 채(한국어 등 비-라틴 입력 소스가 하나 이상 있어야 옵션이 보인다), 위 프리셋을 켠 상태로 물리 caps lock 을 누른다 | **입력 소스가 전환되지 않아야 한다** — D-1 이 살아 있으면 물리 caps lock 은 F18 로 도착해 macOS 자신의 이 기능(물리 caps lock keycode 전용)이 발동할 대상이 없다. 전환이 **일어나면** D-1 이 이 순간 빠져 있다는 사용자 확인 가능한 신호다(§5 #25 (d)) — 원인 (a)/(e) 재현으로 기록한다 | §5 #24·#25 (d) |
+
+### ⚠️ 이 절차로 확인할 수 없는 것
+
+- **Karabiner-DriverKit-VirtualHIDDevice 의 정확한 VendorID/ProductID** — 공개 문서로 확인하지 못했다(추정). M2 는 그 값을 몰라도 성립한다(usage 로만 판정).
+- **시스템 설정 보조 키 remap 의 정확한 plist 저장 위치** — 확인하지 못했다(추정). D-17-6 의 동작은 저장 위치와 무관하게 성립한다(M3 근거).
+- **"Caps Lock 으로 입력 소스 전환"의 짧게/길게 판정 임계시간** — 공개 문서 없음(추정, 75ms 는 다른 지연값과 혼동하지 않도록 이 문서에 단정하지 않는다). M4 는 임계값을 몰라도 "전환 자체가 일어나는가"만 보므로 성립한다.
 - **한국어 106키 물리 키보드의 세션 중 한/영 키** — korean-input.md §5 #1 과 같은 기기 제약(이 항목은 온스크린 입력 소스 전환으로 대체해 확인한다).

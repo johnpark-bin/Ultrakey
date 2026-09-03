@@ -84,7 +84,19 @@ pub struct TapTrace {
     /// 0=off 1=on 2=읽기실패. 효과가 없었으면(시도 안 함) 기본값 0 그대로 남는다.
     pub path_c_before: u8,
     pub path_c_after: u8,
+    /// ⭐ 이슈 #108 원인 (b) 진단 — `arbitrate()` 가 이 이벤트를 처리한 **직후**, 정본
+    /// 눌림 테이블이 좌shift(bit0)·우shift(bit1)·caps lock(bit2)을 각각 눌림으로
+    /// 믿고 있는지의 스냅샷. `ToggleCapsLock` 오발화가 stale 눌림 때문이었는지를
+    /// 사후에 이 비트마스크로 바로 확인할 수 있다 — 같은 스레드 메모리 읽기 3회뿐이라
+    /// (원자 로드조차 아니다) 매 레코드에 채워도 비용이 없다.
+    pub pressed_mods: u8,
 }
+
+/// [`TapTrace::pressed_mods`] 비트 배정 — 이 상수들이 계측 생산부(engine.rs)와
+/// 소비부(이 파일의 렌더링 함수들) 양쪽의 유일한 근거다.
+pub const PRESSED_MOD_LEFT_SHIFT: u8 = 1 << 0;
+pub const PRESSED_MOD_RIGHT_SHIFT: u8 = 1 << 1;
+pub const PRESSED_MOD_CAPS_LOCK: u8 = 1 << 2;
 
 // ============================================================================
 // 링 버퍼 — 원시 자료구조는 ultrakey-platform 소유, 여기는 TapTrace 전용 래퍼.
@@ -475,6 +487,26 @@ pub struct ViewerRecord {
     pub effects: Vec<String>,
     /// 예: `"ToggleCapsLock ok off->on"`. 경로 C 를 시도하지 않았으면 `None`.
     pub path_c: Option<String>,
+    /// ⭐ 이슈 #108 — [`TapTrace::pressed_mods`] 를 사람이 읽을 이름으로("leftShift"·
+    /// "rightShift"·"capsLock") 푼 목록. 이벤트 처리 직후 정본 눌림 테이블이 눌림으로
+    /// 믿고 있던 키들이다.
+    pub pressed_mods: Vec<String>,
+}
+
+/// [`TapTrace::pressed_mods`] 비트마스크를 사람이 읽을 이름 목록으로 푼다. 드레인
+/// 스레드 전용(할당한다).
+fn pressed_mods_names(bits: u8) -> Vec<String> {
+    let mut out = Vec::new();
+    if bits & PRESSED_MOD_LEFT_SHIFT != 0 {
+        out.push("leftShift".to_string());
+    }
+    if bits & PRESSED_MOD_RIGHT_SHIFT != 0 {
+        out.push("rightShift".to_string());
+    }
+    if bits & PRESSED_MOD_CAPS_LOCK != 0 {
+        out.push("capsLock".to_string());
+    }
+    out
 }
 
 /// `flags` 비트마스크에서 켜진 modifier 이름들(§3.3 표 — `⇧⌃⌥⌘` + caps lock/fn).
@@ -551,6 +583,7 @@ fn decode_viewer_record(t: &TapTrace, at_ms: u64) -> ViewerRecord {
         emitted,
         effects,
         path_c: viewer_path_c(t),
+        pressed_mods: pressed_mods_names(t.pressed_mods),
     }
 }
 
@@ -722,6 +755,7 @@ fn log_trace(t: &TapTrace) {
             caps_lock_state_name(t.path_c_before),
             caps_lock_state_name(t.path_c_after)
         ),
+        pressed_mods = %format_args!("{:?}", pressed_mods_names(t.pressed_mods)),
         "tap trace"
     );
 }

@@ -194,12 +194,26 @@ impl PathBManager {
         let settings = PerDeviceSettings::new(&cfg.per_device_values);
         let d1 = d1_for(cfg);
         let mut count = 0usize;
+        let mut device_ids: Vec<String> = Vec::with_capacity(attached.len());
         for info in attached {
             let device = DeviceId::new(info.vendor_id, info.product_id);
             let composition = compose(&device, &settings, d1);
             self.write_device(&device, &composition.mappings)?;
+            device_ids.push(device.as_str().to_string());
             count += 1;
         }
+        // ⭐ 이슈 #108 원인 (e) 진단 — 어떤 디바이스에 D-1 이 실제로 깔렸는지는 지금까지
+        // 로그에 전혀 남지 않았다(engine.rs 의 완료 로그는 `?device` 가 `None` 뿐이라
+        // 디바이스별 내역이 없다). Karabiner 가상 HID 등 예상 밖 디바이스가 매칭
+        // 대상으로 잡혔는지, D-1 이 실제로 붙어 있는 키보드 전부를 커버했는지를
+        // 사용자 제보의 평상시 로그에서 바로 확인할 수 있게 한 줄만 남긴다(계측
+        // 링·새 상태 없이 기존 `tracing` 로만).
+        tracing::info!(
+            count,
+            d1_active = d1.is_some(),
+            devices = ?device_ids,
+            "Path B applied to attached devices"
+        );
         Ok(count)
     }
 
