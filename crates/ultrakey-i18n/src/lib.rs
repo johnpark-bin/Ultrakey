@@ -545,29 +545,29 @@ mod tests {
     }
 
     /// ⭐ 이슈 #117 — 언어 트리 자식 탭 `japanese`·`chinese` 의 라벨·헤딩은
-    /// **5 카탈로그 전부에서 언어 endonym**(`日本語`·`中文`) 그대로여야 한다
-    /// (명세 §4.1 "자식은 언어 endonym", F-14 §3.1.2-a "자기 언어 이름" —
-    /// es·ja·zh 에서도 번역하지 않는다). `seek과_hyperkey_…_원문_그대로다` 와
-    /// 같은 형태의 재발 방지 장치다. ⚠️ `korean` 은 F-16 시절부터의 번역 라벨
-    /// 선례라 여기서 검사하지 않는다(명세 §4.1 korean 예외 주석, §9 #10).
+    /// **각 로케일의 언어로 번역**되어야 한다(`korean` 선례: en `Korean`·es
+    /// `Coreano`·ja `韓国語`·zh `韩语`). endonym 규칙(F-14 §3.1.2-a "자기 언어
+    /// 이름")은 **언어 선택 팝업 한정**이다 — 그 팝업은 "지금 UI 를 읽을 수 없는
+    /// 사람"이 쓰는 컨트롤이라 자기 언어로 표기해야 하지만, 사이드바 라벨·헤딩은
+    /// 이미 UI 를 읽는 사용자를 위한 내비게이션 텍스트라 로케일 번역이 맞다
+    /// (이슈 #117 정정 2026-09-03). 빈 문자열 금지는 위
+    /// `모든_탭_라벨과_헤딩은_빈_문자열이_아니다` 가 전 탭에 대해 이미 단언한다.
     #[test]
-    fn japanese과_chinese_탭_라벨과_헤딩은_모든_로케일에서_endonym_그대로다() {
-        for locale in Locale::all() {
-            let catalog = Catalog::for_locale(*locale);
-            for (key, endonym) in [
-                ("settings.tab.japanese", "日本語"),
-                ("settings.japanese.heading", "日本語"),
-                ("settings.tab.chinese", "中文"),
-                ("settings.chinese.heading", "中文"),
-            ] {
-                assert_eq!(
-                    catalog.get(key),
-                    endonym,
-                    "{} 카탈로그의 {key} 가 endonym({endonym})과 다르다 — \
-                     언어명은 자기 이름이라 번역하지 않는다(명세 §4.1, 이슈 #117)",
-                    locale.code()
-                );
-            }
+    fn japanese과_chinese_탭_라벨과_헤딩은_각_로케일_언어로_번역된다() {
+        // (로케일, tab.japanese, japanese.heading, tab.chinese, chinese.heading)
+        let expected = [
+            (Locale::En, "Japanese", "Japanese", "Chinese", "Chinese"),
+            (Locale::Ko, "일본어", "일본어", "중국어", "중국어"),
+            (Locale::Es, "Japonés", "Japonés", "Chino", "Chino"),
+            (Locale::Ja, "日本語", "日本語", "中国語", "中国語"),
+            (Locale::Zh, "日语", "日语", "中文", "中文"),
+        ];
+        for (locale, tab_jp, heading_jp, tab_zh, heading_zh) in expected {
+            let catalog = Catalog::for_locale(locale);
+            assert_eq!(catalog.get("settings.tab.japanese"), tab_jp, "{} 카탈로그 tab.japanese", locale.code());
+            assert_eq!(catalog.get("settings.japanese.heading"), heading_jp, "{} 카탈로그 japanese.heading", locale.code());
+            assert_eq!(catalog.get("settings.tab.chinese"), tab_zh, "{} 카탈로그 tab.chinese", locale.code());
+            assert_eq!(catalog.get("settings.chinese.heading"), heading_zh, "{} 카탈로그 chinese.heading", locale.code());
         }
     }
 
