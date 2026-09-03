@@ -599,10 +599,56 @@ impl Arbiter {
         if ev.kind != EventKind::FlagsChanged {
             return ev.kind;
         }
+        // ⭐ 이슈 #108 — modifier 키(caps lock 제외)는 이 이벤트 **자신의** flags 만
+        // 보고 뗌을 확정할 수 있다. 그 키가 지금 눌려 있다면(자신이든 반대쪽 좌/우든)
+        // [`Self::input_family_flag`] 가 주는 **좌우 공용** family 비트는 반드시 켜져
+        // 있다 — 비트가 없는데 이 키의 `FlagsChanged` 가 왔다면 뗌 말고는 없다.
+        // 눌림 테이블이 실제 뗌을 놓쳐(0-c/0-d 게이트 진입 중 매 이벤트 `force_reset`
+        // 이 돌다가 눌린 채로 게이트를 벗어남, 탭 disable 창, 절전/화면잠금
+        // `ForceResetState` 순서 등으로) stale 하게 "눌림"으로 믿고 있어도, 이 판정은
+        // 테이블과 무관하게 **사실을 바로잡는다** — 게이트 이탈 시나리오가 그 예다:
+        // 게이트가 걸린 동안 매 콜백이 `pressed` 를 강제로 지우므로, 사용자가 shift 를
+        // 누른 채 게이트를 벗어나면 테이블은 이미 거짓인 채 물리 shift 만 눌려 있는
+        // 상태가 되고, 그 뒤 진짜 뗌이 와도 `is_pressed==false` 라서 예전 로직은 그걸
+        // KeyDown 으로 오판해 `set_pressed(true)` 로 영구 고착시켰다. 이 판정이 그
+        // 뗌을 flags 만으로 먼저 잡아낸다. `F-08.9`/`F-08.10`(`Left/right shift`·
+        // `Shift + caps lock = caps lock`)이 그렇게 고착된 값으로 `EitherShift`/`Key`
+        // 조건을 오판해 `Effect::ToggleCapsLock` 을 오발화하는 것이 원인 (b)다.
+        //
+        // ⚠️ **`KeyCode::modifier_flags()` 를 여기서 재사용하지 않는다.** 그 함수가
+        // 얹는 `DEVICE_LEFT_SHIFT` 류 좌우 구분 비트는 **우리가 출력을 합성할 때만**
+        // 싣는 값이다(`flags.rs` 문서) — 실제 macOS 입력 이벤트에는 절대 실리지
+        // 않는다(§5 #18 이 말하는 "좌/우가 같은 공개 비트를 공유해 구분 불가"가 바로
+        // 이 뜻이다). 그 값으로 입력을 검사하면 모든 진짜 keyDown 도 "비트 없음"으로
+        // 오판해 shift/hyper 가 전면 망가진다 — 실제로 이 자리에 처음 그렇게 짰다가
+        // 기존 테스트 8개가 깨져서 잡은 결함이다. 여기서는 좌/우 공용 family 비트만
+        // 본다 — "이 키가 지금 안 눌려 있다"는 쪽만 판정하므로 좌/우 구분이 필요
+        // 없다. caps lock 은 `input_family_flag` 가 `None` 을 주어 이 판정에서 자동으로
+        // 빠진다 — `alphaShift`(잠금 상태 비트)를 눌림으로 오독할 위험이 없다.
+        if let Some(family) = Self::input_family_flag(ev.keycode) {
+            if !ev.flags.contains(family) {
+                return EventKind::KeyUp;
+            }
+        }
         if self.state.is_pressed(ev.keycode) {
             EventKind::KeyUp
         } else {
             EventKind::KeyDown
+        }
+    }
+
+    /// [`Self::normalize_kind`] 전용 — modifier 키가 실제로 눌려 있을 때 macOS 입력
+    /// 이벤트에 반드시 실리는 **좌우 공용** `CGEventFlags` family 비트. `KeyCode::
+    /// modifier_flags()` 와 달리 좌/우 구분 비트(`DEVICE_*`, 합성 출력 전용)는 절대
+    /// 섞지 않는다.
+    fn input_family_flag(k: KeyCode) -> Option<EventFlags> {
+        match k {
+            KeyCode::LEFT_SHIFT | KeyCode::RIGHT_SHIFT => Some(EventFlags::SHIFT),
+            KeyCode::LEFT_CONTROL | KeyCode::RIGHT_CONTROL => Some(EventFlags::CONTROL),
+            KeyCode::LEFT_OPTION | KeyCode::RIGHT_OPTION => Some(EventFlags::ALTERNATE),
+            KeyCode::LEFT_COMMAND | KeyCode::RIGHT_COMMAND => Some(EventFlags::COMMAND),
+            KeyCode::FUNCTION => Some(EventFlags::SECONDARY_FN),
+            _ => None,
         }
     }
 
@@ -2704,9 +2750,14 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
+        // ⭐ 이슈 #108 — `RIGHT_COMMAND` 의 keyDown 은 실제 macOS 입력이라면 반드시
+        // `COMMAND` family 비트를 함께 싣는다(`normalize_kind::input_family_flag`).
+        // `CAPS_LOCK` 비트만 실은 이벤트는 뗌으로 재판정되어(§ 이슈 #108 정정) 이
+        // 테스트가 검증하려는 "hyper 활성 상태에서의 alphaShift 보존" 시나리오
+        // 자체가 성립하지 않는다 — 실물 이벤트 모양대로 두 비트를 함께 싣는다.
         arb.arbitrate(
             &cfg,
-            &flags_changed(KeyCode::RIGHT_COMMAND, EventFlags::CAPS_LOCK),
+            &flags_changed(KeyCode::RIGHT_COMMAND, EventFlags::CAPS_LOCK | EventFlags::COMMAND),
             GateSnapshot::default(),
             Millis(0),
         );
@@ -2902,6 +2953,77 @@ mod tests {
         let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(50));
         assert!(up.emitted().is_empty(), "Suppressed → Idle 은 quick press 를 내면 안 된다");
         assert!(up.effects().is_empty());
+    }
+
+    /// ⭐ 이슈 #108 원인 (b) 의 정본 회귀 테스트. 0-c/0-d 게이트(F-10 앱 게이트·Secure
+    /// Input)가 걸린 동안 매 콜백이 `force_reset` 으로 눌림 테이블을 무조건 지운다
+    /// (`docs/dev/architecture.md` §3-f). 사용자가 shift 를 **누른 채** 그 구간에
+    /// 들어갔다 나오면, 테이블은 이미 거짓인데 물리 shift 는 여전히 눌려 있는 상태가
+    /// 된다 — 그 뒤에 오는 **진짜** 뗌을 `normalize_kind` 가 눌림 테이블만 보고
+    /// 판정했다면 "안 눌려 있었으니 이건 누름"으로 오판해 `set_pressed(true)` 로
+    /// 영구 고착시켰다. 이 테스트는 그 시퀀스를 그대로 재현해, 그 뒤 caps lock 을
+    /// 눌러도 `Shift + caps lock = caps lock`(F-08.10)이 오발화하지 않음을 검증한다.
+    #[test]
+    fn stale_shift_release_does_not_flip_to_keydown() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(10),
+            hold: HoldCondition::EitherShift,
+            trigger: KeyCode::CAPS_LOCK,
+            action: RuleAction::ToggleCapsLock,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        // 1) 물리 shift 를 정말로 누른다 — 정상 판정, 테이블에 참으로 기록된다.
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+
+        // 2) 게이트가 걸린 동안의 반복 `force_reset` 을 흉내낸다 — shift 는 물리적으로
+        // 여전히 눌려 있지만 테이블은 강제로 비워진다(0-c/0-d, engine.rs 602-616).
+        arb.force_reset(&cfg);
+
+        // 3) 사용자가 마침내 shift 를 뗀다 — **진짜** 뗌이다. flags 에 SHIFT 비트가
+        // 없으므로 새 판정은 눌림 테이블(거짓으로 어긋나 있음)과 무관하게 이걸
+        // KeyUp 으로 확정해야 한다.
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::NONE), GateSnapshot::default(), Millis(20));
+
+        // 4) caps lock 을 누른다 — shift 는 실제로도 테이블상으로도 이미 뗀 상태이니
+        // F-08.10 이 발화해서는 안 된다.
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(30));
+        assert!(
+            out.effects().is_empty(),
+            "stale 로 고착된 shift 눌림 때문에 ToggleCapsLock 이 오발화했다: {:?}",
+            out.effects()
+        );
+    }
+
+    /// 회귀 방지 — 위 수정이 "양쪽 shift 를 다 든 채 한쪽만 뗀" 정상 케이스까지
+    /// 깨지 않는다. 반대쪽 shift 가 여전히 눌려 있으면 family 비트(`SHIFT`)가 이벤트
+    /// 자신의 flags 에 그대로 남아 있으므로(다른 쪽이 그 비트를 계속 얹는다), 이번
+    /// 뗌 판정에는 새 규칙이 개입하지 않고 기존 눌림 테이블 판정을 그대로 따른다 —
+    /// 반대쪽 shift 는 여전히 hold 조건을 충족해야 한다.
+    #[test]
+    fn either_shift_still_holds_when_other_side_is_down() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.combo_rules.push(ComboRule {
+            id: RuleId::Preset(10),
+            hold: HoldCondition::EitherShift,
+            trigger: KeyCode::CAPS_LOCK,
+            action: RuleAction::ToggleCapsLock,
+        });
+        let mut arb = Arbiter::new(&cfg);
+
+        // 양쪽 shift 를 다 누른다 — 둘 다 SHIFT family 비트를 싣는다.
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(10));
+
+        // 왼쪽만 뗀다 — 오른쪽이 여전히 SHIFT 비트를 얹고 있으므로 flags 에는
+        // 비트가 남아 있다. 이번 뗌은 여전히 눌림 테이블 판정(LEFT_SHIFT 만 확정)으로
+        // 처리돼야 한다.
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(20));
+
+        // caps lock 을 누르면 오른쪽 shift 가 여전히 눌려 있으니 F-08.10 이 발화해야 한다.
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(30));
+        assert_eq!(out.effects(), &[Effect::ToggleCapsLock], "오른쪽 shift 가 여전히 눌려 있다");
     }
 
     /// R1 — `Remap caps lock to:` 와 `Quick press caps lock to execute:` 동시 활성에서
