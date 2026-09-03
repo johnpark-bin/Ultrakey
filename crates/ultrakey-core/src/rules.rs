@@ -101,6 +101,20 @@ pub struct KoreanRule {
     /// 얹을 modifier 비트. ⭐ 원본 `ev.flags` 를 물려받지 않는다 — 이 값 그대로 방출한다
     /// (D-K7, `docs/dev/architecture.md` §6.4 P5).
     pub out_flags: EventFlags,
+    /// ⭐ 이슈 #127 — 이 규칙의 출력이 시스템 "입력 소스 전환" 토글 핫키(⌃Space 류)인가.
+    /// 참이면 물리 트리거 키를 누르고 있는 동안 오는 autorepeat KeyDown 은 같은
+    /// `trigger_key` 래치가 이미 서 있을 때 **재발화하지 않고 소비만** 한다(원본도
+    /// 하류로 안 흘려보낸다) — D-K6 규약(최초 down=합성 down, up=합성 up)을 "1 press
+    /// = 정확히 1 chord" 로 유지한다. macOS 는 물리 ⌃Space 의 autorepeat 을 그
+    /// 이벤트의 autorepeat 플래그로 무시하지만, `SynthEvent`/플랫폼 합성에는 그
+    /// 플래그가 없어(§`SynthEvent` 문서) 매 반복이 독립된 토글로 오인된다(실기기
+    /// 로그 실측 — 208ms 뒤 Korean→ABC 되돌아감).
+    ///
+    /// 거짓이면(F-16.3 한자·F-16.4 backtick) 기존과 동일하게 매 autorepeat tick 마다
+    /// 재발화한다 — 이 규칙들의 출력은 시스템 토글이 아니라 **실제로 반복 타이핑되는
+    /// 문자/제어 키**라, 물리 키를 계속 누르고 있으면 계속 나가는 것이 맞는 동작이다
+    /// (`f16_4_autorepeat_key_down_is_substituted_every_time`).
+    pub is_input_source_toggle: bool,
 }
 
 /// F-19 규칙이 참조하는 앱 제외 게이트 — F-16 §3.5 의 기능군 단위 게이트 패턴을
