@@ -198,10 +198,10 @@ pub const SEEK_FOCUS_WINDOW_BEFORE_CLICKING: &str = "seek.focusWindowBeforeClick
 /// 부재가 `false` 로 읽혀 실측 기본값을 조용히 어기게 된다.
 pub const SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS: &str = "seek.changeClickModesWithModifiers";
 /// ⭐(이슈 #93) `검색 언어` — 값은 `"ko"`·`"zh"`·`"ja"`·`"es"` 또는 영어 단일 명시
-/// `"en"`. ⚠️ **부재 ≠ 빈 문자열과 혼동하지 않는다**: 부재 = `general.language`
-/// 로케일에서 OCR 언어를 계산하는 **기존 동작 유지**(이슈 #48), 명시 `"en"` =
-/// OCR 언어를 `[]`(Vision 기본, 영어)로 **강제**. `input_box_mode`(실제 `<input>`
-/// 사용)는 **명시적 비영어 값(`"ko"`/`"zh"`/`"ja"`/`"es"`)에서만** 켜진다.
+/// `"en"`. ⚠️ **부재 ≠ 빈 문자열과 혼동하지 않는다**: 부재 = **영어 고정**
+/// (`Locale::En` → 빈 목록 = Vision 기본, 이슈 #131 — 이슈 #48 의 로케일 폴백은
+/// 2026-09-05 폐기), 명시 `"en"` = OCR 언어를 `[]`(Vision 기본, 영어)로 **강제**.
+/// `input_box_mode`(실제 `<input>` 사용)는 **명시적 비영어 값(`"ko"`/`"zh"`/`"ja"`/`"es"`)에서만** 켜진다.
 /// (`docs/plan/issue-93-seek-multilingual-ime.md` D1·D6, §9 #1~#2)
 pub const SEEK_SEARCH_LANGUAGE: &str = "seek.searchLanguage";
 

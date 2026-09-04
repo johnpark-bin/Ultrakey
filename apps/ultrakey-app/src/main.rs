@@ -1298,9 +1298,9 @@ struct SeekView {
     /// 저장 키 `seek.changeClickModesWithModifiers`. 출고 기본값 ☑.
     change_click_modes_with_modifiers: bool,
     /// ⭐(이슈 #93) `검색 언어` — 명시 값(`"ko"`·`"zh"`·`"ja"`·`"es"`·`"en"`).
-    /// **부재(`None`) = 로케일 폴백** — OCR 언어는 `general.language` 에서 계산하고
-    /// 인풋 박스 모드는 꺼진다. UI 는 부재 시 `effective_search_language`(로케일
-    /// 파생) 값을 선택된 것으로 보여준다(Plan §9 #2).
+    /// **부재(`None`) = 영어 고정**(이슈 #131 — 이슈 #48 의 로케일 폴백은 폐기):
+    /// OCR 은 영어 단일이고 인풋 박스 모드는 꺼진다. UI 는 부재 시 영어
+    /// 기본(`"en"`)이 선택된 것으로 보여준다(Plan §9 #2).
     search_language: Option<String>,
     /// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 인가(읽기 전용
     /// 표시용).
@@ -4216,7 +4216,8 @@ fn apply_seek_setting(
         k if k == keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS => {
             seek.change_click_modes_with_modifiers = parse(value, key)?
         }
-        // ⭐(이슈 #93) `검색 언어` — `null`/빈 문자열은 부재(= 로케일 폴백)로 되돌림.
+        // ⭐(이슈 #93) `검색 언어` — `null`/빈 문자열은 부재(= 영어 기본)로 되돌림
+        // (이슈 #131 — 이슈 #48 의 로케일 폴백은 폐기).
         // 허용 값은 `"ko"`·`"zh"`·`"ja"`·`"es"`·`"en"` 뿐 — 그 외 값은 거부하고
         // `input_box_mode` 를 좌우하는 값이므로 조용히 넘어가지 않게 한다.
         k if k == keys::SEEK_SEARCH_LANGUAGE => {
@@ -4229,7 +4230,7 @@ fn apply_seek_setting(
                         "알 수 없는 검색 언어 값: {lang:?} — \"ko\"·\"zh\"·\"ja\"·\"es\"·\"en\" 만 허용한다"
                     ));
                 }
-                // 빈 문자열은 부재와 같은 취급(로케일 폴백).
+                // 빈 문자열은 부재와 같은 취급(영어 기본).
                 seek.search_language = if lang.is_empty() { None } else { Some(lang) };
             }
         }
@@ -5417,8 +5418,8 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             // ⭐(이슈 #93) — `seek.searchLanguage`(검색 언어)가 **명시**돼 있으면
             // 그 값이 OCR 언어의 정본이다: 비영어(`"ko"` 등) → `["<lang>-<region>",
             // "en-US"]`(첫 원소가 인식 언어를 가름, 스파이크 §3), 명시 `"en"` →
-            // `[]`(영어 강제). **부재(키 없음)일 때만** 이슈 #48 의 로케일 폴백
-            // (`catalog.locale()`)을 따른다 (Plan D1·D6, §9 #1~#2).
+            // `[]`(영어 강제). **부재(키 없음) = 영어 고정** (이슈 #131 — 이슈
+            // #48 의 로케일 폴백 `catalog.locale()` 은 폐기, Plan D1·D6 §9 #1~#2).
             let state_for_ocr = state.clone();
             let ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(move || {
                 let explicit = state_for_ocr
@@ -5426,12 +5427,13 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                     .lock()
                     .ok()
                     .and_then(|store| store.get::<String>(keys::SEEK_SEARCH_LANGUAGE));
-                let locale = match explicit.as_deref().and_then(Locale::from_search_language) {
-                    // 명시 값이 없다 → 로케일 폴백(이슈 #48 의 기존 동작).
-                    None => state_for_ocr.catalog.load_full().locale(),
-                    // 명시 값이 있다 → 그 언어로 고정(`"en"` 은 `[]` 을 준다).
-                    Some(locale) => locale,
-                };
+                let locale = explicit
+                    .as_deref()
+                    .and_then(Locale::from_search_language)
+                    // 부재(또는 비정규 값) → 영어 고정 (이슈 #131; 이슈 #48 의
+                    // 로케일 폴백은 폐기). 명시 `"en"` 도 `Locale::En` 이라
+                    // 부재와 같은 경로를 탄다.
+                    .unwrap_or(Locale::En);
                 locale
                     .ocr_recognition_languages()
                     .iter()
@@ -7807,7 +7809,7 @@ mod tests {
         assert_eq!(seek.search_language.as_deref(), Some("en"));
         assert!(!seek.to_config(false).input_box_mode, "en = 영어 강제(인풋 아님)");
 
-        // null → 부재(로케일 폴백)로 되돌린다.
+        // null → 부재(영어 기본)로 되돌린다.
         apply_seek_setting(&mut seek, keys::SEEK_SEARCH_LANGUAGE, &serde_json::Value::Null)
             .unwrap();
         assert_eq!(seek.search_language, None);

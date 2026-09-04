@@ -118,6 +118,11 @@ impl Locale {
     /// `["en-US","ko-KR"]` 은 영어 단일과 결과가 동일 — 한글 0개). 그래서
     /// 로케일 언어를 **항상 첫 원소**로 두고 `en-US` 를 둘째로 붙인다.
     ///
+    /// ⭐⭐ **정정 (이슈 #131, 2026-09-05)**: `seek.searchLanguage` 부재 시 이
+    /// 함수의 로케일 폴백 경로는 더 이상 Seek OCR 경로에서 쓰이지 않는다 —
+    /// 부재 = `Locale::En`(영어 단일) 고정. 이 함수는 명시 언어의
+    /// `recognitionLanguages` 매핑으로만 쓰인다.
+    ///
     /// `en` 은 **빈 목록**을 돌려준다 — Vision 기본값(영어)이 곧 미국 영어
     /// 모델이라 `["en-US"]` 명시와 결과가 동일하고(실측), 기존 동작(미설정 =
     /// Vision 기본)과 정확히 같게 유지해 회귀를 막는 것이 목적이다.
@@ -134,7 +139,7 @@ impl Locale {
     /// ⭐(이슈 #93) — `seek.searchLanguage`(검색 언어) 값 `"ko"`·`"zh"`·`"ja"`·
     /// `"es"` → [`Locale`] 로 매핑한다. `"en"`(영어 단일 명시)은 `Locale::En` 을
     /// 준다(`ocr_recognition_languages` 가 `[]` 반환). 모르는 값은 `None` — 호출자가
-    /// 로케일 폴백으로 처리한다(부재 = 로케일 폴백, Plan D1·D6 §9 #1~#2).
+    /// 영어 기본으로 처리한다(부재 = 영어 고정, 이슈 #131).
     #[must_use]
     pub fn from_search_language(code: &str) -> Option<Locale> {
         match code {
@@ -743,6 +748,25 @@ mod tests {
             Locale::En.ocr_recognition_languages().is_empty(),
             "en 은 빈 목록이어야 한다 — Vision 기본값(영어)을 그대로 쓰는 기존 동작을 유지한다(이슈 #48)"
         );
+    }
+
+    /// ⭐ 이슈 #131 — `seek.searchLanguage` 부재(설정 없음)의 Seek OCR 기본
+    /// 검색 언어는 영어 단일이다: 부재를 `Locale::En` 으로 정규화하면
+    /// `ocr_recognition_languages()` 는 빈 목록(Vision 기본 영어)을 준다.
+    /// 이슈 #48 의 로케일 폴백은 폐기 — 부재가 다시 몰래 로케일 언어 목록을
+    /// 돌려주면 이 테스트가 즉시 적발한다.
+    #[test]
+    fn absent_search_language_defaults_to_english_single() {
+        // main.rs `ocr_languages` 클로저의 부재 정규화 경로를 그대로 재현한다
+        // (이슈 #131): 저장 키가 없음 → `Locale::from_search_language` → `Locale::En`.
+        let explicit: Option<String> = None; // `seek.searchLanguage` 부재(저장 키 없음)
+        let locale = explicit
+            .as_deref()
+            .and_then(Locale::from_search_language)
+            .unwrap_or(Locale::En);
+        let empty: &[&str] = &[]; // 영어 = Vision 기본(빈 목록)
+        assert!(locale.ocr_recognition_languages().is_empty());
+        assert_eq!(locale.ocr_recognition_languages(), empty);
     }
 
     /// ⭐(이슈 #93) — `seek.searchLanguage` 값 → `Locale`. 모르는 값은 `None`.

@@ -36,7 +36,8 @@ pub struct GateSnapshot {
     /// 계층 1(Seek 세션 활성, F-01/M3).
     pub seek_active: bool,
     /// ⭐(이슈 #93) — 세션이 **인풋 박스 모드**(검색 언어가 명시적 비영어)인가.
-    /// 세션 열림 시점에 래칭된다(`false` = 영어 단일 또는 로케일 폴백).
+    /// 세션 열림 시점에 래칭된다(`false` = 영어 단일(부재·`"en"` 명시 모두 — 이슈
+    /// #131, 이슈 #48 의 로케일 폴백은 폐기)).
     /// 켜져 있으면 계층 1 이 [`is_input_box_pass_key`](crate::seek_input_box::
     /// is_input_box_pass_key) 를 만족하는 키를 원본 그대로 통과시켜 웹뷰
     /// `<input>` 이 macOS IME 로 조합하게 한다(Plan §3 D4).
