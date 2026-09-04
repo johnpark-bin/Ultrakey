@@ -164,7 +164,7 @@ mod tests {
         assert!(!config.quick_press_opens);
         assert!(config.global_shortcut.is_none());
         assert!(!config.any_activation_configured());
-        // ⭐(이슈 #93) — 검색 언어 부재 = 로케일 폴백이라 기본은 인풋 박스가 아니다.
+        // ⭐(이슈 #93) — 검색 언어 부재 = 영어 고정이라 기본은 인풋 박스가 아니다.
         assert!(!config.input_box_mode);
     }
 
