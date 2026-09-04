@@ -311,6 +311,17 @@ impl SeekController {
                     let origin = overlay.search_bar_origin();
                     let _ = self.renderer.sync_surfaces(&displays);
                     let _ = self.renderer.set_search_bar_origin(origin.0, origin.1);
+                    // ⭐(이슈 #132) — `show()` **직전에** 신규 빈 세션을 먼저
+                    // present 해 캔버스를 비운다. `machine.overlay()` 는 이 시점
+                    // 이미 신규 빈 세션(후보 0개)이므로 이 `repaint()` 가 내는
+                    // 프레임은 빈 프레임이다 — 상주하는 하이라이트 창이 이전 세션
+                    // 그림을 그린 채 `show()` 로 올라가고 검출 결과(주 디스플레이
+                    // ≈335 ms) 도착 전까지 그 stale 그림이 보이는 재진입 플래시를
+                    // 막는다(이슈 #132 코멘트 5543480993 설계 3방향 ②). `hide()`
+                    // 쪽 빈 프레임 emit(overlay.rs)과 이 present 는 같은 효과의
+                    // 양쪽 경로라 어느 쪽이 먼저든 캔버스가 비어 있는 상태로
+                    // 세션이 시작된다.
+                    self.repaint();
                     let _ = self.renderer.show();
 
                     // ⭐(이슈 #93) — 다국어 세션 한정 포커스 핸드오프: 검색 바를

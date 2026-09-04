@@ -29,12 +29,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use tauri::{Emitter, EventTarget, Manager};
+use tauri::{Emitter, EventTarget, Manager, Runtime};
 
 use ultrakey_core::settings::{keys, SettingsStore};
 use ultrakey_overlay::geometry::OverlayDisplay;
 use ultrakey_overlay::model::{OverlayFrame, SearchBarFrame};
-use ultrakey_overlay::palette::Appearance;
+use ultrakey_overlay::palette::{Appearance, Palette};
 use ultrakey_overlay::renderer::{OverlayRenderer, RenderError};
 use ultrakey_overlay::session::{OverlaySession, SEARCH_BAR_HEIGHT_PT, SEARCH_BAR_WIDTH_PT};
 use ultrakey_platform::overlay_window::{NsWindowHandle, OverlayWindowKind, Sharing};
@@ -70,8 +70,13 @@ pub struct SurfaceState {
 /// 모듈" 의 **현재 구현**. 실측(R-1)이 이것으로 충분하다고 판정했다. 예산을
 /// 넘기는 환경이 나오면 같은 [`OverlayRenderer`] 트레이트에 `CALayer` 구현이
 /// 들어오고 이 타입은 그대로 남는다.
-pub struct WebviewOverlayRenderer {
-    app: tauri::AppHandle,
+///
+/// ⭐ 런타임에 제네릭이다(`R: Runtime`, 기본 `Wry`) — 이슈 #132 수명주기
+/// 회귀 테스트가 `tauri::test::mock_app()`(MockRuntime) 으로 [`Self::hide`]
+/// 를 실제 호출해 `last_frames` 초기화 계약을 고정한다. 프로덕션은
+/// 기본 파라미터 `Wry` 로 그대로 컴파일된다.
+pub struct WebviewOverlayRenderer<R: Runtime = tauri::Wry> {
+    app: tauri::AppHandle<R>,
     shared: Arc<Mutex<SurfaceState>>,
     /// 현재 살아 있는 하이라이트 창: `display_id` → 라벨.
     surfaces: HashMap<u32, String>,
@@ -96,9 +101,9 @@ pub struct WebviewOverlayRenderer {
     on_resign_key: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
-impl WebviewOverlayRenderer {
+impl<R: Runtime> WebviewOverlayRenderer<R> {
     /// 렌더러를 만든다. 창은 아직 만들지 않는다(§3.1 미생성 상태).
-    pub fn new(app: tauri::AppHandle, shared: Arc<Mutex<SurfaceState>>) -> Self {
+    pub fn new(app: tauri::AppHandle<R>, shared: Arc<Mutex<SurfaceState>>) -> Self {
         Self {
             app,
             shared,
@@ -326,7 +331,30 @@ impl WebviewOverlayRenderer {
     }
 }
 
-impl OverlayRenderer for WebviewOverlayRenderer {
+/// ⭐(이슈 #132) — 하이라이트 창 하나의 **빈 클리어 프레임**을 만든다(순수).
+///
+/// `hide()` 가 세션 종료 시 이 프레임을 emit 해 캔버스를 비운다. 팔레트는
+/// 직전 프레임에서 상속해 같은 색 체계로 비운다(빈 프레임은 하이라이트 0개라
+/// 색이 드러날 일은 없다). 직전 프레임이 없으면 `Dark` 폴백(아무 의미 없는
+/// 값). 순수 경계로 분리된 이유는 이슈 #132 판정 조건 5 — "닫힘 → 클리어"
+/// 계약(하이라이트 창마다 빈 프레임 + 팔레트 상속)을 단위 테스트로 고정하기
+/// 위해서다(회귀 테스트는 이 함수와 [`WebviewOverlayRenderer::hide`] 를
+/// 각각 고정한다).
+#[must_use]
+fn clear_frame_for(display_id: u32, previous: Option<&OverlayFrame>) -> OverlayFrame {
+    OverlayFrame {
+        display_id,
+        highlights: Vec::new(),
+        line: None,
+        palette: previous
+            .map(|f| f.palette.clone())
+            .unwrap_or_else(|| Palette::for_appearance(Appearance::Dark)),
+        animate: false,
+        omitted: 0,
+    }
+}
+
+impl<R: Runtime> OverlayRenderer for WebviewOverlayRenderer<R> {
     fn sync_surfaces(&mut self, displays: &[OverlayDisplay]) -> Result<(), RenderError> {
         // 검색 바는 세션과 무관하게 한 번만 만든다(§3.1 — 재생성 비용을 피해
         // 상주시킨다).
@@ -469,9 +497,47 @@ impl OverlayRenderer for WebviewOverlayRenderer {
     }
 
     fn hide(&mut self) -> Result<(), RenderError> {
-        for label in self.surfaces.values().cloned().chain(std::iter::once(SEARCH_BAR_LABEL.to_string())) {
+        // ⭐(이슈 #132) — 세션 종료 시 **하이라이트 창의 캔버스도 비운다.**
+        // 이전에는 `order_out`(창 내리기) + 검색 바 클리어만 보냈고 하이라이트
+        // 프레임은 그려진 채 남아 있었다. 창은 파괴되지 않고 상주하므로(§3.1),
+        // 다음 세션이 `show()` 로 올라갈 때 이전 세션 하이라이트가 **먼저**
+        // 보였다가 새 프레임이 덮으면서 재진입 플래시가 생긴다(이슈 #132).
+        // 아래 순서는 이슈 #132 코멘트 5543480993 의 설계 3방향을 그대로 옮긴
+        // 것이며, 판정 조건 1·2·3 의 코드다:
+        // ① `order_out` dispatch(기존) → ② 빈 프레임 emit → ③ `last_frames.clear()`
+        // + 검색 바 클리어(기존 유지).
+        for label in self
+            .surfaces
+            .values()
+            .cloned()
+            .chain(std::iter::once(SEARCH_BAR_LABEL.to_string()))
+        {
             self.order(label, false);
         }
+
+        // ⭐(이슈 #132) ② — 하이라이트 창마다 **빈 프레임**(`highlights=[]`,
+        // `line=None`)을 emit 해 캔버스를 비운다. `emit_frame` 은 `&self` 를
+        // 받으므로 `&mut self` 인 여기서 surfaces 순회 중 그대로 호출할 수 있다.
+        // 준비된 창은 이 프레임을 받는 즉시 빈 화면이 되고, 미준비 창은
+        // `last_frames` 에 빈 프레임이 남았다가 아래 ③ 의 `clear()` 로 제거된다
+        // (의도된 동작 — 모듈 문서의 replay 경로를 타지 않는다).
+        for (display_id, label) in &self.surfaces {
+            // ⚠️ lock 블록을 스코프로 끝낸 뒤 emit 한다 — `emit_frame` 이 내부에서
+            // 같은 `self.shared` 를 다시 lock 하므로 중첩 lock(데드락)을 피한다.
+            // `previous` 복제(팔레트 상속원)도 같은 스코프에서 끝낸다.
+            let previous = {
+                let shared = self.shared.lock().unwrap();
+                shared.last_frames.get(label).cloned()
+            };
+            self.emit_frame(label, &clear_frame_for(*display_id, previous.as_ref()));
+        }
+
+        // ⭐(이슈 #132) ③ — 어떤 경로로든 이전 세션의 stale 프레임이
+        // `overlay_surface_ready` 를 통해 재전송될 수 없게 한다. 위 빈 프레임
+        // emit 의 미준비 창 몫도 여기서 함께 제거된다(의도된 동작).
+        // ⚠️ `last_bar` 는 건드리지 않는다 — 검색 바는 매 세션 `present` 가 덮는다.
+        self.shared.lock().unwrap().last_frames.clear();
+
         // ⭐(이슈 #93) — 인풋 박스(다국어) 세션의 `<input>` 값을 다음 세션에
         // 남기지 않는다. 검색 바 창은 세션 사이 상주하므로, 닫힘마다 웹뷰에
         // 클리어 이벤트를 보내 입력·값·span 상태를 초기화한다(영어 세션에서는
@@ -745,5 +811,127 @@ impl OverlayController {
         if let Err(e) = self.renderer.present(&frames, &bar) {
             tracing::warn!(error = ?e, "overlay render failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ultrakey_overlay::model::Segment;
+    use ultrakey_seek::{Rect, TextCandidate};
+
+    fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
+        OverlayDisplay {
+            display_id: id,
+            frame: Rect { x, y, width: w, height: h },
+            backing_scale: 2.0,
+        }
+    }
+
+    // ⭐(이슈 #132 판정 조건 5 — 닫힘→클리어·last_frames 초기화) — 아래 두
+    // 테스트의 실패 버전을 적어 둔다. 결함이 존재하면 어느 테스트가 붉게
+    // 터지는가:
+    // - `hide()` 가 빈 프레임을 만들지 않거나 팔레트 상속을 빠뜨리면
+    //   `clear_frame_for_produces_empty_frame_and_inherits_palette` 가 터진다.
+    // - `hide()` 가 `last_frames` 를 비우지 않으면(이슈 #132 원인 1)
+    //   `hide_clears_last_frames_so_stale_frames_cannot_replay` 가 터진다.
+
+    /// "닫힘 → 클리어" — [`clear_frame_for`] 가 만드는 클리어 프레임은
+    /// 하이라이트 0개·연결선 없음·애니메이션 꺼짐이고, **팔레트는 직전
+    /// 프레임에서 상속**한다(§3.1 숨김 행, 이슈 #132 설계 ①). 직전 프레임이
+    /// 없으면 `Dark` 폴백 — 빈 프레임은 색을 소비하지 않으므로 아무 의미
+    /// 없는 값이다.
+    #[test]
+    fn clear_frame_for_produces_empty_frame_and_inherits_palette() {
+        let light = Palette::for_appearance(Appearance::Light);
+        assert_ne!(light, Palette::for_appearance(Appearance::Dark));
+
+        let previous = OverlayFrame {
+            display_id: 1,
+            highlights: Vec::new(),
+            line: Some(Segment { x1: 0.0, y1: 0.0, x2: 10.0, y2: 10.0 }),
+            palette: light.clone(),
+            animate: true,
+            omitted: 3,
+        };
+        let cleared = clear_frame_for(1, Some(&previous));
+        assert_eq!(cleared.display_id, 1);
+        assert!(cleared.highlights.is_empty());
+        assert_eq!(cleared.line, None);
+        assert_eq!(cleared.palette, light, "빈 프레임의 palette 는 직전 프레임에서 상속된다");
+        assert!(!cleared.animate);
+        assert_eq!(cleared.omitted, 0);
+
+        let fallback = clear_frame_for(2, None);
+        assert!(fallback.highlights.is_empty());
+        assert_eq!(fallback.palette, Palette::for_appearance(Appearance::Dark));
+    }
+
+    /// "last_frames 초기화" — **실제 `WebviewOverlayRenderer::hide()`** 를
+    /// `tauri::test::mock_app()`(MockRuntime) 으로 호출해, 닫힘 후
+    /// `SurfaceState.last_frames` 가 비어 있음을 검증한다. 이 테스트는
+    /// round-trip 복붙이 아니라 **결함을 잡는** 형태다 — 결함(클리어 없음)이
+    /// 존재하면 이전 세션의 실재 프레임이 그대로 남아
+    /// `overlay_surface_ready` 재전송에 실리고, 아래 assert 가 붉게 터진다.
+    ///
+    /// ⚠️ **왜 `sync_surfaces` 를 부르지 않는가** — mock app 은 `run()` 되지
+    /// 않으므로 `run_on_main_thread` 가 큐잉이 아니라 **동기 실행**된다
+    /// (tauri 2.11.5 `mock_runtime.rs` `send_message` — `is_running == false`
+    /// 면 `Message::Task` 를 즉시 실행). 그러면 `sync_surfaces → spawn_window`
+    /// 가 테스트 스레드에서 진짜 창 생성까지 진행하고, 그 뒤
+    /// `window.ns_window()` 가 mock 의 쓰레기 `ns_view` 포인터
+    /// (`RawWindowHandle::AppKit` — `NonNull::from(&())`)를 실물 `NSView` 로
+    /// 역참조해 **SIGSEGV** 로 죽는다. 그래서 `surfaces` 는 private 필드를
+    /// 직접 채운다(같은 크레이트 테스트 모듈) — 창 생성은 이 테스트의 계약이
+    /// 아니고, `hide()` 본체(order → 빈 프레임 emit → `last_frames.clear()`)는
+    /// 전부 실제로 실행된다. 창이 없으면 `order` 의 `get_webview_window` 는
+    /// `None`(warn+조기 반환)이라 `ns_window` 경로에 닿지 않는다.
+    #[test]
+    fn hide_clears_last_frames_so_stale_frames_cannot_replay() {
+        use tauri::test::mock_app;
+
+        let app = mock_app();
+        let shared = Arc::new(Mutex::new(SurfaceState::default()));
+        let mut renderer = WebviewOverlayRenderer::new(app.handle().clone(), shared.clone());
+        // `sync_surfaces` 대신 surfaces 를 직접 채운다(위 문서 주석).
+        renderer.surfaces.insert(1, highlight_label(1));
+
+        // 이전 세션 — 후보 1개를 넣어 **실재 프레임**(하이라이트 있음)을
+        // present 한다.
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0)];
+        let mut session = OverlaySession::open(displays, Appearance::Light, false);
+        session.set_query("Save");
+        session.ingest_display(
+            1,
+            vec![TextCandidate::ocr(
+                "Save".into(),
+                Rect { x: 10.0, y: 10.0, width: 40.0, height: 20.0 },
+                0.9,
+                1,
+            )],
+        );
+        let frames = session.frames();
+        let bar = session.search_bar_frame();
+        assert!(frames.iter().any(|f| !f.highlights.is_empty()));
+        renderer.present(&frames, &bar).unwrap();
+
+        // present 가 last_frames 에 실재 프레임을 기록했다(미준비 창 = 보관만).
+        let stored = shared.lock().unwrap();
+        assert!(stored.last_frames.values().any(|f| !f.highlights.is_empty()));
+        drop(stored);
+
+        // ⭐ 창이 준비된 경로(즉시 emit → emit_to)도 panic 없이 지나가는지
+        // 함께 확인한다 — 창이 없어 emit_to 는 리스너 없이 조용히 Ok 다.
+        shared.lock().unwrap().ready.insert(highlight_label(1));
+
+        renderer.hide().unwrap();
+
+        // ⭐ 결함(클리어 없음)이 존재하면 여기서 실패한다 — 이 테스트가
+        // 이슈 #132 의 "어떤 경로로든 이전 세션 real 프레임이 준비 신고
+        // (ready)에 재전송될 수 없다"를 직접 고정한다.
+        assert!(
+            shared.lock().unwrap().last_frames.is_empty(),
+            "hide() 후 last_frames 가 비어 있어야 한다 — stale 프레임이 overlay_surface_ready 재전송에 실릴 수 있다(이슈 #132)"
+        );
     }
 }

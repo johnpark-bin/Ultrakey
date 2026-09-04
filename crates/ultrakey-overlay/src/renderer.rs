@@ -75,6 +75,31 @@ pub struct NullRenderer {
     pub last_bar_origin: Option<(f64, f64)>,
     /// 현재 표시 중인가.
     pub visible: bool,
+    /// ⭐(이슈 #132) 렌더러 수명주기 이벤트 기록 — `present`/`show`/`hide` 가
+    /// 호출된 **순서**를 남긴다. "표시 전에 빈 프레임 present 가 선행한다"는
+    /// 열림 계약이 이 로그로 회귀 테스트된다(아래 `tests` — 현행
+    /// `session_to_renderer_round_trip` 이 기록값을 assert 하지 않으므로
+    /// 필드 추가만으로는 기존 테스트를 깨지 않는다).
+    pub lifecycle: Vec<LifecycleEvent>,
+}
+
+/// ⭐(이슈 #132) [`NullRenderer`] 가 남기는 수명주기 이벤트.
+///
+/// 발화 순서(`present` → `show` → … → `hide`)가 그대로 로그가 된다. 테스트는
+/// `Present` 의 프레임이 전부 빈 프레임인지(`highlights` 0 · `line` None)와
+/// 어느 이벤트가 어느 이벤트보다 앞섰는지를 이 로그로 검사한다.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LifecycleEvent {
+    /// `present` 에 전달된 프레임 목록.
+    Present {
+        /// 프레임 목록 — 테스트가 빈 프레임 여부(`highlights` 0 · `line` None)를
+        /// 검사한다.
+        frames: Vec<OverlayFrame>,
+    },
+    /// `show`.
+    Show,
+    /// `hide`.
+    Hide,
 }
 
 impl OverlayRenderer for NullRenderer {
@@ -90,6 +115,8 @@ impl OverlayRenderer for NullRenderer {
     ) -> Result<(), RenderError> {
         self.last_frames = frames.to_vec();
         self.last_bar = Some(bar.clone());
+        self.lifecycle
+            .push(LifecycleEvent::Present { frames: frames.to_vec() });
         Ok(())
     }
 
@@ -100,11 +127,13 @@ impl OverlayRenderer for NullRenderer {
 
     fn show(&mut self) -> Result<(), RenderError> {
         self.visible = true;
+        self.lifecycle.push(LifecycleEvent::Show);
         Ok(())
     }
 
     fn hide(&mut self) -> Result<(), RenderError> {
         self.visible = false;
+        self.lifecycle.push(LifecycleEvent::Hide);
         Ok(())
     }
 }
@@ -114,7 +143,7 @@ mod tests {
     use super::*;
     use crate::palette::Appearance;
     use crate::session::OverlaySession;
-    use ultrakey_seek::Rect;
+    use ultrakey_seek::{Rect, TextCandidate};
 
     fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
@@ -155,5 +184,94 @@ mod tests {
 
         renderer.hide().unwrap();
         assert!(!renderer.visible);
+    }
+
+    // ⭐(이슈 #132) — 렌더러 수명주기 계약 회귀 테스트.
+    //
+    // 현행 `session_to_renderer_round_trip` 은 메서드를 "올바른 순서로" 직접
+    // 호출하므로, 호출 **순서**가 틀어져도 잡지 못한다. 아래 두 테스트는
+    // `NullRenderer::lifecycle` 기록을 assert 해 그 빈칸을 메운다.
+    //
+    // ⚠️ 이 테스트는 "호출자가 어떤 순서로 렌더러를 드라이브해야 하는가"를
+    // **실행 가능한 계약으로 고정**한다 — 시퀀스 자체는 이 모듈이 소유하지
+    // 않으므로(실제 호출자는 `apps/ultrakey-app/src/seek.rs` 의 Opened
+    // 브랜치), 호출자 쪽 회귀는 이 테스트로는 못 잡는다(그쪽은 실기기 +
+    // `ULTRAKEY_SEEK_TRACE` 로그가 판정한다). 이 테스트가 고정하는 것은
+    // 렌더러 계층의 계약이다: "신규 세션(빈 프레임) present 가 show 보다
+    // 앞서야 하고, hide 다음 show 사이에는 빈 present 가 있어야 한다."
+
+    /// 신규 세션 열림 — `OverlaySession::open` 의 프레임은 전부 빈 프레임이고,
+    /// 그 present 가 `show` 보다 **앞서** 온다(§3.1 표시 행, 이슈 #132).
+    #[test]
+    fn session_open_presents_empty_frames_before_show() {
+        let displays = vec![
+            display(1, 0.0, 0.0, 1000.0, 1000.0),
+            display(2, 1000.0, 0.0, 1000.0, 1000.0),
+        ];
+        let session = OverlaySession::open(displays.clone(), Appearance::Light, false);
+        assert!(session.frames().iter().all(|f| f.highlights.is_empty()));
+
+        let mut renderer = NullRenderer::default();
+        renderer.sync_surfaces(&displays).unwrap();
+        // ⭐ 계약 — 표시 **전에** 빈 세션을 present 한다(이슈 #132 설계 ②).
+        let frames = session.frames();
+        let bar = session.search_bar_frame();
+        renderer.present(&frames, &bar).unwrap();
+        renderer.show().unwrap();
+
+        assert_eq!(
+            renderer.lifecycle,
+            vec![
+                LifecycleEvent::Present { frames },
+                LifecycleEvent::Show,
+            ],
+            "신규 세션의 빈 프레임 present 가 show 보다 앞서야 한다"
+        );
+    }
+
+    /// 이전 세션(그려진 프레임) → hide → 신규 세션 — 그 사이 **빈** present 가
+    /// 선행해야 한다(§3.1 숨김+표시 행, 이슈 #132). 이 테스트는 "숨김 후
+    /// 다시 표시되기 직전 프레임은 반드시 빈 프레임"이라는 계약을 고정한다 —
+    /// stale 그림을 그대로 올리는 `show` 는 이 assert 를 통과할 수 없다.
+    #[test]
+    fn reopen_after_hide_requires_empty_present_before_show() {
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0)];
+
+        // 이전 세션 — 후보 1개를 넣어 **그려진** 프레임을 만든다.
+        let mut previous = OverlaySession::open(displays.clone(), Appearance::Light, false);
+        previous.set_query("Save");
+        previous.ingest_display(
+            1,
+            vec![TextCandidate::ocr(
+                "Save".into(),
+                Rect { x: 10.0, y: 10.0, width: 40.0, height: 20.0 },
+                0.9,
+                1,
+            )],
+        );
+        let drawn = previous.frames();
+        assert!(drawn.iter().any(|f| !f.highlights.is_empty()));
+
+        let mut renderer = NullRenderer::default();
+        renderer.sync_surfaces(&displays).unwrap();
+        let bar = previous.search_bar_frame();
+        renderer.present(&drawn, &bar).unwrap();
+        renderer.hide().unwrap();
+
+        // 신규 세션 — 후보 0(빈 프레임)으로 연다(S-6).
+        let fresh = OverlaySession::open(displays.clone(), Appearance::Light, false);
+        let empty = fresh.frames();
+        assert!(empty.iter().all(|f| f.highlights.is_empty() && f.line.is_none()));
+        renderer.present(&empty, &bar).unwrap();
+        renderer.show().unwrap();
+
+        // ⭐ hide 와 다음 show 사이의 present 는 반드시 빈 프레임이다.
+        let hide_idx = renderer.lifecycle.iter().position(|e| *e == LifecycleEvent::Hide).unwrap();
+        let mut after_hide = renderer.lifecycle[hide_idx + 1..].iter();
+        let Some(LifecycleEvent::Present { frames }) = after_hide.next() else {
+            panic!("hide 직후에는 빈 프레임 present 가 와야 한다 — stale 그림을 그대로 show 하면 재진입 플래시가 난다(이슈 #132)");
+        };
+        assert!(frames.iter().all(|f| f.highlights.is_empty() && f.line.is_none()));
+        assert_eq!(after_hide.next(), Some(&LifecycleEvent::Show));
     }
 }
