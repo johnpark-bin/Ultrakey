@@ -299,6 +299,15 @@ function clearQueryInput() {
   queryInput.value = "";
   lastSentQuery = null;
   clearTimeout(inputDebounceTimer);
+  // ⭐(이슈 #132) 영어(span) 경로 검색어 — 세션 닫힘 후에도 이 span 에 이전
+  // 검색어가 남아 다음 세션 첫 프레임까지 보였다(재진입 플래시). 치운다.
+  queryText.textContent = "";
+  // ⭐(이슈 #132) 빈 상태로 되돌렸으므로 "Seek" 플레이스홀더를 복원한다 —
+  // render() 가 `query.length > 0` 일 때 숨겼던 것이다.
+  placeholder.hidden = false;
+  // ⭐(이슈 #132) 이전 세션의 카운터("k / n"·"찾는 중…"·"없음")도 세션 사이
+  // 상주 창에 남는다 — 함께 지운다.
+  counter.textContent = "";
 }
 
 // 검색 바 창이 실제로 포커스를 받았을 때(WKWebView 가 키 윈도우 승격을 반영)

@@ -62,7 +62,10 @@ crossbeam-channel = { workspace = true }
 # 이 기능 없이는 만들어지지 않는다(`WebviewWindowBuilder::transparent` 자체가
 # 컴파일되지 않는다). App Store 배포와 배타적이지만 이 제품은 애초에 비샌드박스
 # 직접 배포다(`code-signing.md`, `platform-constraints.md` §3) — 잃는 것이 없다.
-tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-private-api"] }
+# ⭐ `test` — 이슈 #132 렌더러 수명주기 회귀 테스트용. `tauri::test::mock_app()`
+# (MockRuntime) 로 `WebviewOverlayRenderer::hide()` 를 실제 호출해 결함(초기화
+# 없음)을 잡는다. 빈 feature — 프로덕션 빌드에 아무 영향이 없다.
+tauri = { workspace = true, features = ["tray-icon", "image-png", "macos-private-api", "test"] }
 tauri-plugin-opener = { workspace = true }
 # ⭐ F-01 활성화 경로 1 — `Toggle Seek with shortcut:`. 명세 §6·§7 이 지목했고,
 # `rdev` 는 명시적으로 기각됐다(3년간 릴리스 없음 · 이벤트 소비 제어 제한).
