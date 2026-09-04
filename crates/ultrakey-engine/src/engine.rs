@@ -16,7 +16,8 @@ use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 use ultrakey_core::arbitration::{
-    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, GateSnapshot, Outcome, SynthEvent,
+    resolve_caps_lock_alias_for_trace, Arbiter, Disposition, Effect, GateSnapshot, Layer, Outcome,
+    SynthEvent,
 };
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::gate::{AppGate, AtomicAppGate};
@@ -408,6 +409,41 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
     }
 }
 
+/// ⭐ 이슈 #129 — 인풋 박스 세션 중 D2(F-16.1 세션 재평가, `evaluate_korean_rules`)가
+/// 낸 합성 `⌃Space` 는 콜백 **안**(`post_to_tap`)이 아니라 커맨드 큐를 거쳐 콜백
+/// **밖**(`post()`, `apply_outcome_outside_tap` 과 같은 경로)에서 낸다 —
+/// `docs/plan/issue-129-seek-webview-inputsource.md` §7.4 순위 1(②-c1) 확정.
+///
+/// ⭐ 판정 로직은 한 줄도 건드리지 않는다 — `evaluate_korean_rules`(#125·#127 가드·
+/// 래치)는 무변경이고, 이 함수는 그 결과(`Outcome`)의 **전송**만 바꾼다.
+///
+/// ⭐ 이 분기가 D2 발화만 정확히 가려내는 이유: `Layer::KoreanInput` 은 두 상호
+/// 배타적인 자리에서만 나온다 — ① 세션 밖 계층 3(`arbitration.rs` "계층 3 안의 F-16
+/// 한국어 입력 규칙", `gates.seek_active == false` 일 때만 도달) ② 인풋 박스 세션 중
+/// D2 재평가(`gates.seek_active && gates.seek_input_box` 일 때만 도달). 따라서
+/// `gates.seek_active && gates.seek_input_box` 조건이 ①을 배제하고 ②만 남긴다 —
+/// 세션 밖 F-16.1·F-16.2, 기본 Seek, 다른 모든 계층(Preset·SimpleRemap 등)은 종전과
+/// 똑같이 `apply_outcome_in_tap` 을 탄다(한 바이트도 안 바뀐다).
+fn emit_outcome(outcome: &Outcome, gates: GateSnapshot, proxy: TapProxy, commands: &CommandChannel) {
+    if should_defer_synth_to_command_queue(gates, outcome.layer()) {
+        for ev in outcome.emitted() {
+            commands.send(EngineCommand::PostSynthEvent(*ev));
+        }
+    } else {
+        apply_outcome_in_tap(outcome, proxy);
+    }
+}
+
+/// [`emit_outcome`] 의 게이트 판정만 뽑아낸 순수 함수 — `TapProxy`(탭 콜백 안에서만
+/// 만들어지는 불투명 플랫폼 타입) 없이도 단위 테스트로 고정할 수 있다. 이 크레이트에
+/// 기존에 `#[cfg(test)]` 모듈이 없었던 것을 이슈 #129 가 메운다(`docs/plan/
+/// issue-129-seek-webview-inputsource.md` §7.2 "테스트 지형" — 이전에는 "무엇을
+/// 방출하는가"만 `ultrakey-core` 에서 CI 로 고정됐고 "어떻게 방출하는가"는 아무 데도
+/// 고정되지 않았다).
+fn should_defer_synth_to_command_queue(gates: GateSnapshot, layer: Layer) -> bool {
+    gates.seek_active && gates.seek_input_box && layer == Layer::KoreanInput
+}
+
 /// P11 — 경로 C(`IOHIDSetModifierLockState`) caps lock 토글. 현재 상태를 읽어
 /// 반전해 쓴다. `docs/dev/architecture.md` §6.6 결정: **콜백 안에서 직접 실행한다**
 /// — mach 메시지 한 번이라 마이크로초 단위이고, 사용자가 실제로 제스처를 완료했을
@@ -687,7 +723,7 @@ fn on_tap_event(
         }
     }
 
-    apply_outcome_in_tap(&outcome, proxy);
+    emit_outcome(&outcome, gates, proxy, commands);
     let path_c = apply_effects_in_tap(&outcome, &table, proxy, &st.on_event);
     record_caps_lock_ownership(&st.shared, path_c);
 
@@ -979,6 +1015,14 @@ fn drain_commands(
                     Err(e) => tracing::warn!(error = %e, ?device, "Path B (F-17) reapply failed"),
                 }
             }
+            EngineCommand::PostSynthEvent(ev) => {
+                // ⭐ 이슈 #129 — `emit_outcome` 이 큐에 넣은, 이미 판정이 끝난 합성
+                // 이벤트를 콜백 밖에서 낸다(`apply_outcome_outside_tap` 과 같은
+                // `post()` 경로). 여기서 새로 판정하지 않는다 — 그저 전송만.
+                if let Some(synth) = make_synth_event(&ev) {
+                    synth.post();
+                }
+            }
             EngineCommand::Shutdown => {
                 should_stop = true;
             }
@@ -1081,4 +1125,55 @@ fn tap_thread_main(
     // 놓아 준다.
     cell.borrow_mut().tap = None;
     tracing::info!("tap thread exited");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_defer_synth_to_command_queue;
+    use ultrakey_core::arbitration::{GateSnapshot, Layer};
+
+    /// ⭐ 이슈 #129 — 인풋 박스 세션 D2 발화(`Layer::KoreanInput` + `seek_active` +
+    /// `seek_input_box`)만 커맨드 큐 경로로 가려낸다는 게이트 불변식.
+    #[test]
+    fn defers_only_for_input_box_session_korean_input_layer() {
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            ..GateSnapshot::default()
+        };
+        assert!(should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+    }
+
+    /// 세션 밖(계층 3) 의 같은 `Layer::KoreanInput` 산출 — F-16.1 세션 밖 발화는
+    /// 종전대로 `apply_outcome_in_tap` 을 타야 한다(한 바이트도 안 바뀐다는 계약).
+    #[test]
+    fn does_not_defer_out_of_session_korean_input_layer() {
+        let gates = GateSnapshot::default(); // seek_active == false
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+    }
+
+    /// 세션은 열려 있지만 인풋 박스 모드가 아니면(영어 단일 세션) 계층 1 이 D2 자체를
+    /// 태우지 않으므로 이 게이트도 defer 하지 않아야 한다.
+    #[test]
+    fn does_not_defer_when_session_active_but_not_input_box() {
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: false,
+            ..GateSnapshot::default()
+        };
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+    }
+
+    /// 인풋 박스 세션 중이라도 D2 가 아닌 다른 계층(예: 계층 1 자체의 `SeekSession`)
+    /// 산출은 defer 하지 않는다 — `Layer::KoreanInput` 로만 정확히 가려낸다.
+    #[test]
+    fn does_not_defer_input_box_session_for_other_layers() {
+        let gates = GateSnapshot {
+            seek_active: true,
+            seek_input_box: true,
+            ..GateSnapshot::default()
+        };
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::SeekSession));
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::PresetCombo));
+    }
 }

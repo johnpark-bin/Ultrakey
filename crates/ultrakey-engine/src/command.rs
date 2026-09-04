@@ -12,6 +12,7 @@
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
+use ultrakey_core::arbitration::SynthEvent;
 use ultrakey_core::perdevice::DeviceId;
 use ultrakey_platform::runloop::CommandSignaller;
 
@@ -35,6 +36,11 @@ pub enum EngineCommand {
     /// (`PathBManager::apply_device`, 핫플러그 `Attached`), `None` 이면 붙어 있는
     /// 디바이스 전체를 재조정한다(`PathBManager::apply_all`, CONTRACT.md 부록 B.5).
     ReapplyHidMapping(Option<DeviceId>),
+    /// ⭐ 이슈 #129 — 인풋 박스 세션 중 D2(F-16.1 세션 재평가)가 낸 합성 이벤트를
+    /// 콜백 밖에서 낸다(`engine::emit_outcome`, `docs/plan/issue-129-seek-webview-inputsource.md`
+    /// §7.4 순위 1). 판정 로직이 이미 만든 `SynthEvent` 를 그대로 실어 보낼 뿐,
+    /// 이 커맨드 자체는 새 판정을 하지 않는다.
+    PostSynthEvent(SynthEvent),
     /// 탭 스레드 런루프를 정지하고 종료한다.
     Shutdown,
 }
