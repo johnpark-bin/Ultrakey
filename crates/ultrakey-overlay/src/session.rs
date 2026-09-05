@@ -209,6 +209,22 @@ impl OverlaySession {
         self.detecting
     }
 
+    /// ⭐(이슈 #134, 결정 1) **질의로 필터되지 않은** 후보 우주 전체
+    /// (`by_display` 값 전부 + `extra`)를 돌려준다 — "사용자가 이 세션에서
+    /// 본" 그 후보들이다. 워커가 완료 시점에 이 값을 스냅샷해 세션 간
+    /// 캐시를 만들고, 재진입 시 `display_id` 로 다시 나눠 주입한다.
+    ///
+    /// ⭐ [`Self::search_bar_frame`] 의 `matches`(질의 필터 결과·`matching`
+    /// 캐시)가 **아니다** — 필터된 목록을 캐시에 담으면 쿼리 밖 후보가
+    /// 유실되어 재진입 첫 탐색의 질을 떨어뜨린다. 반드시 후보 우주 전체를
+    /// 돌려줘야 한다.
+    #[must_use]
+    pub fn all_candidates(&self) -> Vec<TextCandidate> {
+        let mut all: Vec<TextCandidate> = self.by_display.values().flatten().cloned().collect();
+        all.extend(self.extra.iter().cloned());
+        all
+    }
+
     /// 디스플레이마다 한 장씩 렌더 프레임을 만든다. **전역 → 로컬 변환과
     /// 연결선 클리핑을 여기서 한다.**
     #[must_use]
@@ -620,5 +636,57 @@ mod tests {
 
         session.set_query("row");
         assert_eq!(session.selected().unwrap().text, "Row A");
+    }
+
+    // ── ⭐(이슈 #134, 결정 5) 최신화 시 선택 인덱스 유지 + clamp ────────────
+
+    /// 캐시 주입 후 신규 OCR 이 목록을 교체할 때(재검출 — `ingest_display`
+    /// 교체 의미론) 선택 인덱스는 **0 으로 리셋되지 않고** 새 범위 안에서는
+    /// 유지되고 범위 밖이면 마지막 유효 인덱스로 당겨진다 — 결정 5
+    /// "refresh keeps index, clamped" 를 고정하는 회귀 테스트다. 사용자가
+    /// 위치시켜 둔 선택이 목록 길이가 허용하는 한 유지돼야 한다.
+    ///
+    /// ⚠️ 이 동작은 `recompute_matching` 의 **기존** 규칙이다 — 이 테스트는
+    /// 그걸 잠그기만 할 뿐 코드를 바꾸지 않는다. 선택을 0 으로 리셋하는
+    /// 것은 `set_query` 뿐이다(질의 변경 = 새 탐색, 교체 = 같은 탐색의
+    /// 갱신).
+    #[test]
+    fn refresh_keeps_selected_index_clamped() {
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0)];
+        let mut session = OverlaySession::open(displays, Appearance::Light, false);
+        session.set_query("row");
+
+        // 5 개 목록에서 2 번 순환 → 인덱스 2("Row 2") 선택.
+        let five: Vec<TextCandidate> = (0..5)
+            .map(|i| candidate(&format!("Row {i}"), 1, f64::from(i) * 10.0, 0.0))
+            .collect();
+        session.ingest_display(1, five.clone());
+        session.cycle_next();
+        session.cycle_next();
+        assert_eq!(session.selected_index, 2);
+        assert_eq!(session.selected().unwrap().text, "Row 2");
+
+        // ① 짧아진 교체(2 개) — 인덱스 2 는 새 범위 밖 → 마지막 유효
+        //    인덱스 1 로 당긴다(0 은 아니다 — 리셋이 아니라 clamp).
+        session.ingest_display(
+            1,
+            vec![candidate("Row A", 1, 0.0, 0.0), candidate("Row B", 1, 10.0, 0.0)],
+        );
+        assert_eq!(session.selected_index, 1, "범위 밖 → 마지막 유효 인덱스로 clamp");
+        assert_eq!(session.selected().unwrap().text, "Row B");
+        assert_eq!(
+            session.search_bar_frame().selected_index,
+            Some(1),
+            "세션이 일관된 상태를 유지한다"
+        );
+
+        // ② 원래 길이(5 개)로 다시 교체 — 인덱스 1 은 유효 범위 → 유지된다
+        //    (0 으로 리셋하지 않는다 — ingest 는 쿼리가 아니다). 인덱스 1 의
+        //    텍스트는 이제 5 개 목록의 "Row 1" 이다(2 개 목록의 "Row B" 와
+        //    다르다 — 그래도 위치는 보존됐는지를 보는 것이지 텍스트가
+        //    아니다).
+        session.ingest_display(1, five);
+        assert_eq!(session.selected_index, 1, "같은 길이 교체는 인덱스를 보존한다 (0 리셋 금지)");
+        assert_eq!(session.selected().unwrap().text, "Row 1");
     }
 }

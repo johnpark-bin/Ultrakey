@@ -125,6 +125,17 @@ F-01 은 이 기능의 **활성화 트리거, 세션의 생명주기, 세션 중
 - **같은 경로**로 열린 세션에 **hold 모드**에서 동일 리매핑 키의 반복(autorepeat) 다운 이벤트가 들어오는 경우, 이는 새 활성화 시도가 아니라 눌림 유지의 연속이므로 무시한다(상태 불변).
 - **다른 경로**의 트리거(세션은 리매핑 키로 열려 있는데 전역 단축키가 눌리는 경우 등)는 무시한다 — 두 번째 세션을 열지 않는다. 이 정책은 조사 자료로 확정되지 않았으며 합리적 기본 정책으로 채택한 것이다 `(추정)`.
 
+#### 3.3.1 ⭐(이슈 #134) 재진입 캐시 우선 시퀀스
+
+직전 세션의 **완료된** 검출 결과가 캐시(`seek-text-detection.md` §3.7, 메모리 한정 — 세션 밖 `SeekController` 보관)로 남아 있으면, **재진입은 캡처·OCR 을 기다리지 않고 캐시부터 후보를 주입**한다 — 세션이 닫힌 뒤 다시 여는 경우의 **세션 시작 순서만** 단축된다. 위 세 불릿(세션이 열린 채 같은/다른 트리거가 다시 들어오는 경우)은 재입력 처리이고, 이 절은 **새 세션의 시작**이므로 서로 독립이다. 시퀀스:
+
+1. **세션 열림(Opening)** — 활성화 경로 3종(단축키 / 키 리맵 / quick press caps lock)에 동일하게 적용된다.
+2. **캐시 히트면 `inject_cached` 로 즉시 후보 주입 + 즉시 `finish`** — 캡처·OCR 대기 없이 **즉시 Ready/Querying**(쿼리 버퍼 유무에 따라). 상태 머신 관점에서 이것은 §3.2 의 기존 "후보 생성 완료" 전이(Opening → Ready/Querying)의 **캐시 단축 버전**이다 — 같은 전이가 캐시라는 즉시 입력으로 발화하는 것이다.
+3. 그 뒤 **`spawn_detection` 을 그대로 기동**한다 — 배경 신규 OCR 이 세션 열림 ~0.8–3.1s 뒤 도착하면(§3.1 증분 트리거, 이슈 #102), **기존 ingest 경로**(`ingest_display`/`ingest_extra`)로 캐시 후보를 최신화·재탐색한다 — 별도 재탐색 코드가 없다.
+4. 검출 완료(현재 세대 `DetectionFinished`, 세션 생존 시) → **캐시 갱신** — 다음 재진입이 쓴다(`seek-text-detection.md` §3.7).
+
+⭐ **선택 인덱스**: 재진입(캐시 주입)은 **0 에서 시작**(새 세션 — 일반 열림과 동일), 최신화 중에는 **유지 + 범위 밖이면 clamp**(`recompute_matching` 기존 동작). ⭐ **Enter 확정 시점에는 캐시 후보(또는 이미 최신화된 후보)가 그대로 클릭에 쓰인다** — 확정 전 재검증 캡처가 없으며, 이는 `seek-text-detection.md` §3.7 의 **신뢰 위임 정책**과 연결된다(같은 실패 클래스가 세션 스냅샷에 이미 존재 — `seek-text-detection.md` §5 #9, stale 노출 창은 신규 OCR 완료로 유계).
+
 ### 3.4 ⭐ 검색 바의 실체 — 오버레이에 그려지는 요소가 아니라 독립 창
 
 내부 타입 `EntryBarWindow` · `EntryBarWindowController` · `EntryBarViewController` · `EntryOutlineView` · `EntryBarTableRowView` · `EntrySearchButton` · `EntryBarMatches` · `EntryBarOptions` · `ClickablePlaceholderView`(실측: 번들 심볼, app-bundle-analysis.md §4.7).

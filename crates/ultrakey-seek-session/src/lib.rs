@@ -30,12 +30,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod cache;
 pub mod config;
 pub mod confirm;
 pub mod keys;
 pub mod machine;
 pub mod settings;
 
+pub use cache::SeekDetectionCache;
 pub use config::{ActivationPath, SeekConfig, SessionMode};
 pub use confirm::{ClickError, ClickExecutor, ClickSettings, ConfirmAction, ConfirmedMatch, NullClickExecutor};
 pub use keys::{classify, SessionKey};

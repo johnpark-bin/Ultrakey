@@ -36,6 +36,16 @@
 //! 신호라 같은 위험(늦게 끝난 이전 세션의 결과가 다음 세션의 `finish_detection()`
 //! 을 앞당겨 부르는 것)이 있어 셋 다에 붙였다 — 이 판단은 이 구현이 스스로 내렸다.
 //!
+//! ## ⭐(이슈 #134) 세션 간 검출 캐시
+//!
+//! 마지막으로 **완료**된 검출의 후보 전체를 세션 밖
+//! ([`SeekController::cache`])에 메모리 한정 단일 슬롯으로 보관한다(디스크
+//! 금지 — 제품 제약). 재진입 시 `should_inject` 히트면 캐시를 즉시 주입해
+//! 캡처·OCR 을 기다리지 않고 곧바로 검색할 수 있게 하고, 신규 OCR 이 도착하면
+//! 기존 ingest 교체 의미론으로 후보가 최신화되며 `DetectionFinished` 에서 캐시도
+//! 함께 갱신된다. 세대 폐기 정책은 **그대로**다 — 늦게 끝난 이전 세대 결과는
+//! 캐시 갱신으로 라우팅하지 않고 조용히 버린다(결정 3).
+//!
 //! ## ⚠️ 레이아웃 문자 해석의 한계
 //!
 //! 세션 중 키를 검색어로 넣으려면 keycode+flags → 문자 변환이 필요하다.
@@ -61,10 +71,11 @@ use ultrakey_engine::SharedState;
 use ultrakey_layout::ModifierCombo;
 use ultrakey_overlay::renderer::OverlayRenderer;
 use ultrakey_seek::{detect_candidates, CandidateSource, DetectionParams, TextCandidate};
+use ultrakey_seek_session::cache::should_inject;
 use ultrakey_seek_session::keys::{classify, SessionKey};
 use ultrakey_seek_session::{
-    ActivationPath, ClickExecutor, ClickSettings, CloseReason, SeekConfig, SeekSessionMachine,
-    SessionEffect,
+    ActivationPath, ClickExecutor, ClickSettings, CloseReason, SeekConfig, SeekDetectionCache,
+    SeekSessionMachine, SessionEffect,
 };
 
 use crate::overlay::{overlay_displays, SurfaceState, WebviewOverlayRenderer};
@@ -217,6 +228,11 @@ struct SeekController {
     /// ⭐(이슈 #93) 현재 세션 열림 시점의 최전면 앱 pid — 클릭 없이 닫힐 때
     /// 이 앱으로 포커스를 되돌린다(Plan §3 D7).
     active_frontmost_pid: Option<i32>,
+    /// ⭐(이슈 #134) 마지막으로 **완료**된 검출 결과의 후보를 세션 밖에 보관한다.
+    /// 세션 스코프가 아니므로 세션이 닫혀도 살아남아, 재진입 시 캡처·OCR 을
+    /// 기다리지 않는 캐시 우선 탐색(D13)을 켠다(메모리 한정 — 디스크 금지,
+    /// 제품 제약). `DetectionFinished`(현재 세대·세션 생존)에서 갱신된다.
+    cache: Option<SeekDetectionCache>,
 }
 
 impl SeekController {
@@ -233,6 +249,7 @@ impl SeekController {
             activation_started: None,
             active_input_box: false,
             active_frontmost_pid: None,
+            cache: None,
         }
     }
 
@@ -316,16 +333,30 @@ impl SeekController {
                     let origin = overlay.search_bar_origin();
                     let _ = self.renderer.sync_surfaces(&displays);
                     let _ = self.renderer.set_search_bar_origin(origin.0, origin.1);
-                    // ⭐(이슈 #132) — `show()` **직전에** 신규 빈 세션을 먼저
-                    // present 해 캔버스를 비운다. `machine.overlay()` 는 이 시점
-                    // 이미 신규 빈 세션(후보 0개)이므로 이 `repaint()` 가 내는
-                    // 프레임은 빈 프레임이다 — 상주하는 하이라이트 창이 이전 세션
-                    // 그림을 그린 채 `show()` 로 올라가고 검출 결과(주 디스플레이
-                    // ≈335 ms) 도착 전까지 그 stale 그림이 보이는 재진입 플래시를
-                    // 막는다(이슈 #132 코멘트 5543480993 설계 3방향 ②). `hide()`
-                    // 쪽 빈 프레임 emit(overlay.rs)과 이 present 는 같은 효과의
-                    // 양쪽 경로라 어느 쪽이 먼저든 캔버스가 비어 있는 상태로
-                    // 세션이 시작된다.
+                    // ⭐(이슈 #134) 세션 밖 캐시 — 직전 세션의 검출 결과가 있으면
+                    // 캡처·OCR 을 기다리지 않고 즉시 주입한다(inject_cached 는
+                    // 후보를 채우고 즉시 Ready/Querying 으로 넘긴다). 아래
+                    // `spawn_detection` 은 그대로 기동되고, 신규 OCR 결과가
+                    // 도착하면 기존 ingest 교체 의미론으로 캐시 후보를 덮는다.
+                    // 반환되는 `Repaint` 효과는 곧 이어지는 `repaint()` 가 이미
+                    // 처리하므로 여기서는 버린다(must_use).
+                    let cache_hit = should_inject(self.cache.as_ref());
+                    if cache_hit {
+                        if let Some(cache) = self.cache.as_ref() {
+                            let _ = self.machine.inject_cached(cache);
+                        }
+                    }
+                    // ⭐(이슈 #132) — `show()` **직전에** 신규 세션을 먼저
+                    // present 해 캔버스를 비운다. ⭐(이슈 #134) 캐시 히트면 위
+                    // 주입으로 이 시점 후보가 이미 차 있어 이 `repaint()` 는
+                    // 직전 세션 후보를 그린다(미스 — 첫 실행·직전 후보 0개 —
+                    // 면 여전히 빈 프레임이다). 상주하는 하이라이트 창이 이전
+                    // 세션 그림을 그린 채 `show()` 로 올라가고 검출 결과(주
+                    // 디스플레이 ≈335 ms) 도착 전까지 그 stale 그림이 보이는
+                    // 재진입 플래시를 막는다(이슈 #132 코멘트 5543480993 설계
+                    // 3방향 ②). `hide()` 쪽 빈 프레임 emit(overlay.rs)과 이
+                    // present 는 같은 효과의 양쪽 경로라 어느 쪽이 먼저든
+                    // 캔버스가 정리된 상태로 세션이 시작된다.
                     self.repaint();
                     let _ = self.renderer.show();
 
@@ -350,12 +381,21 @@ impl SeekController {
                         let elapsed_ms = self
                             .activation_started
                             .map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+                        // ⭐(이슈 #134) — 캐시 히트 재진입 시 세션은 열림 시점에
+                        // 이미 후보를 갖고 있어 `matches = 0` 고정값은 수동 검증
+                        // 로그를 오도한다(판정 9). `Candidates`/`DetectionFinished`
+                        // 로그와 같은 모양으로 실제 매치 수를 찍는다.
+                        let matches = self
+                            .machine
+                            .overlay()
+                            .map_or(0, |o| o.search_bar_frame().total_matches);
                         tracing::warn!(
                             ?path,
                             ?mode,
                             input_box,
+                            cache_hit,
                             elapsed_ms,
-                            matches = 0,
+                            matches,
                             "seek session opened"
                         );
                     }
@@ -867,6 +907,16 @@ fn run_worker(
                         .overlay()
                         .map_or(0, |o| o.search_bar_frame().total_matches);
                     tracing::warn!(total_ms, ocr, ax, merged, matches, "detection finished");
+                }
+                // ⭐(이슈 #134) 마지막 검출 결과를 캐시에 기록 — 세션 밖 보관
+                // (메모리 한정). 이 핸들러는 위의 `generation != controller.generation`
+                // 가드를 이미 통과한 현재 세대 결과만 처리하므로, 폐기 말고 캐시
+                // 갱신으로 라우팅할 경로는 없다(결정 3 — 이전 세대 늦은 결과는
+                // 여기 도달조차 못 한다). 세션이 이미 닫혀 `all_candidates() == None`
+                // 이면(닫힌 뒤 늦게 도착) 캐시를 갱신하지 않는다 — 직전 세션의
+                // 완성된 결과를 보존한다.
+                if let Some(candidates) = controller.machine.all_candidates() {
+                    controller.cache = Some(SeekDetectionCache::new(candidates));
                 }
             }
         }
