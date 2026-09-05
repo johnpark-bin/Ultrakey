@@ -66,6 +66,59 @@ pub fn merge_candidates(
     out
 }
 
+/// 창 제목 후보(소스 C)를 병합된 후보 목록에 붙인다 (이슈 #133 판정 조건 3).
+///
+/// `candidates` 는 OCR/AX 병합([`merge_candidates`])이 끝난 목록, `titles` 는
+/// 소스 C 가 만든 창 제목 후보 목록이다. 반환 전 읽기 순서로 다시 정렬한다.
+///
+/// **중복 제거 규칙**: `titles` 의 각 후보는, 기존 `candidates` 중 **소스 C 가
+/// 아닌**(OCR/AX) 후보로서 ① 정규화 텍스트가 동일하고
+/// ([`crate::query::normalize_for_match`]) ② 그 후보의 프레임 **중심점이 이 창
+/// 제목 후보의 frame(창 bounds) 안**에 있으면 버린다 — 가시 텍스트가 이미 그
+/// 제목을 대표하고 있기 때문이다. ⚠️ 소스 C 후보끼리(같은 제목의 다른 창)는
+/// 중복 제거하지 않는다 — 서로 다른 창이다.
+#[must_use]
+pub fn merge_window_titles(
+    candidates: Vec<TextCandidate>,
+    titles: Vec<TextCandidate>,
+) -> Vec<TextCandidate> {
+    let mut out = candidates;
+    for title in titles {
+        if is_visible_duplicate(&title, &out) {
+            continue;
+        }
+        out.push(title);
+    }
+    sort_reading_order(&mut out);
+    out
+}
+
+/// 이 창 제목 후보가 가시(OCR/AX) 후보의 중복이라 버려야 하는가.
+fn is_visible_duplicate(title: &TextCandidate, candidates: &[TextCandidate]) -> bool {
+    let title_normalized = crate::query::normalize_for_match(&title.text);
+    if title_normalized.is_empty() {
+        // 정규화 결과가 비면 유지하지 않는다. window_list 가 빈 제목을 애초에
+        // 걸렀으므로 사실상 도달하지 않는 방어다.
+        return true;
+    }
+    candidates.iter().any(|c| {
+        // ⚠️ 소스 C 후보는 비교 대상에서 제외한다 — 같은 제목의 다른 창은
+        // 서로 다른 실체다(판정 조건 3).
+        c.source != CandidateSource::WindowTitle
+            && crate::query::normalize_for_match(&c.text) == title_normalized
+            && center_inside_frame(c, title)
+    })
+}
+
+/// `candidate` 의 프레임 중심점이 `window`(창 bounds) 안에 있는가 — 닫힌 구간
+/// 포함 판정.
+fn center_inside_frame(candidate: &TextCandidate, window: &TextCandidate) -> bool {
+    let (cx, cy) = candidate.frame.center();
+    let x2 = window.frame.x + window.frame.width;
+    let y2 = window.frame.y + window.frame.height;
+    cx >= window.frame.x && cx <= x2 && cy >= window.frame.y && cy <= y2
+}
+
 /// M2 — 두 후보가 같은 실체인가.
 #[must_use]
 pub fn is_same_entity(a: &TextCandidate, b: &TextCandidate, params: MergeParams) -> bool {
@@ -268,5 +321,119 @@ mod tests {
         )];
         let merged = merge_candidates(vec![], ax_only.clone(), MergeParams::default());
         assert_eq!(merged, ax_only);
+    }
+
+    // ── 이슈 #133 소스 C — merge_window_titles ───────────────────────────────
+
+    /// (OCR, window_id, x) 로 후보를 만들어 주는 테스트 헬퍼.
+    fn ocr(text: &str, x: f64, y: f64) -> TextCandidate {
+        TextCandidate::ocr(text.to_string(), rect(x, y, 100.0, 20.0), 0.9, 1)
+    }
+
+    /// 창 bounds 를 (x, y, 800, 600) 으로 하는 창 제목 후보 헬퍼.
+    fn title(text: &str, window_id: u32, x: f64, y: f64) -> TextCandidate {
+        TextCandidate::window_title(text.to_string(), rect(x, y, 800.0, 600.0), window_id, 100)
+    }
+
+    /// 판정 조건 3-① — 가시(OCR) 후보와 같은 텍스트가 그 창 bounds 안에 있으면
+    /// 창 제목 후보를 버린다.
+    #[test]
+    fn visible_same_text_inside_bounds_deduped() {
+        let candidates = vec![ocr("Settings", 100.0, 100.0)]; // 중심 (150, 110)
+        let titles = vec![title("Settings", 1, 0.0, 0.0)]; // bounds (0,0,800,600)
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, CandidateSource::Ocr);
+        assert_eq!(merged[0].text, "Settings");
+    }
+
+    /// 판정 조건 3-② — 텍스트가 다르면 창 위치가 겹쳐도 창 제목을 유지한다.
+    #[test]
+    fn different_text_kept_even_inside_window_bounds() {
+        let candidates = vec![ocr("Save", 100.0, 100.0)];
+        let titles = vec![title("Settings", 1, 0.0, 0.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 2);
+        assert!(merged
+            .iter()
+            .any(|c| c.source == CandidateSource::WindowTitle && c.text == "Settings"));
+    }
+
+    /// 판정 조건 3-③ — 텍스트가 같아도 그 후보의 중심점이 창 bounds 밖에
+    /// 있으면(다른 창 영역) 창 제목을 유지한다.
+    #[test]
+    fn same_text_outside_window_bounds_kept() {
+        let candidates = vec![ocr("Settings", 1000.0, 1000.0)]; // 중심 (1050, 1010) — bounds 밖
+        let titles = vec![title("Settings", 1, 0.0, 0.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 2);
+    }
+
+    /// 판정 조건 3-① 대소문자 — normalize_for_match 하므로 대소문자만 다른
+    /// 텍스트도 중복으로 본다.
+    #[test]
+    fn case_only_difference_deduped_against_window_title() {
+        let candidates = vec![ocr("SETTINGS", 100.0, 100.0)];
+        let titles = vec![title("settings", 1, 0.0, 0.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, CandidateSource::Ocr);
+    }
+
+    /// 판정 조건 3-① 공백 정규화 — 연속 공백·앞뒤 트림 차이는 같은 텍스트로
+    /// 본다(OCR 결과의 전형적인 잡음).
+    #[test]
+    fn whitespace_and_trim_difference_deduped_against_window_title() {
+        let candidates = vec![ocr("  Settings   Panel ", 100.0, 100.0)];
+        let titles = vec![title("Settings Panel", 1, 0.0, 0.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, CandidateSource::Ocr);
+    }
+
+    /// 판정 조건 3-① AX — 중복 제거 규칙은 OCR 후보뿐 아니라 **AX 후보에도**
+    /// 적용된다(`is_visible_duplicate` 의 비교 대상은 소스 C 가 아닌 모든
+    /// 후보다). 같은 정규화 텍스트의 AX 요소(요소 전체 frame)가 창 bounds
+    /// 안에 있으면 창 제목 후보를 버리고 AX 후보가 남는다.
+    #[test]
+    fn ax_visible_same_text_inside_bounds_dedupes_window_title() {
+        let candidates = vec![TextCandidate::accessibility(
+            "Settings".to_string(),
+            rect(100.0, 100.0, 200.0, 40.0), // 중심 (200, 120) — 창 bounds (0,0,800,600) 안
+        )];
+        let titles = vec![title("Settings", 1, 0.0, 0.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].source, CandidateSource::Accessibility);
+        assert_eq!(merged[0].text, "Settings");
+    }
+
+    /// 판정 조건 3-⚠️ — 같은 제목의 서로 다른 창(window_id 다름)은 중복
+    /// 제거하지 않고 둘 다 유지한다. 두 번째 후보가 먼저 들어간 첫 후보와
+    /// 비교되는 상황도 소스 C 끼리는 비교하지 않는 규칙으로 통과해야 한다.
+    #[test]
+    fn same_title_different_windows_both_kept() {
+        let titles = vec![
+            title("Settings", 1, 0.0, 0.0),
+            title("Settings", 2, 500.0, 500.0),
+        ];
+        let merged = merge_window_titles(Vec::new(), titles);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|c| c.source == CandidateSource::WindowTitle));
+        let ids: Vec<Option<u32>> = merged.iter().map(|c| c.window_id).collect();
+        assert_eq!(ids, vec![Some(1), Some(2)]);
+    }
+
+    /// 판정 조건 3-반환 — 병합 후 읽기 순서로 다시 정렬된다. 목록상 뒤에
+    /// 붙은 창 제목 후보(y=10)가 위쪽 OCR(y=500)보다 먼저 와야 한다.
+    #[test]
+    fn reading_order_restored_after_window_title_merge() {
+        let candidates = vec![ocr("Bottom Text", 100.0, 500.0)];
+        let titles = vec![title("Top Window", 1, 0.0, 10.0)];
+        let merged = merge_window_titles(candidates, titles);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].source, CandidateSource::WindowTitle);
+        assert_eq!(merged[0].text, "Top Window");
+        assert_eq!(merged[1].text, "Bottom Text");
     }
 }

@@ -1302,6 +1302,9 @@ struct SeekView {
     /// OCR 은 영어 단일이고 인풋 박스 모드는 꺼진다. UI 는 부재 시 영어
     /// 기본(`"en"`)이 선택된 것으로 보여준다(Plan §9 #2).
     search_language: Option<String>,
+    /// ⭐(이슈 #133, D12) `창 제목 검색` 체크박스 — 저장 키 `seek.includeWindowTitles`.
+    /// 출고 기본값 ☑(부재 = true — `SeekSettings` 가 이미 반영).
+    include_window_titles: bool,
     /// `Presets` 탭 `Quick press caps lock to execute:` 가 `Seek` 인가(읽기 전용
     /// 표시용).
     quick_press_opens: bool,
@@ -1343,6 +1346,7 @@ fn seek_view(seek: &SeekSettings, quick_press_opens: bool) -> SeekView {
         focus_window_before_clicking: seek.focus_window_before_clicking,
         change_click_modes_with_modifiers: seek.change_click_modes_with_modifiers,
         search_language: seek.search_language.clone(),
+        include_window_titles: seek.include_window_titles,
         quick_press_opens,
         any_activation_configured: seek
             .to_config(quick_press_opens)
@@ -4216,6 +4220,11 @@ fn apply_seek_setting(
         k if k == keys::SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS => {
             seek.change_click_modes_with_modifiers = parse(value, key)?
         }
+        // ⭐(이슈 #133, 소스 C) — 창 제목 검색 체크박스. ⚠️ 이 매치를 빼먹으면
+        // 폴스루로 조용한 거부가 된다(F-04 예시 암 스타일 그대로).
+        k if k == keys::SEEK_INCLUDE_WINDOW_TITLES => {
+            seek.include_window_titles = parse(value, key)?
+        }
         // ⭐(이슈 #93) `검색 언어` — `null`/빈 문자열은 부재(= 영어 기본)로 되돌림
         // (이슈 #131 — 이슈 #48 의 로케일 폴백은 폐기).
         // 허용 값은 `"ko"`·`"zh"`·`"ja"`·`"es"`·`"en"` 뿐 — 그 외 값은 거부하고
@@ -5440,6 +5449,21 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                     .map(|s| s.to_string())
                     .collect()
             });
+            // ⭐(이슈 #133) — `seek.includeWindowTitles` 를 세션 열림 시점에
+            // 읽는다. F-02 검출 설정이라 `ConfigChanged` 신호로 못 실어
+            // `ocr_languages` 와 같은 클로저 경계로 주입한다 — 부재 = true 는
+            // `SeekSettings::from_store` 가 이미 반영한다(D12 설계 결정).
+            let state_for_window_titles = state.clone();
+            let include_window_titles: Arc<dyn Fn() -> bool + Send + Sync> =
+                Arc::new(move || {
+                    let seek = state_for_window_titles
+                        .store
+                        .lock()
+                        .ok()
+                        .map(|store| SeekSettings::from_store(&store));
+                    // 락 실패는 드물고 우발적 — 출고(☑) 기본값으로 내려간다.
+                    seek.is_none_or(|s| s.include_window_titles)
+                });
             let tx = seek::spawn(
                 handle.clone(),
                 shared.clone(),
@@ -5448,6 +5472,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                 click_settings,
                 stored_origin,
                 ocr_languages,
+                include_window_titles,
                 persist_origin,
             );
             *state.seek_tx.lock().unwrap() = Some(tx);
@@ -7784,6 +7809,41 @@ mod tests {
         );
     }
 
+    // ⭐(이슈 #133, D12) — 창 제목 검색 키. ⚠️ 이 매치가 빠지면 폴스루로 조용히
+    // 거부되므로(체크 해제 저장이 안 됨), 반드시 매치가 있는지 단정한다.
+    #[test]
+    fn apply_seek_setting_updates_include_window_titles() {
+        let mut seek = SeekSettings::default();
+        // 출고(☑) 기본값 — D12 클론 결정.
+        assert!(seek.include_window_titles);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_INCLUDE_WINDOW_TITLES,
+            &serde_json::json!(false),
+        )
+        .unwrap();
+        assert!(!seek.include_window_titles);
+
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_INCLUDE_WINDOW_TITLES,
+            &serde_json::json!(true),
+        )
+        .unwrap();
+        assert!(seek.include_window_titles);
+
+        // 타입이 안 맞으면 거부 — 다른 Seek 키와 같은 계약.
+        assert!(
+            apply_seek_setting(
+                &mut seek,
+                keys::SEEK_INCLUDE_WINDOW_TITLES,
+                &serde_json::json!("yes"),
+            )
+            .is_err()
+        );
+    }
+
     // ⭐(이슈 #93) — `seek.searchLanguage` 채택/거부. 인풋 박스 모드를 좌우하는
     // 값이라 허용 코드가 아니면 조용히 넘어가지 않게 거부한다.
     #[test]
@@ -7911,6 +7971,8 @@ mod tests {
         // ⭐ F-04(이슈 #44) — 출고 기본값 그대로: focusWindow ☐, changeModes ☑.
         assert!(!view.focus_window_before_clicking);
         assert!(view.change_click_modes_with_modifiers);
+        // ⭐(이슈 #133, D12) — 창 제목 검색 기본 ☑(실측이 아닌 클론 결정).
+        assert!(view.include_window_titles);
 
         let with_caps_lock = seek_view(
             &SeekSettings {
@@ -7973,6 +8035,8 @@ mod tests {
         // ⭐ F-04(이슈 #44) — 체크박스 2종도 camelCase 로 실린다.
         assert_eq!(seek_json["focusWindowBeforeClicking"], false);
         assert_eq!(seek_json["changeClickModesWithModifiers"], true);
+        // ⭐(이슈 #133, D12) — 창 제목 검색 체크박스(기본 ☑).
+        assert_eq!(seek_json["includeWindowTitles"], true);
         assert!(seek_json.contains_key("quickPressOpens"));
         assert_eq!(seek_json["anyActivationConfigured"], false);
         assert_eq!(seek_json["remapKeyOptions"].as_array().unwrap().len(), 35);

@@ -23,6 +23,12 @@ pub struct ConfirmedMatch {
     pub source: CandidateSource,
     /// 어느 디스플레이에서 나왔는가. AX 매치는 `None`.
     pub display_id: Option<u32>,
+    /// 창 전면화 확정에 쓰는 창 식별자(`kCGWindowNumber`) — OCR/AX 는 `None`,
+    /// 창 제목(WindowTitle) 후보는 `Some(kCGWindowNumber)`.
+    pub window_id: Option<u32>,
+    /// 창 전면화 확정에 쓰는 소유 프로세스 식별자(`kCGWindowOwnerPID`) —
+    /// OCR/AX 는 `None`, 창 제목 후보는 `Some(kCGWindowOwnerPID)`.
+    pub pid: Option<i32>,
     /// 확정 시점의 검색어(로그·진단용).
     pub query: String,
     /// 필터링된 매치 목록 내 0-based 순번.
@@ -51,6 +57,32 @@ impl ConfirmedMatch {
     pub fn click_point(&self) -> (f64, f64) {
         self.frame.center()
     }
+
+    /// 이 확정을 **어떻게 실행할지**를 정한다 — 소스 하나로 분기한다(이슈 #133):
+    /// 창 제목(WindowTitle) 후보는 **클릭이 아니라 창 전면화**가 확정 동작이고,
+    /// 나머지(OCR·AX)는 기존 클릭 합성이 확정 동작이다.
+    ///
+    /// ⚠️ WindowTitle 인데 `window_id`·`pid` 중 하나라도 `None` 이면(구조상
+    /// 불가 — 생성자가 두 값을 항상 채운다) 그래도 `FrontWindow` 를 반환하고,
+    /// 실행기가 None 을 조용한 no-op(로그)으로 받는다(방어).
+    #[must_use]
+    pub fn action(&self) -> ConfirmAction {
+        if self.source == CandidateSource::WindowTitle {
+            ConfirmAction::FrontWindow
+        } else {
+            ConfirmAction::Click
+        }
+    }
+}
+
+/// 확정된 대상의 **실행 종류**. F-04 실행기는 이 값으로 먼저 분기한다(이슈 #133
+/// 판정 조건 4 — "제목→창 전면화 / 텍스트→클릭").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    /// 기존 클릭 합성 — OCR·AX 후보의 확정 동작(현행 유지).
+    Click,
+    /// 창 전면화(제목 검색 후보의 확정 동작) — 좌표 클릭을 합성하지 않는다.
+    FrontWindow,
 }
 
 /// 확정된 대상을 실제로 클릭하는 계층 — `OverlayRenderer`(F-03)와 같은
@@ -145,6 +177,8 @@ mod tests {
             },
             source: CandidateSource::Ocr,
             display_id: Some(1),
+            window_id: None,
+            pid: None,
             query: "set".to_string(),
             match_index: 0,
             modifiers: EventFlags::NONE,
@@ -204,5 +238,52 @@ mod tests {
 
         let target = sample();
         assert!(boxed.execute(&target).is_ok());
+    }
+
+    /// ⭐ 이슈 #133 판정 조건 4 — `action()` 은 소스 하나로 분기한다:
+    /// 창 제목(WindowTitle) → `FrontWindow`(창 전면화), 그 외(OCR·AX) →
+    /// `Click`(기존 클릭 합성).
+    #[test]
+    fn action_branches_on_source_window_title_vs_rest() {
+        // WindowTitle — 전면화 확정. window_id/pid 가 채워져 있다(생성자 보장).
+        let title = ConfirmedMatch {
+            source: CandidateSource::WindowTitle,
+            window_id: Some(42),
+            pid: Some(1337),
+            ..sample()
+        };
+        assert_eq!(title.action(), ConfirmAction::FrontWindow);
+
+        // OCR → 클릭.
+        let ocr = ConfirmedMatch {
+            source: CandidateSource::Ocr,
+            window_id: None,
+            pid: None,
+            ..sample()
+        };
+        assert_eq!(ocr.action(), ConfirmAction::Click);
+
+        // AX → 클릭.
+        let ax = ConfirmedMatch {
+            source: CandidateSource::Accessibility,
+            window_id: None,
+            pid: None,
+            ..sample()
+        };
+        assert_eq!(ax.action(), ConfirmAction::Click);
+    }
+
+    /// ⚠️ 방어 — WindowTitle 인데 window_id/pid 가 None 이어도(구조상 불가 —
+    /// 생성자가 보장) `FrontWindow` 를 반환하고, None 은 실행기가 조용한
+    /// no-op 으로 받는다. 판정은 소스만 본다.
+    #[test]
+    fn action_still_returns_front_window_for_window_title_with_missing_ids() {
+        let broken = ConfirmedMatch {
+            source: CandidateSource::WindowTitle,
+            window_id: None,
+            pid: None,
+            ..sample()
+        };
+        assert_eq!(broken.action(), ConfirmAction::FrontWindow);
     }
 }

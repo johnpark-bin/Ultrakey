@@ -60,6 +60,8 @@
   "settings.seek.execute_on_close": "リマップしたキーを押している間だけ表示する",
   "settings.seek.execute_on_close.hint": "オンの間、リマップしたキーを離すと、ハイライトされた一致項目が確定されてクリックされます。まず「Seek にリマップするキー:」でキーを選んでください — その項目が「-」の間はオフのままです。",
   "settings.seek.focus_window_before_clicking": "クリック前にウィンドウをフォーカスする",
+  "settings.seek.include_window_titles": "ウィンドウタイトルを検索する",
+  "settings.seek.include_window_titles.hint": "他のウィンドウに隠れていても、ウィンドウタイトルを検索対象に含める",
   "settings.seek.semicolon_cycle": "セミコロンで次の一致項目をハイライトする",
   "settings.seek.quick_press.hint": "Seek を開く3つ目の方法もあります — プリセットタブで「Caps Lock を短く押すと送るキー:」を Seek に設定します。",
   "settings.seek.change_click_modes_with_modifiers": "修飾キーでクリックモードを切り替える",

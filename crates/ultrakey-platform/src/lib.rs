@@ -41,6 +41,7 @@ pub mod single_instance;
 pub mod text_input_source;
 pub mod trace_ring;
 pub mod vision_ocr;
+pub mod window_list;
 pub mod workspace;
 
 /// macOS 전용 수기 FFI 선언 모음. 공개 헤더에서 확인한 시그니처만 담는다

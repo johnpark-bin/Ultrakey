@@ -2077,8 +2077,9 @@ fn extract_hex_const_value(text: &str, needle: &str) -> u64 {
 /// `Seek` 탭 버튼·패널과 5개 `data-key` 가 전부 `settings.html` 에 존재한다.
 /// ⭐ F-04(이슈 #44) — `seek.focusWindowBeforeClicking`·`seek.changeClickModes
 /// WithModifiers` 체크박스 2개가 추가됐다(3 → 5).
+/// ⭐(이슈 #133) — `seek.includeWindowTitles` 체크박스가 추가됐다(5 → 6).
 #[test]
-fn settings_html_에_seek_탭_버튼_패널_5개_data_key가_있다() {
+fn settings_html_에_seek_탭_버튼_패널_6개_data_key가_있다() {
     let html = read_settings_html();
 
     assert!(
@@ -2096,6 +2097,7 @@ fn settings_html_에_seek_탭_버튼_패널_5개_data_key가_있다() {
         "seek.semicolonCycle",
         "seek.focusWindowBeforeClicking",
         "seek.changeClickModesWithModifiers",
+        "seek.includeWindowTitles",
     ] {
         assert!(
             html.contains(&format!("data-key=\"{data_key}\"")),

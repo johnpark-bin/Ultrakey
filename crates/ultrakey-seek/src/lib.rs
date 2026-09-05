@@ -22,6 +22,6 @@ pub mod transform;
 pub use candidate::{CandidateSource, TextCandidate};
 #[cfg(target_os = "macos")]
 pub use detect::{detect_candidates, DetectionOutcome, DetectionParams, DisplayResult};
-pub use merge::{merge_candidates, MergeParams};
+pub use merge::{merge_candidates, merge_window_titles, MergeParams};
 pub use query::{filter_by_query, normalize_for_match, QueryParams};
 pub use transform::{normalized_bbox_to_global, DisplayFrame, Rect};

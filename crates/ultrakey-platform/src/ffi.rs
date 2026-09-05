@@ -10,7 +10,7 @@
 #![allow(non_camel_case_types, non_upper_case_globals, dead_code)]
 
 use objc2_core_foundation::{
-    CFAllocator, CFDictionary, CFMutableDictionary, CFRunLoopSource, CFString,
+    CFAllocator, CFArray, CFDictionary, CFMutableDictionary, CFRunLoopSource, CFString,
 };
 use std::ffi::{c_char, c_void};
 
@@ -409,7 +409,7 @@ extern "C" {
 }
 
 // ============================================================================
-// CoreGraphics — F-19(D-4) 키보드 타입 판정
+// CoreGraphics — F-19(D-4) 키보드 타입 판정 · F-02 이슈 #133 창 목록
 // ============================================================================
 //
 // 근거: `CoreGraphics.framework/.../CGEventSource.h` 65행 —
@@ -418,7 +418,55 @@ extern "C" {
 // `CGEventSourceKeyboardType` 은 `uint32_t`(같은 헤더 488행 실측).
 // ⚠️ 반환 상수(ANSI=40/ISO=41/JIS=42) 는 SDK 헤더에 매크로가 없다 — 값의 근거는
 // `keyboard_type.rs` 모듈 문서를 참고(Apple 공개 문서값, `(추정)`).
+//
+// ⭐ 창 목록 API 는 `CGWindow.h` 에 있다(이슈 #133, 창 제목 검색 소스) —
+// 아래 함수·상수·데이터 심볼의 근거 헤더 경로는 각 선언 주석에 적는다.
+// keychain.rs·text_input_source.rs 의 기존 관례대로 데이터 심볼은
+// `Option<&'static CFString>` 로 선언해 호출부에서 `expect` 로 푼다.
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     pub(crate) fn CGEventSourceGetKeyboardType(source: *mut c_void) -> u32;
+
+    /// 근거: `CGWindow.h` 169행 —
+    /// `CG_EXTERN CFArrayRef __nullable CGWindowListCopyWindowInfo(CGWindowListOption option,
+    ///     CGWindowID relativeToWindow) API_AVAILABLE(macos(10.5));`
+    ///
+    /// ⭐ **CF_RETURNS_RETAINED** — 같은 헤더 176행: "You should release the array
+    /// when you are finished using it." 호출부(`window_list.rs`)가 `CFRetained` 으로
+    /// 감싸 해제 책임을 안전하게 만든다.
+    ///
+    /// ⚠️ `relativeToWindow` 는 `kCGWindowListOptionOnScreenOnly` 와 함께 쓸 때
+    /// **`kCGNullWindowID`(0) 이어야 한다**(헤더 140·143행).
+    pub(crate) fn CGWindowListCopyWindowInfo(
+        option: CGWindowListOption,
+        relative_to_window: CGWindowID,
+    ) -> *mut CFArray;
+
+    /// 근거: `CGWindow.h` — 창 dict 키 상수(전부 데이터 심볼 `const CFStringRef`).
+    /// 값 타입은 각 키의 주석에 명시되어 있다 — Number/OwnerPID/Layer 는
+    /// "CFNumber 32-bit signed integer", OwnerName/Name 은 "a CFString",
+    /// Bounds 는 "a CFDictionary"(76행: "use `CGRectMakeWithDictionaryRepresentation`
+    /// to obtain the bounds as a CGRect value").
+    pub(crate) static kCGWindowNumber: Option<&'static CFString>;
+    pub(crate) static kCGWindowOwnerPID: Option<&'static CFString>;
+    pub(crate) static kCGWindowOwnerName: Option<&'static CFString>;
+    pub(crate) static kCGWindowName: Option<&'static CFString>;
+    pub(crate) static kCGWindowBounds: Option<&'static CFString>;
+    pub(crate) static kCGWindowLayer: Option<&'static CFString>;
 }
+
+/// 근거: `CGWindow.h` 15행 — `typedef uint32_t CGWindowID;`
+pub(crate) type CGWindowID = u32;
+
+/// 근거: `CGWindow.h` 137행 — `typedef CF_OPTIONS(uint32_t, CGWindowListOption) { ... }`
+pub(crate) type CGWindowListOption = u32;
+
+/// 근거: `CGWindow.h` 42행 — `#define kCGNullWindowID ((CGWindowID)0)`.
+/// 창을 특정하지 않는 목록 조회(OptionAll/OnScreenOnly)의 `relativeToWindow` 자리 값.
+pub(crate) const K_CG_NULL_WINDOW_ID: CGWindowID = 0;
+/// 근거: `CGWindow.h` 141행 — `kCGWindowListOptionAll = 0,`
+pub(crate) const K_CG_WINDOW_LIST_OPTION_ALL: CGWindowListOption = 0;
+/// 근거: `CGWindow.h` 145행 — `kCGWindowListOptionOnScreenOnly = (1 << 0),`
+pub(crate) const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: CGWindowListOption = 1 << 0;
+/// 근거: `CGWindow.h` 160행 — `kCGWindowListExcludeDesktopElements = (1 << 4)`
+pub(crate) const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: CGWindowListOption = 1 << 4;

@@ -60,6 +60,8 @@
   "settings.seek.execute_on_close": "仅在按住所重映射的键时显示",
   "settings.seek.execute_on_close.hint": "开启后,松开所重映射的键时,会立即确认当前高亮的匹配项并点击它。请先在“将某个键重新映射为 Seek:”中选择一个键——在该项为“-”期间,此选项会保持关闭。",
   "settings.seek.focus_window_before_clicking": "点击前聚焦窗口",
+  "settings.seek.include_window_titles": "搜索窗口标题",
+  "settings.seek.include_window_titles.hint": "即使窗口被其他窗口遮挡,也将其标题纳入搜索范围",
   "settings.seek.semicolon_cycle": "分号会将高亮移到下一个匹配项",
   "settings.seek.quick_press.hint": "打开 Seek 还有第三种方式:在“预设”标签页中,将“轻按大写锁定时发送:”设为 Seek。",
   "settings.seek.change_click_modes_with_modifiers": "使用修饰键更改点击模式",

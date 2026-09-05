@@ -50,6 +50,13 @@ pub struct SeekSettings {
     /// **부재 = 영어 고정**(이슈 #131 — 이슈 #48 의 로케일 폴백은 폐기): OCR 언어는
     /// `Locale::En`(빈 목록 = Vision 기본 영어)이고, `input_box_mode` 는 꺼진다.
     pub search_language: Option<String>,
+    /// ⭐(이슈 #133, D12 — 원본에 없는 신규 기능) `창 제목 검색`(저장 키
+    /// `seek.includeWindowTitles`) — 창 제목(소스 C)을 검색 대상에 넣을 것인가.
+    /// ⚠️ **기본 ☑(부재 = true)** — 원본 SuperKey 에 이 설정이 없어 실측 출고
+    /// 기본값이 존재하지 않으므로(이슈 #133 판정 조건) 클론 설계 결정으로 켜짐을
+    /// 기본값으로 삼는다. `change_click_modes_with_modifiers` 의 "부재 = true"
+    /// 주석 관례(`KOREAN_DISABLE_IN_REMOTE_DESKTOP`)를 따른다.
+    pub include_window_titles: bool,
 }
 
 impl Default for SeekSettings {
@@ -62,6 +69,9 @@ impl Default for SeekSettings {
             focus_window_before_clicking: false,
             change_click_modes_with_modifiers: true,
             search_language: None,
+            // ⭐(이슈 #133, D12) — ☑(켜짐). 실측 기본값이 없는 신규 기능의
+            // 클론 결정(위 필드 문서).
+            include_window_titles: true,
         }
     }
 }
@@ -168,6 +178,13 @@ impl SeekSettings {
             search_language: store
                 .get::<String>(keys::SEEK_SEARCH_LANGUAGE)
                 .filter(|s| !s.is_empty()),
+            // ⭐(이슈 #133, D12) 부재 = true. 다른 필드처럼 `unwrap_or_default()` 를
+            // 쓰면 부재가 `false` 로 읽혀 켜짐(☑) 클론 결정을 조용히 어기게 된다 —
+            // `change_click_modes_with_modifiers` 의 "부재 = true" 주석 관례를
+            // 따른다. ⚠️ 실측 기본값이 없는 신규 기능이라 이 값은 클론 설계 결정이다.
+            include_window_titles: store
+                .get(keys::SEEK_INCLUDE_WINDOW_TITLES)
+                .unwrap_or(true),
         }
     }
 
@@ -277,6 +294,10 @@ mod tests {
         assert!(s.change_click_modes_with_modifiers);
         // ⭐(이슈 #131) — 검색 언어 부재 = 영어 고정(영어 단일).
         assert_eq!(s.search_language, None);
+        // ⭐(이슈 #133, D12) — 창 제목 검색 기본 ☑. ⚠️ 이것은 실측 기본값이
+        // 아니라(원본에 없는 신규 기능) D12 클론 설계 결정이다 — 주석 관례상
+        // "측정된 출고 기본값" 테스트에 함께 묶되 명시한다.
+        assert!(s.include_window_titles);
     }
 
     #[test]
@@ -380,6 +401,28 @@ mod tests {
         let flipped = SeekSettings::from_store(&store);
         assert!(flipped.focus_window_before_clicking);
         assert!(!flipped.change_click_modes_with_modifiers);
+    }
+
+    /// ⭐(이슈 #133, D12) — `include_window_titles` 는 부재 = true(클론 결정),
+    /// 명시 `false` 는 그대로 읽힌다.
+    #[test]
+    fn from_store_include_window_titles_absent_true_explicit_false() {
+        let store = SettingsStore::in_memory();
+        assert!(
+            SeekSettings::from_store(&store).include_window_titles,
+            "부재 = ☑(D12 클론 결정)"
+        );
+
+        let mut store = SettingsStore::in_memory();
+        store
+            .set(keys::SEEK_INCLUDE_WINDOW_TITLES, &false)
+            .unwrap();
+        assert!(!SeekSettings::from_store(&store).include_window_titles);
+
+        store
+            .set(keys::SEEK_INCLUDE_WINDOW_TITLES, &true)
+            .unwrap();
+        assert!(SeekSettings::from_store(&store).include_window_titles);
     }
 
     // ── display() ───────────────────────────────────────────────────────────

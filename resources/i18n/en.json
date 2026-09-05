@@ -60,6 +60,8 @@
   "settings.seek.execute_on_close": "Only show while the remapped key is held",
   "settings.seek.execute_on_close.hint": "While this is on, releasing the remapped key confirms the highlighted match and clicks it. Pick a key under \"Remap key to Seek:\" first — this stays off while that is \"-\".",
   "settings.seek.focus_window_before_clicking": "Focus window before clicking",
+  "settings.seek.include_window_titles": "Search window titles",
+  "settings.seek.include_window_titles.hint": "Search window titles even when they are obscured by other windows",
   "settings.seek.semicolon_cycle": "Semicolon highlights next match",
   "settings.seek.quick_press.hint": "There's a third way to open Seek: on the Presets tab, set \"A brief tap on Caps Lock sends:\" to Seek.",
   "settings.seek.change_click_modes_with_modifiers": "Change click modes with modifier keys",

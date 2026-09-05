@@ -1,7 +1,7 @@
 # F-02 · Seek — 텍스트 후보 검출
 
-> **한 줄 요약**: 화면 캡처에 대한 Vision OCR(항상 켜지는 기본 소스)과, 최전면 창에 한해 후보를 보강하는 Accessibility 트리 파싱이라는 두 소스에서 "클릭 가능한 텍스트 후보" 목록을 만들고, 중복 시 OCR 을 우선해 병합한다. ⭐ 화면 캡처는 **ScreenCaptureKit 이 아니라 `CGDisplayCreateImage` 계열**이다(실측: 번들 심볼).
-> **의존성**: 후보 검출을 *언제* 시작하는지는 `F-01`(`seek-activation-and-session.md`)이 결정한다. 이 문서는 세션이 열려 질의 문자열이 주어진 상태에서 "화면 텍스트 후보 목록 + 질의 매칭 결과"를 산출하는 것까지만 다룬다. 소스 A(OCR)는 Screen Recording 권한에, 소스 B(AX)는 Accessibility 권한에 의존한다 — 권한 획득 절차 자체는 `F-11`(`permissions-onboarding.md`) 참조.
+> **한 줄 요약**: 화면 캡처에 대한 Vision OCR(항상 켜지는 기본 소스)과, 최전면 창에 한해 후보를 보강하는 Accessibility 트리 파싱, 그리고 화면에 남아 있는(가려진 것 포함) 창의 제목을 후보로 넣는 `CGWindowList` 창 제목 검색(소스 C — ⭐ 이슈 #133, D12)이라는 **세 소스**에서 "클릭 가능한 텍스트 후보" 목록을 만들고, 중복 시 OCR 을 우선해 병합한다. ⭐ 화면 캡처는 **ScreenCaptureKit 이 아니라 `CGDisplayCreateImage` 계열**이다(실측: 번들 심볼).
+> **의존성**: 후보 검출을 *언제* 시작하는지는 `F-01`(`seek-activation-and-session.md`)이 결정한다. 이 문서는 세션이 열려 질의 문자열이 주어진 상태에서 "화면 텍스트 후보 목록 + 질의 매칭 결과"를 산출하는 것까지만 다룬다. 소스 A(OCR)·⭐(이슈 #133) 소스 C(창 제목)는 Screen Recording 권한에, 소스 B(AX)는 Accessibility 권한에 의존한다 — 권한 획득 절차 자체는 `F-11`(`permissions-onboarding.md`) 참조.
 > **관련 명세**: 후보를 화면에 그리는 방법 → `F-03`(`seek-overlay-ui.md`, AX 매치의 "요소 전체 하이라이트"는 여기서 다룬다). 선택된 후보를 클릭하는 방법 → `F-04`(`seek-click-execution.md`). 권한 획득 UX → `F-11`(`permissions-onboarding.md`). 플랫폼 역량 종합 판정 → `docs/spec/platform-constraints.md`(별도 문서, 이 문서 범위 밖).
 > **1차 근거**: `docs/research/app-bundle-analysis.md`(실측: AX 트리·`defaults`·번들 심볼·번들 문자열). 근거 표기 정의는 그 문서 §0.
 
@@ -11,12 +11,13 @@
 
 Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를 화면에서 찾아 그 위치를 클릭 후보로 제시하는 기능이다. 이 문서가 다루는 범위는 "질의 문자열 + 현재 화면 상태" 를 입력으로 받아 "클릭 가능한 후보 목록(텍스트 + 화면 좌표)" 을 출력하는 검출·병합 파이프라인 하나뿐이다.
 
-검출은 두 개의 독립 소스를 병행한다.
+검출은 세 개의 독립 소스를 병행한다.
 
 - **소스 A (항상 켜지는 기본 소스) — Vision OCR**: 화면을 스크린샷으로 캡처해 Apple Vision 프레임워크로 문자를 인식한다. ⭐ **끌 수 있는 UI 컨트롤이 없다는 사실이 확정**됐다 — `Seek using macOS accessibility` 옆 ⓘ 팝오버 원문(§3.1)이 AX 를 "잠재적으로 더 많은 텍스트 항목을 찾게 해주는" 보강 소스로 서술하는 반면 OCR 을 끄는 스위치는 어디에도 없다(실측: AX 트리 — Seek 탭 8개 컨트롤 전수 확인, app-bundle-analysis.md §6.1).
 - **소스 B (최전면 창 한정 보강 경로) — Accessibility 파싱**: `Seek using macOS accessibility` 체크박스로 켜는 선택 기능이다. 대상 앱이 `AXUIElement` 트리로 노출하는 텍스트 요소를 직접 읽는다. v1.18 에서 "initial cut" 으로 추가됐으며 OCR 이 놓치는 후보를 보강하는 역할이다. ⭐ **AX 소스는 이 체크박스와 무관하게 애초에 최전면 창으로 범위가 고정된다** — ⓘ 팝오버 원문이 "in the frontmost window" 라고 명시한다(§3.1, §3.3.2).
+- **소스 C (제3 소스, ⭐ 이슈 #133 · D12) — 창 제목 검색**: `Search window titles` 체크박스(기본 ☑, §4)로 제어하는 보강 소스다. `CGWindowListCopyWindowInfo(OptionOnScreenOnly)` 로 화면에 남아 있는 창(가려진 것 포함, 최소화 제외)의 제목(`kCGWindowName`)을 읽어 후보로 넣는다 — **화면에 안 보이는(가려진) 창의 제목을 검색 대상에 넣는 보강 소스**다. Accessibility(소스 B)가 최전면 창 하나로 한정되는 것과 달리 범위 제한이 없고, 같은 가시(OCR/AX) 텍스트가 그 창 bounds 안에 있으면 중복 제거된다(§3.4 M4). 좌표는 창 bounds 전체라 정밀 위치가 없어, 확정 동작도 **클릭이 아니라 창 전면화**다(`seek-click-execution.md` §3.7).
 
-두 소스의 산출물은 **동일한 자료형(텍스트 + 전역 화면 좌표)** 으로 정규화된 뒤 병합되어 하나의 후보 목록이 된다. ⭐ **AX·OCR 은 배타적이지 않다.** 둘 다 동시에 후보를 낼 수 있고, 겹치는 경우 **OCR 매치가 AX 매치를 대체**한다(우선순위 확정, §3.4).
+세 소스의 산출물은 **동일한 자료형(텍스트 + 전역 화면 좌표)** 으로 정규화된 뒤 병합되어 하나의 후보 목록이 된다. ⭐ **AX·OCR 은 배타적이지 않다.** 둘 다 동시에 후보를 낼 수 있고, 겹치는 경우 **OCR 매치가 AX 매치를 대체**한다(우선순위 확정, §3.4). ⭐(이슈 #133) **세 소스는 배타적이지 않다** — 창 제목 후보(소스 C)는 위 둘과 겹치면 §3.4 M4 규칙(같은 정규화 텍스트 + 창 bounds 안)으로 제거되고, 소스 C 끼리(같은 제목의 다른 창)는 유지된다.
 
 ---
 
@@ -48,7 +49,7 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
        A4 TextCandidate 목록 A                        B4 TextCandidate 목록 B (요소 전체 하이라이트)
                      └─────────────────┬─────────────────┘
                                         ▼
-                        M. 병합 — 중복 시 OCR 이 AX 를 대체 (M1~M3)
+                        M. 병합 — 중복 시 OCR 이 AX 를 대체 (M1~M3) · ⭐ 소스 C 중복 제거 (§3.4 M4, 이슈 #133)
                                         ▼
                          전역 후보 목록 CandidateSet
                                         ▼
@@ -59,9 +60,11 @@ Seek 는 사용자가 타이핑한 질의 문자열과 일치하는 텍스트를
 
 ⭐ **소스 B 의 범위는 `Only Seek in the frontmost window` 설정과 무관하게 항상 최전면 창으로 고정된다.** 그 설정은 소스 A(OCR/캡처)의 범위만 좁힌다. 두 설정의 역할 분리는 §3.3.2 참조.
 
+⭐(이슈 #133) **소스 C(창 제목)는 위 그림 이후 병합 계층에 합류한 세 번째 소스다** — CGWindowList 로 화면에 남아 있는(가려진 것 포함) 창 제목을 읽어 `merge_candidates`(A∪B) 출력에 붙이고(§3.3.4), §3.4 M4 규칙으로 가시 텍스트와 겹치는 제목 후보를 거른 뒤 읽기 순서로 정렬한다. 별도 분기로 그리지 않았을 뿐, 병합 지점(▼ M) 이후의 흐름은 세 소스가 동일하다.
+
 ### 3.2 소스 A — Vision OCR
 
-⭐⭐ **화면 캡처 API 정정 — ScreenCaptureKit 이 아니다.** 실측(`nm -u`): 링크된 심볼은 **`CGDisplayCreateImage`** · **`CGDisplayCreateImageForRect`** · `CGWindowListCopyWindowInfo` · `CGWindowListCreateDescriptionFromArray` 이고, `SCStream`·`SCContentFilter`·`SCShareableContent` 등 ScreenCaptureKit 심볼은 **전무**하다(app-bundle-analysis.md §3.1). `LSMinimumSystemVersion = 12.0` 과 정합한다 — 원본은 macOS 12.0 을 유지한 채 `CGDisplayCreateImage` 계열 레거시 API 로 출하 중이다. `CGWindowListCopyWindowInfo` 는 `Only Seek in the frontmost window` 와 창 범위 판정에 쓰이는 것으로 보인다 `(미확정 — 용도는 해석, 실측: 번들 심볼)`.
+⭐⭐ **화면 캡처 API 정정 — ScreenCaptureKit 이 아니다.** 실측(`nm -u`): 링크된 심볼은 **`CGDisplayCreateImage`** · **`CGDisplayCreateImageForRect`** · `CGWindowListCopyWindowInfo` · `CGWindowListCreateDescriptionFromArray` 이고, `SCStream`·`SCContentFilter`·`SCShareableContent` 등 ScreenCaptureKit 심볼은 **전무**하다(app-bundle-analysis.md §3.1). `LSMinimumSystemVersion = 12.0` 과 정합한다 — 원본은 macOS 12.0 을 유지한 채 `CGDisplayCreateImage` 계열 레거시 API 로 출하 중이다. ⭐ **`CGWindowListCopyWindowInfo` 의 용도가 확정됐다(이슈 #133)** — **소스 C: 창 제목 후보 획득**(§3.3.4, §6). 기존 추정("`Only Seek in the frontmost window` 의 창 범위 판정")은 §3.3.2 의 추정으로 유보해 둔다 — 같은 함수가 두 용도에 쓰일 가능성을 배제하지 않는다(소스 C 용도는 실측·확정, 범위 판정 용도는 미확정).
 
 | 단계 | 입력 | 처리 | 출력 |
 | :--- | :--- | :--- | :--- |
@@ -186,6 +189,24 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 
 구체적 타임아웃 값·깊이 상한은 조사 자료에 없다 — §9 미해결 질문.
 
+#### 3.3.4 ⭐ 소스 C — CGWindowList 창 제목 파싱 (이슈 #133 · D12, 신규)
+
+⭐ 원본 SuperKey 에는 없는 **클론 고유 소스**다(갈라짐 표 D12). 사용자 명시 요구(이슈 #133: "중첩되어 있는 윈도우에서 뒤쪽에 있는 윈도우에 있는 문자열 탐색이 안 된다")에서 출발해, **화면에 안 보이는(가려진) 창의 제목**을 검색 대상에 넣는 보강 소스로 설계됐다. Accessibility(소스 B)가 최전면 창 하나로 한정되는 것과 달리 이 소스는 범위 제한이 없다.
+
+| 단계 | 입력 | 처리 | 출력 |
+| :--- | :--- | :--- | :--- |
+| C1. 목록 획득 | (트리거 신호) | `CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)` 로 온스크린 창 딕셔너리 배열 획득 | `[CFDictionary]` (창 1개당 1항목) |
+| C2. 필터 | 딕셔너리 배열 | ① `kCGWindowLayer == 0` 인 창만(일반 앱 창 — 메뉴 막대(24 · `kCGMainMenuWindowLevel`)·팝업 메뉴(101 · `kCGPopUpMenuWindowLevel`)·화면 보호기(1000 · `kCGScreenSaverWindowLevel`) 등 다른 레이어는 후보 불가 — `CGWindowLevel.h` 실측, `window_list.rs` 와 동일) ② `kCGWindowName`(제목)이 **빈 문자열**이면 항목 제외 — 제목 없는 창은 검색 대상이 없다 | 필터링된 목록 |
+| C3. 후보 생성 | 필터링된 목록 | `kCGWindowName` = 제목, `kCGWindowBounds` = 창 bounds 전체(전역 rect — §3.3.4-2), `kCGWindowNumber`/`kCGWindowOwnerPID` = 창 식별자(확정 동작의 창 전면화에 사용, `seek-click-execution.md` §3.7) | `[TextCandidate]` (목록 C, source: WindowTitle) |
+
+**좌표계(§3.3.4-2)**: `kCGWindowBounds` 는 `X`/`Y`/`Width`/`Height` 키의 CFDictionary 로 돌아오며(키 이름은 2026-09-05 이 기기 전수 출력 실측으로 확정), 이미 **전역 화면 좌표, 포인트 단위, 좌상단 원점**이다 — 소스 A(§3.2.3 변환 결과)·소스 B(`kAXPositionAttribute`/`kAXSizeAttribute`)와 **동일한 좌표계**라 추가 좌표 변환이 필요 없다. `frame` 은 창 bounds **전체**(가시 텍스트의 정밀한 위치가 아니라 창 사각형)다 — 그래서 이 소스의 후보는 클릭 지점을 가질 수 없고, 확정 시 창 전면화로 실행된다(F-04 §3.7).
+
+**`OptionOnScreenOnly` 의 의미**: 이 소스는 **화면에 나타나 있는 창**만 본다. "안 보이는 창"이란 위 §3.3.4 도입부에서 말한 대로 **가려진(occluded) 창**을 뜻하며, 최소화된 창은 온스크린 목록에서 빠진다.
+
+⭐ **자기 창 제외(이슈 #133 REVISE 반영)**: Ultrakey 본인 프로세스의 창(설정 창·Event Viewer·About 창)은 세션 중 열려 있어도 후보에서 제외한다 — 이 기능의 목적은 "다른 앱의 가려진 창 검색"이므로 자기 창은 노이즈일 뿐이며, 오버레이 창은 항상 `always_on_top`(플로팅 레벨)이라 레이어 0 필터(C2 ①)로 이미 걸러진다.
+
+**⭐ 권한 제약**: `CGWindowListCopyWindowInfo` 자체는 Screen Recording 권한이 없어도 호출에 **성공**한다. 다만 권한이 없으면 `kCGWindowName`(창 제목)이 통상 **빈 문자열**로 돌아오고, C2 의 빈 제목 필터가 그 항목을 제외하므로 이 소스는 **권한 없이 조용히 빈 결과(후보 0개)** 가 된다 — 실패로 드러나지 않는다. F-02 는 애초에 Screen Recording 권한을 요구·보유하므로(§1, `F-11`), 실제 사용 경로에서는 제목이 읽힌다.
+
 ### 3.4 병합 계층
 
 두 목록을 하나의 `CandidateSet` 으로 합친다. 전제: 3.2.3/3.3 절에서 이미 동일 좌표계(전역, 좌상단 원점, 포인트)로 정규화되어 있다. 단, AX 매치는 요소 전체가 `frame` 이므로(§3.3) OCR 매치보다 넓은 사각형인 경우가 흔하다.
@@ -195,7 +216,10 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 | M1. 합치기 | 목록 A ∪ 목록 B | 사실 — 두 소스가 병행 동작하고 결과가 하나의 목록으로 사용자에게 보인다는 점은 벤더 FAQ 와 ⓘ 팝오버 원문(§3.3) 양쪽에서 확정. |
 | M2. 중복 판정 | 두 후보의 `frame` 이 겹치고(예: IoU 임계값 초과, 또는 중심점 간 거리가 임계값 이하) 텍스트가 대소문자 무시 후 동일/포함 관계이면 같은 실체로 판정 | `(추정)` — 정확한 임계값과 텍스트 비교 방식은 조사 자료에 없다. |
 | M3. ⭐ 충돌 시 우선순위 — 정정(승격) | 겹치는 한 쌍에서 **OCR 쪽이 AX 쪽을 대체**한다 | **확정** — `Seek using macOS accessibility` ⓘ 팝오버 원문(§3.3): "Seek matches using Optical Character Recognition (OCR) will display in place of duplicate matches from Accessibility." 기존 명세가 "AX 프레임을 채택한다"고 추정했던 것은 **정반대로 틀렸다.** OCR 이 항상 켜지는 기본 소스이고 AX 는 보강 소스라는 §1 의 구도와도 정합한다. |
+| M4. ⭐(이슈 #133 · D12, 신규) 창 제목 후보(소스 C)의 중복 제거 | 창 제목 후보는, **같은 정규화 텍스트(소문자·공백 축약, `normalize_for_match`)를 가진 OCR/AX 후보가 그 창 bounds 안에 있으면** 버린다(구현: 가시 후보 프레임의 **중심점이 창 bounds 안** — 닫힌 구간 포함 판정). ⚠️ **창 제목 후보끼리(같은 제목의 다른 창)는 중복 제거하지 않는다** — 서로 다른 창이다 | **확정** — 이슈 #133 결정(comment-5547504824 3절). 가시 텍스트가 이미 그 제목을 대표하고 있으면 제목 후보는 잡음이므로 버리고, 정밀 위치가 없는 제목 후보가 가시 후보를 밀어내는 것을 막는다 |
 | 정렬 순서 | 읽기 순서(화면 좌표 `y` 오름차순, 동률이면 `x` 오름차순)를 기본으로 제안 | `(추정)` — 개발자 포스트는 "up/down arrows or tab/shift+tab 로 후보 순환"만 언급하고 순서 기준은 밝히지 않는다. 커서 거리 기준일 가능성도 배제할 수 없다 — §9. |
+
+⭐(이슈 #133) **소스 C 는 M1~M3 을 거친 뒤(OCR/AX 병합 출력에) 추가 병합된다** — `merge_candidates`(A∪B) 결과에 창 제목 목록(소스 C)을 붙이고(구현: `merge_window_titles`), 위 M4 규칙으로 가시 중복을 거른 뒤 읽기 순서로 다시 정렬한다. 분리한 이유는 두 병합의 성격이 다르기 때문이다 — M1~M3 은 "같은 실체를 하나로"이고, M4 는 "가시 후보를 대표하는 제목 잡음 제거"다.
 
 ### 3.5 ⭐ 다중 디스플레이·Stage Manager (신규)
 
@@ -229,6 +253,9 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 | `Seek using macOS accessibility` | 체크박스 (bool) | **☐** (실측: AX 트리 + `defaults` 부재) | 항상 표시 | `seekOptions` 비트(추정) | app-bundle-analysis.md §6.1, §2.2 |
 | ↳ `Match on more than one character` | 체크박스 UI, 저장은 **정수**(§3.3.1) | **상위 켰을 때 기본 ☑**(정수값 `2`) (실측: AX 트리 + `defaults`) | ⭐ **`Seek using macOS accessibility` 가 ☑ 일 때만 존재 — ☐ 이면 dimmed 가 아니라 완전히 숨겨진다**(hidden, 실측: AX 트리) | `minAxCharCount`(정수, `2`/`1`) — ⭐ 아무 설정도 안 건드린 plist 에 이미 존재하는 두 키 중 하나(시딩값) | app-bundle-analysis.md §6.1, §2.1 |
 | `Only Seek in the frontmost window` | 체크박스 (bool) | **☐** (실측: AX 트리) — 기존 명세와 값 일치, 실측으로 확인 완료 | 항상 표시. ⭐ AX(소스 B)의 범위와는 무관 — OCR(소스 A)의 캡처 범위만 좁힌다(§3.3.2) | `seekFrontmostOnly` | app-bundle-analysis.md §6.1, §2.2 |
+| ⭐(이슈 #133 · D12) `Search window titles` | 체크박스 (bool) | **☑ (부재 = 참)** — ⚠️ **원본에 없는 신규 항목이라 실측 출고 기본값이 없다** — ☑ 는 **클론 설계 결정**(이슈 #133)이다. 라벨 ko: `창 제목 검색` | 항상 표시 | `seek.includeWindowTitles` | 이슈 #133 (원본에 없는 D12 신규 기능) |
+
+> ⭐(이슈 #133) **`Search window titles` 는 위 표의 나머지 행들과 근거 등급이 다르다.** 나머지는 전부 원본 v1.66 실측(부재 = 원본 기본값)이지만, 이 행은 **원본에 없는 클론 고유 항목**(D12 — 갈라짐 표)이라 실측값이 존재하지 않는다. **부재 = 참(☑)** 은 클론 설계 결정이며, 그 근거·기각 대안은 이슈 #133 결정 코멘트(comment-5547504824)에 기록돼 있다 — 여기서는 결정만 확정으로 반영한다. 힌트 원문: en "Search window titles even when they are obscured by other windows" · ko "다른 창에 가려 보이지 않아도 창 제목을 검색 대상에 넣는다".
 
 > `Match on more than one character` 를 제외한 나머지는 사용자가 건드리지 않는 한 plist 에 키 자체가 없다 — "부재 = 기본값" 판정 논리(app-bundle-analysis.md §2.1)를 그대로 따른다.
 
@@ -253,6 +280,7 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 | 13 | ⭐ 정정 — 최소 지원 OS 와 캡처 API 요구 버전의 "간극"은 애초에 존재하지 않는다 | 기존 명세는 ScreenCaptureKit(12.3+) 전제로 12.0–12.2 사용자를 배제하는 결정을 내렸으나, 원본은 ScreenCaptureKit 을 쓰지 않는다(§3.2). `LSMinimumSystemVersion = 12.0` 과 실제 사용 API(`CGDisplayCreateImage`)가 정합하므로 이 간극 자체가 근거를 잃는다 — §7 D1 재검토 참조. |
 | 14 | ⭐ (신규) AX 매치가 가려진(obscured) 텍스트를 잡는 경우 | AX ⓘ 팝오버 원문(§3.3)이 명시하는 알려진 한계다: "you might get matches even if you can't see the text in the element." 사용자에게는 화면에 없는 텍스트가 매치로 뜨는 것처럼 보일 수 있다. 관련 타입 `UnobscuredWindowElement`. F-03 은 이런 매치도 정상적으로 하이라이트(요소 전체)해야 한다. |
 | 15 | ⭐ (신규) Stage Manager 에서 창을 순회 | `StageWindowAccessibilityElement` 가 별도로 존재하는 것으로 보아 Stage Manager 의 AX 트리 접근이 일반 창과 다르게 취급될 가능성이 있다(§3.5). 구체적으로 무엇이 다른지는 `(미확정)` — §9. |
+| 16 | ⭐ (신규, 이슈 #133) 소스 C(창 제목)와 Screen Recording 권한 | `CGWindowListCopyWindowInfo` 자체는 권한 없이도 호출에 성공하지만, 권한이 없으면 `kCGWindowName`(창 제목)이 빈 문자열이 되어(§3.3.4) 이 소스는 **실질적으로 빈 결과(후보 0개)** 가 된다 — 조용한 실패. F-02 는 애초에 Screen Recording 권한을 요구·보유하므로(§1) 실제 경로에서는 제목이 읽힌다 |
 
 ---
 
@@ -260,7 +288,7 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 
 **소스 A (OCR·캡처)** — ⭐ 아래 캡처 API 목록은 ScreenCaptureKit 을 전제한 기존 명세를 정정한 것이다.
 - `CGImage` — 캡처 결과 프레임 표현
-- ⭐ **`CGDisplayCreateImage(displayID)`** / **`CGDisplayCreateImageForRect(displayID, rect)`** — 화면 캡처 본체(실측: 번들 심볼, `nm -u`). `CGWindowListCopyWindowInfo` / `CGWindowListCreateDescriptionFromArray` 도 링크되어 있으며 `Only Seek in the frontmost window` 의 창 범위 판정에 쓰이는 것으로 보인다 `(미확정 — 용도는 해석)`.
+- ⭐ **`CGDisplayCreateImage(displayID)`** / **`CGDisplayCreateImageForRect(displayID, rect)`** — 화면 캡처 본체(실측: 번들 심볼, `nm -u`). ⭐ **`CGWindowListCopyWindowInfo` 의 용도가 확정됐다(이슈 #133)** — **소스 C: 창 제목 후보 획득**(§3.3.4, `crates/ultrakey-platform/src/window_list.rs`). 기존 추정("`Only Seek in the frontmost window` 의 창 범위 판정")은 소스 C 용도가 확정된 뒤에도 §3.3.2 의 추정으로 유보해 둔다 — 같은 함수가 두 용도에 쓰일 가능성을 배제하지 않는다(전자는 실측·확정, 후자는 미확정). `CGWindowListCreateDescriptionFromArray` 는 여전히 용도 미확정.
 - **CoreImage** — `CILanczosScaleTransform`(스케일) · `CIPhotoEffectMono` / `CIPhotoEffectNoir`(흑백) · `CIMaximumComponent` / `CIMinimumComponent`(성분 추출) — §3.2.1 의 전처리 파이프라인(실측: 번들 심볼)
 - **Vision — 실측 확정**(승격, `(추정)` 아님): `VNImageRequestHandler(cgImage:)` · `VNRecognizeTextRequest` · `VNRecognizedTextObservation`(`boundingBox`, `topCandidates(_:)`) · `VNRecognizedText` · `VNImageRectForNormalizedRect`(정규화 좌표 → 화면 좌표 변환, §3.2.3). Swift 래퍼 `libswiftVision.dylib`. 내부 타입 `VisionManager` · `TextRecognition` · `TextRecognitionDelegate` · `RecognitionResult`(실측: 번들 심볼)
 - `CGDisplayBounds(_:)` / `NSScreen.screens` — 디스플레이별 전역 원점, `backingScaleFactor`
@@ -325,6 +353,9 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 - [ ] OCR 결과가 0개인 화면(순수 이미지 등)에서도 세션이 오류 없이 후보 0개 상태를 반환한다.
 - [ ] 병합된 `CandidateSet` 에 질의 문자열을 적용했을 때, §3.6 의 매칭 규칙(대소문자 무시·부분 문자열·공백 정규화)에 따라 일치하는 후보만 남는다.
 - [ ] ⭐(이슈 #102) 디스플레이별 후보가 도착하는 즉시 현재 질의로 필터링된 후보가 표시된다(F-02 `filter_by_query` 의 재적용 — OCR 총 완료를 기다리지 않는다, §5 #8).
+- [ ] ⭐(이슈 #133, 소스 C) `Search window titles` 가 켜져 있고 Screen Recording 권한이 있을 때, 화면에 **가려진(obscured) 창**의 제목이 후보 목록에 나타난다(§3.3.4).
+- [ ] ⭐(이슈 #133, §3.4 M4) 같은 창 bounds 안에 같은 정규화 텍스트의 가시(OCR/AX) 후보가 있으면 창 제목 후보는 중복 제거되고, 제목이 같은 **서로 다른 창**은 둘 다 유지된다.
+- [ ] ⭐(이슈 #133, 소스 C) `Search window titles` 가 꺼져 있으면 소스 C 는 후보를 하나도 생성하지 않는다.
 
 ---
 
@@ -346,3 +377,4 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 | Q-l | ⭐ (신규) `minAxCharCount` 를 `2`/`1` 외의 값으로 설정하는 경로가 있는가 (§3.3.1) | UI 는 체크박스 하나뿐이라 두 값만 관찰됐고, 다른 값을 만드는 경로(설정 파일 직접 편집 외)를 찾지 못했다 | 소스 코드 확인, 또는 `defaults write` 로 임의 값을 넣었을 때의 UI/동작 관찰 |
 | ~~Q-m~~ | ~~전체 화면 OCR 지연의 실측치~~ — ⭐⭐ **해소. `docs/dev/seek-ocr-latency-spike.md`** | **전체 화면(3840×1600 + 2560×1440) `.accurate` = 약 775 ms**(캡처 31 ms + OCR 744 ms), 콜드 첫 호출 +120 ms. `.fast` 는 241 ms. 함께 확정된 것: 비용은 화면 크기가 아니라 **텍스트 밀도**를 따르고, **Vision 은 병렬화되지 않는다**(이득 0 %). ⚠️ **Retina(`scale=2.0`)와 저사양 기기는 측정하지 못했다** — 그 두 가지는 스파이크 문서 §6 에 미확인으로 남았다 | 해소됨 (M4 Pro / macOS 26.5.2 / 1× 디스플레이 2대) |
 | Q-n | ⭐ (신규) Stage Manager 에서 `StageWindowAccessibilityElement` 가 일반 AX 처리와 정확히 무엇이 다른가 (§3.5, §5 #15) | 타입 이름만 실측, 동작 상세는 확인 못함 | Stage Manager 를 켠 상태에서 실제 앱 동작 관찰, 또는 소스 코드 확인 |
+| Q-o | ⭐ (신규, 이슈 #133) 소스 C — 창 제목 후보의 **획득 경로·중복 제거 규칙·확정 동작** (§3.3.4·§3.4 M4 · `seek-click-execution.md` §3.7) | **결정됨(이슈 #133)** — 획득 경로 a(`CGWindowListCopyWindowInfo(OptionOnScreenOnly)`), 중복 규칙(같은 정규화 텍스트의 가시 후보가 창 bounds 안에 있으면 제거 — 소스 C 끼리는 유지), 확정 시 **창 전면화**(클릭 합성 없음). 근거·기각 대안: 이슈 #133 결정 코멘트(comment-5547504824) | 해소됨 |

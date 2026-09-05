@@ -60,7 +60,7 @@
 
 | 탭 | 컨트롤 개수(§4) | 창 크기(실측: AX 트리) | 소유 명세 ID |
 | :--- | :--- | :--- | :--- |
-| `Seek` | 상위 8개 + 조건부 1개 = 9개 | 555 × 378 pt | `F-01`·`F-02`·`F-03`·`F-04` |
+| `Seek` | 상위 9개 + 조건부 1개 = 10개 ⭐(이슈 #133: D12 `Search window titles` 추가) | 555 × 378 pt | `F-01`·`F-02`·`F-03`·`F-04` |
 | `Hyperkey` | 상위 6개 + 조건부 2개 = 8개 | 710 × 517 pt | `F-05`·`F-06` |
 | `Presets` | 16개 + 조건부 2개 = 18개 | 825 × 527 pt | `F-08` |
 | `General` | 7개 컨트롤 + 조건부 1개 | 613 × 273 pt | `F-10`·`F-11`·`F-12`·`F-13` |
@@ -217,7 +217,7 @@
 
 ⭐ 4개 탭의 전 항목을 실제 UI 기준으로 재작성한다. 각 항목에 라벨 원문·컨트롤 종류·선택지 전량·출고 기본값·활성화/표시 조건·배치 순서와 구분선 위치·소유 명세·저장 키(알려진 경우)를 표기한다. 저장 키가 `—` 인 항목은 IB 아웃렛만 확인되고 `NSUserDefaults` 키는 확인되지 않은 것이다(app-bundle-analysis.md §2.2).
 
-### 4.1 `Seek` 탭 (상위 8개 + 조건부 1개 = 9개 항목, 555×378pt)
+### 4.1 `Seek` 탭 (상위 9개 + 조건부 1개 = 10개 항목, 555×378pt — ⭐(이슈 #133) D12 `Search window titles` 1개 추가)
 
 배치 순서 그대로 (실측: AX 트리, 02-seek-tab.png):
 
@@ -227,19 +227,22 @@
 | 1 | `Toggle Seek with shortcut:` | 단축키 레코더(`AXTextField`) | **빈 값(미설정)**, 표시 라벨 `Record Shortcut` | 항상 | F-01 | — |
 | 2 | `Remap key to Seek:` | 팝업 버튼(35종, §4.1.1) | **`-`**(미설정) | 항상 | F-01 | `seekRemapKeycode` |
 | 3 | `Only show while the remapped key is held` | 체크박스 | ☐ | ② 아님, **① 비활성화(dimmed)**: `Remap key to Seek:` = `-` 이면 dimmed. 부제 `Release the remapped key to click` 이 종속 | F-01 | `seekExecuteOnClose` |
+| 4 | ⭐(이슈 #133 · D12) `Search window titles` | 체크박스 | **☑ (부재 = 참)** — ⚠️ 원본에 없는 항목이라 실측 기본값 없음, 클론 설계 결정(아래 주석) | 항상 | F-02 | `seek.includeWindowTitles` |
 | — | (구분선) | | | | | |
-| 4 | `Seek using macOS accessibility` + ⓘ | 체크박스 + 정보 팝오버 | ☐ | 항상 | F-02 | `seekOptions` 비트 |
-| 5 | `Match on more than one character` | 체크박스(중첩) | **☑**(값 `minAxCharCount = 2`) | **② 숨김**: 항목 4 가 ☐ 이면 AX 트리에서 사라진다 | F-02 | `minAxCharCount`(정수, 불리언 아님) |
-| 6 | `Only Seek in the frontmost window` | 체크박스 | ☐ | 항상 | F-02 | `seekFrontmostOnly` |
-| 7 | `Focus window before clicking` | 체크박스 | ☐ | 항상 | F-04 `(추정 — 소유 배정은 기존과 동일하게 유지, 이번 실측이 F-03/F-04 경계를 확정하지 못함)` | — |
-| 8 | `Semicolon highlights next match` | 체크박스 | ☐ | 항상 | F-01 | `semicolonCycleSeek` |
-| 9 | `Change click modes with modifier keys` + ⓘ | 체크박스 + 정보 팝오버 | **☑** — Seek 탭에서 유일하게 기본 켜짐 | 항상. 부제 `If this setting is disabled, modifiers will be applied to the click` 종속 | F-04 `(추정)` | `seekOptions` 비트 |
+| 5 | `Seek using macOS accessibility` + ⓘ | 체크박스 + 정보 팝오버 | ☐ | 항상 | F-02 | `seekOptions` 비트 |
+| 6 | `Match on more than one character` | 체크박스(중첩) | **☑**(값 `minAxCharCount = 2`) | **② 숨김**: 항목 5 가 ☐ 이면 AX 트리에서 사라진다 | F-02 | `minAxCharCount`(정수, 불리언 아님) |
+| 7 | `Only Seek in the frontmost window` | 체크박스 | ☐ | 항상 | F-02 | `seekFrontmostOnly` |
+| 8 | `Focus window before clicking` | 체크박스 | ☐ | 항상 | F-04 `(추정 — 소유 배정은 기존과 동일하게 유지, 이번 실측이 F-03/F-04 경계를 확정하지 못함)` | — |
+| 9 | `Semicolon highlights next match` | 체크박스 | ☐ | 항상 | F-01 | `semicolonCycleSeek` |
+| 10 | `Change click modes with modifier keys` + ⓘ | 체크박스 + 정보 팝오버 | **☑** — 원본 Seek 탭에서 유일하게 기본 켜짐(클론은 항목 4 추가로 기본 ☑ 가 둘이 된다, 아래 주석) | 항상. 부제 `If this setting is disabled, modifiers will be applied to the click` 종속 | F-04 `(추정)` | `seekOptions` 비트 |
 
 **`Remap key to Seek:` 팝업 선택지 35종(표시 순서대로, 실측: AX 트리)**: `-` · `caps lock` · `right option` · `right shift` · `right command` · `right control` · `left option` · `left shift` · `left command` · `left control` · `menu (PC)` · `F1`…`F24`. **`globe` 는 없다** — Hyperkey 탭 팝업(§4.2)에는 있어 두 열거형이 다르다.
 
-**ⓘ 팝오버 내용의 소유**: 3개 팝오버(제목·항목4·항목9) 의 문구 자체는 각각 F-01/F-02/F-04 가 소유한다. F-09 는 "그 항목 옆에 ⓘ 가 있다"는 배치 사실만 소유한다(§3.2).
+**ⓘ 팝오버 내용의 소유**: 3개 팝오버(제목·항목5·항목10) 의 문구 자체는 각각 F-01/F-02/F-04 가 소유한다. F-09 는 "그 항목 옆에 ⓘ 가 있다"는 배치 사실만 소유한다(§3.2).
 
 > ⭐(이슈 #93) — **클론 고유 항목 `검색 언어`** 는 위 "실측: AX 트리" 표에서 **제외**한다. 원본 SuperKey 의 Seek 탭에 이런 항목이 없기 때문(원본은 영어 단일 — 계획 §9 #9 참조)이고, 위 표는 원본 실측의 정본이므로 지우지 않고 **측면 주석**으로만 남긴다. 클론 구현의 항목 위치·저장 키·동작은 `seek-activation-and-session.md` §4 계열(저장 키 `seek.searchLanguage`)과 `settings.html` 이 정본이다 — 컨트롤은 팝업(5종: `en`·`ko`·`zh`·`ja`·`es`), ⭐(이슈 #131, D11) 부재 시 **`영어만`(영어 기본)이 선택된 것으로 표시**되고(부재 = 영어 고정 — 이슈 #48 의 로케일 폴백은 폐기), 팝업 조작 시 명시 값으로 굳는다(현행 유지, Plan D1·D6 §9 #2).
+
+> ⭐(이슈 #133 · D12) — **클론 고유 항목 `창 제목 검색`(`Search window titles`)은 위 표에 행 4 로 등재했다** — 검색 언어(D10)와 달리 체크박스 계열이라 표 형식에 그대로 들어가기 때문이며, **원본 실측 표에는 이 항목이 없다**(원본은 OCR 기반 소스 A·B 2종뿐 — ⚠️ 이것은 "제외하고 측면 주석으로 남기는" D10 의 방식이 아니라, **"원본에는 없음을 행·기본값·이 주석으로 명시하고 표에 둔다"** 는 방식이다). 배치 순서는 **클론 결정**이다: `settings.html` 이 `Only show while the remapped key is held` 바로 뒤(체크박스 군의 시작)에 두었으므로 표도 같은 자리(항목 3 과 구분선 사이)에 두어 **명세 표 순서 = UI 순서를 유지**한다(HTML 주석: "클론 검출 항목 중 가장 위"). 라벨 ko `창 제목 검색`, 힌트 en "Search window titles even when they are obscured by other windows" / ko "다른 창에 가려 보이지 않아도 창 제목을 검색 대상에 넣는다". 저장 키 `seek.includeWindowTitles`·기본값 부재 = 참(☑)·동작의 정본은 `seek-text-detection.md` §3.3.4·§4 (D12 — 갈라짐 표 `docs/spec/README.md`)가 소유한다.
 
 ### 4.2 `Hyperkey` 탭 (상위 6개 + 조건부 2개 = 8개 항목, 710×517pt)
 
@@ -382,11 +385,11 @@
 - [ ] 환경설정 창을 열면 좌측 사이드바에 `Seek`·`Hyperkey`·`Presets`·`General` 4개 탭이 이 순서로, 각각 토글형 버튼으로 표시된다.
 - [ ] 각 탭을 클릭하면 우측 패널이 전환되고 창 크기가 §3.1 의 값(Seek 555×378 · Hyperkey 710×517 · Presets 825×527 · General 613×273, pt)으로 리사이즈된다.
 - [ ] 좌측 사이드바의 탭 6개 전부가 라벨 왼쪽에 아이콘을 갖고, 라이트/다크 양쪽에서 배경과 충분한 대비로 보인다(§3.1 탭 아이콘, 이슈 #40 ②).
-- [ ] `Seek` 탭에 §4.1 의 상위 8개 항목이 모두 존재하고, `Match on more than one character` 는 `Seek using macOS accessibility` 가 ☐ 인 상태에서 **DOM/AX 트리에서 완전히 사라진다**(dimmed 가 아니라 hidden). `Only show while the remapped key is held` 는 `Remap key to Seek:` 가 `-` 인 상태에서 **자리를 차지한 채 dimmed** 로 표시된다.
+- [ ] `Seek` 탭에 §4.1 의 상위 9개 항목이 모두 존재하고, `Match on more than one character` 는 `Seek using macOS accessibility` 가 ☐ 인 상태에서 **DOM/AX 트리에서 완전히 사라진다**(dimmed 가 아니라 hidden). `Only show while the remapped key is held` 는 `Remap key to Seek:` 가 `-` 인 상태에서 **자리를 차지한 채 dimmed** 로 표시된다.
 - [ ] `Hyperkey` 탭에 §4.2 의 상위 6개 항목이 모두 존재하고, `Engage hyper key using trackpad:` 가 ☐ 이면 `Change menu bar icon when engaged`·`Provide haptic feedback when triggered` 2개가 숨김 처리된다.
 - [ ] `Presets` 탭에 §4.3 의 16개 항목이 4개 그룹(캡스락 7·시프트 4·삭제 3·기타 2)으로 구분선과 함께 표시된다. `Quick press duration` 슬라이더는 250~2000ms 범위이고 기본값 1000ms 다.
 - [ ] `General` 탭에 §4.4 의 7개 컨트롤(`Launch on login`·버전 버튼·`Check for updates automatically`·`Hide menu bar icon`·`Menu bar icon` 팝업·`Remove Oldest Activation`·`Purchase`)이 모두 존재하고, 언어 선택·권한 상태 표시·라이선스 키 입력 필드·`Reset to defaults` 는 **의도적으로 없다**.
-- [ ] 신규 설치 상태(설정을 아무것도 바꾸지 않음)에서 §4 의 모든 항목이 표기된 출고 기본값과 정확히 일치한다 — 특히 `Include shift in hyper key`·`Change click modes with modifier keys`·`Match on more than one character` **3개만 ☑**, 나머지는 전부 ☐ 이다.
+- [ ] 신규 설치 상태(설정을 아무것도 바꾸지 않음)에서 §4 의 모든 항목이 표기된 출고 기본값과 정확히 일치한다 — 특히 `Include shift in hyper key`·`Change click modes with modifier keys`·`Match on more than one character`·⭐(이슈 #133 · D12) `Search window titles` **4개만 ☑**, 나머지는 전부 ☐ 이다.
 - [ ] 임의의 체크박스를 토글하면 별도의 "적용"/"확인" 조작 없이(그런 버튼이 UI 어디에도 없다) 다음 키 입력부터 F-07 리매핑 엔진에 새 값이 반영된다.
 - [ ] 단축키 레코더 필드는 미설정 시 `Record Shortcut` 을 표시하고, 클릭하면 레코딩 모드로 전환되며, `Esc` 를 누르면 레코딩이 취소되고 이전 값이 유지된다.
 - [ ] 앱을 재시작해도 이전에 설정한 모든 값이 그대로 유지되며, **한 번도 건드리지 않은 항목은 저장 파일에 키 자체가 없어도 올바른 기본값으로 동작한다**(§3.6 "부재 = 기본값").
