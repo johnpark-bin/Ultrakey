@@ -580,6 +580,10 @@ fn confirm_selected(session: &mut Session, modifiers: EventFlags) -> Option<Sess
         frame: candidate.frame,
         source: candidate.source,
         display_id: candidate.display_id,
+        // ⭐ 이슈 #133 — 소스 C(창 제목) 후보의 창 식별자를 그대로 운반한다.
+        // OCR/AX 는 None 이라 `ConfirmedMatch::action()` 이 Click 으로 갈린다.
+        window_id: candidate.window_id,
+        pid: candidate.pid,
         query: session.query.clone(),
         match_index,
         modifiers,
@@ -592,6 +596,7 @@ fn confirm_selected(session: &mut Session, modifiers: EventFlags) -> Option<Sess
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::confirm::ConfirmAction;
     use ultrakey_core::event::EventKind;
     use ultrakey_core::flags::EventFlags;
     use ultrakey_core::keycode::KeyCode;
@@ -1140,6 +1145,58 @@ mod tests {
             }]
         );
         assert!(!machine.is_active());
+    }
+
+    // ── ⭐ 이슈 #133 — 창 제목(소스 C) 후보의 확정 ─────────────────────────
+
+    /// 창 제목 후보를 ingest → Enter 확정 → `SessionEffect::Confirm` 이
+    /// `window_id`/`pid` 를 운반하고 `action()` 이 `FrontWindow` 를 낸다.
+    #[test]
+    fn window_title_confirm_carries_window_id_and_pid_with_front_window_action() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        let title = TextCandidate::window_title(
+            "Settings".to_string(),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            42,
+            1337,
+        );
+        let _ = machine.ingest_extra(vec![title]);
+        let _ = machine.finish_detection();
+        for c in ['s', 'e', 't'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        assert_eq!(
+            machine.overlay().unwrap().selected().unwrap().text,
+            "Settings"
+        );
+
+        let effects = machine.handle_key(
+            &key_down(KeyCode::RETURN, EventFlags::NONE),
+            Some('\r'),
+        );
+        assert_eq!(effects.len(), 1);
+        let SessionEffect::Confirm(confirmed) = &effects[0] else {
+            panic!("Confirm 이어야 한다: {effects:?}")
+        };
+        assert_eq!(confirmed.window_id, Some(42));
+        assert_eq!(confirmed.pid, Some(1337));
+        assert_eq!(confirmed.action(), ConfirmAction::FrontWindow);
+        assert_eq!(machine.state(), SessionState::Confirming);
     }
 
     // ── Esc 가 모든 상태에서 닫는다(§3.2, §8) ────────────────────────────

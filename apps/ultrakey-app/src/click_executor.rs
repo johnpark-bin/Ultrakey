@@ -28,7 +28,7 @@ use ultrakey_core::keycode::KeyCode;
 use ultrakey_platform::click_synthesis;
 use ultrakey_platform::event::SyntheticEvent;
 use ultrakey_seek::Rect;
-use ultrakey_seek_session::confirm::{ClickError, ClickSettings, ConfirmedMatch};
+use ultrakey_seek_session::confirm::{ClickError, ClickSettings, ConfirmAction, ConfirmedMatch};
 use ultrakey_click::path::{self, AxOutcome, Press, Requery};
 use ultrakey_click::plan::ClickPlan;
 use ultrakey_click::{mode, point, visible};
@@ -36,6 +36,10 @@ use ultrakey_click::{mode, point, visible};
 /// AX 호출 메시징 타임아웃(초) — `ax_text.rs` 의 기본값과 같다. 응답 없는 앱이
 /// 워커를 영원히 블로킹하지 않게 한다(§5 #1, 엣지 14).
 const AX_TIMEOUT_SECS: f32 = 0.5;
+/// ⭐(이슈 #133) 창 전면화 — `kAXWindowsAttribute` 순회 상한(개). 병적 앱
+/// (브라우저 DOM 미러 등이 창 수백 개를 노출하는 경우) 방어 — 초과 시 AX 경로를
+/// 포기하고 앱 수준 폴백으로 내려간다.
+const MAX_AX_WINDOW_ITERATION: usize = 200;
 /// `Focus window before clicking` — `isActive` 폴링 간격(결정 D8, 이슈 #44 —
 /// 설계 판단, 실기기 조정 지점).
 const FOCUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -72,6 +76,16 @@ impl ultrakey_seek_session::ClickExecutor for ClickExecutor {
     }
 
     fn execute(&mut self, target: &ConfirmedMatch) -> Result<(), ClickError> {
+        // ⭐(이슈 #133 판정 조건 4) — 확정 동작은 소스로 갈린다: 창 제목 후보는
+        // 좌표 클릭이 아니라 **창 전면화**다. `FrontWindow` 는 이 자리에서 즉시
+        // 반환해 클릭 경로(아래 1~5단계)로 **들어가지 않는다** — F-01 의
+        // `notify_click_finished` 는 executor 반환 후 호출되므로 세션 닫힘은
+        // 그 경로 그대로 성립한다.
+        match target.action() {
+            ConfirmAction::FrontWindow => return self.front_window(target),
+            ConfirmAction::Click => {}
+        }
+
         // 1) 모드 해석 · 클릭 계획 산출(순수).
         let click_mode = mode::resolve_click_mode(
             self.settings.change_click_modes_with_modifiers,
@@ -236,6 +250,117 @@ fn find_window_ancestor(mut element: AXUIElement) -> Option<AXUIElement> {
 }
 
 impl ClickExecutor {
+    /// ⭐(이슈 #133 판정 조건 4) — 창 제목 후보의 확정 동작: **창 전면화**.
+    ///
+    /// 순서(설계 결정 — "AXRaise 우선, 실패 시 앱 수준 폴백"):
+    /// ① AX 경로 — `AXUIElementCreateApplication`(`AXUIElement::from_pid`) →
+    ///    `kAXWindowsAttribute` 창 목록에서 `kAXWindowNumberAttribute` 값이
+    ///    `target.window_id` 와 일치하는 창을 찾아 `kAXRaiseAction`. 창 수 상한
+    ///    ([`MAX_AX_WINDOW_ITERATION`])으로 병적 앱을 방어하고, 모든 AX 요소에
+    ///    [`AX_TIMEOUT_SECS`] 를 건다.
+    /// ② 앱 활성화 — `activate_application`(메인 디스패치 + ActivateIgnoringOtherApps)
+    ///    을 **어느 경로든 정확히 1회** 호출한다: ①은 창을 앞으로만 끌어오고
+    ///    키보드 포커스는 따라오지 않는 macOS 동작이 있어 보완이 필요하고
+    ///    (`focus_window_at` 의 관례), ①이 온전히 실패했을 때는 그 호출 자체가
+    ///    **앱 수준 폴백**이 된다 — 할 수 있는 전부가 앱 활성화뿐이기 때문이다.
+    /// 좌표 클릭은 합성하지 않는다 — 이 경로는 "그 창을 앞으로"만 한다.
+    ///
+    /// `window_id`·`pid` 중 하나라도 `None` 이면(구조상 불가 — 생성자가 보장)
+    /// 로그만 남기고 `Ok(())` 를 돌려준다(조용한 no-op). 단계별 실패도 크래시
+    /// 없이 로그 + 앱 활성화 폴백으로 흡수한다.
+    fn front_window(&self, target: &ConfirmedMatch) -> Result<(), ClickError> {
+        let Some(window_id) = target.window_id else {
+            tracing::warn!("FrontWindow confirm has no window_id; treating as a no-op");
+            return Ok(());
+        };
+        let Some(pid) = target.pid else {
+            tracing::warn!("FrontWindow confirm has no pid; treating as a no-op");
+            return Ok(());
+        };
+
+        let ax_raised = self.raise_window_via_ax(window_id, pid);
+
+        // ② — AX 성공 여부와 무관한 독립 1회(위 메서드 문서: 보완이자 폴백).
+        if !activate_application(&self.app, pid) {
+            tracing::warn!(
+                pid,
+                "target application could not be activated after window fronting"
+            );
+        }
+
+        if ax_raised {
+            tracing::debug!(window_id, pid, "fronted the target window (AX raise + app activation)");
+        } else {
+            tracing::warn!(window_id, pid, "AX window raise failed; only app-level activation was applied");
+        }
+        Ok(())
+    }
+
+    /// AX 경로의 창 전면화 — 성공하면 `true`. 실패(요소 생성 실패·`AXWindows`
+    /// 읽기 실패·창 수 상한 초과·창 미매칭·raise 실패)는 단계마다 로그만 남기고
+    /// `false` 를 돌려준다 — 호출자가 앱 수준 활성화 폴백으로 흡수한다.
+    fn raise_window_via_ax(&self, window_id: u32, pid: i32) -> bool {
+        let Some(app) = AXUIElement::from_pid(pid) else {
+            tracing::warn!(pid, "failed to create AXUIElement for pid; falling back to app activation");
+            return false;
+        };
+        let _ = app.set_timeout(AX_TIMEOUT_SECS);
+
+        let windows = match app.attribute(ax_attr::AX_WINDOWS_ATTRIBUTE).ok().flatten() {
+            Some(value) => value.as_array().unwrap_or_default(),
+            None => {
+                tracing::warn!(pid, "failed to read AXWindows; falling back to app activation");
+                return false;
+            }
+        };
+        if windows.len() > MAX_AX_WINDOW_ITERATION {
+            tracing::warn!(
+                window_id,
+                pid,
+                count = windows.len(),
+                "AXWindows count exceeds the iteration cap; falling back to app activation"
+            );
+            return false;
+        }
+
+        // `kAXWindowNumberAttribute` — axuielement 0.9.1 의 ax_attribute 상수에
+        // 없고, 공개 SDK(AXAttributeConstants.h 의 kAX* 상수)에도 선언이 없는
+        // 미문서(비공개) 속성이다. 값은 "AXWindowNumber" 이며 읽기는 public API
+        // 경로와 같다(문자열 리터럴).
+        const AX_WINDOW_NUMBER_ATTRIBUTE: &str = "AXWindowNumber";
+
+        for value in windows {
+            let Some(window) = value.as_element() else {
+                continue;
+            };
+            let _ = window.set_timeout(AX_TIMEOUT_SECS);
+            let Ok(Some(number)) = window.attribute(AX_WINDOW_NUMBER_ATTRIBUTE) else {
+                continue;
+            };
+            if number.as_i64() != Some(i64::from(window_id)) {
+                continue;
+            }
+            match window.perform_action(AX_RAISE_ACTION) {
+                Ok(()) => return true,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        window_id,
+                        pid,
+                        "kAXRaiseAction failed on the matched window; falling back to app activation"
+                    );
+                    return false;
+                }
+            }
+        }
+        tracing::warn!(
+            window_id,
+            pid,
+            "no matching AXWindow (kAXWindowNumberAttribute); falling back to app activation"
+        );
+        false
+    }
+
     /// `Focus window before clicking` ON — 대상 창을 활성화한다(명세 §3.7).
     ///
     /// 순서: 클릭 지점 요소 → `AXWindow` 조상(순회 상한 J4) → pid →

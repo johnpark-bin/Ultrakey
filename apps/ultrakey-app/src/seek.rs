@@ -195,6 +195,11 @@ struct WorkerEnv {
     /// `recognitionLanguages` 목록을 읽는다(메인 스레드의 `catalog` 를 캡처한
     /// 클로저 — `stored_origin` 과 같은 경계).
     ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// ⭐ 이슈 #133 — 세션을 열 때마다 `seek.includeWindowTitles` 값을 읽는다
+    /// (메인 스레드 `AppState.store` 를 캡처한 클로저 — `ocr_languages` 와 같은
+    /// 경계). F-02 검출 설정이라 `ConfigChanged` 신호로는 못 실어, 이 클로저가
+    /// 세션 열림 시점에 `SeekSettings::from_store` 로 직접 읽는다.
+    include_window_titles: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 /// F-01 세션 컨트롤러 — 워커 스레드가 **단독 소유**한다(잠금 없음).
@@ -334,7 +339,12 @@ impl SeekController {
                     }
 
                     self.generation += 1;
-                    spawn_detection(self.generation, env.tx.clone(), (env.ocr_languages)());
+                    spawn_detection(
+                        self.generation,
+                        env.tx.clone(),
+                        (env.ocr_languages)(),
+                        (env.include_window_titles)(),
+                    );
 
                     if env.trace {
                         let elapsed_ms = self
@@ -443,6 +453,7 @@ fn spawn_detection(
     generation: u64,
     tx: Sender<SeekSignal>,
     recognition_languages: Vec<String>,
+    include_window_titles: bool,
 ) {
     let spawned = thread::Builder::new()
         .name("ultrakey-seek-detect".into())
@@ -459,6 +470,10 @@ fn spawn_detection(
                 ..Default::default()
             };
             params.recognition.languages = recognition_languages;
+            // ⭐ 이슈 #133 — 소스 C(창 제목)를 켤 것인가. 세션 열림 시점에
+            // `SeekSettings::from_store` 로 읽은 값이 유입된다(부재 = true 는
+            // 저장 표현 쪽이 이미 반영).
+            params.include_window_titles = include_window_titles;
 
             let tx_for_display = tx.clone();
             let outcome = detect_candidates(&params, move |result| {
@@ -471,16 +486,24 @@ fn spawn_detection(
                 });
             });
 
-            let ax_only: Vec<TextCandidate> = outcome
+            // ⭐ 이슈 #133 — 디스플레이 미지정 후보(AX + 창 제목)를 `ExtraCandidates` 로
+            // 보낸다. 창 제목 후보는 `display_id: None` 이라 기존 `ingest_extra`
+            // 경로를 그대로 탄다(오버레이 위쪽에 얹히는 소스 B 와 같은 자리).
+            let extra: Vec<TextCandidate> = outcome
                 .candidates
                 .iter()
-                .filter(|c| c.source == CandidateSource::Accessibility)
+                .filter(|c| {
+                    matches!(
+                        c.source,
+                        CandidateSource::Accessibility | CandidateSource::WindowTitle
+                    )
+                })
                 .cloned()
                 .collect();
-            if !ax_only.is_empty() {
+            if !extra.is_empty() {
                 let _ = tx.send(SeekSignal::ExtraCandidates {
                     generation,
-                    candidates: ax_only,
+                    candidates: extra,
                 });
             }
 
@@ -623,6 +646,8 @@ fn ascii_fallback(keycode: KeyCode, flags: EventFlags) -> Option<char> {
 /// 이 파일은 `AppState` 를 모른다, `overlay.rs`/`overlay_demo.rs` 와 같은 경계).
 /// `ocr_languages` 는 세션을 열 때마다 현재 UI 로케일(`general.language`)에서
 /// 계산한 `recognitionLanguages` 목록을 읽는다(`AppState.catalog` 캡처 — 이슈 #48).
+/// `include_window_titles` 는 세션을 열 때마다 `seek.includeWindowTitles` 값을
+/// 읽는다(`AppState.store` 캡처 — 이슈 #133, `ocr_languages` 와 같은 경계).
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     app: tauri::AppHandle,
@@ -632,6 +657,7 @@ pub fn spawn(
     initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
     ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    include_window_titles: Arc<dyn Fn() -> bool + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) -> Sender<SeekSignal> {
     let (tx, rx) = unbounded::<SeekSignal>();
@@ -652,6 +678,7 @@ pub fn spawn(
                 initial_click_settings,
                 stored_origin,
                 ocr_languages,
+                include_window_titles,
                 persist_origin,
             );
         });
@@ -673,6 +700,7 @@ fn run_worker(
     initial_click_settings: ClickSettings,
     stored_origin: Arc<dyn Fn() -> Option<(f64, f64)> + Send + Sync>,
     ocr_languages: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    include_window_titles: Arc<dyn Fn() -> bool + Send + Sync>,
     persist_origin: Arc<dyn Fn(f64, f64) + Send + Sync>,
 ) {
     let trace = std::env::var_os("ULTRAKEY_SEEK_TRACE").is_some();
@@ -708,6 +736,7 @@ fn run_worker(
         trace,
         stored_origin,
         ocr_languages,
+        include_window_titles,
     };
     let mut controller = SeekController::new(initial_config, renderer, executor);
 

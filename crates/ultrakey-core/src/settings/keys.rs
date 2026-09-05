@@ -197,6 +197,11 @@ pub const SEEK_FOCUS_WINDOW_BEFORE_CLICKING: &str = "seek.focusWindowBeforeClick
 /// "부재 = true" 주석 관례를 그대로 따른다 — `unwrap_or_default()` 를 쓰면
 /// 부재가 `false` 로 읽혀 실측 기본값을 조용히 어기게 된다.
 pub const SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS: &str = "seek.changeClickModesWithModifiers";
+/// ⭐(이슈 #133, 소스 C) `창 제목 검색` — 체크박스. ⚠️ **기본값 ☑(부재 = `true`)**
+/// — 원본 SuperKey 에 이 설정이 없어 **실측 출고 기본값이 존재하지 않는다**(D12
+/// 클론 설계 결정). 위 `SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS` 와 같은 "부재 =
+/// true" 주석 관례를 따른다.
+pub const SEEK_INCLUDE_WINDOW_TITLES: &str = "seek.includeWindowTitles";
 /// ⭐(이슈 #93) `검색 언어` — 값은 `"ko"`·`"zh"`·`"ja"`·`"es"` 또는 영어 단일 명시
 /// `"en"`. ⚠️ **부재 ≠ 빈 문자열과 혼동하지 않는다**: 부재 = **영어 고정**
 /// (`Locale::En` → 빈 목록 = Vision 기본, 이슈 #131 — 이슈 #48 의 로케일 폴백은
@@ -305,6 +310,7 @@ pub fn all() -> &'static [&'static str] {
         SEEK_SEARCH_LANGUAGE,
         SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
         SEEK_CHANGE_CLICK_MODES_WITH_MODIFIERS,
+        SEEK_INCLUDE_WINDOW_TITLES,
         PER_DEVICE_MANAGED,
     ]
 }

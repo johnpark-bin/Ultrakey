@@ -434,6 +434,19 @@
       </div>
       <p class="hint" id="seek-execute-on-close-hint"></p>
 
+      <!-- ⭐(이슈 #133, D12) — `창 제목 검색`(소스 C). F-02 검출 설정이라 F-09
+           §4.1 배치 순서 표에는 없고, 클론 검출 항목 중 가장 위(체크박스 군의
+           시작)로 — 'Only show while the remapped key is held' 바로 뒤에 둔다.
+           출고 기본값 ☑(부재 = true — 원본에 없는 신규 기능의 D12 클론 결정). -->
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="seek-include-window-titles"
+            data-key="seek.includeWindowTitles" />
+          <span id="seek-include-window-titles-label"></span>
+        </label>
+      </div>
+      <p class="hint" id="seek-include-window-titles-hint"></p>
+
       <!-- ⭐ F-04(seek-click-execution.md §4) — 항목 7. F-09 §4.1 배치 순서:
            executeOnClose(3) 와 semicolonCycle(8) 사이. 출고 기본값 ☐(실측). -->
       <div class="row">
@@ -1373,6 +1386,13 @@ if (!tauri || !tauri.core) {
     );
     $("seek-change-click-modes-with-modifiers-hint").textContent = t(
       "settings.seek.change_click_modes_with_modifiers.hint",
+    );
+    // ⭐(이슈 #133, D12) — 창 제목 검색 체크박스 + 부제 힌트.
+    $("seek-include-window-titles-label").textContent = t(
+      "settings.seek.include_window_titles",
+    );
+    $("seek-include-window-titles-hint").textContent = t(
+      "settings.seek.include_window_titles.hint",
     );
     // ⭐(이슈 #93) — 검색 언어 팝업(라벨·힌트·5 종 선택지). 근거 문구는
     // Plan D1·D6 (Multilingual). 부제는 "영어 외 언어를 고르면 검색 창이
@@ -3110,6 +3130,10 @@ if (!tauri || !tauri.core) {
     // 반영해 온다(부재 = 기본값).
     $("seek-focus-window-before-clicking").checked = seek.focusWindowBeforeClicking;
     $("seek-change-click-modes-with-modifiers").checked = seek.changeClickModesWithModifiers;
+
+    // ⭐(이슈 #133, D12) — 창 제목 검색. 출고 기본값 ☑(부재 = true — 막
+    // SeekSettings 가 반영).
+    $("seek-include-window-titles").checked = seek.includeWindowTitles;
 
     if (!seekRecording) {
       renderSeekShortcutButtons(seek);

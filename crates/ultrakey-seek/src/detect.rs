@@ -1,4 +1,4 @@
-//! F-02 검출 파이프라인 조립 — 소스 A + 소스 B → 병합된 후보 집합.
+//! F-02 검출 파이프라인 조립 — 소스 A + 소스 B + 소스 C → 병합된 후보 집합.
 //!
 //! 이 모듈만 `ultrakey-platform`(macOS FFI)에 의존한다. 나머지 모듈은 순수
 //! 로직이라 macOS 없이 테스트된다.
@@ -17,7 +17,7 @@
 //!   약 775 ms 다. 세션은 즉시 열고 후보는 증분으로 받아야 한다.
 
 use crate::candidate::TextCandidate;
-use crate::merge::{merge_candidates, MergeParams};
+use crate::merge::{merge_candidates, merge_window_titles, MergeParams};
 use crate::transform::{normalized_bbox_to_global, DisplayFrame};
 use ultrakey_platform::ax_text::{AxScanError, AxScanParams};
 use ultrakey_platform::image_preprocess::PreprocessPreset;
@@ -46,6 +46,12 @@ pub struct DetectionParams {
     /// 창 프레임을 어떻게 얻는지는 명세가 `(미확정)` 으로 남겼으므로(§3.3.2)
     /// 이 모듈은 **호출자가 넘겨준 사각형을 쓴다** — 그 획득 책임은 F-01 이다.
     pub frontmost_window_rect: Option<crate::transform::Rect>,
+    /// 소스 C 를 켤 것인가 — `CGWindowListCopyWindowInfo` 창 제목 보강 소스
+    /// (이슈 #133). 화면에 안 보이는(가려진) 창의 제목도 검색 대상에 넣는다.
+    ///
+    /// ⭐ 설정 기본값(부재 = 켜짐)은 앱 계층(단위 B)이 넘긴다 — 이 구조체의
+    /// `Default` 는 꺼짐(`false`) 그대로다.
+    pub include_window_titles: bool,
 }
 
 /// 디스플레이 하나의 OCR 결과 — 끝나는 대로 하나씩 전달된다(S-1).
@@ -72,6 +78,8 @@ pub struct DetectionOutcome {
     pub ocr_count: usize,
     /// 소스 B 가 만든 후보 수(병합 전).
     pub ax_count: usize,
+    /// 소스 C 가 만든 후보 수(병합 전) — 창 제목. 꺼져 있으면 0.
+    pub window_count: usize,
     /// 캡처 전체에 걸린 시간(ms).
     pub capture_ms: f64,
     /// 검출 전체에 걸린 시간(ms).
@@ -213,9 +221,41 @@ pub fn detect_candidates(
         }
     }
 
+    // ── 소스 C ─────────────────────────────────────────────────────────────
+    // CGWindowList 창 제목(이슈 #133 판정 조건 1) — 화면에 안 보이는(가려진)
+    // 창의 제목도 검색 대상에 넣는 보강 소스. ⚠️ Screen Recording 권한이
+    // 없으면 kCGWindowName 이 비어 있어 창이 전부 필터링될 수 있다
+    // (`window_list.rs` 모듈 문서 참조) — 권한 자체는 F-02 가 이미 요구한다.
+    let window_titles: Vec<TextCandidate> = if params.include_window_titles {
+        ultrakey_platform::window_list::front_layer_windows()
+            .into_iter()
+            // ⭐ 이슈 #133(REVISE 반영) — 자기 창(Ultrakey 본인 프로세스의 창)은
+            // 후보에서 제외한다. 이 기능의 목적은 "다른 앱의 가려진 창 검색"이므로
+            // 설정 창·Event Viewer·About 창 등 자기 창은 노이즈일 뿐이고, 확정 시
+            // 자기 자신을 활성화하는 것은 혼란만 준다. 오버레이 창은 항상 플로팅
+            // 레벨(always_on_top)이라 레이어 0 필터로 이미 걸러진다(window_list.rs).
+            .filter(|w| w.pid != std::process::id() as i32)
+            .map(|w| {
+                let frame = crate::transform::Rect {
+                    x: w.bounds.0,
+                    y: w.bounds.1,
+                    width: w.bounds.2,
+                    height: w.bounds.3,
+                };
+                TextCandidate::window_title(w.title, frame, w.window_id, w.pid)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let ocr_count = ocr.len();
     let ax_count = ax.len();
-    let candidates = merge_candidates(ocr, ax, params.merge);
+    let window_count = window_titles.len();
+    // 기존 OCR/AX 병합은 그대로 두고, 그 결과에 창 제목 병합(중복 제거)을
+    // 얹는다 — 소스 C 는 가시 후보의 중복 창 제목만 버린다(merge.rs).
+    let merged = merge_candidates(ocr, ax, params.merge);
+    let candidates = merge_window_titles(merged, window_titles);
 
     DetectionOutcome {
         candidates,
@@ -223,6 +263,7 @@ pub fn detect_candidates(
         ax_error,
         ocr_count,
         ax_count,
+        window_count,
         capture_ms,
         total_ms: started.elapsed().as_secs_f64() * 1000.0,
     }

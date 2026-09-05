@@ -60,6 +60,8 @@
   "settings.seek.execute_on_close": "Mostrar solo mientras la tecla reasignada esté pulsada",
   "settings.seek.execute_on_close.hint": "Mientras está activado, soltar la tecla reasignada confirma el resultado resaltado y hace clic en él. Elige primero una tecla en \"Reasignar una tecla a Seek:\" — esta opción permanece desactivada mientras ese valor sea \"-\".",
   "settings.seek.focus_window_before_clicking": "Enfocar la ventana antes de hacer clic",
+  "settings.seek.include_window_titles": "Buscar títulos de ventanas",
+  "settings.seek.include_window_titles.hint": "Buscar títulos de ventanas incluso cuando estén ocultos por otras ventanas",
   "settings.seek.semicolon_cycle": "El punto y coma resalta el siguiente resultado",
   "settings.seek.quick_press.hint": "También hay una tercera forma de abrir Seek: en la pestaña Preajustes, pon \"Una pulsación breve de Bloq Mayús envía:\" en Seek.",
   "settings.seek.change_click_modes_with_modifiers": "Cambiar los modos de clic con las teclas modificadoras",

@@ -9,13 +9,13 @@
 
 ## 1. 개요
 
-Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01` 정의)이 발생하면, 선택된 매치 하나가 F-04 로 넘어온다. F-04 는 이 매치를 받아 다음을 수행하는 것이 전부다:
+Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01` 정의)이 발생하면, 선택된 매치 하나가 F-04 로 넘어온다. ⭐(이슈 #133) **확정 동작은 항상 "클릭"인 것은 아니다** — 소스 C(창 제목, `WindowTitle`) 매치의 확정은 **창 전면화**이며, 클릭 이벤트를 합성하지 않는다(§3.7). 그 외(OCR·AX) 매치만 아래 클릭 파이프라인을 탄다. F-04 는 이 매치를 받아 다음을 수행하는 것이 전부다:
 
 1. (설정에 따라) 클릭 대상 창을 포커스한다.
 2. 오버레이를 해제한다.
 3. **⭐ 확정된 클릭 모드(7종 중 하나, §3.3)를 실행한다** — 클릭하지 않고 커서만 이동, 매치 시작/끝 지점 클릭, 클릭 후 커서 복귀, 클릭→복귀→재클릭, 더블/트리플 클릭+복사 중 하나다. "클릭(또는 우클릭·더블클릭·가운데클릭)을 합성한다"는 기존 서술은 **부정확했다** — 실측 결과 SuperKey 의 클릭 모드는 마우스 버튼 종류(좌/우/중간)가 아니라 **클릭 지점·횟수·커서 복귀 여부의 조합**으로 구성된 7종 프리셋이다(§3.3). 커서 복귀는 모드 하나(`Click and return cursor`)의 정의일 뿐, 모든 클릭에 공통 적용되는 후처리 단계가 아니다.
 
-입력은 F-02 가 만든 매치 객체 하나이며, 최소한 다음을 포함한다고 가정한다: 출처(OCR 또는 AX), 화면상 bounding box(OCR) 또는 `AXUIElement` 핸들(AX), 소속 프로세스 pid. F-04 는 이 입력의 **생성 로직**(OCR 정확도, AX 트리 순회, 후보 랭킹)에는 관여하지 않는다 — 오직 "이미 확정된 매치를 어떻게 클릭으로 바꾸는가"만 다룬다.
+입력은 F-02 가 만든 매치 객체 하나이며, 최소한 다음을 포함한다고 가정한다: 출처(OCR·AX·⭐(이슈 #133) 창 제목), 화면상 bounding box(OCR) 또는 `AXUIElement` 핸들(AX), 소속 프로세스 pid(⭐ 창 제목 매치는 추가로 `kCGWindowNumber`/`kCGWindowOwnerPID` 를 가진다 — §3.7). F-04 는 이 입력의 **생성 로직**(OCR 정확도, AX 트리 순회, 후보 랭킹)에는 관여하지 않는다 — 오직 "이미 확정된 매치를 어떻게 실행하는가"만 다룬다.
 
 이 기능은 SuperKey 의 핵심 약속("Match what you type, and click it — all with the keyboard and anywhere on the screen")을 물리적으로 실행하는 지점이며, 조사 문서와 번들 실측(`app-bundle-analysis.md`)에서 확정된 사실만을 근거로 한다.
 
@@ -50,6 +50,9 @@ Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01
 
 **시나리오 E — 확정 직전 대상이 사라짐**
 사용자가 매치를 확정하는 순간 대상 앱이 그 창을 닫는다. 클릭은 실패하지만 SuperKey 는 크래시하거나 엉뚱한 창을 클릭하지 않는다(§5).
+
+**시나리오 F — 가려진 창의 제목 검색 → 창 전면화 (⭐ 신규, 이슈 #133)**
+`Search window titles` 가 켜진 상태에서, 사용자가 뒤쪽에 가려진 창의 제목(예: "Settings")을 타이핑해 매칭시킨 뒤 Enter 로 확정한다. **클릭 이벤트는 하나도 합성되지 않는다** — F-04 는 확정에 실린 `pid`·`window_id` 로 `AXUIElementCreateApplication(pid)` → `kAXWindowsAttribute` → `kAXWindowNumberAttribute == window_id` 창을 찾아 `kAXRaiseAction` 을 수행하고, 앱 활성화(`NSRunningApplication.activate`)를 병행한다(§3.7). 사용자는 화면 어디에도 클릭이 일어나지 않은 채 그 창이 전면으로 올라온 것을 본다.
 
 ---
 
@@ -153,6 +156,7 @@ Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01
 | AX (핸들 보유) | `clickStartMatch`/`clickEndMatch` 상당의 단일 클릭, `kAXPressAction` 지원 확인됨 | `AXUIElementPerformAction(kAXPressAction)` | 요소 핸들이 있으므로 좌표·화면 밖·다중 디스플레이 문제를 완전히 우회하는 요소 기반 경로를 우선 사용. 스크롤되어 화면 일부만 보이거나 좌표가 살짝 어긋나도 요소 자체를 누르므로 더 견고. 다만 시작/끝 지점 구분(§3.3)은 요소 기반 경로에는 의미가 없다는 점에 유의 — Press 액션은 좌표를 받지 않는다 |
 | AX | 단일 클릭, `kAXPressAction` **미지원**(`kAXErrorActionUnsupported`) | `CGEventCreateMouseEvent` + `CGEventPost` (AX frame 의 시작/끝 지점 좌표 사용) | Press 액션이 없는 순수 텍스트 요소 등은 좌표 기반으로 폴백 |
 | AX | `clickAndReturn`/`clickReturnClick`/`doubleClickCopy`/`tripleClickCopy` | `CGEventCreateMouseEvent` + `CGEventPost` | `kAXPressAction` 은 의미상 "기본 동작 1회 실행"일 뿐 더블/트리플클릭·클릭-복귀류에 대응하는 AX 액션이 표준화되어 있지 않다. 이 모드들부터는 출처와 무관하게 항상 좌표 기반 경로로 통일 |
+| ⭐(이슈 #133) 창 제목 (WindowTitle) | 무관 — 클릭 모드 7종 어느 것이든 | **클릭 합성 없음 — 창 전면화(§3.7)** | `ConfirmedMatch::action()` 이 `FrontWindow` 로 분기하므로 클릭 모드 판정(§1.1 의 modifier 매핑) 자체가 적용되지 않는다. 창 제목 후보는 frame 이 창 bounds 전체라 정밀 클릭 좌표가 없고(§3.4), 의도된 동작이 "그 창을 앞으로 가져온다"다 |
 
 > 원칙: **AX 요소 기반 경로(`kAXPressAction`)는 "AX 후보 + 시작/끝 지점 단일 클릭 상당 + Press 지원"이라는 좁은 조건에서만** 쓰고, 그 외 모든 조합(다른 6종 모드, OCR 후보, Press 미지원)은 좌표 기반 `CGEvent` 경로로 통일한다. 두 경로를 넓게 섞으면 클릭 모드·좌표계 처리 로직이 출처마다 갈라져 유지보수 비용이 커진다.
 
@@ -186,6 +190,8 @@ Seek 의 확정 동작("Enter" 또는 hold 모드의 리매핑 키 해제, `F-01
 
 → **둘을 병행**한다: 먼저 `NSRunningApplication.activate` 로 앱을 활성화해 키보드/클릭 포커스가 실제로 그 앱으로 넘어가게 하고, 이어서 클릭 대상이 속한 **특정 창**에 `kAXRaiseAction` 을 수행해 같은 앱의 다른 창이 대신 앞에 오는 경우를 방지한다. 대상 윈도우 요소는 클릭 지점에 대해 `AXUIElementCopyElementAtPosition`(시스템 전역 요소 기준)으로 조회한다 — 이 조회는 OCR/AX 두 후보 출처 모두에 동일하게 적용 가능하므로(둘 다 최종적으로는 화면 좌표를 가지므로), 포커스 전환 로직은 후보 출처에 따라 분기하지 않는다. ⭐ `AXUIElementCopyElementAtPosition` 이 실제로 `Focus window before clicking` 구현에 쓰인다는 추정은 이제 **심볼 링크가 실측으로 확정**됐다(실측: 번들 심볼, §6) — 다만 그 용도가 이 절이 서술한 대로인지는 여전히 해석이다 `(미확정 — 용도는 해석)`.
 
+⭐(이슈 #133) **제목 매치(소스 C)의 확정 — 창 전면화**: `ConfirmedMatch::action()` 이 `FrontWindow` 인 경우(출처 = 창 제목) 클릭 합성 대신 **창 전면화**를 수행한다. 이때 `window_id`(`kCGWindowNumber`)·`pid`(`kCGWindowOwnerPID`) 는 확정 시점에 이미 `ConfirmedMatch` 에 실려 오므로(F-01 이 소스 C 후보에서 운반) **좌표 재조회가 필요 없다** — 위 `AXUIElementCopyElementAtPosition` 경로와 다르다. 절차: `AXUIElementCreateApplication(pid)` → `kAXWindowsAttribute` 로 앱의 창 목록을 얻어 `kAXWindowNumberAttribute == window_id` 인 창을 찾고, 그 창에 `kAXRaiseAction` 을 수행한다. 앱 활성화는 위 기존 결정과 같은 조합을 따른다 — `NSRunningApplication.activate`(앱·키보드 포커스) + 대상 창 `kAXRaiseAction`(특정 창 선정) 병행. **AX 경로가 실패하면**(창 요소 조회 불가, 앱이 AX 비지원, `kAXError*`) **앱 수준 활성화**(`NSRunningApplication.activate` + `ActivateIgnoringOtherApps` — `crates/ultrakey-platform/src/apps.rs` 의 `activate_pid` 와 동일 호출)로 폴백한다 — 창 선택 없이 앱만 최전면으로 온다(이슈 #133 결정 4절). 후보가 창 bounds 전체를 frame 으로 가지므로 이 절의 클릭 경로는 애초에 존재하지 않는다.
+
 ### 3.8 ⭐ 신규 — 합성 클릭이 자기 이벤트 탭으로 되돌아오는 것을 막는 장치
 
 F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이벤트뿐 아니라, tap 의 이벤트 마스크에 마우스 이벤트가 포함돼 있다면 F-04 가 `CGEventPost` 로 내보낸 **합성 클릭 이벤트도 같은 탭으로 다시 들어올 수 있다.** 이를 무한 루프나 오탐(자신이 만든 클릭을 사용자 클릭으로 오인)으로 처리하지 않으려면 별도의 차단 장치가 필요하다 — 기존 명세에는 이 문제 자체가 없었다.
@@ -207,7 +213,7 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 | `Focus window before clicking` | 체크박스(불리언) | **☐** (실측: AX 트리 · defaults) | `frontmostFirstCheckbox` 대응 | ON / OFF | `app-bundle-analysis.md` §2.1(defaults), §6.1(AX 실측) |
 | `Change click modes with modifier keys` | 체크박스(불리언), ⓘ 툴팁 보유 | **☑** (실측: AX 트리 — 스크린샷과 일치) | (`seekOptions` 비트) | ON / OFF | 동일. 부제 원문: "If this setting is disabled, modifiers will be applied to the click" |
 
-⭐ **기본값 오기 정정**: `Focus window before clicking` 이 ☑ 로 서술돼 있었다면 그것은 홍보 스크린샷 값이다. 아무 설정도 바꾸지 않은 상태의 `defaults` 전량에 이 항목에 대응하는 키가 없고, AX 트리 실측도 ☐ 다 — 부재가 기본값이므로 **출고 기본값은 ☐(꺼짐)** 이다. `Change click modes with modifier keys` 는 기존 서술(☑)과 실측이 **일치**한다 — ⭐ **Seek 탭 전체에서 유일하게 출고 기본값이 켜진 항목**이라는 점을 명시한다(§3.2). (`superkey-inventory.md` §7 Q3 해소.)
+⭐ **기본값 오기 정정**: `Focus window before clicking` 이 ☑ 로 서술돼 있었다면 그것은 홍보 스크린샷 값이다. 아무 설정도 바꾸지 않은 상태의 `defaults` 전량에 이 항목에 대응하는 키가 없고, AX 트리 실측도 ☐ 다 — 부재가 기본값이므로 **출고 기본값은 ☐(꺼짐)** 이다. `Change click modes with modifier keys` 는 기존 서술(☑)과 실측이 **일치**한다 — ⭐ **Seek 탭 전체에서 유일하게 출고 기본값이 켜진 항목**이라는 점을 명시한다(§3.2). (`superkey-inventory.md` §7 Q3 해소.) ⭐(이슈 #133 · D12) 위 "유일하게"는 **원본 실측(9개 항목) 기준**이다 — 클론 Seek 탭에는 기본 ☑ 항목이 하나 더 있다: `Search window titles`(`seek.includeWindowTitles`, **부재 = 참** — `seek-text-detection.md` §4). 클릭 모드와 무관한 검출 소스 토글이므로 §3.2 의 이중 의미 분석 대상은 아니다.
 
 두 설정 모두 **Seek 탭**에 위치하며, 팝업이나 슬라이더 같은 부가 파라미터는 없는 단순 불리언이다(조사 문서에서 추가 세부 컨트롤이 확인되지 않음). **클릭 모드 7종(§1.1, §3.3)을 고르는 UI(`Record Modifiers`)는 이 두 체크박스와 별개이며, 4개 탭 어디에서도 관찰되지 않았다** `(미확정)` — §9 참조.
 
@@ -251,11 +257,12 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 | `AXUIElementSetAttributeValue` | AX 요소 속성 설정(포커스·값 변경 등 — 정확한 사용처는 `(미확정)`) | 실측: 번들 심볼 | `axuielement` 0.9.1 |
 | `AXUIElementCopyActionNames` | `kAXPressAction` 지원 여부 사전 확인 | 명세 설계값 | `axuielement` 0.9.1 |
 | `AXUIElementCopyElementAtPosition` | ⭐ 클릭 대상 좌표의 AX 요소를 역조회 — `Focus window before clicking` 구현에 쓰이는 것으로 보인다 `(미확정 — 용도는 해석)` | 실측: 번들 심볼 | `axuielement` 0.9.1 또는 `accessibility-sys` 0.2.0 |
-| `AXUIElementPerformAction` (`kAXRaiseAction`) | 대상 특정 윈도우 올리기 | 실측: 번들 심볼(액션 존재는 확인, `kAXRaiseAction` 특정은 `(미확정)`) | `axuielement` 0.9.1 |
-| `AXUIElementCreateApplication` | pid 로부터 앱의 AX 최상위 요소 획득 | 실측: 번들 심볼 | `axuielement` 0.9.1 |
+| `AXUIElementPerformAction` (`kAXRaiseAction`) | 대상 특정 윈도우 올리기 · ⭐(이슈 #133) **제목 매치 확정의 창 전면화**(§3.7)에도 사용 | 실측: 번들 심볼(액션 존재는 확인, `kAXRaiseAction` 특정은 `(미확정)`) | `axuielement` 0.9.1 |
+| `AXUIElementCreateApplication` | pid 로부터 앱의 AX 최상위 요소 획득 · ⭐(이슈 #133) **제목 매치 창 전면화 경로의 시작점**(§3.7 — `kAXWindowsAttribute` 조회의 루트) | 실측: 번들 심볼 | `axuielement` 0.9.1 |
+| `kAXWindowsAttribute`·`kAXWindowNumberAttribute` | ⭐(이슈 #133, 신규) pid 의 앱 창 목록에서 `kAXWindowNumberAttribute == window_id` 인 창을 찾아 `kAXRaiseAction` — **제목 매치 창 전면화**(§3.7) | 명세 설계값 | `axuielement` 0.9.1 |
 | `AXUIElementGetPid` | AX 요소로부터 소속 프로세스 pid 조회 | 실측: 번들 심볼 | `axuielement` 0.9.1 |
 | `AXUIElementSetMessagingTimeout` | AX 호출이 응답 없는 대상 앱에 블로킹되는 것 방지 | 명세 설계값 | `axuielement` 0.9.1 |
-| `NSRunningApplication.activate(options:)` / `runningApplications` | 대상 앱 활성화(키 포커스 이전), 실행 중 앱 열거 | 실측: 번들 심볼(`NSWorkspace` 계열) | `objc2-app-kit` 0.3.2 |
+| `NSRunningApplication.activate(options:)` / `runningApplications` | 대상 앱 활성화(키 포커스 이전), 실행 중 앱 열거 · ⭐(이슈 #133) 제목 매치 창 전면화에서도 같은 조합(활성화 + 특정 창 raise)을 유지(§3.7), AX 실패 시 `apps::activate_pid` 앱 수준 활성화 폴백 | 실측: 번들 심볼(`NSWorkspace` 계열) | `objc2-app-kit` 0.3.2 |
 | `NSWorkspace` / `NSWorkspaceOpenConfiguration` / `URLForApplicationWithBundleIdentifier:` | 앱 활성화·조회에 쓰이는 `NSWorkspace` API 군 — 정확히 어느 호출이 F-04 경로에 쓰이는지는 `(미확정)` | 실측: 번들 심볼 | `objc2-app-kit` 0.3.2 |
 | `CGWarpMouseCursorPosition` | 클릭 후 커서 원위치 복구(`clickAndReturn`/`clickReturnClick` 모드, §3.5) | 명세 설계값 | `core-graphics` 0.25.0 또는 `objc2-core-graphics` 0.3.2 |
 | `CGAssociateMouseAndMouseCursorPosition` | 워프 직후 물리 마우스 이동과의 충돌 방지 | 명세 설계값 | 동일 |
@@ -299,6 +306,8 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 - [ ] hold 모드 확정 시 클릭 모드 판정에 쓰이는 modifier 스냅샷은 리매핑 키를 떼는 그 순간의 상태를 반영한다(§5 #10).
 - [ ] AX 후보에서 `kAXPressAction` 이 `kAXErrorActionUnsupported` 로 실패하면 좌표 기반 경로로 폴백해 클릭이 완료된다.
 - [ ] F-04 가 합성한 클릭이 F-07 의 `CGEventTap` 콜백에 되돌아왔을 때, SuperKey 자신의 클릭으로 식별되어 이중 처리·루프가 발생하지 않는다(§3.8).
+- [ ] ⭐(이슈 #133) 창 제목(소스 C) 매치를 확정하면 **클릭(마우스) 이벤트가 하나도 합성되지 않고**, 해당 창(`kCGWindowNumber`)이 전면으로 올라온다 — `kAXRaiseAction` 호출(또는 그 로그)과 `CGWindowListCopyWindowInfo` 재조회가 그 창을 최전면으로 보고함으로 확인한다(§3.7).
+- [ ] ⭐(이슈 #133) 창 전면화의 AX 경로가 실패하면(요소 조회 불가 등) 클릭 합성이 아니라 앱 수준 활성화(`NSRunningApplication.activate` + `ActivateIgnoringOtherApps` — `crates/ultrakey-platform/src/apps.rs` 의 `activate_pid` 와 동일 호출)로 폴백되고, 크래시하지 않는다(§3.7).
 
 ---
 
@@ -329,3 +338,4 @@ F-07(`key-remapping-engine.md`)이 설치하는 `CGEventTap` 은 키보드 이�
 | Q18 | `Focus window before clicking` 의 "활성화 완료" 판정 방법 — 고정 딜레이 / `kAXFocusedWindowChangedNotification` 구독 / 폴링 중 무엇을 쓸지 | **결정됨(이슈 #44 — 설계 판단, 실기기 미검증).** D8: `NSRunningApplication.isActive` **폴링(간격 20ms × 상한 300ms)** — 조건부 대기(사건 발생 시 조기 종료)라 고정 딜레이 금지(§5 #9)를 지킨다. 상한 초과 시 클릭을 그대로 진행(첫 클릭이 활성화에 소모되는 macOS 기본 동작으로 열화). AX 알림 구독은 일회성 대기에 비동기 구독 생명주기 관리가 필요해 기각 |
 | Q19 | `kAXPressAction` 지원 여부를 `AXUIElementCopyActionNames` 로 사전 질의하는 것이 모든 대상 앱에서 신뢰할 수 있는지(일부 앱이 액션 이름은 보고하되 실제 수행은 실패하는 사례가 있는지) | **결정됨(이슈 #44 — 판정 구조는 설계 결정, 앱별 신뢰성은 수동 검증 항목).** D9: `action_names` 는 **참고·로그용만**(게이트 아님) — 실제 성패는 `perform_action` 결과로 판정하고, 실패 시 좌표 폴백(§5 #5). 앱별 신뢰성 실측은 `docs/dev/manual-verification.md` F-04 항목 1 |
 | Q20 | 다중 modifier 스냅샷을 "누른 시점"이 아니라 "확정 시점"으로 고정하는 것이 사용자 기대와 맞는지(예: Control 을 먼저 누르고 이후 확정하는 동안 손을 뗀 경우) | **결정됨(이슈 #44).** D10: **확정 시점 스냅샷 채택** — 명세 §5 #10 이 요구하는 그대로이고, F-01 이 이미 `ConfirmedMatch.modifiers` 로 전달한다(실측 — confirm.rs). 클릭 시점 재조회는 하지 않는다(hold 모드의 확정 시점은 F-01 만 안다). UX 적 정답 여부는 여전히 원본 대조·사용자 관찰 대상 |
+| Q21 | ⭐(신규, 이슈 #133) 제목 매치 확정의 **창 전면화** — AX 경로(`AXUIElementCreateApplication` → `kAXWindowsAttribute` → `kAXWindowNumberAttribute` → `kAXRaiseAction`)의 신뢰성과 실패 시 폴백(§3.7) | **결정됨(이슈 #133)** — 경로 자체를 확정하고, AX 실패 시 앱 수준 활성화(`NSRunningApplication.activate` + `ActivateIgnoringOtherApps` — `crates/ultrakey-platform/src/apps.rs` 의 `activate_pid` 와 동일 호출) 폴백(결정 코멘트 4절). 창 raise 의 **실제 성공 여부는 대상 앱 의존**이라 자동 테스트로 고정할 수 없다 — `docs/dev/manual-verification.md` 의 수동 대조 항목으로 승계한다 (원본 미검증 — 클론 설계 결정) |
