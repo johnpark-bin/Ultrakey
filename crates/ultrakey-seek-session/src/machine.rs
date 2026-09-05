@@ -11,12 +11,22 @@
 //!
 //! ⭐ 매치 선택·순환·질의 필터링·200개 상한(R-4)은 [`OverlaySession`]
 //! 이 이미 갖고 있다 — 이 머신은 그것을 소유(compose)하고 생명주기만 더한다.
+//!
+//! ⭐(이슈 #134) 세션 간 검출 캐시의 두 진입점도 이 머신이 더한다 —
+//! [`inject_cached`](SeekSessionMachine::inject_cached)(재진입 캐시 우선
+//! 주입, [`crate::cache`] 참조)와
+//! [`all_candidates`](SeekSessionMachine::all_candidates)(완료 시 캐시
+//! 스냅샷 재료). 둘 다 기존 `ingest_*`/`finish_detection` 경로를 재사용해
+//! 추가·교체 의미론을 어기지 않는다.
+
+use std::collections::{BTreeMap, HashSet};
 
 use ultrakey_core::event::{EventKind, InputEvent};
 use ultrakey_core::flags::EventFlags;
 use ultrakey_overlay::{Appearance, OverlayDisplay, OverlaySession};
 use ultrakey_seek::TextCandidate;
 
+use crate::cache::SeekDetectionCache;
 use crate::config::{ActivationPath, SeekConfig, SessionMode};
 use crate::confirm::ConfirmedMatch;
 use crate::keys::{classify, SessionKey};
@@ -493,6 +503,115 @@ impl SeekSessionMachine {
             };
         }
         vec![SessionEffect::Repaint]
+    }
+
+    /// ⭐(이슈 #134, 결정 1·2·5) 재진입 시 **캐시 우선 주입** — 세션을 열고
+    /// 첫 페인트 직전에 워커가 직전 세션의 [`SeekDetectionCache`] 를 넣는다.
+    ///
+    /// 캐시 후보를 `display_id` 로 나눠(Some → 디스플레이별 그룹, None →
+    /// extra 배치 하나) 기존 `OverlaySession::ingest_display`/`ingest_extra`
+    /// **그대로** 밀어 넣는다 — 기존 경로를 재사용하므로 같은 `display_id` 는
+    /// 누적이 아니라 **교체**되고(재검출 대비), 후보 도착 때마다 현재 질의로
+    /// 다시 필터링된다. 그리고 검출이 끝났다고 표시해 세션이 즉시
+    /// Ready/Querying 에 도달하게 한다 — 이것이 "캐시 우선"이 곧바로 검색·
+    /// 순환 가능한 이유다. 새 OCR 이 도착하면 기존 `ingest_*` 경로가 후보를
+    /// 교체하며 최신화하고, 그때 선택 인덱스는 결정 5 의 "유지 + 범위 clamp"
+    /// 규칙을 따른다(`OverlaySession::recompute_matching` 의 기존 동작).
+    ///
+    /// ⭐ **사라진 디스플레이의 후보는 버리고 주입한다** — 캐시를 스냅샷한
+    /// 직전 세션과 지금 세션 사이에 디스플레이 구성이 바뀌면(외장 모니터
+    /// 분리, 도킹 해제), 사라진 `display_id` 의 후보는 이번 세션의 신규
+    /// OCR 이 결코 교체하지 못해 검색·선택만 가능한 **유령 매치**로 남는다
+    /// (화면 밖이라 `frames()` 는 그리지 않는다) — 결정 2·4 의 stale 노출
+    /// 유계 논거와 `OverlaySession::set_displays` 의 "사라진 디스플레이의
+    /// 후보는 버린다" 규칙을 주입 경로에서도 지킨다. `display_id: None`
+    /// (AX·창 제목)은 프레임 위치로 나중에 화면 소속이 판정되므로 이 필터의
+    /// 대상이 아니다.
+    ///
+    /// - 세션이 없으면 아무것도 하지 않고 `Vec::new()` 를 돌려준다.
+    /// - 빈 캐시면 후보는 0 개지만 검출 종료·상태 전이는 동일하게 진행한다
+    ///   — 워커가 `should_inject` 로 히트일 때만 부르는 것을 전제하지만,
+    ///   방어적으로는 빈 캐시 주입도 무해해야 한다.
+    /// - `Opening` 에서만 Ready(빈 질의)/Querying(질의 있음)으로 넘어간다 —
+    ///   [`Self::finish_detection`] 과 **정확히 같은** 전이·방어 규칙이다.
+    ///   이미 그 뒤(Ready/Querying/Selected/Confirming)라면 **후보만
+    ///   교체**하고 상태는 건드리지 않는다(특히 `Confirming` 을 덮어써서
+    ///   확정 처리 중인 세션을 되살리지 않는다).
+    ///
+    /// 반환: 세션이 있었으면 [`SessionEffect::Repaint`] 하나.
+    #[must_use]
+    pub fn inject_cached(&mut self, cache: &SeekDetectionCache) -> Vec<SessionEffect> {
+        let Some(session) = &mut self.session else {
+            return Vec::new();
+        };
+
+        // 후보를 display_id 로 나눈다 — OCR 은 디스플레이별(Some), AX·창
+        // 제목은 디스플레이 미특정(None)이라 extra 로 간다(캐시가
+        // `all_candidates` 로부터 왔을 때의 원래 소속을 그대로 복원한다).
+        // ⭐ 디스플레이 구성이 바뀌었으면(외장 모니터 분리·도킹 해제) 사라진
+        // id 의 후보는 버린다 — 신규 OCR 이 그 id 를 다시 덮지 않아 교체될
+        // 기회 없이 유령 매치로 남기 때문이다(`displays()` 문서의 "사라진
+        // 디스플레이의 후보는 버린다" 규칙과 같은 결).
+        let live_displays: HashSet<u32> = session
+            .overlay
+            .displays()
+            .iter()
+            .map(|d| d.display_id)
+            .collect();
+        let mut by_display: BTreeMap<u32, Vec<TextCandidate>> = BTreeMap::new();
+        let mut extra: Vec<TextCandidate> = Vec::new();
+        for candidate in &cache.candidates {
+            match candidate.display_id {
+                Some(display_id) if live_displays.contains(&display_id) => {
+                    by_display.entry(display_id).or_default().push(candidate.clone())
+                }
+                Some(display_id) => {
+                    tracing::debug!(
+                        display_id,
+                        "seek session: dropping cached candidate for a display no longer present"
+                    );
+                }
+                None => extra.push(candidate.clone()),
+            }
+        }
+
+        for (display_id, candidates) in &by_display {
+            session.overlay.ingest_display(*display_id, candidates.clone());
+        }
+        if !extra.is_empty() {
+            session.overlay.ingest_extra(extra);
+        }
+
+        // 검출이 끝났다고 표시한다 — 아래 Opening → Ready/Querying 전이와
+        // 함께, `finish_detection` 이 끝에 했던 것과 같은 결을 만든다(중복
+        // 호출돼도 `overlay.finish_detection` 은 멱등으로 detecting 을 끌
+        // 뿐이고, 전이는 Opening 일 때만).
+        session.overlay.finish_detection();
+        if session.state == SessionState::Opening {
+            session.state = if session.query.is_empty() {
+                SessionState::Ready
+            } else {
+                SessionState::Querying
+            };
+        }
+        vec![SessionEffect::Repaint]
+    }
+
+    /// ⭐(이슈 #134, 결정 1) 세션이 살아 있을 때 **질의로 필터되지 않은** 후보
+    /// 우주 전체를 스냅샷한다 — 워커가 현재 세대 `DetectionFinished` 에서 이
+    /// 값을 [`SeekDetectionCache`] 로 감싸 다음 재진입의 주입 재료로 쓴다.
+    ///
+    /// ⭐ `search_bar_frame().matches`(질의 필터 결과)가 **아니다** — 필터된
+    /// 목록을 캐시에 담으면 쿼리 밖 후보가 영영 사라져 재진입 첫 탐색의
+    /// 질을 떨어뜨린다. 반드시 `by_display` + `extra` 의 **후보 우주 전체**
+    /// ([`OverlaySession::all_candidates`]) 여야 한다.
+    ///
+    /// 세션이 없으면 `None` — 워커는 이를 "캐시 갱신 안 함(기존 값 유지)"으로
+    /// 해석한다: 취소된 세션의 늦은 결과로 캐시를 더럽히지 않는 규약이다
+    /// (결정 1).
+    #[must_use]
+    pub fn all_candidates(&self) -> Option<Vec<TextCandidate>> {
+        self.session.as_ref().map(|s| s.overlay.all_candidates())
     }
 
     /// 핫플러그(§5 #6). 안전한 기본값으로 세션을 취소한다 — 좌표계가 더
@@ -1772,5 +1891,274 @@ mod tests {
 
         assert!(machine.defocused().is_empty(), "Confirming 은 닫으면 안 된다");
         assert!(machine.is_active());
+    }
+
+    // ── ⭐(이슈 #134) 캐시 우선 주입 — 재진입 시 즉시 검색·순환 ────────────
+
+    /// OCR(display_id Some)과 AX·창 제목(display_id None)이 섞인 캐시를
+    /// 주입하면 디스플레이별·extra 로 갈라져 오버레이에 채워지고, 검출이 끝난
+    /// 것으로 표시돼(`is_detecting == false`) 빈 질의로는 Ready 에 도달하며,
+    /// 질의 필터와 키 순환이 **즉시** 동작한다 — 캐시 우선의 목적 그대로다.
+    #[test]
+    fn inject_cached_mixed_candidates_ready_and_navigable() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        let cache = SeekDetectionCache::new(vec![
+            candidate("Row A", 0.0),
+            candidate("Row B", 100.0),
+            TextCandidate::accessibility(
+                "AX Cancel".to_string(),
+                Rect { x: 500.0, y: 0.0, width: 10.0, height: 10.0 },
+            ),
+            TextCandidate::window_title(
+                "Settings".to_string(),
+                Rect { x: 800.0, y: 0.0, width: 10.0, height: 10.0 },
+                42,
+                1337,
+            ),
+        ]);
+        let effects = machine.inject_cached(&cache);
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert_eq!(machine.state(), SessionState::Ready, "빈 질의 → Ready");
+        assert!(
+            !machine.overlay().unwrap().is_detecting(),
+            "캐시 주입은 검출 종료를 의미한다"
+        );
+
+        // 질의를 걸면 캐시 후보가 즉시 필터링된다 — "검색 가능"의 실체.
+        for c in ['r', 'o', 'w'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        let bar = machine.overlay().unwrap().search_bar_frame();
+        assert_eq!(
+            bar.total_matches, 2,
+            "OCR Row A/B 만 매치 — AX·창 제목은 'row' 에 없다"
+        );
+        assert!(bar.matches.iter().all(|m| m.text.starts_with("Row")));
+
+        // 순환이 곧바로 동작한다 — 재진입 첫 페인트 직후부터 탐색·이동 가능.
+        let _ = machine.handle_key(&key_down(KeyCode::DOWN_ARROW, EventFlags::NONE), None);
+        assert_eq!(machine.overlay().unwrap().selected().unwrap().text, "Row B");
+        assert_eq!(machine.state(), SessionState::Selected);
+    }
+
+    /// Opening 중 버퍼링된 질의가 있으면 캐시 주입 시 Querying 으로 바로
+    /// 들어간다 — `finish_detection` 과 같은 전이 규칙(빈 질의만 Ready).
+    #[test]
+    fn inject_cached_transitions_to_querying_with_buffered_query() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        for c in ['r', 'o', 'w'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        assert_eq!(machine.query(), "row");
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        let cache =
+            SeekDetectionCache::new(vec![candidate("Row A", 0.0), candidate("Row B", 100.0)]);
+        let _ = machine.inject_cached(&cache);
+        assert_eq!(machine.state(), SessionState::Querying, "질의가 있으므로 Querying");
+        assert_eq!(
+            machine.overlay().unwrap().search_bar_frame().total_matches,
+            2,
+            "버퍼된 질의가 주입 후보에 즉시 적용된다"
+        );
+    }
+
+    /// 빈 캐시 주입 — 후보 0 개지만 세션은 살아 있고 Ready 로 진행한다
+    /// (방어: `should_inject` 가 미스를 걸러 주지만, 주입 자체는 무해해야
+    /// 한다).
+    #[test]
+    fn inject_cached_with_empty_cache_keeps_session_active_no_candidates() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        assert!(machine.is_active());
+
+        let effects = machine.inject_cached(&SeekDetectionCache::new(Vec::new()));
+        assert_eq!(effects, vec![SessionEffect::Repaint]);
+        assert!(machine.is_active(), "빈 캐시 주입은 세션을 닫지 않는다");
+        assert_eq!(machine.state(), SessionState::Ready);
+        assert!(!machine.overlay().unwrap().is_detecting());
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 0);
+        assert_eq!(machine.all_candidates(), Some(Vec::new()));
+    }
+
+    /// 세션이 없으면 캐시 주입은 no-op.
+    #[test]
+    fn inject_cached_without_session_is_noop() {
+        let mut machine = SeekSessionMachine::new(SeekConfig::default());
+        let cache = SeekDetectionCache::new(vec![candidate("Settings", 0.0)]);
+        assert!(machine.inject_cached(&cache).is_empty());
+        assert!(!machine.is_active());
+    }
+
+    /// 방어 규칙 — 이미 검출이 끝난(Ready) 세션에 캐시를 다시 주입하면
+    /// **후보만 교체**되고 상태는 바뀌지 않는다(Opening 이 아닌 상태는
+    /// 덮어쓰지 않음).
+    #[test]
+    fn inject_cached_when_not_opening_replaces_candidates_keeps_state() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        let _ = machine.ingest_display(1, vec![candidate("Row A", 0.0)]);
+        let _ = machine.finish_detection();
+        assert_eq!(machine.state(), SessionState::Ready);
+
+        let cache =
+            SeekDetectionCache::new(vec![candidate("Row A", 0.0), candidate("Row B", 100.0)]);
+        let _ = machine.inject_cached(&cache);
+        assert_eq!(
+            machine.state(),
+            SessionState::Ready,
+            "Opening 이 아니면 상태를 바꾸지 않는다"
+        );
+        for c in ['r', 'o', 'w'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        assert_eq!(
+            machine.overlay().unwrap().search_bar_frame().total_matches,
+            2,
+            "후보는 교체됐다"
+        );
+    }
+
+    /// `all_candidates` 는 질의 필터와 무관하게 by_display + extra 의 후보
+    /// 우주 전체를 돌려주고, 세션이 없으면 `None` 이다.
+    #[test]
+    fn all_candidates_returns_unfiltered_universe_and_none_when_idle() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        assert_eq!(machine.all_candidates(), None, "세션이 없으면 None");
+
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        let _ = machine.ingest_display(
+            1,
+            vec![candidate("Row A", 0.0), candidate("Row B", 100.0)],
+        );
+        let _ = machine.ingest_extra(vec![TextCandidate::window_title(
+            "Settings".to_string(),
+            Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 },
+            42,
+            1337,
+        )]);
+        let _ = machine.finish_detection();
+
+        // 질의를 걸어도(필터가 동작해도) 우주 전체를 돌려줘야 한다 — 필터된
+        // matching 이 아니라 캐시 재료다.
+        for c in ['r', 'o', 'w'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 2);
+
+        let all = machine.all_candidates().expect("세션이 있으므로 Some");
+        assert_eq!(all.len(), 3, "by_display 2 + extra 1");
+        let texts: Vec<&str> = all.iter().map(|c| c.text.as_str()).collect();
+        assert!(texts.contains(&"Row A"));
+        assert!(texts.contains(&"Row B"));
+        assert!(texts.contains(&"Settings"));
+    }
+
+    /// ⭐ **사라진 디스플레이의 후보는 버린다** — 세션 사이에 디스플레이
+    /// 구성이 바뀐 상황(외장 모니터 분리·도킹 해제)에서, 현재 세션의
+    /// 디스플레이 목록에 없는 `display_id` 의 캐시 후보는 주입되지 않아야
+    /// 한다(유령 매치 방지, 결정 2·4). `display_id: None`(extra) 는 필터의
+    /// 대상이 아니므로 그대로 주입된다.
+    #[test]
+    fn inject_cached_drops_candidates_for_removed_displays() {
+        let mut machine = SeekSessionMachine::new(SeekConfig {
+            global_shortcut: Some((KeyCode::SPACE, EventFlags::ALTERNATE)),
+            ..SeekConfig::default()
+        });
+        // 현재 세션은 디스플레이 1 만 덮는다 — 캐시는 그 전의 두-디스플레이
+        // 구성에서 왔다고 가정한다.
+        let _ = machine.activate(
+            ActivationPath::GlobalShortcut,
+            displays(),
+            Appearance::Light,
+            false,
+            (0.0, 0.0),
+        );
+        assert_eq!(machine.state(), SessionState::Opening);
+
+        let cache = SeekDetectionCache::new(vec![
+            candidate("Row A", 0.0), // 디스플레이 1 — 살아 있다.
+            TextCandidate::ocr(
+                "Ghost".to_string(),
+                Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
+                0.9,
+                99, // 현재 세션에 없는 디스플레이.
+            ),
+            TextCandidate::accessibility(
+                "AX Cancel".to_string(),
+                Rect { x: 500.0, y: 0.0, width: 10.0, height: 10.0 },
+            ),
+        ]);
+        let _ = machine.inject_cached(&cache);
+
+        // 유령은 오버레이 상태(by_display + extra) 어디에도 없다 — extra 는
+        // 필터 대상이 아니므로 남는다.
+        let all = machine.all_candidates().expect("세션이 있으므로 Some");
+        let texts: Vec<&str> = all.iter().map(|c| c.text.as_str()).collect();
+        assert!(texts.contains(&"Row A"));
+        assert!(texts.contains(&"AX Cancel"));
+        assert!(
+            !texts.contains(&"Ghost"),
+            "현재 디스플레이 목록에 없는 display 99 의 후보는 버려야 한다"
+        );
+
+        // 질의를 걸어도 유령은 matching 에 나타나지 않는다 — 검색·선택
+        // 불가능해야 한다.
+        for c in ['r', 'o', 'w'] {
+            let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
+        }
+        let bar = machine.overlay().unwrap().search_bar_frame();
+        assert_eq!(bar.total_matches, 1, "Row A 만 매치 — Ghost 는 아예 없다");
+        assert_eq!(bar.matches[0].text, "Row A");
+        assert_eq!(machine.state(), SessionState::Querying);
     }
 }
