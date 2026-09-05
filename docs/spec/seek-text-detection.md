@@ -196,7 +196,7 @@ AX 트리 순회는 **프로세스 간 동기 IPC** 다. 대상 앱이 응답하
 | 단계 | 입력 | 처리 | 출력 |
 | :--- | :--- | :--- | :--- |
 | C1. 목록 획득 | (트리거 신호) | `CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)` 로 온스크린 창 딕셔너리 배열 획득 | `[CFDictionary]` (창 1개당 1항목) |
-| C2. 필터 | 딕셔너리 배열 | ① `kCGWindowLayer == 0` 인 창만(일반 앱 창 — 메뉴 막대(26)·트루퍼(1000) 등 다른 레이어는 후보 불가) ② `kCGWindowName`(제목)이 **빈 문자열**이면 항목 제외 — 제목 없는 창은 검색 대상이 없다 | 필터링된 목록 |
+| C2. 필터 | 딕셔너리 배열 | ① `kCGWindowLayer == 0` 인 창만(일반 앱 창 — 메뉴 막대(24 · `kCGMainMenuWindowLevel`)·팝업 메뉴(101 · `kCGPopUpMenuWindowLevel`)·화면 보호기(1000 · `kCGScreenSaverWindowLevel`) 등 다른 레이어는 후보 불가 — `CGWindowLevel.h` 실측, `window_list.rs` 와 동일) ② `kCGWindowName`(제목)이 **빈 문자열**이면 항목 제외 — 제목 없는 창은 검색 대상이 없다 | 필터링된 목록 |
 | C3. 후보 생성 | 필터링된 목록 | `kCGWindowName` = 제목, `kCGWindowBounds` = 창 bounds 전체(전역 rect — §3.3.4-2), `kCGWindowNumber`/`kCGWindowOwnerPID` = 창 식별자(확정 동작의 창 전면화에 사용, `seek-click-execution.md` §3.7) | `[TextCandidate]` (목록 C, source: WindowTitle) |
 
 **좌표계(§3.3.4-2)**: `kCGWindowBounds` 는 `X`/`Y`/`Width`/`Height` 키의 CFDictionary 로 돌아오며(키 이름은 2026-09-05 이 기기 전수 출력 실측으로 확정), 이미 **전역 화면 좌표, 포인트 단위, 좌상단 원점**이다 — 소스 A(§3.2.3 변환 결과)·소스 B(`kAXPositionAttribute`/`kAXSizeAttribute`)와 **동일한 좌표계**라 추가 좌표 변환이 필요 없다. `frame` 은 창 bounds **전체**(가시 텍스트의 정밀한 위치가 아니라 창 사각형)다 — 그래서 이 소스의 후보는 클릭 지점을 가질 수 없고, 확정 시 창 전면화로 실행된다(F-04 §3.7).
