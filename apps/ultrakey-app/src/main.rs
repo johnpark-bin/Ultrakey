@@ -1873,7 +1873,12 @@ struct AppState {
     seek: Mutex<SeekSettings>,
     /// Seek 워커(`seek.rs`)로 신호를 보내는 채널. 엔진이 아직 시작되지 않았으면
     /// (권한 대기 중) `None` — `send_seek_signal` 이 조용히 버린다.
-    seek_tx: Mutex<Option<crossbeam_channel::Sender<seek::SeekSignal>>>,
+    ///
+    /// ⭐ 이슈 #139 F3 — `send_seek_signal` 은 `on_engine_event`(탭 콜백 스택)에서
+    /// 불릴 수 있으므로 `architecture.md` §2.2 규약상 이 필드에 `Mutex` 를 둘 수
+    /// 없다(콜백 안 잠금 경합 가능성 금지). `ArcSwapOption` 은 콜백 쪽에서 무잠금·
+    /// 무할당으로 읽는다(`load()`). 쓰기는 엔진 기동 시 1회뿐이다.
+    seek_tx: ArcSwapOption<crossbeam_channel::Sender<seek::SeekSignal>>,
     /// ⭐ F-06 — 트랙패드 제스처 리스너(`trackpad.rs`). 엔진 시작 시점에 뜨고,
     /// 설정 변경·종료 때 이 손잡이로 통신한다. 비공개 API 로드 실패 시 `thread`
     /// 가 없는 손잡이(격하)가 된다.
@@ -4867,7 +4872,7 @@ fn main() {
         japanese: Mutex::new(ultrakey_language_presets::JapaneseSettings::default()),
         chinese: Mutex::new(ultrakey_language_presets::ChineseSettings::default()),
         seek: Mutex::new(SeekSettings::default()),
-        seek_tx: Mutex::new(None),
+        seek_tx: ArcSwapOption::empty(),
         trackpad: Mutex::new(None),
         global_hotkey_manager: Mutex::new(None),
         global_hotkey_registered: Mutex::new(None),
@@ -5475,7 +5480,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                 include_window_titles,
                 persist_origin,
             );
-            *state.seek_tx.lock().unwrap() = Some(tx);
+            state.seek_tx.store(Some(Arc::new(tx)));
 
             // ⭐ F-06 — 트랙패드 제스처 리스너 기동(이슈 #63). 엔진이 살아 있어야
             // `SharedState.trackpad` 게이트가 존재한다. 비공개 API 로드 실패 시
@@ -5594,12 +5599,11 @@ fn seek_set_query(state: State<'_, Arc<AppState>>, query: String) {
 }
 
 /// `AppState.seek_tx` 로 신호를 보낸다 — 워커가 아직 뜨지 않았으면(엔진 시작 전)
-/// 조용히 버린다.
+/// 조용히 버린다. `load()` 는 무잠금·무할당 읽기 가드다(`load_full` 로 `Arc` 를
+/// 복제하지 않는다). crossbeam unbounded 채널의 `send` 는 블로킹하지 않는다.
 fn send_seek_signal(state: &Arc<AppState>, signal: seek::SeekSignal) {
-    if let Ok(guard) = state.seek_tx.lock() {
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(signal);
-        }
+    if let Some(tx) = state.seek_tx.load().as_ref() {
+        let _ = tx.send(signal);
     }
 }
 

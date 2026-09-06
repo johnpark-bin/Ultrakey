@@ -39,6 +39,7 @@ pub mod screens;
 pub mod secure_input;
 pub mod single_instance;
 pub mod text_input_source;
+pub mod thread_qos;
 pub mod trace_ring;
 pub mod vision_ocr;
 pub mod window_list;

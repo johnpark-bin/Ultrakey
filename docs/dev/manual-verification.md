@@ -292,6 +292,9 @@ INFO ultrakey-tap      경로 B 재적용을 완료했다(M1: 등록된 규칙 0
 **예약(`ultrakey-hotplug`)과 실행(`ultrakey-tap`)이 모두 로그에 남는다** — 지연 1500 ms 뒤
 `ReapplyHidMapping` 이 실제로 처리된 것이 확인된다.
 
+> ⭐ 이슈 #139 이후 재적용 실행 스레드는 `ultrakey-tap` 이 아니라
+> `ultrakey-delay-scheduler` 다(로그의 스레드 이름이 그렇게 찍힌다). 위 로그는 당시 기록이다.
+
 ⚠️ **착탈 1회에 감지 로그가 2건씩 남는 것은 정상이다.** `F108Pro Dongle` 이 키보드 클래스
 HID 인터페이스를 2개 등록해서, 매칭 알림도 장치마다 하나씩 온다. 로그를 볼 때 중복으로
 오해하지 마라.

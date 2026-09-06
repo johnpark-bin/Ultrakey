@@ -225,7 +225,6 @@ impl Engine {
             let thread_on_event = Arc::clone(&on_event);
             let thread_tap_state = Arc::clone(&tap_state);
             let thread_probe_slot = Arc::clone(&health_probe_slot);
-            let thread_path_b = Arc::clone(&path_b);
             let thread_trace_ring = Arc::clone(&trace_ring);
 
             let thread = thread::Builder::new()
@@ -236,7 +235,6 @@ impl Engine {
                         thread_on_event,
                         thread_tap_state,
                         thread_probe_slot,
-                        thread_path_b,
                         thread_trace_ring,
                         ready_tx,
                     );
@@ -250,7 +248,11 @@ impl Engine {
                 Arc::clone(&health_probe_slot),
                 handshake.commands.clone(),
             );
-            let system_hooks = SystemHooks::start(Arc::clone(&shared), handshake.commands.clone());
+            let system_hooks = SystemHooks::start(
+                Arc::clone(&shared),
+                handshake.commands.clone(),
+                Arc::clone(&path_b),
+            );
             // `trace::spawn_drain_thread` 는 `trace_enabled()` 가 false 면 스레드를
             // 만들지 않고 `None` 을 돌려준다.
             let trace_drain = trace::spawn_drain_thread(Arc::clone(&trace_ring));
@@ -282,6 +284,8 @@ impl Engine {
     /// 서브프로세스 호출(디바이스 수만큼)은 §2.2 가 콜백 임계 경로에서 금지하는 블로킹
     /// I/O 그 자체이지만, 이 메서드는 그 경로 밖에서만 불린다(architecture.md §6.6 이
     /// 확정한 "설정이 바뀔 때마다 재계산해서 Engine::reconfigure 경로로 반영"의 구현).
+    /// ⭐ 이슈 #139 — `PathBManager` 내부 Mutex 가 이 호출과 지연 스케줄러 스레드의
+    /// 재적용을 직렬화한다(`path_b.rs` 구조체 문서 참고).
     pub fn reconfigure(&self, config: EngineConfig) {
         let attached = ultrakey_platform::hid_device::list_attached_keyboards();
         if let Err(e) = self.path_b.apply_all(&config, &attached) {
@@ -355,7 +359,6 @@ struct TapThreadState {
     tap_state_snapshot: TapState,
     tap_state_atomic: Arc<AtomicTapState>,
     health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>>,
-    path_b: Arc<PathBManager>,
     /// 치명적 실패(§3-a "탭 생성 실패는 치명적이다") 이후에는 아무 것도 하지 않는다.
     fatal: bool,
     timer: Option<RepeatingTimer>,
@@ -988,33 +991,6 @@ fn drain_commands(
                 st.arbiter.reconfigure(&cfg);
                 tracing::info!("reconfigured the Arbiter to reflect the settings change");
             }
-            EngineCommand::ReapplyHidMapping(device) => {
-                // ⭐ F-17 — `Some(device)` 면 핫플러그로 방금 연결된 그 디바이스 하나만
-                // (`apply_device`), `None` 이면(디바이스 속성을 읽지 못했거나 전체
-                // 재조정이 필요한 경우) 붙어 있는 디바이스 전체를 다시 계산해
-                // 재적용한다(`apply_all`, CONTRACT.md 부록 B.5). 핫플러그가 드물게만
-                // 이 경로를 타므로, 이 커맨드 perform 콜백(탭 이벤트 콜백 자체는 아니다)
-                // 안에서 hidutil 서브프로세스를 동기 호출해도 §2.2 가 금지하는 "매 이벤트
-                // 임계 경로"에는 해당하지 않는다 — M1 부터 이어진 판단이다.
-                let (path_b, cfg, shared) = {
-                    let st = cell.borrow();
-                    (st.path_b.clone(), st.shared.config.load_full(), Arc::clone(&st.shared))
-                };
-                let result = match &device {
-                    Some(dev) => path_b.apply_device(&cfg, dev),
-                    None => {
-                        let attached = ultrakey_platform::hid_device::list_attached_keyboards();
-                        path_b.apply_all(&cfg, &attached)
-                    }
-                };
-                shared
-                    .d1_confirmed
-                    .store(path_b.d1_confirmed(), Ordering::Release);
-                match result {
-                    Ok(()) => tracing::info!(?device, "Path B (F-17) reapply completed"),
-                    Err(e) => tracing::warn!(error = %e, ?device, "Path B (F-17) reapply failed"),
-                }
-            }
             EngineCommand::PostSynthEvent(ev) => {
                 // ⭐ 이슈 #129 — `emit_outcome` 이 큐에 넣은, 이미 판정이 끝난 합성
                 // 이벤트를 콜백 밖에서 낸다(`apply_outcome_outside_tap` 과 같은
@@ -1046,10 +1022,32 @@ fn tap_thread_main(
     on_event: Arc<dyn Fn(EngineEvent) + Send + Sync>,
     tap_state_atomic: Arc<AtomicTapState>,
     health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>>,
-    path_b: Arc<PathBManager>,
     trace_ring: Arc<TraceRing>,
     ready_tx: Sender<TapThreadHandshake>,
 ) {
+    // ⭐ 이슈 #139 D2 — 활성 탭은 WindowServer 가 이 스레드의 응답을 **동기로**
+    // 기다린다(`event_tap.rs`). 이 스레드가 스케줄에서 밀리는 시간이 곧 시스템
+    // 전체의 키보드·마우스 지연이므로, 런루프 등록 전에 QoS 를 `USER_INTERACTIVE`
+    // 로 올린다(`ultrakey_platform::thread_qos` 모듈 문서 — `thread_policy_set`
+    // 실시간 정책을 쓰지 않는 이유 포함). 실패해도 계속 간다 — 지연이 조금 더
+    // 클 뿐 기능은 그대로다. 여기는 콜백 밖(스레드 초기화)이라 `tracing` 허용.
+    let qos_before = ultrakey_platform::thread_qos::current_thread_qos_class();
+    let qos_result = ultrakey_platform::thread_qos::set_current_thread_user_interactive();
+    let qos_after = ultrakey_platform::thread_qos::current_thread_qos_class();
+    match qos_result {
+        Ok(()) => tracing::info!(
+            ?qos_before,
+            ?qos_after,
+            "tap thread QoS set to USER_INTERACTIVE"
+        ),
+        Err(rc) => tracing::warn!(
+            rc,
+            ?qos_before,
+            ?qos_after,
+            "tap thread QoS promotion failed; continuing with the default QoS"
+        ),
+    }
+
     let start = Instant::now();
     let initial_cfg = shared.config.load_full();
     let arbiter = Arbiter::new(&initial_cfg);
@@ -1063,7 +1061,6 @@ fn tap_thread_main(
         tap_state_snapshot: TapState::NotInstalled,
         tap_state_atomic,
         health_probe_slot,
-        path_b,
         fatal: false,
         timer: None,
         start,

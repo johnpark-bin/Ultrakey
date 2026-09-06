@@ -13,13 +13,12 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use ultrakey_core::arbitration::SynthEvent;
-use ultrakey_core::perdevice::DeviceId;
 use ultrakey_platform::runloop::CommandSignaller;
 
 /// 탭 스레드가 처리하는 명령 하나.
 ///
-/// ⚠️ `ReapplyHidMapping` 이 `Option<DeviceId>` 를 실으므로 더 이상 `Copy` 가 아니다
-/// (`DeviceId` 는 문자열을 감싼다) — 값을 옮겨(move) 보낸다.
+/// ⚠️ `PostSynthEvent(SynthEvent)` 가 있어 더 이상 `Copy` 가 아니다 — 값을 옮겨(move)
+/// 보낸다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineCommand {
     /// 절전/잠금/Secure Input — stuck modifier 방지(§5 #9). `Arbiter::force_reset` 을
@@ -32,10 +31,6 @@ pub enum EngineCommand {
     RecoverTap,
     /// 설정 교체 후 `Arbiter::reconfigure` 호출 — quick press 슬롯 재구성.
     Reconfigure,
-    /// 경로 B(F-17) 재적용 — `Some(device)` 면 그 디바이스 하나만
-    /// (`PathBManager::apply_device`, 핫플러그 `Attached`), `None` 이면 붙어 있는
-    /// 디바이스 전체를 재조정한다(`PathBManager::apply_all`, CONTRACT.md 부록 B.5).
-    ReapplyHidMapping(Option<DeviceId>),
     /// ⭐ 이슈 #129 — 인풋 박스 세션 중 D2(F-16.1 세션 재평가)가 낸 합성 이벤트를
     /// 콜백 밖에서 낸다(`engine::emit_outcome`, `docs/plan/issue-129-seek-webview-inputsource.md`
     /// §7.4 순위 1). 판정 로직이 이미 만든 `SynthEvent` 를 그대로 실어 보낼 뿐,
