@@ -51,7 +51,7 @@ fn main() {}
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2_core_foundation::{
-        kCFRunLoopDefaultMode, CFMachPort, CFRunLoop, CFRunLoopSource, kCFRunLoopCommonModes,
+        kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFMachPort, CFRunLoop, CFRunLoopSource,
     };
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID,
@@ -320,10 +320,9 @@ fn main() {
     };
     let source = CFMachPort::new_run_loop_source(None, Some(&port), 0).expect("run loop source");
     let rl = CFRunLoop::current().expect("run loop");
-    rl.add_source(
-        Some::<&CFRunLoopSource>(&source),
-        unsafe { kCFRunLoopCommonModes },
-    );
+    rl.add_source(Some::<&CFRunLoopSource>(&source), unsafe {
+        kCFRunLoopCommonModes
+    });
     CGEvent::tap_enable(&port, true);
 
     eprintln!(

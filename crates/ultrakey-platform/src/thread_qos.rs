@@ -24,8 +24,7 @@
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use crate::ffi::{
-        self, pthread_get_qos_class_np, pthread_self, pthread_set_qos_class_self_np,
-        qos_class_t,
+        self, pthread_get_qos_class_np, pthread_self, pthread_set_qos_class_self_np, qos_class_t,
     };
     use std::ffi::c_int;
 
@@ -71,7 +70,8 @@ mod macos_impl {
         // (호출 스레드) 자신에게만 작용하는 non-throwing C 함수다. 인자는
         // `sys/qos.h` 가 정의한 상수와 리터럴 0 뿐이라 널 포인터나 잘못된
         // 핸들을 넘길 여지가 없다.
-        let rc: c_int = unsafe { pthread_set_qos_class_self_np(ffi::QOS_CLASS_USER_INTERACTIVE, 0) };
+        let rc: c_int =
+            unsafe { pthread_set_qos_class_self_np(ffi::QOS_CLASS_USER_INTERACTIVE, 0) };
         if rc == 0 {
             Ok(())
         } else {
@@ -88,9 +88,8 @@ mod macos_impl {
         // 유효한 포인터이고, `pthread_get_qos_class_np` 는 실패 시(rc != 0)
         // 이들을 건드리지 않을 수 있으므로 호출 전에 안전한 기본값으로
         // 초기화해 둔다.
-        let rc: c_int = unsafe {
-            pthread_get_qos_class_np(pthread_self(), &mut cls, &mut relative_priority)
-        };
+        let rc: c_int =
+            unsafe { pthread_get_qos_class_np(pthread_self(), &mut cls, &mut relative_priority) };
         if rc == 0 {
             Some(QosClass::from_raw(cls))
         } else {

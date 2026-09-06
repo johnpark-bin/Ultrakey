@@ -91,7 +91,7 @@
 
 | # | 조건 | 확인 수단 | 귀속 단위 |
 | :--- | :--- | :--- | :--- |
-| A1 | `EngineCommand::ReapplyHidMapping` 부재, 재적용은 스케줄러 스레드, 탭 코드 경로에 `hidutil`·`persist` 없음 | `grep -rn ReapplyHidMapping crates apps` = 0건(문서 제외). `engine.rs` 의 `drain_commands`/`tap_thread_main`/`TapThreadState` 에 `path_b` 참조 0건. 실기기 로그의 reapply 줄 스레드가 `ultrakey-delay-scheduler` | U2 |
+| A1 | `EngineCommand::ReapplyHidMapping` 부재, 재적용은 스케줄러 스레드, 탭 코드 경로에 `hidutil`·`persist` 없음 | `grep -rn "EngineCommand::ReapplyHidMapping" crates apps` = 0건(`DelayedJob::ReapplyHidMapping` 은 스케줄러 내부 job 이름으로 존속 — 의도된 잔존). `engine.rs` 의 `drain_commands`/`tap_thread_main`/`TapThreadState` 에 `path_b` 참조 0건. 실기기 로그의 reapply 줄 스레드가 `ultrakey-delay-scheduler` | U2 |
 | A2 | `PathBManager` 직렬화 | 단위 테스트(동시 `apply_all` 최대 진입 1) 통과 | U2 |
 | A3 | 탭 스레드 QoS UI | 기동 로그 `tap thread QoS` 줄의 되읽기 값 = 0x21 + `ps -M` PRI 기록 | U3 |
 | A4 | `seek_tx` Mutex 없음, Seek 동작 유지 | `grep seek_tx main.rs` 에 `Mutex` 없음. 수동: 세션 열기·타이핑·한/영·ESC | U4 |
@@ -145,7 +145,7 @@
 
 | # | 조건 | 현황 |
 | :--- | :--- | :--- |
-| A1 | `ReapplyHidMapping` 부재, 재적용은 스케줄러 스레드 | grep 0건 확인 |
+| A1 | `EngineCommand::ReapplyHidMapping` 부재, 재적용은 스케줄러 스레드 | `grep -rn "EngineCommand::ReapplyHidMapping" crates apps` 0건, `engine.rs` 탭 경로에 `path_b` 참조 0건(P3 reviewer 재현 확인). 남은 6건은 전부 `system_hooks.rs` 의 `DelayedJob::ReapplyHidMapping`(의도된 잔존) |
 | A2 | `PathBManager` 직렬화 | 단위 테스트 통과 |
 | A3 | 탭 스레드 QoS UI | 기동 로그 확인(`qos_before=Some(Default) qos_after=Some(UserInteractive)`). `ps -M` 은 스레드 이름 미표시 — 귀속 불가, 판정 근거로 쓰지 않음 |
 | A4 | `seek_tx` Mutex 없음 | grep 확인 완료. 수동(세션 열기·타이핑·한/영·ESC) 확인은 **대기** |

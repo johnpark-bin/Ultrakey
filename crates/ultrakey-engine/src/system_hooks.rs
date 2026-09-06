@@ -85,7 +85,11 @@ pub struct DelayScheduler {
 }
 
 impl DelayScheduler {
-    pub fn spawn(shared: Arc<SharedState>, commands: CommandChannel, path_b: Arc<PathBManager>) -> Self {
+    pub fn spawn(
+        shared: Arc<SharedState>,
+        commands: CommandChannel,
+        path_b: Arc<PathBManager>,
+    ) -> Self {
         let (tx, rx) = unbounded::<SchedulerMsg>();
         let handle = DelaySchedulerHandle {
             sender: tx,
@@ -203,6 +207,18 @@ fn fire_job(
             // ⭐ 이슈 #139 — 재적용은 이 스케줄러 스레드가 직접 실행한다. `EngineCommand`
             // 로 번역해 탭 스레드로 넘기지 않는다 — `hidutil` 서브프로세스·원장 fsync 를
             // 탭 런루프 시간에 넣지 않기 위함이다(architecture.md §2.2).
+            //
+            // ⚠️ 트레이드오프(이슈 #139 P3 심사 지적): 이 실행이 스케줄러 스레드를
+            // 재적용 시간만큼(실측 1대 179 ms, 전체 재적용은 디바이스 수에 비례) 점유하므로
+            // 그 사이 도착한 다른 지연 작업(`Recover`)의 발화가 그만큼 밀린다. 같은
+            // 깨어남의 `Recover` 는 이 작업보다 먼저 예약되어 먼저 발화하고, 나머지는
+            // 이미 300~2000 ms 지연 재확인이라 수백 ms 추가 지연은 무해하다 — 재적용
+            // 시간이 크게 늘어나면 이 판단을 다시 하라.
+            //
+            // `list_attached_keyboards()` 는 `PathBManager::serial` 잠금 **밖**에서 열거한다
+            // (`Engine::reconfigure` 와 동일). 잠금 대기 중 목록이 낡을 수 있지만 그 영향은
+            // "방금 뽑힌 디바이스 쓰기 실패 로그 후 계속 / 방금 붙은 디바이스는 자기
+            // 핫플러그 재적용이 따로 예약됨" 뿐이라 감수한다.
             let started = Instant::now();
             let cfg = shared.config.load_full();
             let (result, devices) = match &device {
@@ -247,7 +263,11 @@ pub struct SystemHooks {
 impl SystemHooks {
     /// ⚠️ **호출한 스레드에서 동기적으로** 구독을 등록한다 — 이 스레드가 곧 메인
     /// 스레드여야 한다(위 모듈 문서 참고). 절대 이 함수 자체를 새 스레드에서 부르지 마라.
-    pub fn start(shared: Arc<SharedState>, commands: CommandChannel, path_b: Arc<PathBManager>) -> Self {
+    pub fn start(
+        shared: Arc<SharedState>,
+        commands: CommandChannel,
+        path_b: Arc<PathBManager>,
+    ) -> Self {
         warn_if_not_main_thread();
 
         let scheduler = DelayScheduler::spawn(Arc::clone(&shared), commands, path_b);
