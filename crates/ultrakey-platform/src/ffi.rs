@@ -12,7 +12,7 @@
 use objc2_core_foundation::{
     CFAllocator, CFArray, CFDictionary, CFMutableDictionary, CFRunLoopSource, CFString,
 };
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_int, c_void};
 
 // ============================================================================
 // Mach 기본 타입
@@ -470,3 +470,54 @@ pub(crate) const K_CG_WINDOW_LIST_OPTION_ALL: CGWindowListOption = 0;
 pub(crate) const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: CGWindowListOption = 1 << 0;
 /// 근거: `CGWindow.h` 160행 — `kCGWindowListExcludeDesktopElements = (1 << 4)`
 pub(crate) const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: CGWindowListOption = 1 << 4;
+
+// ============================================================================
+// pthread QoS — 이슈 #139 D2 (탭 스레드 QoS `USER_INTERACTIVE`)
+// ============================================================================
+//
+// 근거: `/usr/include/sys/qos.h` — `typedef unsigned int qos_class_t;` 와
+// `QOS_CLASS_USER_INTERACTIVE = 0x21`, `QOS_CLASS_USER_INITIATED = 0x19`,
+// `QOS_CLASS_DEFAULT = 0x15`, `QOS_CLASS_UTILITY = 0x11`,
+// `QOS_CLASS_BACKGROUND = 0x09`, `QOS_CLASS_UNSPECIFIED = 0x00`.
+//
+// `pthread_t` 는 Darwin 에서 `struct _opaque_pthread_t *` — 불투명 포인터로만
+// 다룬다(근거: `/usr/include/pthread/pthread_types.h`).
+
+/// `sys/qos.h` — `qos_class_t` 는 `unsigned int` 열거형.
+pub(crate) type qos_class_t = u32;
+/// `QOS_CLASS_USER_INTERACTIVE` (`sys/qos.h`).
+pub(crate) const QOS_CLASS_USER_INTERACTIVE: qos_class_t = 0x21;
+/// `QOS_CLASS_USER_INITIATED` (`sys/qos.h`) — 되읽기 표시용.
+pub(crate) const QOS_CLASS_USER_INITIATED: qos_class_t = 0x19;
+/// `QOS_CLASS_DEFAULT` (`sys/qos.h`) — 되읽기 표시용.
+pub(crate) const QOS_CLASS_DEFAULT: qos_class_t = 0x15;
+/// `QOS_CLASS_UTILITY` (`sys/qos.h`) — 되읽기 표시용.
+pub(crate) const QOS_CLASS_UTILITY: qos_class_t = 0x11;
+/// `QOS_CLASS_BACKGROUND` (`sys/qos.h`) — 되읽기 표시용.
+pub(crate) const QOS_CLASS_BACKGROUND: qos_class_t = 0x09;
+/// `QOS_CLASS_UNSPECIFIED` (`sys/qos.h`) — 되읽기 표시용.
+pub(crate) const QOS_CLASS_UNSPECIFIED: qos_class_t = 0x00;
+
+/// `pthread_t` 는 Darwin 에서 `struct _opaque_pthread_t *` — 불투명 포인터로만 다룬다.
+pub(crate) type pthread_t = *mut c_void;
+
+extern "C" {
+    /// 근거: `sys/qos.h` —
+    /// `int pthread_set_qos_class_self_np(qos_class_t __qos_class, int __relative_priority);`
+    pub(crate) fn pthread_set_qos_class_self_np(
+        qos_class: qos_class_t,
+        relative_priority: c_int,
+    ) -> c_int;
+
+    /// 근거: `sys/qos.h` —
+    /// `int pthread_get_qos_class_np(pthread_t __pthread, qos_class_t * __nonnull __qos_class,
+    ///     int * __nullable __relative_priority);`
+    pub(crate) fn pthread_get_qos_class_np(
+        thread: pthread_t,
+        qos_class: *mut qos_class_t,
+        relative_priority: *mut c_int,
+    ) -> c_int;
+
+    /// 근거: `pthread.h` — `pthread_t pthread_self(void);`
+    pub(crate) fn pthread_self() -> pthread_t;
+}

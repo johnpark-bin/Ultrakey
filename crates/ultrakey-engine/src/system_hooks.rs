@@ -12,6 +12,7 @@
 //! ([`DelayScheduler`])가 `crossbeam_channel::recv_timeout` 으로 예약된 작업의 마감을
 //! 관리한다 — 이벤트마다 `thread::spawn` 하지 않는다.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -26,18 +27,24 @@ use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEve
 
 use crate::command::{CommandChannel, EngineCommand};
 use crate::lifecycle::should_skip_restart;
+use crate::path_b::PathBManager;
 use crate::state::SharedState;
 
 /// 지연 스케줄러에 예약하는 작업 종류.
 ///
 /// ⚠️ `ReapplyHidMapping` 이 `Option<DeviceId>` 를 실으므로 더 이상 `Copy` 가 아니다.
+///
+/// ⭐ 이슈 #139 — `ReapplyHidMapping` 은 더 이상 `EngineCommand` 로 번역되지 않는다.
+/// 이 스케줄러 스레드가 `fire_job` 안에서 `PathBManager::apply_device`/`apply_all` 을
+/// **직접** 실행한다 — 탭 런루프 시간에 `hidutil` 서브프로세스·원장 fsync 를 넣지
+/// 않기 위함이다(이슈 #139, `docs/dev/architecture.md` §2.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DelayedJob {
     /// 절전 복귀·세션 활성화·화면 잠금 해제 → 지연 뒤 `RecoverTap`. ⭐ 재시작
     /// 디바운스가 적용된다(§3-a).
     Recover,
-    /// 키보드 핫플러그(연결) → 지연 뒤 `ReapplyHidMapping(device)`. 경로 B 는 경로 A 와
-    /// 다른 자원이라 디바운스를 공유하지 않는다. `Some(device)` 면 그 디바이스 하나만,
+    /// 키보드 핫플러그(연결) → 지연 뒤 경로 B 재적용. 경로 B 는 경로 A 와 다른
+    /// 자원이라 디바운스를 공유하지 않는다. `Some(device)` 면 그 디바이스 하나만,
     /// `None` 이면(디바이스 속성을 읽지 못한 경우, `HotplugEvent::device` 문서 참고)
     /// 전체 재조정으로 대응한다.
     ReapplyHidMapping(Option<DeviceId>),
@@ -78,7 +85,11 @@ pub struct DelayScheduler {
 }
 
 impl DelayScheduler {
-    pub fn spawn(shared: Arc<SharedState>, commands: CommandChannel) -> Self {
+    pub fn spawn(
+        shared: Arc<SharedState>,
+        commands: CommandChannel,
+        path_b: Arc<PathBManager>,
+    ) -> Self {
         let (tx, rx) = unbounded::<SchedulerMsg>();
         let handle = DelaySchedulerHandle {
             sender: tx,
@@ -87,7 +98,7 @@ impl DelayScheduler {
         };
         let thread = thread::Builder::new()
             .name("ultrakey-delay-scheduler".to_string())
-            .spawn(move || scheduler_loop(rx, shared, commands))
+            .spawn(move || scheduler_loop(rx, shared, commands, path_b))
             .expect("지연 스케줄러 스레드 생성 실패");
         DelayScheduler {
             thread: Some(thread),
@@ -112,7 +123,12 @@ struct PendingJob {
     job: DelayedJob,
 }
 
-fn scheduler_loop(rx: Receiver<SchedulerMsg>, shared: Arc<SharedState>, commands: CommandChannel) {
+fn scheduler_loop(
+    rx: Receiver<SchedulerMsg>,
+    shared: Arc<SharedState>,
+    commands: CommandChannel,
+    path_b: Arc<PathBManager>,
+) {
     let clock_start = Instant::now();
     let mut pending: Vec<PendingJob> = Vec::new();
     let mut last_recover_fired_ms: Option<u64> = None;
@@ -147,6 +163,7 @@ fn scheduler_loop(rx: Receiver<SchedulerMsg>, shared: Arc<SharedState>, commands
                     p.job,
                     &shared,
                     &commands,
+                    &path_b,
                     &mut last_recover_fired_ms,
                     now_ms,
                 );
@@ -162,6 +179,7 @@ fn fire_job(
     job: DelayedJob,
     shared: &Arc<SharedState>,
     commands: &CommandChannel,
+    path_b: &Arc<PathBManager>,
     last_recover_fired_ms: &mut Option<u64>,
     now_ms: u64,
 ) {
@@ -186,7 +204,50 @@ fn fire_job(
             commands.send(EngineCommand::RecoverTap);
         }
         DelayedJob::ReapplyHidMapping(device) => {
-            commands.send(EngineCommand::ReapplyHidMapping(device));
+            // ⭐ 이슈 #139 — 재적용은 이 스케줄러 스레드가 직접 실행한다. `EngineCommand`
+            // 로 번역해 탭 스레드로 넘기지 않는다 — `hidutil` 서브프로세스·원장 fsync 를
+            // 탭 런루프 시간에 넣지 않기 위함이다(architecture.md §2.2).
+            //
+            // ⚠️ 트레이드오프(이슈 #139 P3 심사 지적): 이 실행이 스케줄러 스레드를
+            // 재적용 시간만큼(실측 1대 179 ms, 전체 재적용은 디바이스 수에 비례) 점유하므로
+            // 그 사이 도착한 다른 지연 작업(`Recover`)의 발화가 그만큼 밀린다. 같은
+            // 깨어남의 `Recover` 는 이 작업보다 먼저 예약되어 먼저 발화하고, 나머지는
+            // 이미 300~2000 ms 지연 재확인이라 수백 ms 추가 지연은 무해하다 — 재적용
+            // 시간이 크게 늘어나면 이 판단을 다시 하라.
+            //
+            // `list_attached_keyboards()` 는 `PathBManager::serial` 잠금 **밖**에서 열거한다
+            // (`Engine::reconfigure` 와 동일). 잠금 대기 중 목록이 낡을 수 있지만 그 영향은
+            // "방금 뽑힌 디바이스 쓰기 실패 로그 후 계속 / 방금 붙은 디바이스는 자기
+            // 핫플러그 재적용이 따로 예약됨" 뿐이라 감수한다.
+            let started = Instant::now();
+            let cfg = shared.config.load_full();
+            let (result, devices) = match &device {
+                Some(dev) => (path_b.apply_device(&cfg, dev), 1usize),
+                None => {
+                    let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+                    let devices = attached.len();
+                    (path_b.apply_all(&cfg, &attached), devices)
+                }
+            };
+            shared
+                .d1_confirmed
+                .store(path_b.d1_confirmed(), Ordering::Release);
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            match result {
+                Ok(()) => tracing::info!(
+                    ?device,
+                    elapsed_ms,
+                    devices,
+                    "Path B (F-17) reapply completed"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    ?device,
+                    elapsed_ms,
+                    devices,
+                    "Path B (F-17) reapply failed"
+                ),
+            }
         }
     }
 }
@@ -202,10 +263,14 @@ pub struct SystemHooks {
 impl SystemHooks {
     /// ⚠️ **호출한 스레드에서 동기적으로** 구독을 등록한다 — 이 스레드가 곧 메인
     /// 스레드여야 한다(위 모듈 문서 참고). 절대 이 함수 자체를 새 스레드에서 부르지 마라.
-    pub fn start(shared: Arc<SharedState>, commands: CommandChannel) -> Self {
+    pub fn start(
+        shared: Arc<SharedState>,
+        commands: CommandChannel,
+        path_b: Arc<PathBManager>,
+    ) -> Self {
         warn_if_not_main_thread();
 
-        let scheduler = DelayScheduler::spawn(Arc::clone(&shared), commands);
+        let scheduler = DelayScheduler::spawn(Arc::clone(&shared), commands, path_b);
         let sched_handle = scheduler.handle();
 
         let sched_for_events = sched_handle.clone();
@@ -354,8 +419,9 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             // ⭐ 이슈 #108 원인 (a) — 절전 중 커널이 경로 B(D-1 포함) 매핑을 유실했을
             // 가능성을 닫는다(BT 키보드가 핫플러그 재열거 없이 재개되는 경우 등,
             // 검증 불가능한 가설이라 계측 대신 재적용으로 닫는다). `apply_all` 은
-            // 멱등이고 이미 승인된 커맨드 드레인 경로(`ReapplyHidMapping`)를 그대로
-            // 재사용한다 — 새 코드 경로를 만들지 않는다.
+            // 멱등이다. ⭐ 이슈 #139 — 재적용은 이 스케줄러 스레드가 직접 실행한다 —
+            // 탭 런루프 시간에 `hidutil` 서브프로세스·원장 fsync 를 넣지 않기 위함이다
+            // (architecture.md §2.2).
             sched.schedule(delay, DelayedJob::ReapplyHidMapping(None));
         }
         SystemEvent::ScreenUnlocked => {

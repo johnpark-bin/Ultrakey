@@ -136,6 +136,17 @@ pub struct ReconcileReport {
 
 /// 경로 B 디바이스별 합성·쓰기·정리를 총괄한다. 저장소·마이그레이션 구현을 모르고
 /// 트레이트 객체로만 다룬다(CONTRACT.md 부록 B.4).
+///
+/// ⭐ 이슈 #139 — `serial` 은 **공개 진입점**(`reconcile_on_start`·`apply_all`·
+/// `apply_device`·`cleanup`) 을 직렬화하는 Mutex 다. 왜 진입점에서 잡는가: 진입점
+/// 하나가 "커널을 한 번 read-modify-write 하는 논리 단위"이기 때문이다 —
+/// `write_device` 안에서 잡으면 `apply_all` 한 번이 디바이스 사이에서 끊겨
+/// `reconfigure` 와 인터리브될 수 있다. 왜 여기(엔진 크레이트) 인가: 재적용의 두
+/// 생산자(메인 스레드의 `Engine::reconfigure`·`Engine::shutdown`, 지연 스케줄러
+/// 스레드의 경로 B 재적용)가 이 매니저 하나를 공유하기 때문 — 커널
+/// `UserKeyMapping` read-modify-write 가 겹치는 경합을 여기서 닫는다. **탭 스레드는
+/// 이 Mutex 를 만지지 않는다** — 이슈 #139 이후 탭 스레드는 `PathBManager` 참조
+/// 자체가 없다(`TapThreadState` 에 `path_b` 필드가 없다).
 pub struct PathBManager {
     backend: Box<dyn HidMappingBackend>,
     migration: Option<Box<dyn GlobalD1Migration>>,
@@ -146,6 +157,9 @@ pub struct PathBManager {
     /// ⭐ 이슈 #110 — "D-1 이 필요한 모든 붙어 있는 키보드에 실제로 실렸다" 가 마지막
     /// 전체 재조정에서 **되읽기로 확인**됐는가. 의미는 [`Self::d1_confirmed`] 문서에.
     d1_confirmed: AtomicBool,
+    /// 공개 진입점 4개를 직렬화하는 잠금(위 구조체 문서 참고). `()` 만 감싸 값 자체는
+    /// 아무 정보도 갖지 않는다 — 존재 자체가 상호 배제다.
+    serial: std::sync::Mutex<()>,
 }
 
 impl PathBManager {
@@ -160,6 +174,7 @@ impl PathBManager {
             ledger,
             migrated: AtomicBool::new(false),
             d1_confirmed: AtomicBool::new(false),
+            serial: std::sync::Mutex::new(()),
         }
     }
 
@@ -190,6 +205,10 @@ impl PathBManager {
         cfg: &EngineConfig,
         attached: &[DeviceInfo],
     ) -> Result<ReconcileReport, HidMappingError> {
+        // ⭐ 이슈 #139 — poison 은 무시한다(`unwrap_or_else(PoisonError::into_inner)`).
+        // 백엔드가 이전 호출에서 패닉했더라도 다음 재적용은 계속돼야 한다 — 여기서
+        // 다시 패닉하면 재적용 자체가 영구히 막힌다.
+        let _guard = self.serial.lock().unwrap_or_else(|p| p.into_inner());
         let global_migration_cleared = self.run_global_migration_once();
         let devices_reconciled = self.apply_all_inner(cfg, attached)?;
         Ok(ReconcileReport {
@@ -205,6 +224,7 @@ impl PathBManager {
         cfg: &EngineConfig,
         attached: &[DeviceInfo],
     ) -> Result<(), HidMappingError> {
+        let _guard = self.serial.lock().unwrap_or_else(|p| p.into_inner());
         self.apply_all_inner(cfg, attached)?;
         Ok(())
     }
@@ -270,6 +290,7 @@ impl PathBManager {
         cfg: &EngineConfig,
         device: &DeviceId,
     ) -> Result<(), HidMappingError> {
+        let _guard = self.serial.lock().unwrap_or_else(|p| p.into_inner());
         let settings = PerDeviceSettings::new(&cfg.per_device_values);
         let d1 = d1_for(cfg);
         let composition = compose(device, &settings, d1);
@@ -285,6 +306,7 @@ impl PathBManager {
     /// (§3.6 규칙 6) — 다음에 그 디바이스가 붙을 때(핫플러그 `Attached` →
     /// `apply_device`) 정리된다.
     pub fn cleanup(&self, attached: &[DeviceInfo]) -> Result<(), HidMappingError> {
+        let _guard = self.serial.lock().unwrap_or_else(|p| p.into_inner());
         let attached_ids: HashSet<(u32, u32)> = attached
             .iter()
             .map(|d| (d.vendor_id, d.product_id))
@@ -1360,5 +1382,87 @@ mod tests {
         assert!(store.store(&l).is_ok());
         // no-op 이므로 다음 load() 도 여전히 비어 있어야 한다.
         assert!(store.load().is_empty());
+    }
+
+    // ── 이슈 #139 D1-b — PathBManager 직렬화 Mutex ──────────────────────────────
+
+    /// `apply()` 진입 시 `in_flight` 를 +1 하고 관측된 최대 동시 진입 수를 `max` 에
+    /// `fetch_max` 로 기록한 뒤, 짧게 sleep 하고 -1 한다 — Mutex 가 없으면 두 스레드의
+    /// `apply` 가 겹쳐 `max == 2` 가 관측된다.
+    #[derive(Default)]
+    struct ConcurrencyProbeBackend {
+        by_device: Mutex<std::collections::BTreeMap<(u32, u32), Vec<KeyMapping>>>,
+        in_flight: Arc<AtomicUsize>,
+        max: Arc<AtomicUsize>,
+    }
+
+    impl HidMappingBackend for ConcurrencyProbeBackend {
+        fn read_current(&self, device: &DeviceMatch) -> Result<DeviceMappingRead, HidMappingError> {
+            let map = self.by_device.lock().unwrap();
+            let mappings = map
+                .get(&(device.vendor_id, device.product_id))
+                .cloned()
+                .unwrap_or_default();
+            Ok(DeviceMappingRead {
+                services: vec![(1, mappings.clone())],
+                aggregated: mappings,
+                partial: false,
+            })
+        }
+
+        fn apply(
+            &self,
+            device: &DeviceMatch,
+            mappings: &[KeyMapping],
+        ) -> Result<(), HidMappingError> {
+            let now_in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max.fetch_max(now_in_flight, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            self.by_device
+                .lock()
+                .unwrap()
+                .insert((device.vendor_id, device.product_id), mappings.to_vec());
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn clear(&self, device: &DeviceMatch) -> Result<(), HidMappingError> {
+            self.apply(device, &[])
+        }
+    }
+
+    /// ⭐ 이슈 #139 A2 — 동시에 들어온 두 `apply_all` 호출이 `PathBManager::serial`
+    /// 로 직렬화되어, 가짜 백엔드가 관측하는 최대 동시 진입 수가 1이어야 한다.
+    /// D-1 이 활성(`caps_lock_alias = F18`)인 config 를 써서 두 디바이스 모두 실제
+    /// 쓰기가 일어나게 한다(§8 수용 기준 재사용 방식).
+    #[test]
+    fn concurrent_apply_all_calls_are_serialized_by_the_manager_lock() {
+        let dev_a = device_a();
+        let dev_b = device_b();
+        let backend = ConcurrencyProbeBackend::default();
+        let max = Arc::clone(&backend.max);
+        let ledger = FakeLedger::default();
+        let mgr = PathBManager::new(Box::new(backend), None, Box::new(ledger));
+
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+        let attached = [info(&dev_a), info(&dev_b)];
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _ = mgr.apply_all(&cfg, &attached);
+            });
+            scope.spawn(|| {
+                let _ = mgr.apply_all(&cfg, &attached);
+            });
+        });
+
+        assert_eq!(
+            max.load(Ordering::SeqCst),
+            1,
+            "PathBManager::serial 없이는 두 apply_all 호출이 겹쳐 max == 2 가 관측된다"
+        );
     }
 }
