@@ -85,6 +85,35 @@ pub fn tap_state_after_create_attempt(result: CreateAttemptResult) -> TapState {
     }
 }
 
+/// 탭 생성을 시도하는 이유 — 실패했을 때의 처리가 갈린다(이슈 #140, P3 심사 지적 2·3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapCreateTrigger {
+    /// `tap_thread_main` 의 최초 설치. 실패 정책은 §3-a 표 그대로(`NotTrusted` →
+    /// `NotInstalled` + F-11 온보딩, `CreateFailed` → `Terminated` 치명).
+    InitialInstall,
+    /// 설정 변경으로 마스크가 달라져 **살아 있던 탭을 해체하고** 다시 만드는 경우.
+    /// 실패하면 어느 사유든 `NotInstalled` 로 두고 `EngineEvent::TapLost` 를 올린다 —
+    /// 사용자의 클릭 하나가 프로세스를 `Terminated`(재시도 없음) 로 굳히면 안 되고,
+    /// "살아 있던 탭이 사라졌다 → 권한 모델(`report_tap_create_failed`, `OutOfSync`
+    /// 진단)에 이관" 이 정확히 `TapLost` 의 계약이기 때문이다. `NotTrusted` 이벤트는
+    /// 온보딩 모달만 띄우고 권한 모니터에 알리지 않으므로 여기서는 쓰지 않는다.
+    MaskChanged,
+}
+
+/// [`tap_state_after_create_attempt`] 의 트리거 인지 판. 최초 설치는 표 그대로,
+/// 재생성 실패는 사유와 무관하게 `NotInstalled`(탭은 이미 해체됐고 복구는 권한
+/// 모니터 몫).
+pub fn tap_state_after_create_attempt_for(
+    trigger: TapCreateTrigger,
+    result: CreateAttemptResult,
+) -> TapState {
+    match (trigger, result) {
+        (TapCreateTrigger::MaskChanged, CreateAttemptResult::NotTrusted)
+        | (TapCreateTrigger::MaskChanged, CreateAttemptResult::Fatal) => TapState::NotInstalled,
+        (_, r) => tap_state_after_create_attempt(r),
+    }
+}
+
 /// §3-a `Disabled` 전이 규칙 — 재활성화(`CGEventTapEnable` 뒤 `is_enabled()` 확인)
 /// 시도 결과로부터 다음 상태를 결정하는 순수 함수.
 pub fn tap_state_after_reenable(succeeded: bool) -> TapState {
@@ -123,6 +152,61 @@ pub fn recover_tap_decision(trusted: bool, reenable_budget_exhausted: bool) -> R
         RecoverTapDecision::Teardown
     } else {
         RecoverTapDecision::KeepAlive
+    }
+}
+
+/// `EngineCommand::Reconfigure` 처리 중 탭을 재생성할지 판정 — 순수 함수(이슈 #140,
+/// `docs/plan/issue-140-event-mask.md` §2 D2).
+///
+/// ⭐ **이슈 #65 와의 경계**. #65 가 굳힌 "재생성 금지"는 `RecoverTap` 트리거(탭
+/// 자신의 비활성화 통지 · 트램폴린 예산 소진 · 권한 상실 — `recover_tap_decision` 이
+/// 판정하는 그 셋)에 대한 것이다. 그 트리거 아래서 재생성하면 새 탭 인스턴스마다
+/// `ReenableBudget` 이 다시 채워지고, stale `AXIsProcessTrusted()` 아래서는 그게
+/// **더 느린 폭주**가 된다(`recover_tap_decision` 문서 참고) — 그래서 `RecoverTap`
+/// 경로는 재생성 없이 해체만 한다.
+///
+/// 이 함수가 판정하는 건 그 트리거가 아니라 **사용자의 설정 변경**이다 —
+/// `EngineCommand::Reconfigure` 는 사람이 설정 화면에서 클릭한 속도로만 도착하므로
+/// 예산 소진 같은 폭주 신호가 아니다. 그래서 여기서만 재생성을 허용한다 — 단, 그때도
+/// 폭주가 진행 중이면(`reenable_budget_exhausted`) 새 탭을 만들지 않고
+/// (`KeepTap`), 탭이 아예 없으면(`!has_tap`) 재생성하지 않는다 — 복구는 여전히
+/// 권한 모니터가 새 `Engine` 을 만드는 몫이다(#65 교정 2 유지). 다음 `Engine::start`
+/// 가 갱신된 설정으로 마스크를 새로 도출하므로 이번 변경이 유실되지는 않는다.
+///
+/// 판정 순서:
+/// 1. `fatal || !has_tap` → [`ReconfigureTapDecision::NoTap`] — 탭이 없거나 치명적
+///    실패 이후에는 아무 것도 하지 않는다.
+/// 2. `reenable_budget_exhausted` → [`ReconfigureTapDecision::KeepTap`] — 폭주 중에는
+///    새 탭(= 새 예산)을 주지 않는다. `RecoverTap` 이 곧 해체한다.
+/// 3. `!mask_changed` → [`ReconfigureTapDecision::KeepTap`] — 도출된 마스크가 그대로면
+///    `CGEventTapCreate` 를 다시 부를 이유가 없다.
+/// 4. 그 외 → [`ReconfigureTapDecision::Recreate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconfigureTapDecision {
+    /// 지금 탭을 그대로 둔다.
+    KeepTap,
+    /// 지금 탭을 해체하고 새 마스크로 다시 만든다.
+    Recreate,
+    /// 탭이 없다(또는 치명적 실패 이후) — 아무 것도 하지 않는다.
+    NoTap,
+}
+
+/// `has_tap` = 이 시점에 `TapThreadState.tap` 이 `Some` 인가, `fatal` =
+/// `TapThreadState.fatal`, `reenable_budget_exhausted` = 지금 탭의
+/// `EventTap::reenable_budget_exhausted()`, `mask_changed` = 이번에 도출한
+/// 이벤트 마스크가 지금 탭의 `EventTap::mask()` 와 다른가.
+pub fn reconfigure_tap_decision(
+    has_tap: bool,
+    fatal: bool,
+    reenable_budget_exhausted: bool,
+    mask_changed: bool,
+) -> ReconfigureTapDecision {
+    if fatal || !has_tap {
+        ReconfigureTapDecision::NoTap
+    } else if reenable_budget_exhausted || !mask_changed {
+        ReconfigureTapDecision::KeepTap
+    } else {
+        ReconfigureTapDecision::Recreate
     }
 }
 
@@ -244,6 +328,33 @@ mod tests {
         );
     }
 
+    /// 이슈 #140 — 재생성 실패는 치명(`Terminated`)이 아니라 `NotInstalled` + `TapLost`.
+    #[test]
+    fn recreate_failures_fall_back_to_not_installed_instead_of_terminated() {
+        use TapCreateTrigger::*;
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::Fatal),
+            TapState::NotInstalled
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::NotTrusted),
+            TapState::NotInstalled
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::Success),
+            TapState::Active
+        );
+        // 최초 설치는 표 그대로 — 치명 실패는 여전히 `Terminated`.
+        assert_eq!(
+            tap_state_after_create_attempt_for(InitialInstall, CreateAttemptResult::Fatal),
+            TapState::Terminated
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(InitialInstall, CreateAttemptResult::NotTrusted),
+            TapState::NotInstalled
+        );
+    }
+
     #[test]
     fn reenable_transitions_match_table() {
         assert_eq!(tap_state_after_reenable(true), TapState::Active);
@@ -311,6 +422,50 @@ mod tests {
         assert_eq!(
             recover_tap_decision(false, true),
             RecoverTapDecision::Teardown
+        );
+    }
+
+    // --- `Reconfigure` 재생성 판정(이슈 #140) ---
+
+    #[test]
+    fn reconfigure_no_tap_when_tap_absent() {
+        assert_eq!(
+            reconfigure_tap_decision(false, false, false, true),
+            ReconfigureTapDecision::NoTap
+        );
+    }
+
+    #[test]
+    fn reconfigure_no_tap_when_fatal_even_if_mask_changed() {
+        assert_eq!(
+            reconfigure_tap_decision(true, true, false, true),
+            ReconfigureTapDecision::NoTap
+        );
+    }
+
+    #[test]
+    fn reconfigure_keeps_tap_when_budget_exhausted_even_if_mask_changed() {
+        // ⭐ 폭주 중(예산 소진)에는 마스크가 바뀌었어도 새 탭 = 새 예산을 주지 않는다
+        // — `RecoverTap` 이 곧 해체한다.
+        assert_eq!(
+            reconfigure_tap_decision(true, false, true, true),
+            ReconfigureTapDecision::KeepTap
+        );
+    }
+
+    #[test]
+    fn reconfigure_keeps_tap_when_mask_unchanged() {
+        assert_eq!(
+            reconfigure_tap_decision(true, false, false, false),
+            ReconfigureTapDecision::KeepTap
+        );
+    }
+
+    #[test]
+    fn reconfigure_recreates_when_mask_changed_and_no_storm() {
+        assert_eq!(
+            reconfigure_tap_decision(true, false, false, true),
+            ReconfigureTapDecision::Recreate
         );
     }
 

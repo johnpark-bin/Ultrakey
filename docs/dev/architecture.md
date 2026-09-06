@@ -155,6 +155,65 @@ impl AppGateController {
 ⭐ 메인 `reconfigure`/`shutdown` 과 지연 스케줄러의 경로 B 재적용은 `PathBManager::serial` 로
 직렬화한다(이슈 #139). 탭 스레드는 D1 이후 `PathBManager` 를 참조하지 않으므로 이 Mutex 를 만지지 않는다.
 
+### 2.5 ⭐ 탭 이벤트 마스크와 재생성(이슈 #140)
+
+`CGEventTapCreate` 에 넘기는 이벤트 마스크는 더 이상 키 3종 + 마우스 11종 고정이 아니다. 마우스
+11종을 항상 받는 것은 구조적 상수 비용이었다 — 소비할 수 없는 구성에서도 커서를 움직일 때마다
+WindowServer ⇄ 탭 스레드 동기 왕복이 발생했다(#139 는 이 왕복의 탭 스레드 쪽 시간을 실측했다).
+그래서 마스크를 `EngineConfig` 에서 도출해, 마우스 이벤트를 실제로 소비할 수 있는 구성에서만
+해당 종류를 넣는다.
+
+**도출 경로**: `ultrakey_core::tap_mask::mouse_event_needs(&EngineConfig) -> MouseEventNeeds` →
+`ultrakey_platform::event_tap::build_event_mask(&MouseEventNeeds) -> u64` → `EventTap::create(callback, mask)`.
+판정 규칙은 정확히 이렇다:
+
+- **합성 modifier flags 가 생길 수 있는가**(`synthetic_modifier_flags_possible`) — `rules.modifier_rules`
+  중 flags 가 비어 있지 않은 규칙이 하나라도 있거나, `rules.source_actions` 중 `hold_remap` 이
+  modifier 키(`KeyCode::modifier_flags().is_some()`)를 대상으로 하는 것이 하나라도 있으면 참이다.
+  이것이 `arbitration.rs::active_synth_flags()` 의 원천 두 가지와 정확히 같다 — `keystate.rs::
+  register_sources` 에 같은 취지의 결합 지점 주석이 남아 있다. **`active_synth_flags()` 에 새 원천이
+  추가되면 `tap_mask.rs` 도 함께 고쳐야 한다.**
+- **클릭/드래그/스크롤** = 위 판정 × `mouse_apply.{click,drag,scroll}`.
+- **`MouseMoved`** = `trackpad_gesture_enabled`(= 앱의 `hyperkey.trackpad.enabled && hyperkey.hyper.enabled`
+  — 트랙패드 리스너 기동 조건과 동일하게 맞춘 것, 커서 프리즈 게이트가 켜질 수 있는 조건과 마스크
+  조건을 하나로 유지하기 위함) **또는** (합성 flags 가능 × `mouse_apply.r#move`).
+
+**설정 변경 시 재생성**: 마스크는 `CGEventTapCreate` 시점에 고정되므로, 설정이 바뀌어 도출된 마스크가
+달라지면 탭을 재생성해야 한다. 흐름은 `EngineCommand::Reconfigure` → 지금 탭의 `EventTap::mask()` 와
+새로 도출한 마스크를 비교 → `lifecycle::reconfigure_tap_decision` (순수 판정) → `Recreate` 면
+콜백 **밖**에서 `force_reset`(stuck modifier 방지) 방출 → `handle_recreate_tap`(기존 함수 그대로
+재사용: `Active|Disabled → Installing → Active/NotInstalled`). ⭐ 재생성 실패는 최초 설치와
+달리 **치명(`Terminated`)으로 굳히지 않는다** — `NotTrusted`/`CreateFailed` 어느 쪽이든
+`NotInstalled` 로 두고 `EngineEvent::TapLost` 를 올려 권한 모니터(`report_tap_create_failed`
+→ `OutOfSync` 진단)에 이관한다(`lifecycle::TapCreateTrigger::MaskChanged`). 사용자의 설정
+클릭 하나가 재시도 없는 프로세스 상태를 만들면 안 되기 때문이다(P3 심사 지적). 건강 확인 슬롯
+(`health_probe_slot`)은 재생성 중 비웠다가 새 탭이 만들어지면 다시 채운다 — 워치독은 슬롯이
+`None` 이면 건너뛴다.
+
+**이슈 #65 와의 경계**: `RecoverTap`(탭 자신의 비활성화 통지·트램폴린 예산 소진·권한 상실) 경로는
+**절대 재생성하지 않는다** — 재생성마다 새 `ReenableBudget` 이 채워져 stale
+`AXIsProcessTrusted()` 아래서 더 느린 폭주가 되기 때문이다(#65 가 굳힌 그대로). 사람의 클릭
+속도로만 오는 설정 변경은 이 폭주 트리거가 아니므로 재생성을 허용하되, 탭이 아예 없거나
+(`!has_tap`) 치명적 실패 이후(`fatal`)에는 재생성하지 않고(`NoTap`), 재활성화 예산이 소진돼
+폭주가 진행 중이면 새 탭을 만들지 않는다(`KeepTap`).
+
+**닭과 달걀**: 재생성은 `handle_recreate_tap` 을 다시 불러야 하고, 그 함수는 `CommandChannel` 을
+필요로 한다(콜백을 다시 만들 때 `commands.clone()` 을 넘겨야 하므로). 그런데 `CommandChannel` 은
+`CommandSource` 가 만들어진 뒤에야 존재하고, 그 `CommandSource` 의 perform 클로저(`drain_commands`)는
+탭 스레드 상태 셀을 먼저 캡처해야 만들어진다. 이 순환은 `TapThreadState.commands: Option<CommandChannel>`
+필드를 최초 설치 **이전에** 채워 둠으로써 푼다(`tap_thread_main` 이 `CommandChannel::new` 직후
+채운다) — perform 클로저 안에 별도 늦은-채움 셀을 새로 두지 않고, 이미 있는 상태 셀 하나로 접근
+지점을 유지한다.
+
+재생성 창(옛 탭 drop ~ 새 `CGEventTapCreate`) 동안 도착하는 이벤트는 탭이 없는 상태로 **그대로
+통과한다** — 탭이 없으면 macOS 가 이벤트를 막지 않으므로 유실이 아니다(코드 근거에 의한 추론,
+실기기 미검증 — `input-latency-spike.md` §8 체크리스트). 직전 `force_reset` 으로 합성 modifier
+는 내려가 있으므로 stuck modifier 는 남지 않을 것으로 본다(추정 — 같은 이유로 미검증. 그 창에
+정확히 떨어지는 물리 keyUp 은 눌림 테이블에 반영되지 않는데, 이는 이슈 #18/#108 과 같은 부류이며
+`force_reset` 과 `normalize_kind` 의 own-flags 검사가 방어선이다). 새 탭은 `ReenableBudget` 을
+새로 받는다 — 폭주 중에는 `KeepTap` 으로 재생성을 막지만, 사람 속도의 반복 토글이 #65 의 해체를
+그만큼 늦출 수는 있다(허용 — 트리거가 사용자 행위이기 때문).
+
 ---
 
 ## 3. 리매핑 경로 3종의 배치

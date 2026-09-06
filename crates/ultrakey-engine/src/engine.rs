@@ -38,8 +38,9 @@ use ultrakey_platform::secure_input::{DirectSecureInputProbe, SecureInputProbe};
 
 use crate::command::{self, CommandChannel, EngineCommand};
 use crate::lifecycle::{
-    self, quick_press_tick_delay_hint, tap_state_after_create_attempt, tap_state_after_reenable,
-    AtomicTapState, CreateAttemptResult, TapState,
+    self, quick_press_tick_delay_hint, tap_state_after_create_attempt,
+    tap_state_after_create_attempt_for, tap_state_after_reenable, AtomicTapState,
+    CreateAttemptResult, TapCreateTrigger, TapState,
 };
 use crate::path_b::{GlobalD1Migration, HidutilGlobalMigration, LedgerStore, PathBManager};
 use crate::state::SharedState;
@@ -370,6 +371,16 @@ struct TapThreadState {
     trace: Arc<TraceRing>,
     /// 계측 레코드의 단조 증가 시퀀스 번호. 이 스레드 배타 소유라 락 없이 증가시킨다.
     trace_seq: u64,
+    /// ⭐ 이슈 #140 — 닭과 달걀: `CommandChannel` 은 `CommandSource` 가 만들어진
+    /// 뒤에야 존재하는데, 그 `CommandSource` 의 perform 클로저(`drain_commands`)는
+    /// 이 상태 셀을 먼저 캡처해야 만들어진다. `tap_thread_main` 이
+    /// `CommandChannel::new(..)` 를 부른 직후, 첫 `handle_recreate_tap` 호출
+    /// **이전에** `cell.borrow_mut().commands = Some(commands.clone())` 로 채운다.
+    /// `Reconfigure` 분기가 마스크 변경으로 탭을 재생성할 때 `handle_recreate_tap`
+    /// 을 다시 부르려면 이 채널이 필요하다(`docs/plan/issue-140-event-mask.md`
+    /// §2 D2) — perform 클로저 안에 `RunLoopConfined<Option<CommandChannel>>` 를
+    /// 새로 두는 대신, 이미 있는 상태 셀 하나에 넣어 접근 지점을 하나로 유지한다.
+    commands: Option<CommandChannel>,
 }
 
 fn set_tap_state(st: &mut TapThreadState, s: TapState) {
@@ -882,31 +893,50 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>) {
     }
 }
 
-/// 탭을 처음부터 만든다 — 최초 설치 시도(`tap_thread_main`)가 이 함수 하나뿐인
-/// 유일한 호출자다(§3-a `NotInstalled`→`Installing` 전이).
+/// 탭을 처음부터 만든다 — §3-a `NotInstalled`→`Installing` 전이. 호출자는 둘뿐이다:
+/// ① `tap_thread_main` 의 최초 설치, ② `drain_commands` 의 `Reconfigure` 분기가
+/// `lifecycle::reconfigure_tap_decision` 으로 마스크 변경을 판정해 재생성이 필요할
+/// 때(이슈 #140, `docs/plan/issue-140-event-mask.md` §2 D2).
 ///
 /// ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — 예전에는 `handle_recover_tap` 이 재활성화
 /// 실패 에스컬레이션(`EscalateToRecreate`)과 권한 상실 두 경로 모두에서 이 함수를
 /// 다시 불러 탭을 재생성했다. 이제 그 두 경로는 재생성 없이 탭을 해체하고 권한
-/// 모니터에 넘기므로, 이 함수는 탭 스레드의 생애주기당 **정확히 한 번만** 불린다 —
-/// 그래서 "재생성 실패가 반복되면 프로세스 재실행"(§5#17, 옛 `RecoveryCounters::
-/// recreate_failures`)은 반복될 호출 자체가 없어 의미가 없어졌다. 그 UX 는 이제
-/// `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이 대신한다(교정 3).
-fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &CommandChannel) {
-    let start = {
+/// 모니터에 넘기므로, `RecoverTap` 경로는 이 함수를 **절대 부르지 않는다** — 그래서
+/// "재생성 실패가 반복되면 프로세스 재실행"(§5#17, 옛 `RecoveryCounters::
+/// recreate_failures`)은 그 경로에서는 반복될 호출 자체가 없어 의미가 없어졌다. 그
+/// UX 는 이제 `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이
+/// 대신한다(교정 3). 설정 변경에 의한 재생성(②)은 이 금지의 예외가 아니라 애초에
+/// 다른 트리거다 — `lifecycle::reconfigure_tap_decision` 문서 참고.
+fn handle_recreate_tap(
+    cell: &RunLoopConfined<TapThreadState>,
+    commands: &CommandChannel,
+    trigger: TapCreateTrigger,
+) {
+    let (start, mask, needs) = {
         let mut st = cell.borrow_mut();
         if st.fatal {
             return;
         }
+        // 이 대입이 옛 탭을 drop 한다(런루프 소스 제거·`CFMachPortInvalidate`) —
+        // 최초 설치에서는 드롭할 게 없어 아무 효과가 없고, 재생성(이슈 #140)에서는
+        // 옛 탭이 여기서 완전히 해체된 뒤에야 아래에서 `CGEventTapCreate` 가
+        // 불린다. 같은 시퀀스가 두 호출자 모두를 그대로 커버한다(§2 D2 "재생성
+        // 창의 이벤트" 참고 — 그 사이 이벤트는 탭 없이 통과한다).
         st.tap = None;
         st.health_probe_slot.store(None);
         set_tap_state(&mut st, TapState::Installing);
-        st.start
+        // ⭐ 이슈 #140(U2) — 마스크는 이 시점의 `EngineConfig` 로부터 도출한다.
+        // `Installing` 으로 전이한 같은 borrow 안에서 읽어 재생성 창 동안
+        // 설정이 다시 바뀌어도 이 시도가 쓰는 마스크가 뒤섞이지 않는다.
+        let cfg = st.shared.config.load_full();
+        let needs = ultrakey_core::tap_mask::mouse_event_needs(&cfg);
+        let mask = ultrakey_platform::event_tap::build_event_mask(&needs);
+        (st.start, mask, needs)
     };
 
     let callback = build_callback(cell.clone(), commands.clone(), start);
 
-    match EventTap::create(callback) {
+    match EventTap::create(callback, mask) {
         Ok(mut tap) => {
             tap.add_to_current_runloop();
             let probe = tap.health_probe();
@@ -916,7 +946,14 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
             st.health_probe_slot.store(probe.map(Arc::new));
             st.tap = Some(tap);
             let attempt_result = if alive {
-                tracing::info!("tap created");
+                tracing::info!(
+                    mouse_click = needs.click,
+                    mouse_drag = needs.drag,
+                    mouse_move = needs.r#move,
+                    mouse_scroll = needs.scroll,
+                    mask,
+                    "tap created"
+                );
                 CreateAttemptResult::Success
             } else {
                 // ⚠️ 이론상의 엣지 케이스 — `CGEventTapCreate` 는 보통 이미 활성인
@@ -927,10 +964,42 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
                 // `reenable_budget_exhausted()` 가 계속 `false`(통지가 없었으니
                 // 예산 소비도 없다)라 `KeepAlive` 로만 관찰된다. 실기기에서 관찰된
                 // 적은 없다 — 관찰되면 트램폴린 쪽에 별도 신호가 필요하다.
-                tracing::warn!("tap created but is not enabled yet; the watchdog will keep observing it");
+                tracing::warn!(
+                    "tap created but is not enabled yet; the watchdog will keep observing it"
+                );
                 CreateAttemptResult::CreatedButDisabled
             };
             set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
+        }
+        // ⭐ 이슈 #140(P3 심사 지적 2·3) — 재생성(`MaskChanged`) 실패는 사유와
+        // 무관하게 "살아 있던 탭이 사라졌다" 이므로 `TapLost` 로 권한 모델에
+        // 이관한다(`lifecycle::TapCreateTrigger` 문서). 사용자의 설정 클릭 하나가
+        // 프로세스를 `Terminated`(재시도 없음) 로 굳히거나, 온보딩 모달만 띄우고
+        // 권한 모니터에는 알리지 않는 `NotTrusted` 로 끝나면 안 된다.
+        Err(TapCreateError::NotTrusted) if trigger == TapCreateTrigger::MaskChanged => {
+            let mut st = cell.borrow_mut();
+            tracing::warn!(
+                "tap recreation after a settings change failed: Accessibility is not granted; \
+                 handing recovery to the permission monitor (issue #140)"
+            );
+            set_tap_state(
+                &mut st,
+                tap_state_after_create_attempt_for(trigger, CreateAttemptResult::NotTrusted),
+            );
+            (st.on_event)(EngineEvent::TapLost);
+        }
+        Err(TapCreateError::CreateFailed) if trigger == TapCreateTrigger::MaskChanged => {
+            let mut st = cell.borrow_mut();
+            tracing::error!(
+                "tap recreation after a settings change failed even though Accessibility is \
+                 granted; not latching fatal, handing recovery to the permission monitor \
+                 (issue #140)"
+            );
+            set_tap_state(
+                &mut st,
+                tap_state_after_create_attempt_for(trigger, CreateAttemptResult::Fatal),
+            );
+            (st.on_event)(EngineEvent::TapLost);
         }
         Err(TapCreateError::NotTrusted) => {
             let mut st = cell.borrow_mut();
@@ -954,6 +1023,26 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
     }
 }
 
+/// `EngineCommand::ForceResetState`·`EngineCommand::Reconfigure`(재생성 분기)가
+/// 공유하는 강제 리셋 본체 — §5 항목 9, stuck modifier 방지. 탭 콜백 **밖**에서
+/// 부른다(`apply_outcome_outside_tap`).
+fn force_reset_outside_tap(cell: &RunLoopConfined<TapThreadState>) {
+    let (outcome, table, on_event, shared) = {
+        let mut st = cell.borrow_mut();
+        let cfg = st.shared.config.load_full();
+        let table = st.shared.layout.current();
+        (
+            st.arbiter.force_reset(&cfg),
+            table,
+            Arc::clone(&st.on_event),
+            Arc::clone(&st.shared),
+        )
+    };
+    apply_outcome_outside_tap(&outcome);
+    let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
+    record_caps_lock_ownership(&shared, path_c);
+}
+
 /// `CommandSource` perform 콜백이 부르는 드레인 루프. 명령은 항상 이 함수 안에서,
 /// 큐에 들어간 순서 그대로 처리된다(`command.rs` 문서 참고).
 fn drain_commands(
@@ -966,30 +1055,71 @@ fn drain_commands(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             EngineCommand::ForceResetState => {
-                let (outcome, table, on_event, shared) = {
-                    let mut st = cell.borrow_mut();
-                    let cfg = st.shared.config.load_full();
-                    let table = st.shared.layout.current();
-                    (
-                        st.arbiter.force_reset(&cfg),
-                        table,
-                        Arc::clone(&st.on_event),
-                        Arc::clone(&st.shared),
-                    )
-                };
-                apply_outcome_outside_tap(&outcome);
-                let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
-                record_caps_lock_ownership(&shared, path_c);
+                force_reset_outside_tap(cell);
                 tracing::info!(
                     "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );
             }
             EngineCommand::RecoverTap => handle_recover_tap(cell),
             EngineCommand::Reconfigure => {
-                let mut st = cell.borrow_mut();
-                let cfg = st.shared.config.load_full();
-                st.arbiter.reconfigure(&cfg);
-                tracing::info!("reconfigured the Arbiter to reflect the settings change");
+                let (decision, commands, old_mask, new_mask) = {
+                    let mut st = cell.borrow_mut();
+                    let cfg = st.shared.config.load_full();
+                    st.arbiter.reconfigure(&cfg);
+                    tracing::info!("reconfigured the Arbiter to reflect the settings change");
+
+                    // ⭐ 이슈 #140(U3) — 설정이 바뀌면 도출된 이벤트 마스크도 바뀔 수
+                    // 있다(`docs/plan/issue-140-event-mask.md` §2 D2). 지금 탭의
+                    // 마스크와 비교해 재생성 여부를 순수 함수(`lifecycle::
+                    // reconfigure_tap_decision`)로 판정한다 — #65 가 금지한 건
+                    // `RecoverTap` 트리거에 대한 재생성이지, 사람의 클릭 속도로 오는
+                    // 설정 변경이 아니다(그 함수 문서 참고).
+                    let needs = ultrakey_core::tap_mask::mouse_event_needs(&cfg);
+                    let wanted_mask = ultrakey_platform::event_tap::build_event_mask(&needs);
+                    let current = st
+                        .tap
+                        .as_ref()
+                        .map(|t| (t.mask(), t.reenable_budget_exhausted()));
+                    let decision = lifecycle::reconfigure_tap_decision(
+                        current.is_some(),
+                        st.fatal,
+                        current.is_some_and(|c| c.1),
+                        current.is_some_and(|c| c.0 != wanted_mask),
+                    );
+                    (
+                        decision,
+                        st.commands.clone(),
+                        current.map(|c| c.0),
+                        wanted_mask,
+                    )
+                };
+
+                match decision {
+                    lifecycle::ReconfigureTapDecision::Recreate => {
+                        // `commands` 는 `tap_thread_main` 이 최초 설치 전에 채우므로
+                        // 런루프가 도는 동안에는 항상 `Some` 이다. 그래도 `None` 이면
+                        // 강제 리셋을 먼저 내고 끝나는 어정쩡한 상태를 만들지 않도록
+                        // 리셋 **전에** 확인한다(P3 심사 지적 5).
+                        let Some(commands) = commands else {
+                            tracing::warn!(
+                                "cannot recreate the tap: command channel not yet available"
+                            );
+                            continue;
+                        };
+                        force_reset_outside_tap(cell);
+                        tracing::info!(
+                            old_mask = %format_args!("{:#x}", old_mask.unwrap_or(0)),
+                            new_mask = %format_args!("{:#x}", new_mask),
+                            "recreating the tap because the required event mask changed \
+                             after a settings change (issue #140)"
+                        );
+                        handle_recreate_tap(cell, &commands, TapCreateTrigger::MaskChanged);
+                    }
+                    lifecycle::ReconfigureTapDecision::KeepTap => {}
+                    lifecycle::ReconfigureTapDecision::NoTap => {
+                        tracing::debug!("settings changed but there is no tap to recreate");
+                    }
+                }
             }
             EngineCommand::PostSynthEvent(ev) => {
                 // ⭐ 이슈 #129 — `emit_outcome` 이 큐에 넣은, 이미 판정이 끝난 합성
@@ -1066,6 +1196,7 @@ fn tap_thread_main(
         start,
         trace: trace_ring,
         trace_seq: 0,
+        commands: None,
     });
 
     let (cmd_tx, cmd_rx) = command::channel();
@@ -1073,12 +1204,13 @@ fn tap_thread_main(
     let run_loop_for_stop = RunLoopHandle::current()
         .expect("탭 스레드에 CFRunLoop 를 가져올 수 없다 — 있을 수 없는 상황");
 
-    // ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — `drain_commands` 가 더 이상 `CommandChannel`
-    // 을 쓰지 않는다(예전에는 `RecoverTap` 에스컬레이션이 명령 처리 도중 탭을
-    // 재생성하며 콜백을 다시 만드는 데 필요했다). 그래서 예전에 있던
-    // "perform 콜백이 아직 존재하지 않는 `CommandChannel` 을 참조해야 하는 닭과
-    // 달걀 문제"(`RunLoopConfined<Option<CommandChannel>>` 늦은 채움)도 함께
-    // 사라졌다 — `cmd_rx`/`run_loop_for_stop` 은 이 시점에 이미 값이 있다.
+    // ⭐ 이슈 #65 Phase 1 리뷰 교정 2 가 없앴던 "perform 콜백이 아직 존재하지 않는
+    // `CommandChannel` 을 참조해야 하는 닭과 달걀 문제"가 이슈 #140 으로 다시
+    // 생겼다 — `Reconfigure` 분기가 마스크 변경 시 탭을 재생성하려면
+    // `handle_recreate_tap` 을 다시 부를 채널이 필요하다. 이번에는 클로저 자체에
+    // 늦은 채움을 두지 않고, 이미 있는 `TapThreadState.commands` 에 아래에서 채운다
+    // (`commands` 필드 문서 참고) — `cmd_rx`/`run_loop_for_stop` 은 이 시점에 이미
+    // 값이 있다.
     let perform_cell = cell.clone();
     let cmd_source = CommandSource::new(Box::new(move || {
         drain_commands(&perform_cell, &cmd_rx, &run_loop_for_stop);
@@ -1086,9 +1218,12 @@ fn tap_thread_main(
     cmd_source.add_to_current_runloop();
 
     let commands = CommandChannel::new(cmd_tx, cmd_source.signaller());
+    // ⭐ 이슈 #140 — 첫 `handle_recreate_tap` 호출 전에 채운다. 이 호출부터
+    // `Reconfigure` 분기가 재생성용으로 꺼내 쓸 수 있다.
+    cell.borrow_mut().commands = Some(commands.clone());
 
     // 최초 설치 시도 — §3-a `NotInstalled` → `Installing` → `Active`/`NotInstalled`/`Terminated`.
-    handle_recreate_tap(&cell, &commands);
+    handle_recreate_tap(&cell, &commands, TapCreateTrigger::InitialInstall);
 
     // quick press 타이머 — architecture.md §2.3: "매 25ms 씩 깨우지 마라. 대기 중인
     // 상태 머신이 있을 때만 `set_next_fire_after_ms` 로 다음 만료 시각에 맞춰

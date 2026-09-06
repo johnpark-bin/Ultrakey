@@ -30,6 +30,8 @@ pub enum EngineCommand {
     /// 문서 참고).
     RecoverTap,
     /// 설정 교체 후 `Arbiter::reconfigure` 호출 — quick press 슬롯 재구성.
+    /// ⭐ 이슈 #140 — 도출된 탭 이벤트 마스크가 현재 탭과 다르면 `force_reset` 뒤
+    /// 탭을 재생성한다(`lifecycle::reconfigure_tap_decision`).
     Reconfigure,
     /// ⭐ 이슈 #129 — 인풋 박스 세션 중 D2(F-16.1 세션 재평가)가 낸 합성 이벤트를
     /// 콜백 밖에서 낸다(`engine::emit_outcome`, `docs/plan/issue-129-seek-webview-inputsource.md`

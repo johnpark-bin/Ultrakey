@@ -267,6 +267,13 @@ impl KeyStateTable {
     ///
     /// ⭐ M1 의 `register_modifier_sources` 를 대체한다 — 이름을 바꾼 것은 이제
     /// modifier 뿐 아니라 프리셋 액션 소스 키도 함께 등록하기 때문이다.
+    ///
+    /// ⭐ **결합 지점**(이슈 #140). 여기서 `rule_flags` 로 등록하는 두 원천
+    /// (`modifier_rules`, `source_actions.hold_remap` 의 modifier 대상)이 곧
+    /// `active_synth_flags()` 가 낼 수 있는 flags 의 전부다.
+    /// `tap_mask::synthetic_modifier_flags_possible` 이 이 두 원천을 그대로
+    /// 다시 판정해 탭 마스크에 마우스 이벤트를 넣을지 정한다 — 여기 원천이
+    /// 늘면 그쪽도 함께 고쳐야 한다.
     pub(crate) fn register_sources(&mut self, rules: &RuleTable) {
         let mut new_slots: [Option<MachineSlot>; MAX_TRACKED_KEYS] = [None; MAX_TRACKED_KEYS];
         let mut n = 0usize;

@@ -1644,6 +1644,10 @@ fn build_engine_config(
     let mut config = EngineConfig::default();
     config.rules.modifier_rules = hyperkey.to_modifier_rules();
     config.mouse_apply = hyperkey.mouse_apply;
+    // ⭐ 이슈 #140(U2) — 트랙패드 리스너 기동 조건(`reconfigure_trackpad`)과 **같은
+    // 함수**로 채운다. 이 값은 탭 이벤트 마스크 도출(`tap_mask::mouse_event_needs`)에만
+    // 쓰이고, 중재 판정 자체는 여전히 `TrackpadPhase` 원자 게이트를 읽는다.
+    config.trackpad_gesture_enabled = trackpad_gesture_wanted(hyperkey);
     config.timings.quick_press_duration_ms = presets.quick_press_duration_ms;
 
     let caps_is_source = caps_is_modifier_source(hyperkey);
@@ -2193,6 +2197,15 @@ fn reconfigure_engine(
     Ok(())
 }
 
+/// ⭐ F-06 / 이슈 #140 — 트랙패드 제스처 리스너를 띄워야 하는 구성인가. 리스너 기동
+/// (`reconfigure_trackpad`)과 탭 이벤트 마스크 도출(`build_engine_config` 의
+/// `trackpad_gesture_enabled`)이 **이 함수 하나**를 공유한다 — 두 조건이 어긋나면
+/// 프리즈 게이트가 켜지는데 `MouseMoved` 가 마스크에 없거나 그 반대가 되므로,
+/// 식을 두 곳에 손으로 미러링하지 않는다(P3 심사 잔여 위험 반영).
+fn trackpad_gesture_wanted(hyperkey: &HyperkeySettings) -> bool {
+    hyperkey.trackpad.enabled && hyperkey.hyper.enabled
+}
+
 /// ⭐ F-06 — `hyperkey.trackpad.*` 변경을 리스너에 반영한다(이슈 #63).
 ///
 /// - 끄는 변경이면 리스너가 Engaged 를 즉시 강제 해제한다(§5 항목 12) —
@@ -2201,7 +2214,7 @@ fn reconfigure_engine(
 ///   새로 띄운다(엔진 시작 시점에 꺼져 있던 경우를 흡수한다).
 /// - 비공개 API 격하(스레드 없음)면 조용히 무시된다 — 게이트는 `Off` 유지.
 fn reconfigure_trackpad(state: &Arc<AppState>, hyperkey: &HyperkeySettings) -> Result<(), String> {
-    let want = hyperkey.trackpad.enabled && hyperkey.hyper.enabled;
+    let want = trackpad_gesture_wanted(hyperkey);
     let mut slot = state.trackpad.lock().map_err(|e| e.to_string())?;
     match slot.as_ref() {
         Some(listener) => {
@@ -6980,6 +6993,42 @@ mod tests {
         assert_eq!(config.rules.modifier_rules.len(), 1);
         assert!(config.mouse_apply.drag);
         assert!(config.mouse_apply.click); // 기본값 유지
+    }
+
+    // build_engine_config() — 이슈 #140(U2): trackpad_gesture_enabled 는
+    // `reconfigure_trackpad` 의 `want` 와 같은 식(`trackpad.enabled &&
+    // hyper.enabled`)으로 채워진다.
+    #[test]
+    fn build_engine_config_computes_trackpad_gesture_enabled_like_reconfigure_trackpad() {
+        let mut both_on = HyperkeySettings::default();
+        both_on.hyper.enabled = true;
+        both_on.trackpad.enabled = true;
+
+        let config = build_engine_config(
+            &both_on,
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
+            &SettingsStore::in_memory(),
+        );
+        assert!(config.trackpad_gesture_enabled);
+
+        let mut trackpad_only = HyperkeySettings::default();
+        trackpad_only.trackpad.enabled = true;
+        // hyper.enabled 는 기본값 false.
+
+        let config = build_engine_config(
+            &trackpad_only,
+            &PresetSettings::default(),
+            &KoreanSettings::default(),
+            &SeekSettings::default(),
+            &JapaneseSettings::default(),
+            &ChineseSettings::default(),
+            &SettingsStore::in_memory(),
+        );
+        assert!(!config.trackpad_gesture_enabled);
     }
 
     // build_engine_config() — presets.* 도 규칙 테이블·quick_press_duration_ms 로

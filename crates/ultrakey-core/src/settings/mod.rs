@@ -107,6 +107,13 @@ pub struct EngineConfig {
     /// `lowercase_action_for`) 규칙 열거가 아니라 판정기가 조건 플래그로 읽는 모양이
     /// 맞다(`caps_lock_alias` 와 같은 자리다).
     pub korean_modifier_lowercase: bool,
+    /// ⭐ 이슈 #140(D1) — 앱의 트랙패드 리스너 기동 조건(`reconfigure_trackpad` 의
+    /// `want`, `hyperkey.trackpad.enabled && hyperkey.hyper.enabled`)을 그대로
+    /// 미러링한다. **오직 탭 이벤트 마스크 도출(`tap_mask::mouse_event_needs`)에만
+    /// 쓰인다** — 중재 판정 자체는 여전히 `TrackpadPhase` 원자 게이트(`SharedState::
+    /// trackpad`)를 읽는다(C4). `false`(기본)가 프리즈 게이트가 절대 켜질 수 없는
+    /// 구성과 일치하므로, `MouseMoved` 를 마스크에서 뺄 수 있다.
+    pub trackpad_gesture_enabled: bool,
 }
 
 #[cfg(test)]

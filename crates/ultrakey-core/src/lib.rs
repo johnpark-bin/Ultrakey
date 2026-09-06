@@ -19,5 +19,6 @@ pub mod quickpress;
 pub mod rules;
 pub mod seek_input_box;
 pub mod settings;
+pub mod tap_mask;
 pub mod time;
 pub mod trackpad;
