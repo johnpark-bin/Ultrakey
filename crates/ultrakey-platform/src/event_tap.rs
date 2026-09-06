@@ -17,9 +17,133 @@
 //! 알린다 — 다만 콜백의 반환값(`TapAction`)은 무시하고 항상 원본 이벤트를 그대로
 //! 돌려준다(`ultrakey-engine` 의 별도 1Hz 워치독 폴링은 여전히 `is_enabled()` 로 이
 //! 크레이트 밖에서 독립적으로 동작한다).
+//!
+//! ⭐ 이슈 #140 — 이벤트 마스크는 더 이상 이 크레이트가 고정하지 않는다.
+//! [`build_event_mask`] 는 `EngineConfig` 로부터 도출된 [`MouseEventNeeds`]
+//! 를 받아 순수하게 비트를 계산하고, [`EventTap::create`] 는 그 결과를
+//! 인자로 받아 `CGEventTapCreate` 에 넘긴다 — 마우스 이벤트를 실제로 소비할
+//! 수 없는 구성에서는 탭이 그 이벤트를 아예 받지 않아, 커서 이동마다 발생하던
+//! WindowServer ⇄ 탭 스레드 동기 왕복이 사라진다.
 
 use crate::event::CgEventRef;
 use ultrakey_core::event::EventKind;
+use ultrakey_core::tap_mask::MouseEventNeeds;
+
+/// `EventKind` → `CGEventType` 숫자값(`kCGEventXxx`, CoreGraphics 상수). `#[cfg]`
+/// 밖에 순수 상수 표로 두는 이유는 [`build_event_mask`] 가 비-macOS 에서도 단위
+/// 테스트로 돌게 하기 위함이다(`docs/plan/issue-140-event-mask.md` §2 D1). macOS
+/// 테스트(`macos_impl::cg_event_type_value_tests` 아래 모듈)가 이 표를 실제
+/// `CGEventType` 상수와 대조해 값을 고정해 둔다.
+const fn cg_event_type_value(kind: EventKind) -> u32 {
+    match kind {
+        EventKind::KeyDown => 10,
+        EventKind::KeyUp => 11,
+        EventKind::FlagsChanged => 12,
+        EventKind::LeftMouseDown => 1,
+        EventKind::LeftMouseUp => 2,
+        EventKind::RightMouseDown => 3,
+        EventKind::RightMouseUp => 4,
+        EventKind::OtherMouseDown => 25,
+        EventKind::OtherMouseUp => 26,
+        EventKind::LeftMouseDragged => 6,
+        EventKind::RightMouseDragged => 7,
+        EventKind::OtherMouseDragged => 27,
+        EventKind::MouseMoved => 5,
+        EventKind::ScrollWheel => 22,
+        EventKind::TapDisabledByTimeout => 0xFFFF_FFFE,
+        EventKind::TapDisabledByUserInput => 0xFFFF_FFFF,
+    }
+}
+
+/// 전체 `EventKind` 표(마스크 판정 순회용). `TapDisabledBy*` 는
+/// [`MouseEventNeeds::includes`] 가 항상 `false` 를 돌려주므로(그 둘은 마스크
+/// 멤버가 아니라 macOS 가 무조건 보내는 통지다) 여기 넣어도 마스크에 비트가
+/// 서지 않는다 — 그래도 매핑 순회 표는 완전하게 유지한다.
+const ALL_EVENT_KINDS: &[EventKind] = &[
+    EventKind::KeyDown,
+    EventKind::KeyUp,
+    EventKind::FlagsChanged,
+    EventKind::LeftMouseDown,
+    EventKind::LeftMouseUp,
+    EventKind::RightMouseDown,
+    EventKind::RightMouseUp,
+    EventKind::OtherMouseDown,
+    EventKind::OtherMouseUp,
+    EventKind::LeftMouseDragged,
+    EventKind::RightMouseDragged,
+    EventKind::OtherMouseDragged,
+    EventKind::MouseMoved,
+    EventKind::ScrollWheel,
+    EventKind::TapDisabledByTimeout,
+    EventKind::TapDisabledByUserInput,
+];
+
+/// 지금 구성(`MouseEventNeeds`)에서 `CGEventTapCreate` 에 넘길 이벤트 마스크를
+/// 만든다. keyDown/keyUp/flagsChanged 는 항상 들어가고, 마우스 종류별로는
+/// `needs.includes(kind)` 가 참인 것만 들어간다(이슈 #140 — 마우스 이벤트를 실제로
+/// 소비할 수 없는 구성에서는 탭이 그 이벤트를 아예 받지 않는다).
+///
+/// `#[cfg(target_os = "macos")]` **밖**의 순수 함수다 — 마스크 판정 자체는
+/// 플랫폼에 의존하지 않으므로 비-macOS 에서도 단위 테스트가 돈다.
+pub fn build_event_mask(needs: &MouseEventNeeds) -> u64 {
+    ALL_EVENT_KINDS
+        .iter()
+        .filter(|&&kind| needs.includes(kind))
+        .fold(0u64, |mask, &kind| {
+            mask | (1u64 << (cg_event_type_value(kind) as u64))
+        })
+}
+
+#[cfg(test)]
+mod build_event_mask_tests {
+    use super::*;
+
+    fn bit(v: u32) -> u64 {
+        1u64 << (v as u64)
+    }
+
+    #[test]
+    fn key_only_needs_yields_key_bits_only() {
+        let mask = build_event_mask(&MouseEventNeeds::default());
+        assert_eq!(mask, bit(10) | bit(11) | bit(12));
+    }
+
+    #[test]
+    fn all_mouse_needs_matches_the_old_fixed_mask() {
+        let needs = MouseEventNeeds {
+            click: true,
+            drag: true,
+            r#move: true,
+            scroll: true,
+        };
+        let mask = build_event_mask(&needs);
+        // 이슈 #140 이전 `macos_impl::build_event_mask()` 가 고정으로 넣던
+        // 14 종(키 3 + 마우스 11)을 같은 숫자 표로 재계산해 회귀를 막는다.
+        let old_fixed_mask: u64 = [
+            10u32, 11, 12, // key
+            1, 2, 3, 4, 25, 26, // click
+            6, 7, 27, // drag
+            5,  // move
+            22, // scroll
+        ]
+        .into_iter()
+        .fold(0u64, |m, v| m | bit(v));
+        assert_eq!(mask, old_fixed_mask);
+    }
+
+    #[test]
+    fn click_only_needs_yields_key_plus_click_bits() {
+        let needs = MouseEventNeeds {
+            click: true,
+            ..MouseEventNeeds::default()
+        };
+        let mask = build_event_mask(&needs);
+        assert_eq!(
+            mask,
+            bit(10) | bit(11) | bit(12) | bit(1) | bit(2) | bit(3) | bit(4) | bit(25) | bit(26)
+        );
+    }
+}
 
 /// 연속 즉시 재활성화 예산 — 트램폴린 하나(=[`macos_impl::EventTap`] 인스턴스 하나)의
 /// 생애주기 동안 유지되는 상태다.
@@ -118,7 +242,10 @@ mod reenable_budget_tests {
         b.note_real_event();
         assert!(!b.is_exhausted());
         for _ in 0..REENABLE_MAX_CONSECUTIVE {
-            assert!(b.note_disable(), "리셋된 뒤에는 다시 한도만큼 허용해야 한다");
+            assert!(
+                b.note_disable(),
+                "리셋된 뒤에는 다시 한도만큼 허용해야 한다"
+            );
         }
     }
 
@@ -202,37 +329,6 @@ mod macos_impl {
         /// 규칙은 [`super::ReenableBudget`] 문서 참고 — 시간이 아니라 실제
         /// 이벤트 통과로만 리셋된다(이슈 #65 Phase 1 리뷰 교정 1).
         reenable_budget: Cell<ReenableBudget>,
-    }
-
-    fn build_event_mask() -> u64 {
-        // keyDown/keyUp/flagsChanged 는 항상 필요하다(§3-b 전 계층의 입력).
-        // 마우스 이벤트는 hyperkey.md §3.3 의 Click/Drag/Move/Scroll 전부를
-        // 커버해야 하므로(사용자가 어느 것을 켤지는 규칙 테이블이 나중에
-        // 결정한다 — 탭 자체는 항상 전부 받아 둔다) 관련 kCGEventType 을 모두
-        // 넣는다.
-        let types: &[CGEventType] = &[
-            CGEventType::KeyDown,
-            CGEventType::KeyUp,
-            CGEventType::FlagsChanged,
-            // Click
-            CGEventType::LeftMouseDown,
-            CGEventType::LeftMouseUp,
-            CGEventType::RightMouseDown,
-            CGEventType::RightMouseUp,
-            CGEventType::OtherMouseDown,
-            CGEventType::OtherMouseUp,
-            // Drag
-            CGEventType::LeftMouseDragged,
-            CGEventType::RightMouseDragged,
-            CGEventType::OtherMouseDragged,
-            // Move
-            CGEventType::MouseMoved,
-            // Scroll
-            CGEventType::ScrollWheel,
-        ];
-        types
-            .iter()
-            .fold(0u64, |mask, t| mask | (1u64 << (t.0 as u64)))
     }
 
     /// `CGEventType` → `ultrakey_core::event::EventKind` 변환. 실제
@@ -362,6 +458,10 @@ mod macos_impl {
         run_loop_source: Option<CFRetained<CFRunLoopSource>>,
         installed_run_loop: Option<CFRetained<CFRunLoop>>,
         ctx: Option<NonNull<CallbackContext>>,
+        /// 이 탭이 만들어질 때 넘겨진 마스크(이슈 #140) — `EventTap::mask()` 가
+        /// 그대로 돌려준다. `CGEventTapCreate` 는 마스크를 보관하지 않으므로
+        /// 직접 들고 있어야 한다.
+        mask: u64,
     }
 
     // SAFETY: `EventTap` 은 생성된 스레드(전용 탭 스레드) 안에서만 만들어지고
@@ -369,9 +469,11 @@ mod macos_impl {
     // 스레드 경계를 넘지 않으므로 `Send`/`Sync` 를 부여하지 않는다(기본값 유지).
 
     impl EventTap {
-        /// `CGEventTapCreate` 로 탭을 만든다. 마스크는 keyDown/keyUp/
-        /// flagsChanged 와 hyperkey.md §3.3 의 마우스 이벤트 전부로 고정된다.
-        pub fn create(callback: TapCallback) -> Result<Self, TapCreateError> {
+        /// `CGEventTapCreate` 로 탭을 만든다. 마스크는 더 이상 이 크레이트가
+        /// 고정하지 않는다(이슈 #140) — 호출자(엔진)가 `EngineConfig` 로부터
+        /// `ultrakey_core::tap_mask::mouse_event_needs` + `build_event_mask` 로
+        /// 도출해 넘긴다.
+        pub fn create(callback: TapCallback, mask: u64) -> Result<Self, TapCreateError> {
             let boxed = Box::new(CallbackContext {
                 callback,
                 mach_port: RefCell::new(None),
@@ -379,7 +481,6 @@ mod macos_impl {
             });
             let ctx_ptr = Box::into_raw(boxed);
 
-            let mask = build_event_mask();
             // SAFETY: `trampoline` 은 `CGEventTapCallBack` 시그니처와 정확히
             // 일치하고, `ctx_ptr` 은 방금 `Box::into_raw` 로 만든 유효한
             // 포인터다. 탭이 아직 어떤 런루프에도 등록되지 않았으므로 이
@@ -424,7 +525,15 @@ mod macos_impl {
                 installed_run_loop: None,
                 // SAFETY: `Box::into_raw` 는 항상 널이 아닌 포인터를 반환한다.
                 ctx: Some(unsafe { NonNull::new_unchecked(ctx_ptr) }),
+                mask,
             })
+        }
+
+        /// 이 탭이 만들어질 때 넘겨진 이벤트 마스크(이슈 #140). 재생성 여부
+        /// 판정(`lifecycle::reconfigure_tap_decision` 의 `mask_changed`)이
+        /// 이 값을 새로 도출한 마스크와 비교한다.
+        pub fn mask(&self) -> u64 {
+            self.mask
         }
 
         /// 현재 스레드의 런루프에 `kCFRunLoopCommonModes` 로 등록한다
@@ -543,6 +652,53 @@ mod macos_impl {
             }
         }
     }
+
+    /// 이슈 #140 — [`super::cg_event_type_value`] 의 숫자 표가 실제
+    /// `objc2_core_graphics::CGEventType` 상수와 정확히 일치하는지 macOS 에서만
+    /// 고정한다. 비-macOS 에서는 이 크레이트를 통해 `objc2_core_graphics` 를
+    /// 링크할 수 없으므로 여기 둔다(`build_event_mask` 자체의 단위 테스트는
+    /// cfg 밖에 있어 어디서나 돈다).
+    #[cfg(test)]
+    mod cg_event_type_value_tests {
+        use super::super::cg_event_type_value;
+        use objc2_core_graphics::CGEventType;
+        use ultrakey_core::event::EventKind;
+
+        #[test]
+        fn matches_cgeventtype_constants_for_every_event_kind() {
+            let pairs: &[(EventKind, CGEventType)] = &[
+                (EventKind::KeyDown, CGEventType::KeyDown),
+                (EventKind::KeyUp, CGEventType::KeyUp),
+                (EventKind::FlagsChanged, CGEventType::FlagsChanged),
+                (EventKind::LeftMouseDown, CGEventType::LeftMouseDown),
+                (EventKind::LeftMouseUp, CGEventType::LeftMouseUp),
+                (EventKind::RightMouseDown, CGEventType::RightMouseDown),
+                (EventKind::RightMouseUp, CGEventType::RightMouseUp),
+                (EventKind::OtherMouseDown, CGEventType::OtherMouseDown),
+                (EventKind::OtherMouseUp, CGEventType::OtherMouseUp),
+                (EventKind::LeftMouseDragged, CGEventType::LeftMouseDragged),
+                (EventKind::RightMouseDragged, CGEventType::RightMouseDragged),
+                (EventKind::OtherMouseDragged, CGEventType::OtherMouseDragged),
+                (EventKind::MouseMoved, CGEventType::MouseMoved),
+                (EventKind::ScrollWheel, CGEventType::ScrollWheel),
+                (
+                    EventKind::TapDisabledByTimeout,
+                    CGEventType::TapDisabledByTimeout,
+                ),
+                (
+                    EventKind::TapDisabledByUserInput,
+                    CGEventType::TapDisabledByUserInput,
+                ),
+            ];
+            for (kind, cg_type) in pairs {
+                assert_eq!(
+                    cg_event_type_value(*kind),
+                    cg_type.0,
+                    "{kind:?} 의 숫자값이 CGEventType 상수와 어긋난다"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -560,7 +716,7 @@ mod stub_impl {
     pub struct EventTap(core::convert::Infallible);
 
     impl EventTap {
-        pub fn create(_callback: TapCallback) -> Result<Self, TapCreateError> {
+        pub fn create(_callback: TapCallback, _mask: u64) -> Result<Self, TapCreateError> {
             Err(TapCreateError::CreateFailed)
         }
         pub fn add_to_current_runloop(&mut self) {
@@ -576,6 +732,9 @@ mod stub_impl {
             match self.0 {}
         }
         pub fn reenable_budget_exhausted(&self) -> bool {
+            match self.0 {}
+        }
+        pub fn mask(&self) -> u64 {
             match self.0 {}
         }
     }

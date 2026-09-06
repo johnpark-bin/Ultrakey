@@ -200,7 +200,11 @@ impl Engine {
             let attached = ultrakey_platform::hid_device::list_attached_keyboards();
             let migration: Option<Box<dyn GlobalD1Migration>> =
                 Some(Box::new(HidutilGlobalMigration));
-            let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
+            let path_b = Arc::new(PathBManager::new(
+                Box::new(HidutilBackend),
+                migration,
+                ledger,
+            ));
             if let Err(e) = path_b.reconcile_on_start(&config, &attached) {
                 tracing::warn!(error = %e, "Path B reconciliation check failed at startup");
             }
@@ -370,6 +374,16 @@ struct TapThreadState {
     trace: Arc<TraceRing>,
     /// 계측 레코드의 단조 증가 시퀀스 번호. 이 스레드 배타 소유라 락 없이 증가시킨다.
     trace_seq: u64,
+    /// ⭐ 이슈 #140 — 닭과 달걀: `CommandChannel` 은 `CommandSource` 가 만들어진
+    /// 뒤에야 존재하는데, 그 `CommandSource` 의 perform 클로저(`drain_commands`)는
+    /// 이 상태 셀을 먼저 캡처해야 만들어진다. `tap_thread_main` 이
+    /// `CommandChannel::new(..)` 를 부른 직후, 첫 `handle_recreate_tap` 호출
+    /// **이전에** `cell.borrow_mut().commands = Some(commands.clone())` 로 채운다.
+    /// `Reconfigure` 분기가 마스크 변경으로 탭을 재생성할 때 `handle_recreate_tap`
+    /// 을 다시 부르려면 이 채널이 필요하다(`docs/plan/issue-140-event-mask.md`
+    /// §2 D2) — perform 클로저 안에 `RunLoopConfined<Option<CommandChannel>>` 를
+    /// 새로 두는 대신, 이미 있는 상태 셀 하나에 넣어 접근 지점을 하나로 유지한다.
+    commands: Option<CommandChannel>,
 }
 
 fn set_tap_state(st: &mut TapThreadState, s: TapState) {
@@ -427,7 +441,12 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
 /// `gates.seek_active && gates.seek_input_box` 조건이 ①을 배제하고 ②만 남긴다 —
 /// 세션 밖 F-16.1·F-16.2, 기본 Seek, 다른 모든 계층(Preset·SimpleRemap 등)은 종전과
 /// 똑같이 `apply_outcome_in_tap` 을 탄다(한 바이트도 안 바뀐다).
-fn emit_outcome(outcome: &Outcome, gates: GateSnapshot, proxy: TapProxy, commands: &CommandChannel) {
+fn emit_outcome(
+    outcome: &Outcome,
+    gates: GateSnapshot,
+    proxy: TapProxy,
+    commands: &CommandChannel,
+) {
     if should_defer_synth_to_command_queue(gates, outcome.layer()) {
         for ev in outcome.emitted() {
             commands.send(EngineCommand::PostSynthEvent(*ev));
@@ -499,15 +518,19 @@ fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
 /// `(추정 — 실기기로 확인하지 못했다)`. 그래서 `flags` 는 **항상
 /// `combo.event_flags()` 로 명시적으로 덮어써야** 한다 — 아래 두 호출 모두 그렇게
 /// 한다(`SyntheticEvent::keyboard` 가 매 호출마다 `CGEventSetFlags` 를 부른다).
-fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
+fn type_char_events(
+    table: &LayoutTable,
+    c: char,
+) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
     match plan_text_output(table, c) {
         TextOutputPlan::KeyStroke { keycode, flags } => (
             SyntheticEvent::keyboard(keycode, true, flags),
             SyntheticEvent::keyboard(keycode, false, flags),
         ),
-        TextOutputPlan::UnicodeString(c) => {
-            (SyntheticEvent::unicode(c, true), SyntheticEvent::unicode(c, false))
-        }
+        TextOutputPlan::UnicodeString(c) => (
+            SyntheticEvent::unicode(c, true),
+            SyntheticEvent::unicode(c, false),
+        ),
     }
 }
 
@@ -754,22 +777,33 @@ fn on_tap_event(
             disposition_flags: trace::disposition_flags_of(outcome.disposition()),
             // ⭐ 이슈 #108 원인 (b) 진단 — 이 이벤트 처리 직후 정본 눌림 테이블의
             // 좌/우 shift·caps lock 스냅샷. 같은 스레드 메모리 읽기 3회뿐이다.
-            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8 * trace::PRESSED_MOD_LEFT_SHIFT)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8 * trace::PRESSED_MOD_RIGHT_SHIFT)
+            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8
+                * trace::PRESSED_MOD_LEFT_SHIFT)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8
+                    * trace::PRESSED_MOD_RIGHT_SHIFT)
                 | (st.arbiter.is_pressed(KeyCode::CAPS_LOCK) as u8 * trace::PRESSED_MOD_CAPS_LOCK),
             // ⭐ 이슈 #121 — ⌃⌥⌘ 여섯 키 스냅샷(F-16.1 ShiftOnly 의 "다른 modifier
             // 미눌림" 판정) + 합성 hyper 활성 스냅샷(발화 조건 3). `is_pressed` 와
             // `active_synth_flags` 는 같은 스레드 메모리 읽기일 뿐이다(#108 관례).
-            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8 * trace::PRESSED_MOD_LEFT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8 * trace::PRESSED_MOD_RIGHT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8 * trace::PRESSED_MOD_LEFT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8 * trace::PRESSED_MOD_RIGHT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8 * trace::PRESSED_MOD_LEFT_COMMAND)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8 * trace::PRESSED_MOD_RIGHT_COMMAND),
+            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8
+                * trace::PRESSED_MOD_LEFT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8
+                    * trace::PRESSED_MOD_RIGHT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8
+                    * trace::PRESSED_MOD_LEFT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8
+                    * trace::PRESSED_MOD_RIGHT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8
+                    * trace::PRESSED_MOD_LEFT_COMMAND)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8
+                    * trace::PRESSED_MOD_RIGHT_COMMAND),
             synth_flags_active: (!st.arbiter.active_synth_flags().is_empty()) as u8,
             // ⭐ 이슈 #125 — 같은 스레드 메모리 읽기 한 번 더(#108/#121 관례 그대로,
             // 비용 없음). D2 가 실제로 쓰는 pressed-필터 값의 스냅샷.
-            synth_flags_active_pressed: (!st.arbiter.active_synth_flags_of_pressed_slots().is_empty()) as u8,
+            synth_flags_active_pressed: (!st
+                .arbiter
+                .active_synth_flags_of_pressed_slots()
+                .is_empty()) as u8,
             ..Default::default()
         };
 
@@ -882,31 +916,46 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>) {
     }
 }
 
-/// 탭을 처음부터 만든다 — 최초 설치 시도(`tap_thread_main`)가 이 함수 하나뿐인
-/// 유일한 호출자다(§3-a `NotInstalled`→`Installing` 전이).
+/// 탭을 처음부터 만든다 — §3-a `NotInstalled`→`Installing` 전이. 호출자는 둘뿐이다:
+/// ① `tap_thread_main` 의 최초 설치, ② `drain_commands` 의 `Reconfigure` 분기가
+/// `lifecycle::reconfigure_tap_decision` 으로 마스크 변경을 판정해 재생성이 필요할
+/// 때(이슈 #140, `docs/plan/issue-140-event-mask.md` §2 D2).
 ///
 /// ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — 예전에는 `handle_recover_tap` 이 재활성화
 /// 실패 에스컬레이션(`EscalateToRecreate`)과 권한 상실 두 경로 모두에서 이 함수를
 /// 다시 불러 탭을 재생성했다. 이제 그 두 경로는 재생성 없이 탭을 해체하고 권한
-/// 모니터에 넘기므로, 이 함수는 탭 스레드의 생애주기당 **정확히 한 번만** 불린다 —
-/// 그래서 "재생성 실패가 반복되면 프로세스 재실행"(§5#17, 옛 `RecoveryCounters::
-/// recreate_failures`)은 반복될 호출 자체가 없어 의미가 없어졌다. 그 UX 는 이제
-/// `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이 대신한다(교정 3).
+/// 모니터에 넘기므로, `RecoverTap` 경로는 이 함수를 **절대 부르지 않는다** — 그래서
+/// "재생성 실패가 반복되면 프로세스 재실행"(§5#17, 옛 `RecoveryCounters::
+/// recreate_failures`)은 그 경로에서는 반복될 호출 자체가 없어 의미가 없어졌다. 그
+/// UX 는 이제 `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이
+/// 대신한다(교정 3). 설정 변경에 의한 재생성(②)은 이 금지의 예외가 아니라 애초에
+/// 다른 트리거다 — `lifecycle::reconfigure_tap_decision` 문서 참고.
 fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &CommandChannel) {
-    let start = {
+    let (start, mask, needs) = {
         let mut st = cell.borrow_mut();
         if st.fatal {
             return;
         }
+        // 이 대입이 옛 탭을 drop 한다(런루프 소스 제거·`CFMachPortInvalidate`) —
+        // 최초 설치에서는 드롭할 게 없어 아무 효과가 없고, 재생성(이슈 #140)에서는
+        // 옛 탭이 여기서 완전히 해체된 뒤에야 아래에서 `CGEventTapCreate` 가
+        // 불린다. 같은 시퀀스가 두 호출자 모두를 그대로 커버한다(§2 D2 "재생성
+        // 창의 이벤트" 참고 — 그 사이 이벤트는 탭 없이 통과한다).
         st.tap = None;
         st.health_probe_slot.store(None);
         set_tap_state(&mut st, TapState::Installing);
-        st.start
+        // ⭐ 이슈 #140(U2) — 마스크는 이 시점의 `EngineConfig` 로부터 도출한다.
+        // `Installing` 으로 전이한 같은 borrow 안에서 읽어 재생성 창 동안
+        // 설정이 다시 바뀌어도 이 시도가 쓰는 마스크가 뒤섞이지 않는다.
+        let cfg = st.shared.config.load_full();
+        let needs = ultrakey_core::tap_mask::mouse_event_needs(&cfg);
+        let mask = ultrakey_platform::event_tap::build_event_mask(&needs);
+        (st.start, mask, needs)
     };
 
     let callback = build_callback(cell.clone(), commands.clone(), start);
 
-    match EventTap::create(callback) {
+    match EventTap::create(callback, mask) {
         Ok(mut tap) => {
             tap.add_to_current_runloop();
             let probe = tap.health_probe();
@@ -916,7 +965,14 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
             st.health_probe_slot.store(probe.map(Arc::new));
             st.tap = Some(tap);
             let attempt_result = if alive {
-                tracing::info!("tap created");
+                tracing::info!(
+                    mouse_click = needs.click,
+                    mouse_drag = needs.drag,
+                    mouse_move = needs.r#move,
+                    mouse_scroll = needs.scroll,
+                    mask,
+                    "tap created"
+                );
                 CreateAttemptResult::Success
             } else {
                 // ⚠️ 이론상의 엣지 케이스 — `CGEventTapCreate` 는 보통 이미 활성인
@@ -927,7 +983,9 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
                 // `reenable_budget_exhausted()` 가 계속 `false`(통지가 없었으니
                 // 예산 소비도 없다)라 `KeepAlive` 로만 관찰된다. 실기기에서 관찰된
                 // 적은 없다 — 관찰되면 트램폴린 쪽에 별도 신호가 필요하다.
-                tracing::warn!("tap created but is not enabled yet; the watchdog will keep observing it");
+                tracing::warn!(
+                    "tap created but is not enabled yet; the watchdog will keep observing it"
+                );
                 CreateAttemptResult::CreatedButDisabled
             };
             set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
@@ -954,6 +1012,26 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
     }
 }
 
+/// `EngineCommand::ForceResetState`·`EngineCommand::Reconfigure`(재생성 분기)가
+/// 공유하는 강제 리셋 본체 — §5 항목 9, stuck modifier 방지. 탭 콜백 **밖**에서
+/// 부른다(`apply_outcome_outside_tap`).
+fn force_reset_outside_tap(cell: &RunLoopConfined<TapThreadState>) {
+    let (outcome, table, on_event, shared) = {
+        let mut st = cell.borrow_mut();
+        let cfg = st.shared.config.load_full();
+        let table = st.shared.layout.current();
+        (
+            st.arbiter.force_reset(&cfg),
+            table,
+            Arc::clone(&st.on_event),
+            Arc::clone(&st.shared),
+        )
+    };
+    apply_outcome_outside_tap(&outcome);
+    let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
+    record_caps_lock_ownership(&shared, path_c);
+}
+
 /// `CommandSource` perform 콜백이 부르는 드레인 루프. 명령은 항상 이 함수 안에서,
 /// 큐에 들어간 순서 그대로 처리된다(`command.rs` 문서 참고).
 fn drain_commands(
@@ -966,30 +1044,67 @@ fn drain_commands(
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
             EngineCommand::ForceResetState => {
-                let (outcome, table, on_event, shared) = {
-                    let mut st = cell.borrow_mut();
-                    let cfg = st.shared.config.load_full();
-                    let table = st.shared.layout.current();
-                    (
-                        st.arbiter.force_reset(&cfg),
-                        table,
-                        Arc::clone(&st.on_event),
-                        Arc::clone(&st.shared),
-                    )
-                };
-                apply_outcome_outside_tap(&outcome);
-                let path_c = apply_effects_outside_tap(&outcome, &table, &on_event);
-                record_caps_lock_ownership(&shared, path_c);
+                force_reset_outside_tap(cell);
                 tracing::info!(
                     "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );
             }
             EngineCommand::RecoverTap => handle_recover_tap(cell),
             EngineCommand::Reconfigure => {
-                let mut st = cell.borrow_mut();
-                let cfg = st.shared.config.load_full();
-                st.arbiter.reconfigure(&cfg);
-                tracing::info!("reconfigured the Arbiter to reflect the settings change");
+                let (decision, commands, old_mask, new_mask) = {
+                    let mut st = cell.borrow_mut();
+                    let cfg = st.shared.config.load_full();
+                    st.arbiter.reconfigure(&cfg);
+                    tracing::info!("reconfigured the Arbiter to reflect the settings change");
+
+                    // ⭐ 이슈 #140(U3) — 설정이 바뀌면 도출된 이벤트 마스크도 바뀔 수
+                    // 있다(`docs/plan/issue-140-event-mask.md` §2 D2). 지금 탭의
+                    // 마스크와 비교해 재생성 여부를 순수 함수(`lifecycle::
+                    // reconfigure_tap_decision`)로 판정한다 — #65 가 금지한 건
+                    // `RecoverTap` 트리거에 대한 재생성이지, 사람의 클릭 속도로 오는
+                    // 설정 변경이 아니다(그 함수 문서 참고).
+                    let needs = ultrakey_core::tap_mask::mouse_event_needs(&cfg);
+                    let wanted_mask = ultrakey_platform::event_tap::build_event_mask(&needs);
+                    let current = st
+                        .tap
+                        .as_ref()
+                        .map(|t| (t.mask(), t.reenable_budget_exhausted()));
+                    let decision = lifecycle::reconfigure_tap_decision(
+                        current.is_some(),
+                        st.fatal,
+                        current.is_some_and(|c| c.1),
+                        current.is_some_and(|c| c.0 != wanted_mask),
+                    );
+                    (
+                        decision,
+                        st.commands.clone(),
+                        current.map(|c| c.0),
+                        wanted_mask,
+                    )
+                };
+
+                match decision {
+                    lifecycle::ReconfigureTapDecision::Recreate => {
+                        force_reset_outside_tap(cell);
+                        tracing::info!(
+                            old_mask = %format_args!("{:#x}", old_mask.unwrap_or(0)),
+                            new_mask = %format_args!("{:#x}", new_mask),
+                            "recreating the tap because the required event mask changed \
+                             after a settings change (issue #140)"
+                        );
+                        if let Some(commands) = commands {
+                            handle_recreate_tap(cell, &commands);
+                        } else {
+                            tracing::warn!(
+                                "cannot recreate the tap: command channel not yet available"
+                            );
+                        }
+                    }
+                    lifecycle::ReconfigureTapDecision::KeepTap => {}
+                    lifecycle::ReconfigureTapDecision::NoTap => {
+                        tracing::debug!("settings changed but there is no tap to recreate");
+                    }
+                }
             }
             EngineCommand::PostSynthEvent(ev) => {
                 // ⭐ 이슈 #129 — `emit_outcome` 이 큐에 넣은, 이미 판정이 끝난 합성
@@ -1066,6 +1181,7 @@ fn tap_thread_main(
         start,
         trace: trace_ring,
         trace_seq: 0,
+        commands: None,
     });
 
     let (cmd_tx, cmd_rx) = command::channel();
@@ -1073,12 +1189,13 @@ fn tap_thread_main(
     let run_loop_for_stop = RunLoopHandle::current()
         .expect("탭 스레드에 CFRunLoop 를 가져올 수 없다 — 있을 수 없는 상황");
 
-    // ⭐ 이슈 #65 Phase 1 리뷰 교정 2 — `drain_commands` 가 더 이상 `CommandChannel`
-    // 을 쓰지 않는다(예전에는 `RecoverTap` 에스컬레이션이 명령 처리 도중 탭을
-    // 재생성하며 콜백을 다시 만드는 데 필요했다). 그래서 예전에 있던
-    // "perform 콜백이 아직 존재하지 않는 `CommandChannel` 을 참조해야 하는 닭과
-    // 달걀 문제"(`RunLoopConfined<Option<CommandChannel>>` 늦은 채움)도 함께
-    // 사라졌다 — `cmd_rx`/`run_loop_for_stop` 은 이 시점에 이미 값이 있다.
+    // ⭐ 이슈 #65 Phase 1 리뷰 교정 2 가 없앴던 "perform 콜백이 아직 존재하지 않는
+    // `CommandChannel` 을 참조해야 하는 닭과 달걀 문제"가 이슈 #140 으로 다시
+    // 생겼다 — `Reconfigure` 분기가 마스크 변경 시 탭을 재생성하려면
+    // `handle_recreate_tap` 을 다시 부를 채널이 필요하다. 이번에는 클로저 자체에
+    // 늦은 채움을 두지 않고, 이미 있는 `TapThreadState.commands` 에 아래에서 채운다
+    // (`commands` 필드 문서 참고) — `cmd_rx`/`run_loop_for_stop` 은 이 시점에 이미
+    // 값이 있다.
     let perform_cell = cell.clone();
     let cmd_source = CommandSource::new(Box::new(move || {
         drain_commands(&perform_cell, &cmd_rx, &run_loop_for_stop);
@@ -1086,6 +1203,9 @@ fn tap_thread_main(
     cmd_source.add_to_current_runloop();
 
     let commands = CommandChannel::new(cmd_tx, cmd_source.signaller());
+    // ⭐ 이슈 #140 — 첫 `handle_recreate_tap` 호출 전에 채운다. 이 호출부터
+    // `Reconfigure` 분기가 재생성용으로 꺼내 쓸 수 있다.
+    cell.borrow_mut().commands = Some(commands.clone());
 
     // 최초 설치 시도 — §3-a `NotInstalled` → `Installing` → `Active`/`NotInstalled`/`Terminated`.
     handle_recreate_tap(&cell, &commands);
@@ -1138,7 +1258,10 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 세션 밖(계층 3) 의 같은 `Layer::KoreanInput` 산출 — F-16.1 세션 밖 발화는
@@ -1146,7 +1269,10 @@ mod tests {
     #[test]
     fn does_not_defer_out_of_session_korean_input_layer() {
         let gates = GateSnapshot::default(); // seek_active == false
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 세션은 열려 있지만 인풋 박스 모드가 아니면(영어 단일 세션) 계층 1 이 D2 자체를
@@ -1158,7 +1284,10 @@ mod tests {
             seek_input_box: false,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 인풋 박스 세션 중이라도 D2 가 아닌 다른 계층(예: 계층 1 자체의 `SeekSession`)
@@ -1170,7 +1299,13 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::SeekSession));
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::PresetCombo));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::SeekSession
+        ));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::PresetCombo
+        ));
     }
 }
