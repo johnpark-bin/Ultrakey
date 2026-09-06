@@ -131,7 +131,7 @@
 수정 전 동글 재삽입 뒤 경로 B 재적용이 탭 스레드에서 `elapsed_ms=179`(디바이스 1대) 걸렸고, 그 완료
 순간 probe 샘플 14개가 한꺼번에 풀리며 최대 **180.88 ms** 지연이 관측됐다(= 그 시간 동안 키보드·마우스
 입력 전부 정지). 수정 후 재적용은 지연 스케줄러 스레드(`ultrakey-delay-scheduler`)로 옮겨졌다.
-수정 후 ③(재삽입 창)은 **대기** — 사용자 외출로 재삽입 불가, 복귀 후 측정 예정.
+수정 후 재삽입 2회(재적용 `elapsed_ms=102`·`91`, thread=`ultrakey-delay-scheduler`)의 재적용 창에서 probe max 는 **4.16 ms·5.29 ms**(각 67 샘플, 누락 0) — 유휴 수준. 재적용 시간이 입력 정지로 전이되지 않는다.
 
 ### 전후 ①②③
 
@@ -139,7 +139,8 @@
 | :--- | ---: | ---: | ---: | ---: |
 | ① Ultrakey 미실행 | 12.03 | 0 | 15.90 | 0 |
 | ② 실행·유휴(기동 직후 30 s) | 33.24 | 4 | 11.11 | 0 |
-| ③ 동글 재삽입 창 | 180.88 | 24 | **대기** | **대기** |
+| ③ 동글 재삽입 창 — 재적용 창(completed±0.4 s)만 | **180.88** | 14 | **4.16 / 5.29**(2회) | 0 |
+| ③ 창 전체(수정 전 180 s 재삽입 1회 / 수정 후 240 s 재삽입 2회·Seek 사용 중) | 180.88 | 24 | 72.68(재적용과 무관, spike 문서 §3) | 35 |
 
 ### A1~A8 판정 현황
 
@@ -148,8 +149,8 @@
 | A1 | `EngineCommand::ReapplyHidMapping` 부재, 재적용은 스케줄러 스레드 | `grep -rn "EngineCommand::ReapplyHidMapping" crates apps` 0건, `engine.rs` 탭 경로에 `path_b` 참조 0건(P3 reviewer 재현 확인). 남은 6건은 전부 `system_hooks.rs` 의 `DelayedJob::ReapplyHidMapping`(의도된 잔존) |
 | A2 | `PathBManager` 직렬화 | 단위 테스트 통과 |
 | A3 | 탭 스레드 QoS UI | 기동 로그 확인(`qos_before=Some(Default) qos_after=Some(UserInteractive)`). `ps -M` 은 스레드 이름 미표시 — 귀속 불가, 판정 근거로 쓰지 않음 |
-| A4 | `seek_tx` Mutex 없음 | grep 확인 완료. 수동(세션 열기·타이핑·한/영·ESC) 확인은 **대기** |
+| A4 | `seek_tx` Mutex 없음·Seek 동작 유지 | grep 확인. 수동 확인(전후 빌드 트레이스 대조): ⇧+Space 라우팅 15/15 발화 — 유지. 하류 전환 누락(수정 전 5/6, 수정 후 12/15)과 첫 세션 즉시 닫힘은 **양쪽 빌드 동일**(기존 결함, spike 문서 §5 A4) |
 | A5 | reapply 로그 `elapsed_ms` | 수정 전·후 로그 실물로 확인 |
-| A6 | `latency_probe` 빌드·실행, 전후 ①②③ 문서화 | 수정 후 ③ **대기** |
+| A6 | `latency_probe` 빌드·실행, 전후 ①②③ 문서화 | 완료 — 수정 전 ③ max 180.88 ↔ `elapsed_ms=179` 상관, 수정 후 재적용 창 max 4.16/5.29(② 수준) |
 | A7 | `cargo test --workspace`·`clippy` 신규 경고 0·`log_string_discipline` | 통과 |
-| A8 | 절전 복귀·동글 재삽입 뒤 D-1·per-device 매핑 유지 | 수정 후 ③ 실측과 함께 **대기** |
+| A8 | 절전 복귀·동글 재삽입 뒤 D-1·per-device 매핑 유지 | 동글 재삽입 2회 뒤 `hidutil --matching 5ac:24f` 에 D-1 확인. 절전→깨어남은 미측정(세션 연결 유지 위해 절전 트리거 안 함) |
