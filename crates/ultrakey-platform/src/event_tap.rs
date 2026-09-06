@@ -89,9 +89,20 @@ pub fn build_event_mask(needs: &MouseEventNeeds) -> u64 {
     ALL_EVENT_KINDS
         .iter()
         .filter(|&&kind| needs.includes(kind))
-        .fold(0u64, |mask, &kind| {
-            mask | (1u64 << (cg_event_type_value(kind) as u64))
-        })
+        .fold(0u64, |mask, &kind| mask | cg_event_type_bit(kind).unwrap_or(0))
+}
+
+/// `CGEventMask` 비트 하나. `TapDisabledBy*` 두 통지는 값이 `0xFFFF_FFFE/F` 라
+/// 시프트하면 정의되지 않은 동작(디버그 패닉)이 되므로 `None` 을 돌려준다 —
+/// [`MouseEventNeeds::includes`] 가 그 둘을 먼저 거르지만, 그 필터 하나에만
+/// 의존하지 않고 여기서도 막는다(P3 심사 지적 4).
+const fn cg_event_type_bit(kind: EventKind) -> Option<u64> {
+    let v = cg_event_type_value(kind);
+    if v < 64 {
+        Some(1u64 << v)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +140,22 @@ mod build_event_mask_tests {
         .into_iter()
         .fold(0u64, |m, v| m | bit(v));
         assert_eq!(mask, old_fixed_mask);
+    }
+
+    #[test]
+    fn move_only_needs_yields_key_plus_mouse_moved_bit() {
+        // A2 의 platform 쪽 절반 — 트랙패드 제스처만 켠 구성은 `MouseMoved`(5) 하나만 더한다.
+        let needs = MouseEventNeeds {
+            r#move: true,
+            ..MouseEventNeeds::default()
+        };
+        assert_eq!(build_event_mask(&needs), bit(10) | bit(11) | bit(12) | bit(5));
+    }
+
+    #[test]
+    fn tap_disabled_notifications_never_set_a_bit() {
+        assert_eq!(cg_event_type_bit(EventKind::TapDisabledByTimeout), None);
+        assert_eq!(cg_event_type_bit(EventKind::TapDisabledByUserInput), None);
     }
 
     #[test]
@@ -242,10 +269,7 @@ mod reenable_budget_tests {
         b.note_real_event();
         assert!(!b.is_exhausted());
         for _ in 0..REENABLE_MAX_CONSECUTIVE {
-            assert!(
-                b.note_disable(),
-                "리셋된 뒤에는 다시 한도만큼 허용해야 한다"
-            );
+            assert!(b.note_disable(), "리셋된 뒤에는 다시 한도만큼 허용해야 한다");
         }
     }
 

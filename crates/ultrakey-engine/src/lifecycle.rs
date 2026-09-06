@@ -85,6 +85,35 @@ pub fn tap_state_after_create_attempt(result: CreateAttemptResult) -> TapState {
     }
 }
 
+/// 탭 생성을 시도하는 이유 — 실패했을 때의 처리가 갈린다(이슈 #140, P3 심사 지적 2·3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapCreateTrigger {
+    /// `tap_thread_main` 의 최초 설치. 실패 정책은 §3-a 표 그대로(`NotTrusted` →
+    /// `NotInstalled` + F-11 온보딩, `CreateFailed` → `Terminated` 치명).
+    InitialInstall,
+    /// 설정 변경으로 마스크가 달라져 **살아 있던 탭을 해체하고** 다시 만드는 경우.
+    /// 실패하면 어느 사유든 `NotInstalled` 로 두고 `EngineEvent::TapLost` 를 올린다 —
+    /// 사용자의 클릭 하나가 프로세스를 `Terminated`(재시도 없음) 로 굳히면 안 되고,
+    /// "살아 있던 탭이 사라졌다 → 권한 모델(`report_tap_create_failed`, `OutOfSync`
+    /// 진단)에 이관" 이 정확히 `TapLost` 의 계약이기 때문이다. `NotTrusted` 이벤트는
+    /// 온보딩 모달만 띄우고 권한 모니터에 알리지 않으므로 여기서는 쓰지 않는다.
+    MaskChanged,
+}
+
+/// [`tap_state_after_create_attempt`] 의 트리거 인지 판. 최초 설치는 표 그대로,
+/// 재생성 실패는 사유와 무관하게 `NotInstalled`(탭은 이미 해체됐고 복구는 권한
+/// 모니터 몫).
+pub fn tap_state_after_create_attempt_for(
+    trigger: TapCreateTrigger,
+    result: CreateAttemptResult,
+) -> TapState {
+    match (trigger, result) {
+        (TapCreateTrigger::MaskChanged, CreateAttemptResult::NotTrusted)
+        | (TapCreateTrigger::MaskChanged, CreateAttemptResult::Fatal) => TapState::NotInstalled,
+        (_, r) => tap_state_after_create_attempt(r),
+    }
+}
+
 /// §3-a `Disabled` 전이 규칙 — 재활성화(`CGEventTapEnable` 뒤 `is_enabled()` 확인)
 /// 시도 결과로부터 다음 상태를 결정하는 순수 함수.
 pub fn tap_state_after_reenable(succeeded: bool) -> TapState {
@@ -296,6 +325,33 @@ mod tests {
         assert_eq!(
             tap_state_after_create_attempt(CreateAttemptResult::Fatal),
             TapState::Terminated
+        );
+    }
+
+    /// 이슈 #140 — 재생성 실패는 치명(`Terminated`)이 아니라 `NotInstalled` + `TapLost`.
+    #[test]
+    fn recreate_failures_fall_back_to_not_installed_instead_of_terminated() {
+        use TapCreateTrigger::*;
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::Fatal),
+            TapState::NotInstalled
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::NotTrusted),
+            TapState::NotInstalled
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(MaskChanged, CreateAttemptResult::Success),
+            TapState::Active
+        );
+        // 최초 설치는 표 그대로 — 치명 실패는 여전히 `Terminated`.
+        assert_eq!(
+            tap_state_after_create_attempt_for(InitialInstall, CreateAttemptResult::Fatal),
+            TapState::Terminated
+        );
+        assert_eq!(
+            tap_state_after_create_attempt_for(InitialInstall, CreateAttemptResult::NotTrusted),
+            TapState::NotInstalled
         );
     }
 

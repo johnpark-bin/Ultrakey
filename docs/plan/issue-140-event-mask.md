@@ -77,7 +77,11 @@
   판정 → `Recreate` 면 `arbiter.force_reset(&cfg)` 결과를 `apply_outcome_outside_tap`/`apply_effects_outside_tap`
   으로 방출(stuck modifier 방지, §5 #9) → `handle_recreate_tap(cell, commands)`(기존 함수 그대로:
   `tap=None`·probe 슬롯 비움·`Installing`·`EventTap::create(callback, mask)`·probe 슬롯 채움·전이).
-  실패 정책은 기존 그대로(`NotTrusted → NotInstalled`, `CreateFailed → Terminated` 치명).
+  실패 정책(P3 심사 지적 2·3 으로 정정): 최초 설치는 기존 그대로(`NotTrusted → NotInstalled`,
+  `CreateFailed → Terminated` 치명)이지만, **재생성 실패는 어느 사유든 `NotInstalled` + `TapLost`**
+  (`lifecycle::TapCreateTrigger::MaskChanged`). 살아 있던 탭을 사용자 클릭으로 해체한 뒤라 치명으로
+  굳히면 재시도 경로가 없고, `NotTrusted` 이벤트는 온보딩 모달만 띄우고 권한 모니터에 알리지
+  않는다 — "살아 있던 탭이 사라졌다 → 권한 모델 이관" 은 정확히 `TapLost` 의 계약이다.
 - C3 의 닭과 달걀은 `TapThreadState.commands: Option<CommandChannel>` 을 **최초 설치 전에 채워** 푼다
   (`tap_thread_main` 이 `CommandChannel::new` 직후 `cell.borrow_mut().commands = Some(..)`).
   기각: perform 클로저에 `RunLoopConfined<Option<CommandChannel>>` 늦은 채움 — #65 가 걷어낸 구조를
@@ -136,6 +140,15 @@
 | A2 트랙패드 토글 재생성·프리즈 | **미측정 — 사용자가 수동 확인을 수행하지 않음** | 코드 경로·테스트로만 고정. 설정 파일 편집·커맨드 직접 호출은 경계 밖이라 대체하지 않았다 |
 | A4 재생성 직전 force_reset | **코드 확인** / 실기기 미측정 | `force_reset_outside_tap` → `handle_recreate_tap` 순서(리뷰) |
 | A6 키 경로 무변화 | **간접 확인** | 마스크 테스트가 키 비트 항상 포함 · 이번 빌드 활성 중 키보드 입력 정상(정량 계측 없음) |
-| A8 CI 4단계·문서 | (P4 에서 기록) | — |
+| A8 CI 4단계·문서 | **확인** | 로컬 `cargo test --workspace`(실패 0)·`clippy -D warnings`·`check -p ultrakey-app --features keychain-store`·`log_string_discipline` 5건 통과(P3 반영 뒤 재실행). 문서 3종 갱신 |
 
 미측정 항목은 PR 본문에 그대로 옮기고, 후속 실기기 확인이 필요하면 이슈에 남긴다.
+
+### P3 심사(reviewer, 새 컨텍스트) 결과와 반영
+
+판정 revise → 8건 전부 반영: ① 실측 중 잘못 커밋된 임시 파일 제거 ② ③ 재생성 실패를 `fatal`/`NotTrusted`
+대신 `NotInstalled` + `TapLost` 로(`TapCreateTrigger`, 테스트 1건) ④ `cg_event_type_bit` 가 통지 2종에
+`None`(시프트 UB 방지, 테스트) ⑤ `commands` 확인을 `force_reset` 앞으로 ⑥ meh/bleh·hyper+트랙패드·
+move-only 테스트 추가 ⑦ 문서의 "유실 아님·stuck 없음" 을 추정/미검증으로 표기, §3-a `Active` 행 접속사,
+§5 #27 실패 정책·새 예산 잔여 위험 ⑧ 무관한 rustfmt 리플로 되돌림. 잔여 위험 중 `want` 식 수동 미러링은
+`trackpad_gesture_wanted()` 공용 함수로 해소. 반영하지 않은 지적: 없음.

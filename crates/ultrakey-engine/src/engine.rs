@@ -38,8 +38,9 @@ use ultrakey_platform::secure_input::{DirectSecureInputProbe, SecureInputProbe};
 
 use crate::command::{self, CommandChannel, EngineCommand};
 use crate::lifecycle::{
-    self, quick_press_tick_delay_hint, tap_state_after_create_attempt, tap_state_after_reenable,
-    AtomicTapState, CreateAttemptResult, TapState,
+    self, quick_press_tick_delay_hint, tap_state_after_create_attempt,
+    tap_state_after_create_attempt_for, tap_state_after_reenable, AtomicTapState,
+    CreateAttemptResult, TapCreateTrigger, TapState,
 };
 use crate::path_b::{GlobalD1Migration, HidutilGlobalMigration, LedgerStore, PathBManager};
 use crate::state::SharedState;
@@ -200,11 +201,7 @@ impl Engine {
             let attached = ultrakey_platform::hid_device::list_attached_keyboards();
             let migration: Option<Box<dyn GlobalD1Migration>> =
                 Some(Box::new(HidutilGlobalMigration));
-            let path_b = Arc::new(PathBManager::new(
-                Box::new(HidutilBackend),
-                migration,
-                ledger,
-            ));
+            let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
             if let Err(e) = path_b.reconcile_on_start(&config, &attached) {
                 tracing::warn!(error = %e, "Path B reconciliation check failed at startup");
             }
@@ -441,12 +438,7 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
 /// `gates.seek_active && gates.seek_input_box` 조건이 ①을 배제하고 ②만 남긴다 —
 /// 세션 밖 F-16.1·F-16.2, 기본 Seek, 다른 모든 계층(Preset·SimpleRemap 등)은 종전과
 /// 똑같이 `apply_outcome_in_tap` 을 탄다(한 바이트도 안 바뀐다).
-fn emit_outcome(
-    outcome: &Outcome,
-    gates: GateSnapshot,
-    proxy: TapProxy,
-    commands: &CommandChannel,
-) {
+fn emit_outcome(outcome: &Outcome, gates: GateSnapshot, proxy: TapProxy, commands: &CommandChannel) {
     if should_defer_synth_to_command_queue(gates, outcome.layer()) {
         for ev in outcome.emitted() {
             commands.send(EngineCommand::PostSynthEvent(*ev));
@@ -518,19 +510,15 @@ fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
 /// `(추정 — 실기기로 확인하지 못했다)`. 그래서 `flags` 는 **항상
 /// `combo.event_flags()` 로 명시적으로 덮어써야** 한다 — 아래 두 호출 모두 그렇게
 /// 한다(`SyntheticEvent::keyboard` 가 매 호출마다 `CGEventSetFlags` 를 부른다).
-fn type_char_events(
-    table: &LayoutTable,
-    c: char,
-) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
+fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
     match plan_text_output(table, c) {
         TextOutputPlan::KeyStroke { keycode, flags } => (
             SyntheticEvent::keyboard(keycode, true, flags),
             SyntheticEvent::keyboard(keycode, false, flags),
         ),
-        TextOutputPlan::UnicodeString(c) => (
-            SyntheticEvent::unicode(c, true),
-            SyntheticEvent::unicode(c, false),
-        ),
+        TextOutputPlan::UnicodeString(c) => {
+            (SyntheticEvent::unicode(c, true), SyntheticEvent::unicode(c, false))
+        }
     }
 }
 
@@ -777,33 +765,22 @@ fn on_tap_event(
             disposition_flags: trace::disposition_flags_of(outcome.disposition()),
             // ⭐ 이슈 #108 원인 (b) 진단 — 이 이벤트 처리 직후 정본 눌림 테이블의
             // 좌/우 shift·caps lock 스냅샷. 같은 스레드 메모리 읽기 3회뿐이다.
-            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8
-                * trace::PRESSED_MOD_LEFT_SHIFT)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8
-                    * trace::PRESSED_MOD_RIGHT_SHIFT)
+            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8 * trace::PRESSED_MOD_LEFT_SHIFT)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8 * trace::PRESSED_MOD_RIGHT_SHIFT)
                 | (st.arbiter.is_pressed(KeyCode::CAPS_LOCK) as u8 * trace::PRESSED_MOD_CAPS_LOCK),
             // ⭐ 이슈 #121 — ⌃⌥⌘ 여섯 키 스냅샷(F-16.1 ShiftOnly 의 "다른 modifier
             // 미눌림" 판정) + 합성 hyper 활성 스냅샷(발화 조건 3). `is_pressed` 와
             // `active_synth_flags` 는 같은 스레드 메모리 읽기일 뿐이다(#108 관례).
-            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8
-                * trace::PRESSED_MOD_LEFT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8
-                    * trace::PRESSED_MOD_RIGHT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8
-                    * trace::PRESSED_MOD_LEFT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8
-                    * trace::PRESSED_MOD_RIGHT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8
-                    * trace::PRESSED_MOD_LEFT_COMMAND)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8
-                    * trace::PRESSED_MOD_RIGHT_COMMAND),
+            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8 * trace::PRESSED_MOD_LEFT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8 * trace::PRESSED_MOD_RIGHT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8 * trace::PRESSED_MOD_LEFT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8 * trace::PRESSED_MOD_RIGHT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8 * trace::PRESSED_MOD_LEFT_COMMAND)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8 * trace::PRESSED_MOD_RIGHT_COMMAND),
             synth_flags_active: (!st.arbiter.active_synth_flags().is_empty()) as u8,
             // ⭐ 이슈 #125 — 같은 스레드 메모리 읽기 한 번 더(#108/#121 관례 그대로,
             // 비용 없음). D2 가 실제로 쓰는 pressed-필터 값의 스냅샷.
-            synth_flags_active_pressed: (!st
-                .arbiter
-                .active_synth_flags_of_pressed_slots()
-                .is_empty()) as u8,
+            synth_flags_active_pressed: (!st.arbiter.active_synth_flags_of_pressed_slots().is_empty()) as u8,
             ..Default::default()
         };
 
@@ -930,7 +907,11 @@ fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>) {
 /// UX 는 이제 `OutOfSync` 진단 화면(권한은 있는데 탭을 만들 수 없는 상태)이
 /// 대신한다(교정 3). 설정 변경에 의한 재생성(②)은 이 금지의 예외가 아니라 애초에
 /// 다른 트리거다 — `lifecycle::reconfigure_tap_decision` 문서 참고.
-fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &CommandChannel) {
+fn handle_recreate_tap(
+    cell: &RunLoopConfined<TapThreadState>,
+    commands: &CommandChannel,
+    trigger: TapCreateTrigger,
+) {
     let (start, mask, needs) = {
         let mut st = cell.borrow_mut();
         if st.fatal {
@@ -989,6 +970,36 @@ fn handle_recreate_tap(cell: &RunLoopConfined<TapThreadState>, commands: &Comman
                 CreateAttemptResult::CreatedButDisabled
             };
             set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
+        }
+        // ⭐ 이슈 #140(P3 심사 지적 2·3) — 재생성(`MaskChanged`) 실패는 사유와
+        // 무관하게 "살아 있던 탭이 사라졌다" 이므로 `TapLost` 로 권한 모델에
+        // 이관한다(`lifecycle::TapCreateTrigger` 문서). 사용자의 설정 클릭 하나가
+        // 프로세스를 `Terminated`(재시도 없음) 로 굳히거나, 온보딩 모달만 띄우고
+        // 권한 모니터에는 알리지 않는 `NotTrusted` 로 끝나면 안 된다.
+        Err(TapCreateError::NotTrusted) if trigger == TapCreateTrigger::MaskChanged => {
+            let mut st = cell.borrow_mut();
+            tracing::warn!(
+                "tap recreation after a settings change failed: Accessibility is not granted; \
+                 handing recovery to the permission monitor (issue #140)"
+            );
+            set_tap_state(
+                &mut st,
+                tap_state_after_create_attempt_for(trigger, CreateAttemptResult::NotTrusted),
+            );
+            (st.on_event)(EngineEvent::TapLost);
+        }
+        Err(TapCreateError::CreateFailed) if trigger == TapCreateTrigger::MaskChanged => {
+            let mut st = cell.borrow_mut();
+            tracing::error!(
+                "tap recreation after a settings change failed even though Accessibility is \
+                 granted; not latching fatal, handing recovery to the permission monitor \
+                 (issue #140)"
+            );
+            set_tap_state(
+                &mut st,
+                tap_state_after_create_attempt_for(trigger, CreateAttemptResult::Fatal),
+            );
+            (st.on_event)(EngineEvent::TapLost);
         }
         Err(TapCreateError::NotTrusted) => {
             let mut st = cell.borrow_mut();
@@ -1085,6 +1096,16 @@ fn drain_commands(
 
                 match decision {
                     lifecycle::ReconfigureTapDecision::Recreate => {
+                        // `commands` 는 `tap_thread_main` 이 최초 설치 전에 채우므로
+                        // 런루프가 도는 동안에는 항상 `Some` 이다. 그래도 `None` 이면
+                        // 강제 리셋을 먼저 내고 끝나는 어정쩡한 상태를 만들지 않도록
+                        // 리셋 **전에** 확인한다(P3 심사 지적 5).
+                        let Some(commands) = commands else {
+                            tracing::warn!(
+                                "cannot recreate the tap: command channel not yet available"
+                            );
+                            continue;
+                        };
                         force_reset_outside_tap(cell);
                         tracing::info!(
                             old_mask = %format_args!("{:#x}", old_mask.unwrap_or(0)),
@@ -1092,13 +1113,7 @@ fn drain_commands(
                             "recreating the tap because the required event mask changed \
                              after a settings change (issue #140)"
                         );
-                        if let Some(commands) = commands {
-                            handle_recreate_tap(cell, &commands);
-                        } else {
-                            tracing::warn!(
-                                "cannot recreate the tap: command channel not yet available"
-                            );
-                        }
+                        handle_recreate_tap(cell, &commands, TapCreateTrigger::MaskChanged);
                     }
                     lifecycle::ReconfigureTapDecision::KeepTap => {}
                     lifecycle::ReconfigureTapDecision::NoTap => {
@@ -1208,7 +1223,7 @@ fn tap_thread_main(
     cell.borrow_mut().commands = Some(commands.clone());
 
     // 최초 설치 시도 — §3-a `NotInstalled` → `Installing` → `Active`/`NotInstalled`/`Terminated`.
-    handle_recreate_tap(&cell, &commands);
+    handle_recreate_tap(&cell, &commands, TapCreateTrigger::InitialInstall);
 
     // quick press 타이머 — architecture.md §2.3: "매 25ms 씩 깨우지 마라. 대기 중인
     // 상태 머신이 있을 때만 `set_next_fire_after_ms` 로 다음 만료 시각에 맞춰
@@ -1258,10 +1273,7 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(should_defer_synth_to_command_queue(
-            gates,
-            Layer::KoreanInput
-        ));
+        assert!(should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
     }
 
     /// 세션 밖(계층 3) 의 같은 `Layer::KoreanInput` 산출 — F-16.1 세션 밖 발화는
@@ -1269,10 +1281,7 @@ mod tests {
     #[test]
     fn does_not_defer_out_of_session_korean_input_layer() {
         let gates = GateSnapshot::default(); // seek_active == false
-        assert!(!should_defer_synth_to_command_queue(
-            gates,
-            Layer::KoreanInput
-        ));
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
     }
 
     /// 세션은 열려 있지만 인풋 박스 모드가 아니면(영어 단일 세션) 계층 1 이 D2 자체를
@@ -1284,10 +1293,7 @@ mod tests {
             seek_input_box: false,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(
-            gates,
-            Layer::KoreanInput
-        ));
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
     }
 
     /// 인풋 박스 세션 중이라도 D2 가 아닌 다른 계층(예: 계층 1 자체의 `SeekSession`)
@@ -1299,13 +1305,7 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(
-            gates,
-            Layer::SeekSession
-        ));
-        assert!(!should_defer_synth_to_command_queue(
-            gates,
-            Layer::PresetCombo
-        ));
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::SeekSession));
+        assert!(!should_defer_synth_to_command_queue(gates, Layer::PresetCombo));
     }
 }

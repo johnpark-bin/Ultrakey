@@ -122,6 +122,40 @@ mod tests {
         assert!(!needs.scroll);
     }
 
+    /// 판정은 `ModifierKind` 에 무관하다 — meh/bleh 규칙도 flags 가 있으면 같은 결과다.
+    #[test]
+    fn meh_and_bleh_modifier_rules_count_the_same_as_hyper() {
+        for kind in [ModifierKind::Meh, ModifierKind::Bleh] {
+            let mut cfg = EngineConfig::default();
+            cfg.rules.modifier_rules.push(ModifierRule {
+                source: KeyCode::CAPS_LOCK,
+                kind,
+                flags: EventFlags::COMMAND,
+            });
+            let needs = mouse_event_needs(&cfg);
+            assert!(needs.click, "{kind:?} 규칙도 click 을 요구해야 한다");
+            assert!(!needs.r#move);
+        }
+    }
+
+    /// A2 의 현실적인 구성 — hyper 규칙 + 트랙패드 제스처 + 기본 `mouse_apply`(click) →
+    /// click 과 move 둘 다.
+    #[test]
+    fn hyper_rule_plus_trackpad_gesture_needs_click_and_move() {
+        let mut cfg = EngineConfig::default();
+        cfg.rules.modifier_rules.push(ModifierRule {
+            source: KeyCode::CAPS_LOCK,
+            kind: ModifierKind::Hyper,
+            flags: EventFlags::COMMAND,
+        });
+        cfg.trackpad_gesture_enabled = true;
+        let needs = mouse_event_needs(&cfg);
+        assert!(needs.click);
+        assert!(needs.r#move);
+        assert!(!needs.drag);
+        assert!(!needs.scroll);
+    }
+
     #[test]
     fn hyper_modifier_rule_with_all_mouse_apply_needs_all_four() {
         let mut cfg = EngineConfig::default();

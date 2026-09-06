@@ -182,7 +182,11 @@ WindowServer ⇄ 탭 스레드 동기 왕복이 발생했다(#139 는 이 왕복
 달라지면 탭을 재생성해야 한다. 흐름은 `EngineCommand::Reconfigure` → 지금 탭의 `EventTap::mask()` 와
 새로 도출한 마스크를 비교 → `lifecycle::reconfigure_tap_decision` (순수 판정) → `Recreate` 면
 콜백 **밖**에서 `force_reset`(stuck modifier 방지) 방출 → `handle_recreate_tap`(기존 함수 그대로
-재사용: `Active|Disabled → Installing → Active/NotInstalled/Terminated`). 건강 확인 슬롯
+재사용: `Active|Disabled → Installing → Active/NotInstalled`). ⭐ 재생성 실패는 최초 설치와
+달리 **치명(`Terminated`)으로 굳히지 않는다** — `NotTrusted`/`CreateFailed` 어느 쪽이든
+`NotInstalled` 로 두고 `EngineEvent::TapLost` 를 올려 권한 모니터(`report_tap_create_failed`
+→ `OutOfSync` 진단)에 이관한다(`lifecycle::TapCreateTrigger::MaskChanged`). 사용자의 설정
+클릭 하나가 재시도 없는 프로세스 상태를 만들면 안 되기 때문이다(P3 심사 지적). 건강 확인 슬롯
 (`health_probe_slot`)은 재생성 중 비웠다가 새 탭이 만들어지면 다시 채운다 — 워치독은 슬롯이
 `None` 이면 건너뛴다.
 
@@ -202,8 +206,13 @@ WindowServer ⇄ 탭 스레드 동기 왕복이 발생했다(#139 는 이 왕복
 지점을 유지한다.
 
 재생성 창(옛 탭 drop ~ 새 `CGEventTapCreate`) 동안 도착하는 이벤트는 탭이 없는 상태로 **그대로
-통과한다**(유실이 아니다) — 직전 `force_reset` 으로 합성 modifier 는 이미 내려가 있으므로 stuck
-modifier 는 남지 않는다.
+통과한다** — 탭이 없으면 macOS 가 이벤트를 막지 않으므로 유실이 아니다(코드 근거에 의한 추론,
+실기기 미검증 — `input-latency-spike.md` §8 체크리스트). 직전 `force_reset` 으로 합성 modifier
+는 내려가 있으므로 stuck modifier 는 남지 않을 것으로 본다(추정 — 같은 이유로 미검증. 그 창에
+정확히 떨어지는 물리 keyUp 은 눌림 테이블에 반영되지 않는데, 이는 이슈 #18/#108 과 같은 부류이며
+`force_reset` 과 `normalize_kind` 의 own-flags 검사가 방어선이다). 새 탭은 `ReenableBudget` 을
+새로 받는다 — 폭주 중에는 `KeepTap` 으로 재생성을 막지만, 사람 속도의 반복 토글이 #65 의 해체를
+그만큼 늦출 수는 있다(허용 — 트리거가 사용자 행위이기 때문).
 
 ---
 
