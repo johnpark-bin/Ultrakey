@@ -193,12 +193,23 @@ impl PresetSettings {
             }
         }
 
-        // F-08.8 — Double tap shift = caps lock (경로 C). 좌/우 shift 각각 독립적으로
-        // double tap 을 감지한다(§3.2 F-08.8 "좌/우 특정 여부 미확인" — 이 구현은 양쪽
-        // 모두에 적용해 어느 쪽을 두드려도 동작하게 한다).
+        // F-08.8 — Double tap shift = caps lock (경로 C). side 팝업(이슈 #143, 클론
+        // 고유 확장)이 고른 쪽 shift 에만 double tap 을 건다. 기본 `Either` 는 양쪽에
+        // 적용해 어느 쪽을 두드려도 동작하게 한다(종전 동작 그대로).
         if self.double_tap_shift_to_caps {
-            left_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
-            right_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
+            use crate::popups::DoubleTapShiftSide;
+            match self.double_tap_shift_side {
+                DoubleTapShiftSide::Left => {
+                    left_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
+                }
+                DoubleTapShiftSide::Right => {
+                    right_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
+                }
+                DoubleTapShiftSide::Either => {
+                    left_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
+                    right_shift_actions.double_tap = Some(RuleAction::ToggleCapsLock);
+                }
+            }
         }
 
         // F-08.9 — Left shift + right shift = caps lock (경로 C). 어느 쪽이 나중에
@@ -327,7 +338,7 @@ impl PresetSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::popups::{ArrowKeySet, BracketPair, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
+    use crate::popups::{ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
     use crate::settings::{CapsHjklArrowsSettings, CapsHomeRowSettings, CapsLockRemapSettings, CapsQuickPressSettings, PasteWithoutFormattingSettings, ShiftQuickPressBracketsSettings};
 
     #[test]
@@ -441,12 +452,65 @@ mod tests {
 
     #[test]
     fn f08_8_double_tap_shift_applies_to_both_shifts() {
+        // 기본 side=Either — 종전 동작 그대로 양쪽에 설치된다.
         let settings = PresetSettings { double_tap_shift_to_caps: true, ..PresetSettings::default() };
+        assert_eq!(settings.double_tap_shift_side, DoubleTapShiftSide::Either);
         let rules = settings.to_rules(false);
         let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
         let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
         assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
         assert_eq!(right.double_tap, Some(RuleAction::ToggleCapsLock));
+    }
+
+    #[test]
+    fn f08_8_double_tap_shift_side_left_applies_to_left_only() {
+        let settings = PresetSettings {
+            double_tap_shift_to_caps: true,
+            double_tap_shift_side: DoubleTapShiftSide::Left,
+            ..PresetSettings::default()
+        };
+        let rules = settings.to_rules(false);
+        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
+        assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
+        assert!(
+            rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).is_none(),
+            "side=Left 일 때 우 shift 에는 double_tap 규칙이 없어야 한다"
+        );
+    }
+
+    #[test]
+    fn f08_8_double_tap_shift_side_right_applies_to_right_only() {
+        let settings = PresetSettings {
+            double_tap_shift_to_caps: true,
+            double_tap_shift_side: DoubleTapShiftSide::Right,
+            ..PresetSettings::default()
+        };
+        let rules = settings.to_rules(false);
+        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        assert_eq!(right.double_tap, Some(RuleAction::ToggleCapsLock));
+        assert!(
+            rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).is_none(),
+            "side=Right 일 때 좌 shift 에는 double_tap 규칙이 없어야 한다"
+        );
+    }
+
+    #[test]
+    fn f08_8_side_left_leaves_right_shift_quick_press_untouched() {
+        // side=Left + F-08.11 동시 활성 — 우 shift 의 quick_press 는 F-08.11 대로
+        // 그대로 남고, double_tap 은 좌 shift 에만 붙는다.
+        let settings = PresetSettings {
+            double_tap_shift_to_caps: true,
+            double_tap_shift_side: DoubleTapShiftSide::Left,
+            shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Parens },
+            ..PresetSettings::default()
+        };
+        let rules = settings.to_rules(false);
+        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
+        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
+        assert_eq!(left.quick_press, Some(RuleAction::Text('(')));
+        assert_eq!(right.double_tap, None);
+        assert_eq!(right.quick_press, Some(RuleAction::Text(')')));
     }
 
     #[test]

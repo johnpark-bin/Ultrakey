@@ -486,6 +486,33 @@ impl BracketPair {
     }
 }
 
+/// `Double tap shift = caps lock`(F-08.8) 팝업 — 어느 쪽 shift 의 더블탭이 caps lock 을
+/// 토글하는지 고른다(이슈 #143, 클론 고유 확장 — 원본은 단일 체크박스 실측,
+/// `app-bundle-analysis.md` §6.4 `doubleShiftToCaps`). 서술형 항목이라 `PasteTrigger`
+/// 관례를 따른다 — `label()` 은 영어 폴백이고 UI 는 카탈로그 `labelKey`
+/// (`settings.presets.option.double_tap.*`, 앱 계층이 배선)로 번역해 보인다.
+/// 저장은 `serde` variant 이름 그대로(`Either` 등).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DoubleTapShiftSide {
+    Left,
+    Right,
+    Either,
+}
+
+impl DoubleTapShiftSide {
+    pub fn all() -> &'static [DoubleTapShiftSide] {
+        &[DoubleTapShiftSide::Left, DoubleTapShiftSide::Right, DoubleTapShiftSide::Either]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DoubleTapShiftSide::Left => "Left shift",
+            DoubleTapShiftSide::Right => "Right shift",
+            DoubleTapShiftSide::Either => "Either shift",
+        }
+    }
+}
+
 /// `Remap paste (⌘+V) to paste w/o formatting (⌘⌥⇧+V):`(F-08.15) 팝업 — 트리거 4종.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PasteTrigger {
@@ -601,6 +628,14 @@ mod tests {
         assert_eq!(BracketPair::all().len(), 4);
         assert_eq!(BracketPair::Parens.pair(), ('(', ')'));
         assert_eq!(BracketPair::Angles.pair(), ('<', '>'));
+    }
+
+    #[test]
+    fn double_tap_shift_side_has_3_variants_in_order() {
+        assert_eq!(DoubleTapShiftSide::all().len(), 3);
+        assert_eq!(DoubleTapShiftSide::all()[0], DoubleTapShiftSide::Left);
+        assert_eq!(DoubleTapShiftSide::all()[2], DoubleTapShiftSide::Either);
+        assert_eq!(DoubleTapShiftSide::Either.label(), "Either shift");
     }
 
     #[test]

@@ -22,5 +22,10 @@
 	<!-- 48시간 주기(§4.1 실측: SUScheduledCheckInterval=172800). -->
 	<key>SUScheduledCheckInterval</key>
 	<integer>172800</integer>
+	<!-- ⭐ 이슈 #145 — 원본 SuperKey 실측과 동일(app-bundle-analysis.md §1).
+	     Dock 노출은 런타임 `set_activation_policy(Regular)` 로 선택 가능
+	     (`general.hideDockIcon`=false 시). -->
+	<key>LSUIElement</key>
+	<true/>
 </dict>
 </plist>

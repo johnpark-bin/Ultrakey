@@ -16,7 +16,8 @@
 //!    번 처리되기 때문이다.
 //! 2. 로케일 결정 → 문자열 카탈로그(D4: ko + en)
 //! 3. ⭐ Accessory 앱으로 전환 — Dock 아이콘·⌘Tab 미노출(`menu-bar-and-lifecycle.md`
-//!    §3, 원본 `LSUIElement = true` 실측에 대응)
+//!    §3, 원본 `LSUIElement = true` 실측에 대응). 이슈 #145 부터는 저장된
+//!    `general.hideDockIcon`(부재 = 숨김)에 따라 `Accessory`/`Regular` 로 분기한다.
 //! 4. ⭐ 설정 저장소 로드(F-15) — "부재 = 기본값" 규약으로 `HyperkeySettings` 조립.
 //!    같은 자리에서 `general.disabledApps` 를 읽어 `AppGateController` 를 복원한다.
 //! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작. 메뉴바가 생긴 뒤로는
@@ -74,8 +75,8 @@ use ultrakey_platform::login_item;
 use ultrakey_platform::single_instance::{self, ShowSettingsObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 use ultrakey_presets::{
-    ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
-    QuickPressCapsAction, RemapCapsTarget,
+    ArrowKeySet, BracketPair, Conflict, ConflictKind, DoubleTapShiftSide, HomeRowScheme,
+    PasteTrigger, PresetSettings, QuickPressCapsAction, RemapCapsTarget,
 };
 use ultrakey_seek_session::{ClickSettings, SeekSettings, SeekShortcut};
 
@@ -126,6 +127,10 @@ mod settings_keys {
     pub const GENERAL_LAUNCH_ON_LOGIN: &str = "general.launchOnLogin";
     /// F-10 §3 `Hide menu bar icon` 체크박스.
     pub const GENERAL_HIDE_MENU_BAR_ICON: &str = "general.hideMenuBarIcon";
+    /// 이슈 #145 `Hide Dock icon` 체크박스. **부재 = `true`(숨김)** — 원본이 토글 없이
+    /// 항상 숨김(`LSUIElement` 실측)이므로, 클론의 출고 기본값도 숨김이다(F-15
+    /// "부재 = 기본값" — 부재 시 숨김이므로 저장 파일에 키가 없어도 된다).
+    pub const GENERAL_HIDE_DOCK_ICON: &str = "general.hideDockIcon";
     /// ⭐ `General` 탭 언어 선택 팝업(D6, 이슈 #39,
     /// `localization-and-input-sources.md` §3.1.2-a). **부재 = 시스템 언어를
     /// 따른다**(F-15 "부재 = 기본값") — `System` 을 고르면 이 키 자체를 지운다.
@@ -364,6 +369,16 @@ fn paste_trigger_label_key(v: PasteTrigger) -> Option<&'static str> {
     }
 }
 
+/// ⭐ 이슈 #143 — `Double tap shift = caps lock` side 팝업 3종은 키캡 각인이 아니라
+/// 서술형 항목이라 `PasteTrigger` 와 같은 관례로 카탈로그를 거친다.
+fn double_tap_shift_side_label_key(v: DoubleTapShiftSide) -> Option<&'static str> {
+    match v {
+        DoubleTapShiftSide::Left => Some("settings.presets.option.double_tap.left"),
+        DoubleTapShiftSide::Right => Some("settings.presets.option.double_tap.right"),
+        DoubleTapShiftSide::Either => Some("settings.presets.option.double_tap.either"),
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PresetOptionsView {
@@ -371,11 +386,12 @@ struct PresetOptionsView {
     caps_quick_actions: Vec<PresetOptionView>,
     arrow_key_sets: Vec<PresetOptionView>,
     home_row_schemes: Vec<PresetOptionView>,
+    double_tap_shift_sides: Vec<PresetOptionView>,
     bracket_pairs: Vec<PresetOptionView>,
     paste_triggers: Vec<PresetOptionView>,
 }
 
-/// 팝업 6종 전량(50/48/2/2/4/4) — 값은 매번 다시 계산해도 비용이 무시할 만한
+/// 팝업 7종 전량(50/48/2/2/3/4/4) — 값은 매번 다시 계산해도 비용이 무시할 만한
 /// 정적 목록이라 캐시하지 않는다.
 fn preset_options_view() -> PresetOptionsView {
     PresetOptionsView {
@@ -394,6 +410,10 @@ fn preset_options_view() -> PresetOptionsView {
         home_row_schemes: HomeRowScheme::all()
             .iter()
             .map(|&v| preset_option_view(v, v.label(), home_row_scheme_label_key(v)))
+            .collect(),
+        double_tap_shift_sides: DoubleTapShiftSide::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), double_tap_shift_side_label_key(v)))
             .collect(),
         bracket_pairs: BracketPair::all()
             .iter()
@@ -457,6 +477,7 @@ struct PresetsView {
     caps_hjkl_arrows: CapsHjklArrowsView,
     caps_home_row: CapsHomeRowView,
     double_tap_shift_to_caps: bool,
+    double_tap_shift_side: String,
     left_right_shift_to_caps: bool,
     shift_caps_to_caps: bool,
     shift_quick_press_brackets: ShiftQuickPressBracketsView,
@@ -491,6 +512,7 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
             scheme: serde_variant_name(&p.caps_home_row.scheme),
         },
         double_tap_shift_to_caps: p.double_tap_shift_to_caps,
+        double_tap_shift_side: serde_variant_name(&p.double_tap_shift_side),
         left_right_shift_to_caps: p.left_right_shift_to_caps,
         shift_caps_to_caps: p.shift_caps_to_caps,
         shift_quick_press_brackets: ShiftQuickPressBracketsView {
@@ -615,6 +637,10 @@ struct GeneralView {
     /// 보낸다. `requires-approval` 일 때만 프런트가 안내 행을 보인다.
     launch_on_login_status: String,
     hide_menu_bar_icon: bool,
+    /// 이슈 #145 `Hide Dock icon` — **부재 = `true`(숨김)**. `hide_menu_bar_icon`(부재
+    /// = ☐)과 극성이 반대이므로 `unwrap_or(false)` 를 쓰면 출고 기본값을 조용히
+    /// 어긴다 — 반드시 `unwrap_or(true)` 다.
+    hide_dock_icon: bool,
     /// ⭐ 저장된 `general.language`(D6, 이슈 #39). `None` = "시스템 설정 따름"
     /// (키 부재 또는 알 수 없는 값 — §3.1.2-a "폴백"). 언어 선택 팝업의 초기값에
     /// 쓴다.
@@ -659,6 +685,7 @@ fn general_view(store: &SettingsStore, auto_update: bool) -> GeneralView {
         hide_menu_bar_icon: store
             .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
             .unwrap_or(false),
+        hide_dock_icon: store.get(settings_keys::GENERAL_HIDE_DOCK_ICON).unwrap_or(true),
         language: resolve_stored_language(store).map(|locale| locale.code().to_string()),
         auto_update,
     }
@@ -1791,6 +1818,9 @@ fn apply_preset_setting(
         k if k == keys::PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS => {
             presets.double_tap_shift_to_caps = parse(value, key)?
         }
+        k if k == keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE => {
+            presets.double_tap_shift_side = parse(value, key)?
+        }
         k if k == keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS => {
             presets.left_right_shift_to_caps = parse(value, key)?
         }
@@ -2248,9 +2278,10 @@ fn reconfigure_trackpad(state: &Arc<AppState>, hyperkey: &HyperkeySettings) -> R
 /// 컨트롤 하나가 바뀔 때마다 호출된다(§3.7 "적용 버튼 없음" — 즉시 반영).
 ///
 /// `key` 접두사로 세 경로로 갈린다:
-/// - `general.launchOnLogin`/`general.hideMenuBarIcon` — F-10 이 이미 만든
-///   로직(`set_launch_on_login_internal`/`set_hide_menu_bar_icon_internal`)을
-///   그대로 재사용한다. hyperkey/presets 도, 엔진도 건드리지 않는다.
+/// - `general.launchOnLogin`/`general.hideMenuBarIcon`/`general.hideDockIcon` — F-10 이
+///   이미 만든 로직(`set_launch_on_login_internal`/`set_hide_menu_bar_icon_internal`/
+///   `set_hide_dock_icon_internal`)을 그대로 재사용한다. hyperkey/presets 도, 엔진도
+///   건드리지 않는다.
 /// - `presets.*` — [`settings_set_preset`](충돌 감지 → 적용 → 엔진 반영 → 저장).
 /// - 그 밖(`hyperkey.*`) — 순서를 반드시 지킨다: 1) `key` 검증 2) 메모리 갱신
 ///   3) **엔진 반영**(저장 성공 여부와 무관하게 먼저 한다 — D-B: 로그아웃 시
@@ -2275,6 +2306,13 @@ fn settings_set(
             .as_bool()
             .ok_or_else(|| format!("{key} must be a boolean"))?;
         set_hide_menu_bar_icon_internal(&state, on)?;
+        return current_settings_state(&state);
+    }
+    if key == settings_keys::GENERAL_HIDE_DOCK_ICON {
+        let on = value
+            .as_bool()
+            .ok_or_else(|| format!("{key} must be a boolean"))?;
+        set_hide_dock_icon_internal(&app, &state, on)?;
         return current_settings_state(&state);
     }
     if key == settings_keys::GENERAL_LANGUAGE {
@@ -4941,6 +4979,7 @@ fn main() {
             settings_resolve_conflict,
             general_set_launch_on_login,
             general_set_hide_menu_bar_icon,
+            general_set_hide_dock_icon,
             open_keyboard_settings,
             keyboard_fn_state,
             settings_export,
@@ -4965,7 +5004,12 @@ fn main() {
             seek_set_query,
         ])
         .setup(move |app| {
-            // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
+            // 3) ⭐ 이슈 #145 — 저장된 `general.hideDockIcon`(부재 = true=숨김)에 따라
+            // 활성화 정책을 분기한다. `Info.plist` 의 `LSUIElement=true` 가 기동~setup
+            // 사이 Dock 순간 노출을 막는 번들 선언이고, 여기서의 `Regular` 전환은
+            // `NSApplication.setActivationPolicy` 가 런타임에 Dock 을 되돌린다(실기기 검증 필요).
+            // setup 클로저 시점에는 `state.store` 가 아직 `in_memory()` 자리표시자라
+            // 여기서 직접 읽지 않고, 아래 설정 저장소 로드 직후 같은 분기를 다시 적용한다.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -5066,7 +5110,25 @@ fn main() {
                 tracing::info!(locale = locale.code(), "applied stored general.language at boot");
             }
 
+            let hide_dock_at_boot: bool = settings_store
+                .get(settings_keys::GENERAL_HIDE_DOCK_ICON)
+                .unwrap_or(true);
             *state.store.lock().unwrap() = settings_store;
+
+            // ⭐ 이슈 #145 — 저장된 Dock 숨김 값(부재 = true=숨김)을 기동 시 반영한다.
+            // `LSUIElement=true` 번들에서 런타임 `Regular` 전환은
+            // `NSApplication.setActivationPolicy` 가 처리한다(실기기 검증 필요).
+            #[cfg(target_os = "macos")]
+            {
+                let policy = if hide_dock_at_boot {
+                    tauri::ActivationPolicy::Accessory
+                } else {
+                    tauri::ActivationPolicy::Regular
+                };
+                if let Err(e) = app.handle().set_activation_policy(policy) {
+                    tracing::warn!(error = %e, "failed to apply dock icon policy at boot");
+                }
+            }
 
             // ⭐ B-2(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a) — 거울
             // (`general.launchOnLogin`)과 OS 정본을 맞춘다. `login_item::
@@ -6558,13 +6620,15 @@ fn on_front_app_changed(
 }
 
 // ============================================================================
-// F-10 §3.5 — General 탭 백엔드(Launch on login / Hide menu bar icon).
+// F-10 §3.5 — General 탭 백엔드(Launch on login / Hide menu bar icon / Hide Dock icon).
 //
-// `ui/settings.html` 은 두 체크박스를 `data-key="general.launchOnLogin"`/
-// `"general.hideMenuBarIcon"` 로 이미 배선해 두었다 — 값은 범용 `commit(key,
-// value)` 경로를 거쳐 `settings_set` 커맨드로 들어온다(전용 커맨드를 직접 부르지
-// 않는다). 그래서 실제 로직은 여기 `*_internal` 두 함수에 두고, `settings_set` 과
-// 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을 복제하지 않는다.
+// `ui/settings.html` 은 세 체크박스를 `data-key="general.launchOnLogin"`/
+// `"general.hideMenuBarIcon"`/`"general.hideDockIcon"` 로 이미 배선해 두었다 — 값은
+// 범용 `commit(key, value)` 경로를 거쳐 `settings_set` 커맨드로 들어온다(전용 커맨드를
+// 직접 부르지 않는다). 그래서 실제 로직은 여기 `*_internal` 세 함수에 두고,
+// `settings_set` 과 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을
+// 복제하지 않는다. `Hide Dock icon` 만 앱 핸들이 추가로 필요하다(활성화 정책 전환용) —
+// `settings_set` 이 이미 `app: AppHandle` 을 받으므로 그대로 전달한다.
 // ============================================================================
 
 /// `Launch on login` 체크박스 — `login_item::set_enabled` 로 OS 에 등록/해제한 뒤
@@ -6730,6 +6794,47 @@ fn set_hide_menu_bar_icon_internal(state: &Arc<AppState>, on: bool) -> Result<()
 #[tauri::command]
 fn general_set_hide_menu_bar_icon(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
     set_hide_menu_bar_icon_internal(&state, on)
+}
+
+/// 이슈 #145 `Hide Dock icon` 체크박스 — 저장 후 활성화 정책을 즉시 반영한다.
+/// 저장 규약은 `set_hide_menu_bar_icon_internal` 과 같다(값을 그대로 저장 — 부재 =
+/// 숨김이므로 숨김 상태에서 저장 파일에 키가 없어도 된다).
+fn set_hide_dock_icon_internal(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .set(settings_keys::GENERAL_HIDE_DOCK_ICON, &on)
+            .map_err(|e| e.to_string())?;
+    }
+    // `LSUIElement=true` 번들에서 런타임 `Regular` 전환은
+    // `NSApplication.setActivationPolicy` 가 처리한다(실기기 검증 필요).
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if on {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn general_set_hide_dock_icon(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    set_hide_dock_icon_internal(&app, &state, on)
 }
 
 #[cfg(test)]
@@ -7529,7 +7634,7 @@ mod tests {
         assert_eq!(compute_caps_lock_alias(&synthesize, false, false, true), None);
     }
 
-    // preset_options_view() — 팝업 6종 개수(50/48/2/2/4/4)와 labelKey 배정.
+    // preset_options_view() — 팝업 7종 개수(50/48/2/2/3/4/4)와 labelKey 배정.
     #[test]
     fn preset_options_view_has_expected_counts_and_label_keys() {
         let opts = preset_options_view();
@@ -7537,6 +7642,7 @@ mod tests {
         assert_eq!(opts.caps_quick_actions.len(), 48);
         assert_eq!(opts.arrow_key_sets.len(), 2);
         assert_eq!(opts.home_row_schemes.len(), 2);
+        assert_eq!(opts.double_tap_shift_sides.len(), 3);
         assert_eq!(opts.bracket_pairs.len(), 4);
         assert_eq!(opts.paste_triggers.len(), 4);
 
@@ -7585,6 +7691,17 @@ mod tests {
             hyper_trigger.label_key.as_deref(),
             Some("settings.presets.option.paste.hyper")
         );
+
+        // ⭐ 이슈 #143 — side 팝업은 서술형 항목이라 labelKey 를 갖는다(PasteTrigger 관례).
+        let side = opts
+            .double_tap_shift_sides
+            .iter()
+            .find(|o| o.value == "Either")
+            .unwrap();
+        assert_eq!(
+            side.label_key.as_deref(),
+            Some("settings.presets.option.double_tap.either")
+        );
     }
 
     // presets_view() — variant 이름이 저장 형식(serde 기본값)과 일치한다.
@@ -7600,7 +7717,17 @@ mod tests {
         let view = presets_view(&presets);
         assert_eq!(view.caps_lock_remap.target, "Esc");
         assert_eq!(view.caps_home_row.scheme, "SymbolRow");
+        assert_eq!(view.double_tap_shift_side, "Either");
         assert_eq!(view.quick_press_duration_ms, 1000);
+    }
+
+    #[test]
+    fn presets_view_carries_double_tap_shift_side_variant_name() {
+        let presets = PresetSettings {
+            double_tap_shift_side: DoubleTapShiftSide::Left,
+            ..PresetSettings::default()
+        };
+        assert_eq!(presets_view(&presets).double_tap_shift_side, "Left");
     }
 
     // 충돌 응답 JSON 모양 — kind/disableLabelKeys.
@@ -7636,6 +7763,18 @@ mod tests {
         )
         .unwrap();
         assert!(presets.caps_space_enter);
+    }
+
+    #[test]
+    fn validate_and_apply_preset_updates_double_tap_shift_side() {
+        let mut presets = PresetSettings::default();
+        validate_and_apply_preset(
+            &mut presets,
+            keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE,
+            &serde_json::json!("Left"),
+        )
+        .unwrap();
+        assert_eq!(presets.double_tap_shift_side, DoubleTapShiftSide::Left);
     }
 
     #[test]
@@ -8105,6 +8244,8 @@ mod tests {
         let presets_json = obj["presets"].as_object().unwrap();
         assert!(presets_json.contains_key("capsLockRemap"));
         assert!(presets_json.contains_key("quickPressDurationMs"));
+        assert!(presets_json.contains_key("doubleTapShiftSide"));
+        assert_eq!(presets_json["doubleTapShiftSide"], "Either");
         // ⭐ 이슈 #77 — General 탭 Advanced 섹션의 synthesize 체크박스가 이 값을
         // 렌더한다(`$("synthesize-caps-remap").checked = state.presets.
         // synthesizeCapsLockRemap`). 설정 화면은 카탈로그 부재 = 기본값(꺼짐)을
@@ -8113,10 +8254,18 @@ mod tests {
 
         let preset_options_json = obj["presetOptions"].as_object().unwrap();
         assert!(preset_options_json.contains_key("capsRemapTargets"));
+        assert!(preset_options_json.contains_key("doubleTapShiftSides"));
+        assert_eq!(
+            preset_options_json["doubleTapShiftSides"].as_array().unwrap().len(),
+            3
+        );
 
         let general_json = obj["general"].as_object().unwrap();
         assert!(general_json.contains_key("launchOnLogin"));
         assert!(general_json.contains_key("hideMenuBarIcon"));
+        assert!(general_json.contains_key("hideDockIcon"));
+        // 이슈 #145 — 부재 = 숨김이므로 빈 스토어에서는 ☑ 다.
+        assert_eq!(general_json["hideDockIcon"], true);
 
         assert_eq!(obj["lastTab"], "hyperkey"); // 빈 스토어의 기본값
         assert_eq!(obj["saveError"], "디스크 가득 참");
@@ -8262,6 +8411,17 @@ mod tests {
         assert!(store
             .get::<bool>(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
             .unwrap_or(false));
+    }
+
+    // 이슈 #145 — `general.hideDockIcon` 부재 = 숨김(true). `hideMenuBarIcon`(부재 =
+    // ☐)과 극성이 반대다.
+    #[test]
+    fn hide_dock_icon_defaults_to_hidden() {
+        let store = SettingsStore::in_memory();
+        assert!(general_view(&store, false).hide_dock_icon);
+        let mut store = SettingsStore::in_memory();
+        store.set(settings_keys::GENERAL_HIDE_DOCK_ICON, &false).unwrap();
+        assert!(!general_view(&store, false).hide_dock_icon);
     }
 
     // menu_ids 상수들이 서로 다르다 — 오타로 두 메뉴 항목이 같은 id 를 갖는 회귀를 막는다.

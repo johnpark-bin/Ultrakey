@@ -372,6 +372,22 @@ M2 1차 실측이 확정한 사실: **caps lock 은 누를 때만 `flagsChanged`
 >   KeyDown/KeyUp) → 그 이벤트를 down+up 탭으로 판정한다(`Arbiter::d1_bypassed`,
 >   `key-remapping-engine.md` §5 #26). 전역 플래그로 게이트하지 않는 이유: 혼합 상태(외장
 >   정상·내장 미설치)에서 외장의 홀드까지 죽이고, 핫플러그 직후 stale 하다.
+> ⭐ **D-1 보칙 3 — 잠금 화면에서는 매핑을 걷어낸다 (2026-09-26 추가, 이슈 #144).**
+>
+> D-1 은 HID 수준이라 잠금 화면(loginwindow)에서도 유지돼 비밀번호 입력창에서 물리
+> Capslock 이 F18 로 도착해 토글 불가하고, 잠금 중에는 경로 A 탭도 경로 C 토글 수단도
+> 없어 Capslock 상태가 고착한다. 그래서 `ScreenLocked` 시 `DelayedJob::SuspendD1` 을
+> 즉시 예약해 `SharedState::d1_suspended` 를 먼저 세우고 `caps_lock_alias` 를 지운 cfg
+> (`SharedState::path_b_write_cfg` 단일 게이트 — `ReapplyHidMapping`·
+> `Engine::reconfigure`·기동 `reconcile_on_start` 전부 공유)로 전체 재적용해 D-1
+> 엔트리만 걷어낸다(디바이스별 F-17 리맵은 유지). `ScreenUnlocked` 시
+> `session_delay_ms` 뒤 `DelayedJob::ResumeD1` 로 플래그를 내리고 같은 전체 재적용으로
+> D-1 을 되돌린 뒤, 현재 Capslock 상태(`hid_lock::caps_lock_state()`)를
+> `caps_lock_owned_lock` 에 채택한다 — 잠금 중 사용자가 네이티브로 만든 상태를
+> "의도된 잠금"으로 인정해 워치독 #108 안전망(`lifecycle::caps_lock_recovery` —
+> `d1_suspended` 가 참이면 개입하지 않는다)이 해제 직후 되돌리지 않게 하기 위함이다.
+> DidWake 재적용과 ScreenLocked suspend 순서가 뒤집혀도 발화 시점의 플래그가 최종
+> 배열을 결정하므로 결과는 수렴한다.
 
 ⚠️ **검증 기기에서는 이 경로를 실측할 수 없다.** Karabiner-Elements 가 `caps_lock ↔ left_control`
 을 **경로 B 보다도 아래**(가상 HID 장치)에서 맞바꾸고 있어, 우리의 `hidutil` 매핑이 볼 caps lock

@@ -48,6 +48,14 @@ enum DelayedJob {
     /// `None` 이면(디바이스 속성을 읽지 못한 경우, `HotplugEvent::device` 문서 참고)
     /// 전체 재조정으로 대응한다.
     ReapplyHidMapping(Option<DeviceId>),
+    /// ⭐ 이슈 #144 — 화면 잠금 → 즉시 D-1 커널 매핑 제거. `ScreenLocked` 핸들러가
+    /// `schedule(0, …)` 으로 예약한다. `hidutil` 서브프로세스를 옵저버 스레드가
+    /// 아니라 이 스케줄러 스레드에서 돌리기 위함이다 — 이슈 #139 규약(`fire_job` 의
+    /// `ReapplyHidMapping` 주석 참고).
+    SuspendD1,
+    /// ⭐ 이슈 #144 — 화면 잠금 해제 → 지연 뒤 D-1 커널 매핑 재설치 + Capslock 상태
+    /// 채택. `ScreenUnlocked` 핸들러가 `session_delay_ms` 뒤에 예약한다.
+    ResumeD1,
 }
 
 enum SchedulerMsg {
@@ -175,6 +183,37 @@ fn scheduler_loop(
     tracing::debug!("delay scheduler thread exiting");
 }
 
+/// ⭐ 이슈 #144 — 전체 경로 B 재적용 공통 본체. `ReapplyHidMapping(None)`·`SuspendD1`·
+/// `ResumeD1` 세 작업이 공유한다 — cfg 게이트(`SharedState::path_b_write_cfg`)를 거쳐
+/// 잠금 중에는 `caps_lock_alias` 없이 쓰고, `d1_confirmed` 사본을 갱신한 뒤 로그를
+/// 남긴다. (`SuspendD1` 은 호출 전에 플래그를 먼저 세우므로 게이트가 alias 없는 cfg 를
+/// 돌려주고, `ResumeD1` 은 플래그를 먼저 내리므로 전체 cfg 로 돌아간다.)
+fn reapply_all_path_b(shared: &Arc<SharedState>, path_b: &Arc<PathBManager>) {
+    let started = Instant::now();
+    let cfg_full = shared.config.load_full();
+    let cfg = shared.path_b_write_cfg(&cfg_full);
+    let attached = ultrakey_platform::hid_device::list_attached_keyboards();
+    let devices = attached.len();
+    let result = path_b.apply_all(&cfg, &attached);
+    shared
+        .d1_confirmed
+        .store(path_b.d1_confirmed(), Ordering::Release);
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(()) => tracing::info!(
+            elapsed_ms,
+            devices,
+            "Path B (F-17) reapply completed"
+        ),
+        Err(e) => tracing::warn!(
+            error = %e,
+            elapsed_ms,
+            devices,
+            "Path B (F-17) reapply failed"
+        ),
+    }
+}
+
 fn fire_job(
     job: DelayedJob,
     shared: &Arc<SharedState>,
@@ -219,35 +258,89 @@ fn fire_job(
             // (`Engine::reconfigure` 와 동일). 잠금 대기 중 목록이 낡을 수 있지만 그 영향은
             // "방금 뽑힌 디바이스 쓰기 실패 로그 후 계속 / 방금 붙은 디바이스는 자기
             // 핫플러그 재적용이 따로 예약됨" 뿐이라 감수한다.
-            let started = Instant::now();
-            let cfg = shared.config.load_full();
-            let (result, devices) = match &device {
-                Some(dev) => (path_b.apply_device(&cfg, dev), 1usize),
-                None => {
-                    let attached = ultrakey_platform::hid_device::list_attached_keyboards();
-                    let devices = attached.len();
-                    (path_b.apply_all(&cfg, &attached), devices)
+            //
+            // ⭐ 이슈 #144 수렴성 — DidWake(+2000ms 재적용)와 ScreenLocked(즉시 suspend)
+            // 순서가 뒤집혀도 결과가 수렴한다. suspend 는 플래그를 세우고 배열을 다시
+            // 쓰고, reapply 는 발화 시점의 플래그를 읽어 cfg 를 만들기 때문이다 —
+            // 어느 쪽이 나중에 발화하든 그 시점의 잠금 상태가 최종 배열을 결정한다.
+            // ⭐ 이슈 #144 — cfg 는 `SharedState::path_b_write_cfg` 게이트를 거친다.
+            // 잠금 중이면 `caps_lock_alias` 가 지워진 사본으로 써서 D-1 을 되살리지
+            // 않는다(디바이스별 F-17 리맵은 유지된다 — `d1_for` 가 `None` 이면 D-1
+            // 엔트리 없이 합성한다).
+            match &device {
+                Some(dev) => {
+                    let started = Instant::now();
+                    let cfg_full = shared.config.load_full();
+                    let cfg = shared.path_b_write_cfg(&cfg_full);
+                    let result = path_b.apply_device(&cfg, dev);
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    match result {
+                        Ok(()) => tracing::info!(
+                            ?device,
+                            elapsed_ms,
+                            devices = 1usize,
+                            "Path B (F-17) reapply completed"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            ?device,
+                            elapsed_ms,
+                            devices = 1usize,
+                            "Path B (F-17) reapply failed"
+                        ),
+                    }
                 }
-            };
-            shared
-                .d1_confirmed
-                .store(path_b.d1_confirmed(), Ordering::Release);
-            let elapsed_ms = started.elapsed().as_millis() as u64;
-            match result {
-                Ok(()) => tracing::info!(
-                    ?device,
-                    elapsed_ms,
-                    devices,
-                    "Path B (F-17) reapply completed"
-                ),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    ?device,
-                    elapsed_ms,
-                    devices,
-                    "Path B (F-17) reapply failed"
-                ),
+                None => reapply_all_path_b(shared, path_b),
             }
+        }
+        DelayedJob::SuspendD1 => {
+            // ⭐ 이슈 #144 — 화면 잠금 중 D-1 제거. D-1 커널 매핑(`caps lock 0x39 →
+            // F18 0x6D`)은 HID 수준이라 잠금 화면(loginwindow)에서도 유지돼 비밀번호
+            // 입력창에서 물리 Capslock 이 F18 로 도착해 토글 불가하고, 잠금 중 Secure
+            // Event Input 으로 경로 A 탭이 이벤트를 못 받고 경로 C 토글 수단도 없어
+            // Capslock 상태가 고착한다. 그래서 잠금 시 D-1 을 걷어낸다.
+            let cfg_full = shared.config.load_full();
+            let suspended = shared.d1_suspended.load(Ordering::Relaxed);
+            if !crate::lifecycle::d1_suspend_needed(cfg_full.caps_lock_alias.is_some(), suspended)
+            {
+                if cfg_full.caps_lock_alias.is_none() {
+                    tracing::info!(
+                        "D-1 suspend requested but no caps_lock_alias is configured; nothing to remove (issue #144)"
+                    );
+                } else {
+                    tracing::info!(
+                        "D-1 is already suspended; skipping the duplicate suspend (issue #144)"
+                    );
+                }
+                return;
+            }
+            // ⭐ 플래그를 먼저 세운다 — 같은 스레드의 후속 `ReapplyHidMapping` 이
+            // 발화 시점 플래그를 읽으므로, 그 재적용도 alias 없이 나간다(수렴성).
+            shared.d1_suspended.store(true, Ordering::Relaxed);
+            // 게이트가 지금 막 세운 플래그를 보므로 alias 없이 쓴다. 디바이스별 F-17
+            // 리맵은 유지되고 D-1 엔트리만 빠진다(`compose` 가 `d1=None` 으로 불리면
+            // 그렇게 된다 — `path_b.rs` 확인).
+            reapply_all_path_b(shared, path_b);
+            tracing::info!(
+                "D-1 kernel mapping removed for the screen lock; it will be reinstalled on unlock (issue #144)"
+            );
+        }
+        DelayedJob::ResumeD1 => {
+            // ⭐ 이슈 #144 — 화면 잠금 해제 후 D-1 재설치 + Capslock 상태 채택.
+            shared.d1_suspended.store(false, Ordering::Relaxed);
+            reapply_all_path_b(shared, path_b);
+            // ⭐ 잠금 중 사용자가 네이티브로 만든 Capslock 상태를 "의도된 잠금"으로
+            // 채택한다(이슈 #144) — 워치독 #108 안전망이 해제 직후 그것을 되돌리지
+            // 않게 하기 위함이다. suspended 중에는 물리 Capslock 이 네이티브라 관측된
+            // 잠금은 사용자 것이므로, `owned` 에 그대로 반영한다.
+            let observed = ultrakey_platform::hid_lock::caps_lock_state();
+            shared
+                .caps_lock_owned_lock
+                .store(observed == Some(true), Ordering::Relaxed);
+            tracing::info!(
+                observed = ?observed,
+                "D-1 kernel mapping reinstalled after the screen unlock; adopted the current caps lock state (issue #144)"
+            );
         }
     }
 }
@@ -403,6 +496,11 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
         SystemEvent::ScreenLocked => {
             tracing::info!("screen lock notification received; forcing immediate state reset");
             sched.commands().send(EngineCommand::ForceResetState);
+            // ⭐ 이슈 #144 — D-1 커널 매핑을 즉시 걷어낸다. `hidutil` 서브프로세스를
+            // 옵저버 스레드가 아니라 스케줄러 스레드에서 돌리기 위해 `schedule(0, …)`
+            // 으로 예약한다(이슈 #139 규약 — `fire_job` 의 `ReapplyHidMapping` 주석
+            // 참고). 기존 `ForceResetState` 전송은 그대로 유지한다.
+            sched.schedule(0, DelayedJob::SuspendD1);
         }
         SystemEvent::SessionDidResignActive => {
             tracing::info!("session deactivation notification received; forcing immediate state reset");
@@ -431,6 +529,8 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
                 "screen unlock notification received; scheduling a delayed tap recheck"
             );
             sched.schedule(delay, DelayedJob::Recover);
+            // ⭐ 이슈 #144 — 해제 뒤 D-1 재설치 + Capslock 상태 채택(`ResumeD1`).
+            sched.schedule(delay, DelayedJob::ResumeD1);
         }
         SystemEvent::SessionDidBecomeActive => {
             let delay = sched.shared().config.load().timings.session_delay_ms;

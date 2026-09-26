@@ -279,7 +279,7 @@
 | 6 | caps lock | `Caps lock +` [팝업] ` = ◀▼▲▶`(③ 문장 중간 삽입) | 체크박스 + 인라인 팝업(2종) | `H J K L`·`I J K L` | ☐ / `H J K L` | F-08 | `capsHjklArrows`/`capsIjklArrows` |
 | 7 | caps lock | `Caps lock + home row = ` [팝업](③ 문장 끝 부착) | 체크박스 + 인라인 팝업(2종) | `symbol row (A = !)`·`function row (A = F1)` | ☐ / `symbol row (A = !)` | F-08 | `capsHomeSymbol`/`capsHomeFunction` |
 | — | (구분선) | | | | | | |
-| 8 | shift | `Double tap shift = caps lock` | 체크박스 | — | ☐ | F-08 | `doubleShiftToCaps` |
+| 8 | shift | `Double tap shift = caps lock` | 체크박스 + 팝업 3종(클론 고유, 이슈 #143) | `Left shift`·`Right shift`·`Either shift` | ☐ / `Either shift` | F-08 | `doubleShiftToCaps` + `presets.doubleTapShiftSide`(부재 = `Either`) |
 | 9 | shift | `Left shift + right shift = caps lock` | 체크박스 | — | ☐ | F-08 | `leftRightShiftToCaps` |
 | 10 | shift | `Shift + caps lock = caps lock` | 체크박스 | — | ☐ | F-08 | `shiftPlusCapsToCaps` |
 | 11 | shift | `Quick press left or right shift to input corresponding:` | 체크박스 + 팝업(4종) | `( )`·`[ ]`·`{ }`·`< >` | ☐ / `( )` | F-08 | `shiftToBraceEntersString`/`shiftToBraceSelection` |
@@ -304,6 +304,7 @@
 | :--- | :--- |
 | `Remap caps lock to:` (50종) | `esc` · `nothing (disable it)` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F24` |
 | `Quick press caps lock to execute:` (48종 + 구분선 1) | `Seek` · (구분선) · `esc` · `caps lock` · `left control` · `left shift` · `left option` · `left command` · `right control` · `right shift` · `right option` · `right command` · `return (enter)` · `delete (backspace)` · `delete forward` · `tab` · `spacebar` · `home` · `end` · `pageup` · `pagedown` · `left arrow` · `right arrow` · `up arrow` · `down arrow` · `mute` · `volume up` · `volume down` · `F1`…`F20` · `/` |
+| `Double tap shift = caps lock` side(3종, 클론 고유 — 이슈 #143) | `Left shift` · `Right shift` · `Either shift` |
 
 ⭐ `Quick press caps lock to execute:` 의 첫 항목이 `Seek` 다 — quick press 로 Seek 세션을 여는 **세 번째 활성화 경로**(단축키 레코더·`Remap key to Seek:` 리매핑에 이어)가 존재한다. F-01 이 이 사실을 §3(활성화 경로)에 반영해야 한다 — F-09 는 여기서 팝업 선택지로서만 기록한다.
 
@@ -320,6 +321,7 @@
 | — | `v1.66 (66)` | **버튼**(정적 텍스트 아님) | — | 첫 행 우측(항목 1 과 같은 행) | ⭐ **이슈 #87 로 해소.** 버튼 클릭 → About 창 오픈(§9 Q12 추정 방향). 클론 `#version-btn` 도 About 창을 연다(`open_about_window` 커맨드 — `plan/issue-87` §9 #2 유지 결정) | — |
 | 2 | `Check for updates automatically` | 체크박스 | ☐(`SUEnableAutomaticChecks = false` 와 일치) | | F-13 | `SUEnableAutomaticChecks` |
 | 3 | `Hide menu bar icon` | 체크박스 | ☐ | 부제 `When hidden, relaunch from Finder to open.` 종속 | F-10 | — |
+| 3b | `Hide Dock icon`(클론 고유, 이슈 #145) | 체크박스 | **☑(부재 = 숨김)** — ⚠️ `Hide menu bar icon`(기본 ☐)과 극성이 반대다 | `Hide menu bar icon` 바로 아래, why 힌트 행 동반 | F-10 | `general.hideDockIcon` |
 | 4 | `Menu bar icon` | 라벨 + 팝업(2종, 둘 다 **라벨 없는 이미지 항목**) | 기본 선택 `(미확정)` — 에셋 미추출로 어느 쪽이 기본인지 구분 못함 | | F-10 | — |
 | 5 | `Remove Oldest Activation` | 버튼 | — | | F-12 | — |
 | 6 | `Purchase` | 버튼(강조색) | — | | F-12 | — |

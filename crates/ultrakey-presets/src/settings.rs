@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use ultrakey_core::settings::{keys, SettingsStore};
 
-use crate::popups::{ArrowKeySet, BracketPair, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
+use crate::popups::{ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
 
 fn default_remap_caps_target() -> RemapCapsTarget {
     RemapCapsTarget::LeftControl
@@ -28,6 +28,10 @@ fn default_home_row_scheme() -> HomeRowScheme {
 
 fn default_bracket_pair() -> BracketPair {
     BracketPair::Parens
+}
+
+fn default_double_tap_shift_side() -> DoubleTapShiftSide {
+    DoubleTapShiftSide::Either
 }
 
 fn default_paste_trigger() -> PasteTrigger {
@@ -157,6 +161,10 @@ pub struct PresetSettings {
     /// F-08.8.
     #[serde(default)]
     pub double_tap_shift_to_caps: bool,
+    /// F-08.8 팝업 — 어느 쪽 shift 의 더블탭이 토글하는지(이슈 #143, 클론 고유 확장).
+    /// 부재 = `Either`(양쪽, 현행 동작).
+    #[serde(default = "default_double_tap_shift_side")]
+    pub double_tap_shift_side: DoubleTapShiftSide,
     /// F-08.9.
     #[serde(default)]
     pub left_right_shift_to_caps: bool,
@@ -198,6 +206,7 @@ impl Default for PresetSettings {
             caps_hjkl_arrows: CapsHjklArrowsSettings::default(),
             caps_home_row: CapsHomeRowSettings::default(),
             double_tap_shift_to_caps: false,
+            double_tap_shift_side: DoubleTapShiftSide::Either,
             left_right_shift_to_caps: false,
             shift_caps_to_caps: false,
             shift_quick_press_brackets: ShiftQuickPressBracketsSettings::default(),
@@ -250,6 +259,9 @@ impl PresetSettings {
             double_tap_shift_to_caps: store
                 .get(keys::PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS)
                 .unwrap_or_default(),
+            double_tap_shift_side: store
+                .get(keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE)
+                .unwrap_or(DoubleTapShiftSide::Either),
             left_right_shift_to_caps: store
                 .get(keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS)
                 .unwrap_or_default(),
@@ -310,6 +322,7 @@ mod tests {
         assert!(!s.caps_home_row.enabled);
         assert_eq!(s.caps_home_row.scheme, HomeRowScheme::SymbolRow);
         assert!(!s.double_tap_shift_to_caps);
+        assert_eq!(s.double_tap_shift_side, DoubleTapShiftSide::Either);
         assert!(!s.left_right_shift_to_caps);
         assert!(!s.shift_caps_to_caps);
         assert!(!s.shift_quick_press_brackets.enabled);
@@ -350,6 +363,21 @@ mod tests {
     }
 
     #[test]
+    fn from_store_reads_double_tap_shift_side_with_either_default() {
+        let store = SettingsStore::in_memory();
+        assert_eq!(
+            PresetSettings::from_store(&store).double_tap_shift_side,
+            DoubleTapShiftSide::Either
+        );
+        let mut store = SettingsStore::in_memory();
+        store.set(keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE, &DoubleTapShiftSide::Left).unwrap();
+        assert_eq!(
+            PresetSettings::from_store(&store).double_tap_shift_side,
+            DoubleTapShiftSide::Left
+        );
+    }
+
+    #[test]
     fn empty_json_deserializes_to_default() {
         let parsed: PresetSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(parsed, PresetSettings::default());
@@ -366,6 +394,7 @@ mod tests {
             caps_hjkl_arrows: CapsHjklArrowsSettings { enabled: true, key_set: ArrowKeySet::Ijkl },
             caps_home_row: CapsHomeRowSettings { enabled: true, scheme: HomeRowScheme::FunctionRow },
             double_tap_shift_to_caps: true,
+            double_tap_shift_side: DoubleTapShiftSide::Left,
             left_right_shift_to_caps: true,
             shift_caps_to_caps: true,
             shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Angles },
