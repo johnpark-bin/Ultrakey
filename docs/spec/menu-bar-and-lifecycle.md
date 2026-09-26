@@ -286,7 +286,7 @@ PR #17 이 이 기능을 구현했다고 보고하면서 **"등록·해제까지
 
 ※ `Menu bar icon` 팝업 2종의 정체는 `(미확정)` — 항목이 라벨 없는 이미지이고, 에셋(`Assets.car`)은 저작권 경계상 추출하지 않았다 → §9.
 
-> 이 절의 항목들은 `F-09`(환경설정 창 UI)가 실제 렌더링을 소유한다. F-10 은 이 값들이 앱 수명주기(자동 실행, 메뉴바 표시)에 미치는 영향만 다룬다.
+> ⭐ **클론 추가 항목 `Hide Dock icon`(이슈 #145)** — 위 표는 **원본 실측**이라 지우지 않는다. 클론의 `General` 탭은 `Hide menu bar icon` 바로 아래에 `Hide Dock icon` 체크박스(저장 키 `general.hideDockIcon`, **부재 = ☑**)를 하나 더 둔다. 원본은 토글이 없이 항상 숨김(`LSUIElement` 실측)이라 "기본값은 원본과 같고 선택지를 더하는" 갈라짐이다(README **D15**). 번들 선언도 추가한다 — 클론 `Info.plist` 에 `LSUIElement=true` 를 명시해 기동~setup 사이 Dock 순간 노출을 막고, 노출 선택 시에는 런타임 `set_activation_policy(Regular)` 로 전환한다(`NSApplication.setActivationPolicy` 가 처리 — 실기기 검증 필요).
 
 ## 5. 엣지 케이스와 실패 모드
 
@@ -307,7 +307,7 @@ PR #17 이 이 기능을 구현했다고 보고하면서 **"등록·해제까지
 
 ## 6. 필요한 플랫폼 API
 
-- **`NSApplicationActivationPolicyAccessory` / `LSUIElement`**(⭐ 실측 확정) — Dock 아이콘 제거, 앱 스위처 미노출. Tauri 대응: `app.set_activation_policy(ActivationPolicy::Accessory)`(rust-macos-capability-notes.md §2.6, §2.7).
+- **`NSApplicationActivationPolicyAccessory` / `LSUIElement`**(⭐ 실측 확정) — Dock 아이콘 제거, 앱 스위처 미노출. Tauri 대응: `app.set_activation_policy(ActivationPolicy::Accessory)`(rust-macos-capability-notes.md §2.6, §2.7). ⭐ 클론은 번들 선언(`Info.plist` `LSUIElement=true`, 이슈 #145)까지 원본을 추종하고, 부팅 시 저장된 `general.hideDockIcon`(부재 = 숨김)에 따라 `Accessory`/`Regular` 로 분기한다(실기기 검증 필요).
 - **`NSStatusItem`** — 메뉴바 아이콘·메뉴. `tray-icon` 0.24.2 가 macOS 에서 `ns_status_item() -> Option<Retained<NSStatusItem>>` 로 직접 접근을 제공한다(rust-macos-capability-notes.md §2.7). 메뉴 항목별 아이콘이 `tray-icon` 고수준 API 로 되는지는 미확인이며, 필요 시 `objc2-app-kit` 0.3.2 로 `NSMenu`/`NSMenuItem` 을 직접 조작해야 할 수 있다.
 - **`SMAppService.mainApp`(macOS 13+)** — 로그인 시 실행 등록. `smappservice-rs` 0.1.3 또는 `objc2-service-management` 0.3.2(rust-macos-capability-notes.md §1.2, §2.9). ⭐ 원본이 `SMLoginItemSetEnabled` 와 `SMAppService` 를 **둘 다** 링크한다는 사실이 이 이중 경로 판정을 실측으로 뒷받침한다(§3.5).
 - **`SMLoginItemSetEnabled`(macOS 12 폴백)** — 원본이 실제로 쓰는 레거시 API(§3.5). ⭐ 정정: 기존 §6 이 제안했던 "LaunchAgent plist 폴백"은 원본의 실제 구현(헬퍼 앱 + `SMLoginItemSetEnabled`)과 형태가 다르다 — `auto-launch` 0.6.0 이 이 API 를 감싸는지, 직접 `extern "C"` 선언이 필요한지 확인 필요 → §9.
@@ -338,6 +338,7 @@ F-10 이 다루는 기능(활성화 정책 설정, `NSStatusItem` 생성과 메�
 ## 8. 수용 기준
 
 - [ ] 앱 실행 시 Dock 아이콘이 표시되지 않고, `⌘Tab` 앱 스위처 목록에도 나타나지 않는다.
+- [ ] `Hide Dock icon`(클론 고유, 이슈 #145) 체크박스가 `General` 탭에 있고 기본값은 ☑(숨김)이다. 체크를 풀면 Dock·⌘Tab 에 앱이 나타나고, 다시 체크하면 사라진다(런타임 `Regular` 전환 — 실기기 검증 필요).
 - [ ] Accessibility 권한이 없는 상태에서 메뉴를 열면 `unauthorizedMenu` 에 준하는 대체 메뉴(권한 상태 안내 + 권한 요청 진입점)가 표시된다.
 - [ ] 정상 동작 상태에서 메뉴바에 §3.3 이 정한 항목(재현 대상으로 판정된 것들)이 순서대로 표시되고, 최전면 앱 전환 시 `Ignore <앱이름>` 라벨이 실시간으로 갱신된다.
 - [ ] `Ignore <앱이름>` 을 선택하면 그 앱이 최전면일 때 F-07 의 리매핑이 통과(패스스루)된다.

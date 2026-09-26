@@ -652,6 +652,7 @@
           <input type="checkbox" id="p-double-shift" data-key="presets.doubleTapShiftToCaps" />
           <span id="p-double-shift-label"></span>
         </label>
+        <select id="p-double-shift-side" data-key="presets.doubleTapShiftSide"></select>
       </div>
 
       <div class="row">
@@ -1185,6 +1186,14 @@
       <p class="hint why" id="hide-menu-bar-icon-why"></p>
 
       <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="hide-dock-icon" data-key="general.hideDockIcon" />
+          <span id="hide-dock-icon-label"></span>
+        </label>
+      </div>
+      <p class="hint why" id="hide-dock-icon-why"></p>
+
+      <div class="row">
         <label class="checkbox-row disabled">
           <span id="menu-bar-icon-label"></span>
           <select id="menu-bar-icon" disabled><option id="menu-bar-icon-opt"></option></select>
@@ -1538,6 +1547,8 @@ if (!tauri || !tauri.core) {
     $("auto-update-why").textContent = t("settings.general.auto_update.why");
     $("hide-menu-bar-icon-label").textContent = t("settings.general.hide_menu_bar_icon");
     $("hide-menu-bar-icon-why").textContent = t("settings.general.hide_menu_bar_icon.why");
+    $("hide-dock-icon-label").textContent = t("settings.general.hide_dock_icon");
+    $("hide-dock-icon-why").textContent = t("settings.general.hide_dock_icon.why");
     $("menu-bar-icon-label").textContent = t("settings.general.menu_bar_icon");
     $("menu-bar-icon-why").textContent = t("settings.general.menu_bar_icon.why");
     // ⭐ F-12 라이선스 UI — §4.2 의 라벨 전부.
@@ -1689,6 +1700,7 @@ if (!tauri || !tauri.core) {
     fillSelect("p-caps-quick-action", opts.capsQuickActions);
     fillSelect("p-caps-hjkl-set", opts.arrowKeySets);
     fillSelect("p-caps-home-scheme", opts.homeRowSchemes);
+    fillSelect("p-double-shift-side", opts.doubleTapShiftSides);
     fillSelect("p-shift-brackets-pair", opts.bracketPairs);
     fillSelect("p-paste-plain-trigger", opts.pasteTriggers);
   }
@@ -2722,6 +2734,7 @@ if (!tauri || !tauri.core) {
       ["p-caps-quick", "p-caps-quick-action", p.capsQuickPress.enabled, p.capsQuickPress.action],
       ["p-caps-hjkl", "p-caps-hjkl-set", p.capsHjklArrows.enabled, p.capsHjklArrows.keySet],
       ["p-caps-home", "p-caps-home-scheme", p.capsHomeRow.enabled, p.capsHomeRow.scheme],
+      ["p-double-shift", "p-double-shift-side", p.doubleTapShiftToCaps, p.doubleTapShiftSide],
       ["p-shift-brackets", "p-shift-brackets-pair", p.shiftQuickPressBrackets.enabled, p.shiftQuickPressBrackets.pair],
       ["p-paste-plain", "p-paste-plain-trigger", p.pasteWithoutFormatting.enabled, p.pasteWithoutFormatting.trigger],
     ];
@@ -2734,7 +2747,6 @@ if (!tauri || !tauri.core) {
     for (const [id, value] of [
       ["p-caps-space", p.capsSpaceEnter],
       ["p-caps-wasd", p.capsWasdArrows],
-      ["p-double-shift", p.doubleTapShiftToCaps],
       ["p-both-shift", p.leftRightShiftToCaps],
       ["p-shift-caps", p.shiftCapsToCaps],
       ["p-hyper-delete", p.hyperDeleteToForward],
@@ -3207,6 +3219,7 @@ if (!tauri || !tauri.core) {
     $("launch-on-login").checked = state.general.launchOnLogin;
     $("auto-update").checked = state.general.autoUpdate;
     $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;
+    $("hide-dock-icon").checked = state.general.hideDockIcon;
     // ⭐ B-4(이슈 #39, §3.5-a) — `requires-approval` 일 때만 안내 행을 보인다.
     renderHiddenNote(
       "launch-on-login-requires-approval",

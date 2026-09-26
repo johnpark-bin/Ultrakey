@@ -77,6 +77,9 @@ pub const PRESETS_CAPS_HOME_ROW_ENABLED: &str = "presets.capsHomeRow.enabled";
 pub const PRESETS_CAPS_HOME_ROW_SCHEME: &str = "presets.capsHomeRow.scheme";
 /// F-08.8 `Double tap shift = caps lock` — 체크박스.
 pub const PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS: &str = "presets.doubleTapShiftToCaps";
+/// F-08.8 — 팝업(3종 shift 쪽, 이슈 #143 클론 고유 확장). **부재 = `Either`(양쪽,
+/// 현행 동작)** — F-15 "부재 = 기본값".
+pub const PRESETS_DOUBLE_TAP_SHIFT_SIDE: &str = "presets.doubleTapShiftSide";
 /// F-08.9 `Left shift + right shift = caps lock` — 체크박스.
 pub const PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS: &str = "presets.leftRightShiftToCaps";
 /// F-08.10 `Shift + caps lock = caps lock` — 체크박스.
@@ -271,6 +274,7 @@ pub fn all() -> &'static [&'static str] {
         PRESETS_CAPS_HOME_ROW_ENABLED,
         PRESETS_CAPS_HOME_ROW_SCHEME,
         PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS,
+        PRESETS_DOUBLE_TAP_SHIFT_SIDE,
         PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS,
         PRESETS_SHIFT_CAPS_TO_CAPS,
         PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED,
