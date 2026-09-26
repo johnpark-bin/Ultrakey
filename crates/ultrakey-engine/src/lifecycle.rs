@@ -218,6 +218,10 @@ pub fn reconfigure_tap_decision(
 ///   modifier 소스로 배정된 동안). `false` 면 캡스락은 여전히 사용자가 직접 켜고 끄는
 ///   평범한 키이므로 안전망이 개입하지 않는다 — 이 검사를 가장 먼저 두어 D-1 비활성
 ///   구성에서는 `caps_lock_state()`(mach 호출)조차 부르지 않는다.
+/// - `d1_suspended` — ⭐ 이슈 #144. `SharedState::d1_suspended`(화면 잠금 동안 D-1
+///   커널 매핑을 걷어낸 상태). 참인 동안 물리 Capslock 은 네이티브 키로 돌아가 있어
+///   관측된 잠금은 사용자가 잠금 화면에서 의도적으로 만든 것일 수 있으므로 안전망이
+///   개입하지 않는다.
 /// - `observed` — 이번 폴링에서 읽은 `caps_lock_state()`. 읽기 자체가 실패하면(`None`)
 ///   개입하지 않는다 — 실패를 "켜짐"으로 추정해 끄려고 시도하면 성공한 잠금까지
 ///   흔들 수 있다.
@@ -234,8 +238,24 @@ pub fn reconfigure_tap_decision(
 /// — 사용자가 그 잠금을 오래 켜 두어도 안전망이 되돌리면 안 되므로(명세 §5 #20 이
 /// 이미 기각한 "시간 기반 자동 해제"와 같은 문제가 생긴다), `owned` 는 우리가 다음에
 /// 그 상태를 off 로 되돌리거나 다시 on 시킬 때까지 유효한 불리언이다.
-pub fn caps_lock_recovery(alias_active: bool, observed: Option<bool>, owned: bool) -> bool {
-    alias_active && observed == Some(true) && !owned
+pub fn caps_lock_recovery(
+    alias_active: bool,
+    d1_suspended: bool,
+    observed: Option<bool>,
+    owned: bool,
+) -> bool {
+    alias_active && !d1_suspended && observed == Some(true) && !owned
+}
+
+/// ⭐ 이슈 #144 — D-1 suspend 발화 판정 — 순수 함수. `fire_job` 의 `SuspendD1` 분기가
+/// 이 결과를 물어보고, 거짓이면 쓰기 없이 로그만 남긴다(no-op).
+///
+/// - `alias_active` — `EngineConfig::caps_lock_alias.is_some()`. 거짓이면 걷어낼 D-1
+///   자체가 없으므로 suspend 는 no-op 이다.
+/// - `suspended` — `SharedState::d1_suspended`. 이미 참이면 중복 suspend 는 no-op 이다
+///   (같은 효과를 두 번 쓰지 않는다 — `hidutil` 서브프로세스 1회를 아낀다).
+pub fn d1_suspend_needed(alias_active: bool, suspended: bool) -> bool {
+    alias_active && !suspended
 }
 
 /// §3-a 재시작 디바운스 판정 — 순수 함수(시간을 인자로 주입해 테스트 가능).
@@ -495,34 +515,66 @@ mod tests {
         );
     }
 
-    // --- 이슈 #108 자동 복구 안전망 판정 — (alias_active, observed, owned) 전수 ---
+    // --- 이슈 #108 자동 복구 안전망 판정 — (alias_active, d1_suspended, observed, owned) 전수 ---
 
     #[test]
     fn recovery_fires_only_when_alias_active_and_locked_and_not_owned() {
-        assert!(caps_lock_recovery(true, Some(true), false));
+        assert!(caps_lock_recovery(true, false, Some(true), false));
     }
 
     #[test]
     fn recovery_does_not_revert_our_own_intended_lock() {
         // ⭐ Double tap shift·Left/right shift·Shift + caps lock = caps lock 류 경로 C
         // 규칙이 방금 낸 의도된 잠금 — 이 케이스가 불리언 설계의 충분성을 증명한다.
-        assert!(!caps_lock_recovery(true, Some(true), true));
+        assert!(!caps_lock_recovery(true, false, Some(true), true));
     }
 
     #[test]
     fn recovery_skips_when_d1_not_installed() {
         // caps lock 이 modifier 소스가 아니면 평범한 키다 — 안전망이 개입하지 않는다.
-        assert!(!caps_lock_recovery(false, Some(true), false));
+        assert!(!caps_lock_recovery(false, false, Some(true), false));
     }
 
     #[test]
     fn recovery_skips_when_not_locked() {
-        assert!(!caps_lock_recovery(true, Some(false), false));
+        assert!(!caps_lock_recovery(true, false, Some(false), false));
     }
 
     #[test]
     fn recovery_skips_when_read_failed() {
         // 읽기 실패를 "켜짐"으로 추정하지 않는다 — 성공한 잠금까지 흔들 위험을 피한다.
-        assert!(!caps_lock_recovery(true, None, false));
+        assert!(!caps_lock_recovery(true, false, None, false));
+    }
+
+    // --- 이슈 #144 — 잠금 중 D-1 suspend 게이트 ---
+
+    #[test]
+    fn recovery_skips_while_d1_suspended_even_if_locked() {
+        // ⭐ 잠금 화면에서 사용자가 네이티브로 켠 Capslock 은 사용자 것이므로 건드리지
+        // 않는다 — D-1 을 걷어낸 동안에는 물리 Capslock 이 네이티브라 관측된 잠금이
+        // "그 밖의 모든 잠금"(이슈 #108 원인 (c))이 아니다.
+        assert!(!caps_lock_recovery(true, true, Some(true), false));
+    }
+
+    #[test]
+    fn recovery_resumes_after_d1_unsuspended() {
+        // 해제 후 플래그가 내려가면 같은 관측에 다시 개입한다(수렴성).
+        assert!(caps_lock_recovery(true, false, Some(true), false));
+        assert!(!caps_lock_recovery(true, true, Some(true), false));
+    }
+
+    #[test]
+    fn suspend_fires_only_when_alias_configured_and_not_yet_suspended() {
+        assert!(d1_suspend_needed(true, false));
+    }
+
+    #[test]
+    fn suspend_skips_when_no_alias_to_remove() {
+        assert!(!d1_suspend_needed(false, false));
+    }
+
+    #[test]
+    fn suspend_skips_when_already_suspended() {
+        assert!(!d1_suspend_needed(true, true));
     }
 }

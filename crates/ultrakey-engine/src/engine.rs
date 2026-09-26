@@ -196,21 +196,27 @@ impl Engine {
             // ⭐ F-17 — 재조정은 이제 디바이스별이다(`docs/dev/architecture.md` §7.1).
             // 붙어 있는 키보드 목록을 한 번 얻어(`list_attached_keyboards()`) 넘긴다 —
             // `PathBManager` 는 스스로 이 함수를 부르지 않는다(테스트에서 목록을 주입할
-            // 수 있어야 하기 때문, CONTRACT.md 부록 B.4). `config` 를 `SharedState::new`
-            // 로 옮기기 *전에* 재조정해야 한다(그 호출이 값을 소비한다).
+            // 수 있어야 하기 때문, CONTRACT.md 부록 B.4).
             let attached = ultrakey_platform::hid_device::list_attached_keyboards();
             let migration: Option<Box<dyn GlobalD1Migration>> =
                 Some(Box::new(HidutilGlobalMigration));
             let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
-            if let Err(e) = path_b.reconcile_on_start(&config, &attached) {
+            // ⭐ 이슈 #144 — 기동 재조정도 `SharedState::path_b_write_cfg` 단일 게이트를
+            // 거친다. 기동 직후 `d1_suspended` 는 항상 거짓이라 이 자리에서는 항등
+            // 변환이지만, 경로 B 쓰기가 게이트를 우회하는 지점이 하나도 없게 전
+            // 호출부가 같은 헬퍼를 공유한다. `SharedState::new` 가 값을 소비하므로
+            // 먼저 만들고 스냅샷에 게이트를 적용한다.
+            let shared = SharedState::new(config, gate);
+            let cfg_snapshot = shared.config.load_full();
+            let write_cfg = shared.path_b_write_cfg(&cfg_snapshot);
+            if let Err(e) = path_b.reconcile_on_start(&write_cfg, &attached) {
                 tracing::warn!(error = %e, "Path B reconciliation check failed at startup");
             }
-
-            let shared = SharedState::new(config, gate);
             // ⭐ 이슈 #110 — 되읽기 확인 결과를 게시한다(앱 상태 표시용).
             shared
                 .d1_confirmed
                 .store(path_b.d1_confirmed(), Ordering::Release);
+
             let on_event: Arc<dyn Fn(EngineEvent) + Send + Sync> = Arc::from(on_event);
             let tap_state = Arc::new(AtomicTapState::new(TapState::NotInstalled));
             let health_probe_slot: Arc<ArcSwapOption<TapHealthProbe>> =
@@ -288,8 +294,11 @@ impl Engine {
     /// ⭐ 이슈 #139 — `PathBManager` 내부 Mutex 가 이 호출과 지연 스케줄러 스레드의
     /// 재적용을 직렬화한다(`path_b.rs` 구조체 문서 참고).
     pub fn reconfigure(&self, config: EngineConfig) {
+        // ⭐ 이슈 #144 — 잠금 중 설정 변경이 D-1 을 되살리지 않게 같은 게이트를 거친다.
+        // `path_b_write_cfg` 는 `d1_suspended` 가 참이면 alias 를 지운 사본을 준다.
+        let write_cfg = self.shared.path_b_write_cfg(&config);
         let attached = ultrakey_platform::hid_device::list_attached_keyboards();
-        if let Err(e) = self.path_b.apply_all(&config, &attached) {
+        if let Err(e) = self.path_b.apply_all(&write_cfg, &attached) {
             tracing::warn!(error = %e, "Path B (F-17 per-device array) reapply failed");
         }
         self.shared.config.store(Arc::new(config));

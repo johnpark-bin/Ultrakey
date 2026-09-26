@@ -81,11 +81,19 @@ fn watchdog_loop(
         // 설치되지 않은 구성(caps lock 이 modifier 소스가 아님)에서는
         // `caps_lock_state()`(mach 왕복 1회)조차 부르지 않는다 — 새 타이머를 만들지
         // 않고 이미 있는 폴링 주기(`watchdog_poll_ms`)에 얹는다.
+        // ⭐ 이슈 #144 — suspended 중에는 물리 Capslock 이 네이티브라 관측된 잠금은
+        // 사용자 것이다. `caps_lock_recovery` 가 `d1_suspended` 를 보면 개입하지
+        // 않으므로, 여기서도 같은 플래그를 읽어 넘긴다. 검사는 `alias_active` 다음에
+        // 두어 D-1 비활성 구성에서는 mach 호출을 건너뛰는 기존 최적화를 유지한다.
         let alias_active = shared.config.load().caps_lock_alias.is_some();
         if alias_active {
+            let d1_suspended = shared.d1_suspended.load(Ordering::Relaxed);
+            if d1_suspended {
+                continue;
+            }
             let observed = ultrakey_platform::hid_lock::caps_lock_state();
             let owned = shared.caps_lock_owned_lock.load(Ordering::Relaxed);
-            if crate::lifecycle::caps_lock_recovery(alias_active, observed, owned) {
+            if crate::lifecycle::caps_lock_recovery(alias_active, d1_suspended, observed, owned) {
                 tracing::warn!(
                     "watchdog: caps lock hardware lock observed without a matching \
                      Effect::ToggleCapsLock; reverting it (issue #108 safety net)"
