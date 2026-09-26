@@ -109,6 +109,8 @@
   "settings.general.auto_update.why": "48 時間ごとにバックグラウンドで新しいバージョンを確認します。署名検証に合格したアップデートのみインストールされます。",
   "settings.general.hide_menu_bar_icon": "メニューバーアイコンを非表示にする",
   "settings.general.hide_menu_bar_icon.why": "アイコンを非表示にした場合、メニューを再度開くには Finder から Ultrakey を再起動してください。",
+  "settings.general.hide_dock_icon": "Dock アイコンを非表示にする",
+  "settings.general.hide_dock_icon.why": "Ultrakey はバックグラウンドで動作します。非表示にすると Dock や ⌘Tab に表示されなくなりますが、メニューバーアイコンは引き続き使えます。",
   "settings.general.menu_bar_icon": "メニューバーアイコンのスタイル",
   "settings.general.menu_bar_icon.why": "メニューバーアイコンはまだありません — F-10、M2 フェーズ2。",
   "settings.general.license": "ライセンス",

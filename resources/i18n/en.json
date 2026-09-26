@@ -109,6 +109,8 @@
   "settings.general.auto_update.why": "Ultrakey checks for a new version in the background every 48 hours. Updates are verified against a Sparkle security key before they are installed.",
   "settings.general.hide_menu_bar_icon": "Keep the menu bar icon out of sight",
   "settings.general.hide_menu_bar_icon.why": "With the icon hidden, relaunch Ultrakey from Finder to get the menu back.",
+  "settings.general.hide_dock_icon": "Hide Dock icon",
+  "settings.general.hide_dock_icon.why": "Ultrakey runs in the background. When hidden, the app never appears in the Dock or ⌘Tab; the menu bar icon stays available.",
   "settings.general.menu_bar_icon": "Menu bar icon style",
   "settings.general.menu_bar_icon.why": "There's no menu bar icon yet — F-10, M2 phase 2.",
   "settings.general.license": "License",

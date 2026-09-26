@@ -109,6 +109,8 @@
   "settings.general.auto_update.why": "每 48 小时在后台检查一次新版本。只有通过签名验证的更新才会被安装。",
   "settings.general.hide_menu_bar_icon": "在菜单栏中隐藏图标",
   "settings.general.hide_menu_bar_icon.why": "图标隐藏后,需要从 Finder 重新打开 Ultrakey 才能找回菜单。",
+  "settings.general.hide_dock_icon": "在程序坞中隐藏图标",
+  "settings.general.hide_dock_icon.why": "Ultrakey 在后台运行。隐藏后,该应用不会出现在程序坞或 ⌘Tab 中;菜单栏图标仍可使用。",
   "settings.general.menu_bar_icon": "菜单栏图标样式",
   "settings.general.menu_bar_icon.why": "目前还没有菜单栏图标——F-10、M2 第二阶段。",
   "settings.general.license": "许可证",

@@ -1186,6 +1186,14 @@
       <p class="hint why" id="hide-menu-bar-icon-why"></p>
 
       <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="hide-dock-icon" data-key="general.hideDockIcon" />
+          <span id="hide-dock-icon-label"></span>
+        </label>
+      </div>
+      <p class="hint why" id="hide-dock-icon-why"></p>
+
+      <div class="row">
         <label class="checkbox-row disabled">
           <span id="menu-bar-icon-label"></span>
           <select id="menu-bar-icon" disabled><option id="menu-bar-icon-opt"></option></select>
@@ -1539,6 +1547,8 @@ if (!tauri || !tauri.core) {
     $("auto-update-why").textContent = t("settings.general.auto_update.why");
     $("hide-menu-bar-icon-label").textContent = t("settings.general.hide_menu_bar_icon");
     $("hide-menu-bar-icon-why").textContent = t("settings.general.hide_menu_bar_icon.why");
+    $("hide-dock-icon-label").textContent = t("settings.general.hide_dock_icon");
+    $("hide-dock-icon-why").textContent = t("settings.general.hide_dock_icon.why");
     $("menu-bar-icon-label").textContent = t("settings.general.menu_bar_icon");
     $("menu-bar-icon-why").textContent = t("settings.general.menu_bar_icon.why");
     // ⭐ F-12 라이선스 UI — §4.2 의 라벨 전부.
@@ -3209,6 +3219,7 @@ if (!tauri || !tauri.core) {
     $("launch-on-login").checked = state.general.launchOnLogin;
     $("auto-update").checked = state.general.autoUpdate;
     $("hide-menu-bar-icon").checked = state.general.hideMenuBarIcon;
+    $("hide-dock-icon").checked = state.general.hideDockIcon;
     // ⭐ B-4(이슈 #39, §3.5-a) — `requires-approval` 일 때만 안내 행을 보인다.
     renderHiddenNote(
       "launch-on-login-requires-approval",

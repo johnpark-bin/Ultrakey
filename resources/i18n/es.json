@@ -109,6 +109,8 @@
   "settings.general.auto_update.why": "Comprueba si hay una nueva versión cada 48 horas en segundo plano. Solo se instalan actualizaciones verificadas por firma.",
   "settings.general.hide_menu_bar_icon": "Mantener oculto el icono de la barra de menús",
   "settings.general.hide_menu_bar_icon.why": "Con el icono oculto, vuelve a abrir Ultrakey desde Finder para recuperar el menú.",
+  "settings.general.hide_dock_icon": "Ocultar el icono del Dock",
+  "settings.general.hide_dock_icon.why": "Ultrakey se ejecuta en segundo plano. Cuando está oculto, la app nunca aparece en el Dock ni en ⌘Tab; el icono de la barra de menús sigue disponible.",
   "settings.general.menu_bar_icon": "Estilo del icono de la barra de menús",
   "settings.general.menu_bar_icon.why": "Todavía no hay icono de barra de menús — F-10, M2 fase 2.",
   "settings.general.license": "Licencia",

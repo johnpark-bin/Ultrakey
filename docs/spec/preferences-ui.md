@@ -321,6 +321,7 @@
 | — | `v1.66 (66)` | **버튼**(정적 텍스트 아님) | — | 첫 행 우측(항목 1 과 같은 행) | ⭐ **이슈 #87 로 해소.** 버튼 클릭 → About 창 오픈(§9 Q12 추정 방향). 클론 `#version-btn` 도 About 창을 연다(`open_about_window` 커맨드 — `plan/issue-87` §9 #2 유지 결정) | — |
 | 2 | `Check for updates automatically` | 체크박스 | ☐(`SUEnableAutomaticChecks = false` 와 일치) | | F-13 | `SUEnableAutomaticChecks` |
 | 3 | `Hide menu bar icon` | 체크박스 | ☐ | 부제 `When hidden, relaunch from Finder to open.` 종속 | F-10 | — |
+| 3b | `Hide Dock icon`(클론 고유, 이슈 #145) | 체크박스 | **☑(부재 = 숨김)** — ⚠️ `Hide menu bar icon`(기본 ☐)과 극성이 반대다 | `Hide menu bar icon` 바로 아래, why 힌트 행 동반 | F-10 | `general.hideDockIcon` |
 | 4 | `Menu bar icon` | 라벨 + 팝업(2종, 둘 다 **라벨 없는 이미지 항목**) | 기본 선택 `(미확정)` — 에셋 미추출로 어느 쪽이 기본인지 구분 못함 | | F-10 | — |
 | 5 | `Remove Oldest Activation` | 버튼 | — | | F-12 | — |
 | 6 | `Purchase` | 버튼(강조색) | — | | F-12 | — |

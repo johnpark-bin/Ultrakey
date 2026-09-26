@@ -16,7 +16,8 @@
 //!    번 처리되기 때문이다.
 //! 2. 로케일 결정 → 문자열 카탈로그(D4: ko + en)
 //! 3. ⭐ Accessory 앱으로 전환 — Dock 아이콘·⌘Tab 미노출(`menu-bar-and-lifecycle.md`
-//!    §3, 원본 `LSUIElement = true` 실측에 대응)
+//!    §3, 원본 `LSUIElement = true` 실측에 대응). 이슈 #145 부터는 저장된
+//!    `general.hideDockIcon`(부재 = 숨김)에 따라 `Accessory`/`Regular` 로 분기한다.
 //! 4. ⭐ 설정 저장소 로드(F-15) — "부재 = 기본값" 규약으로 `HyperkeySettings` 조립.
 //!    같은 자리에서 `general.disabledApps` 를 읽어 `AppGateController` 를 복원한다.
 //! 5. F-11 권한 감시 시작 → 권한이 생기면 F-07 엔진 시작. 메뉴바가 생긴 뒤로는
@@ -126,6 +127,10 @@ mod settings_keys {
     pub const GENERAL_LAUNCH_ON_LOGIN: &str = "general.launchOnLogin";
     /// F-10 §3 `Hide menu bar icon` 체크박스.
     pub const GENERAL_HIDE_MENU_BAR_ICON: &str = "general.hideMenuBarIcon";
+    /// 이슈 #145 `Hide Dock icon` 체크박스. **부재 = `true`(숨김)** — 원본이 토글 없이
+    /// 항상 숨김(`LSUIElement` 실측)이므로, 클론의 출고 기본값도 숨김이다(F-15
+    /// "부재 = 기본값" — 부재 시 숨김이므로 저장 파일에 키가 없어도 된다).
+    pub const GENERAL_HIDE_DOCK_ICON: &str = "general.hideDockIcon";
     /// ⭐ `General` 탭 언어 선택 팝업(D6, 이슈 #39,
     /// `localization-and-input-sources.md` §3.1.2-a). **부재 = 시스템 언어를
     /// 따른다**(F-15 "부재 = 기본값") — `System` 을 고르면 이 키 자체를 지운다.
@@ -632,6 +637,10 @@ struct GeneralView {
     /// 보낸다. `requires-approval` 일 때만 프런트가 안내 행을 보인다.
     launch_on_login_status: String,
     hide_menu_bar_icon: bool,
+    /// 이슈 #145 `Hide Dock icon` — **부재 = `true`(숨김)**. `hide_menu_bar_icon`(부재
+    /// = ☐)과 극성이 반대이므로 `unwrap_or(false)` 를 쓰면 출고 기본값을 조용히
+    /// 어긴다 — 반드시 `unwrap_or(true)` 다.
+    hide_dock_icon: bool,
     /// ⭐ 저장된 `general.language`(D6, 이슈 #39). `None` = "시스템 설정 따름"
     /// (키 부재 또는 알 수 없는 값 — §3.1.2-a "폴백"). 언어 선택 팝업의 초기값에
     /// 쓴다.
@@ -676,6 +685,7 @@ fn general_view(store: &SettingsStore, auto_update: bool) -> GeneralView {
         hide_menu_bar_icon: store
             .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
             .unwrap_or(false),
+        hide_dock_icon: store.get(settings_keys::GENERAL_HIDE_DOCK_ICON).unwrap_or(true),
         language: resolve_stored_language(store).map(|locale| locale.code().to_string()),
         auto_update,
     }
@@ -2268,9 +2278,10 @@ fn reconfigure_trackpad(state: &Arc<AppState>, hyperkey: &HyperkeySettings) -> R
 /// 컨트롤 하나가 바뀔 때마다 호출된다(§3.7 "적용 버튼 없음" — 즉시 반영).
 ///
 /// `key` 접두사로 세 경로로 갈린다:
-/// - `general.launchOnLogin`/`general.hideMenuBarIcon` — F-10 이 이미 만든
-///   로직(`set_launch_on_login_internal`/`set_hide_menu_bar_icon_internal`)을
-///   그대로 재사용한다. hyperkey/presets 도, 엔진도 건드리지 않는다.
+/// - `general.launchOnLogin`/`general.hideMenuBarIcon`/`general.hideDockIcon` — F-10 이
+///   이미 만든 로직(`set_launch_on_login_internal`/`set_hide_menu_bar_icon_internal`/
+///   `set_hide_dock_icon_internal`)을 그대로 재사용한다. hyperkey/presets 도, 엔진도
+///   건드리지 않는다.
 /// - `presets.*` — [`settings_set_preset`](충돌 감지 → 적용 → 엔진 반영 → 저장).
 /// - 그 밖(`hyperkey.*`) — 순서를 반드시 지킨다: 1) `key` 검증 2) 메모리 갱신
 ///   3) **엔진 반영**(저장 성공 여부와 무관하게 먼저 한다 — D-B: 로그아웃 시
@@ -2295,6 +2306,13 @@ fn settings_set(
             .as_bool()
             .ok_or_else(|| format!("{key} must be a boolean"))?;
         set_hide_menu_bar_icon_internal(&state, on)?;
+        return current_settings_state(&state);
+    }
+    if key == settings_keys::GENERAL_HIDE_DOCK_ICON {
+        let on = value
+            .as_bool()
+            .ok_or_else(|| format!("{key} must be a boolean"))?;
+        set_hide_dock_icon_internal(&app, &state, on)?;
         return current_settings_state(&state);
     }
     if key == settings_keys::GENERAL_LANGUAGE {
@@ -4961,6 +4979,7 @@ fn main() {
             settings_resolve_conflict,
             general_set_launch_on_login,
             general_set_hide_menu_bar_icon,
+            general_set_hide_dock_icon,
             open_keyboard_settings,
             keyboard_fn_state,
             settings_export,
@@ -4985,7 +5004,12 @@ fn main() {
             seek_set_query,
         ])
         .setup(move |app| {
-            // 3) ⭐ Accessory 앱 — Dock 아이콘 없음, ⌘Tab 에 안 나타남.
+            // 3) ⭐ 이슈 #145 — 저장된 `general.hideDockIcon`(부재 = true=숨김)에 따라
+            // 활성화 정책을 분기한다. `Info.plist` 의 `LSUIElement=true` 가 기동~setup
+            // 사이 Dock 순간 노출을 막는 번들 선언이고, 여기서의 `Regular` 전환은
+            // `NSApplication.setActivationPolicy` 가 런타임에 Dock 을 되돌린다(실기기 검증 필요).
+            // setup 클로저 시점에는 `state.store` 가 아직 `in_memory()` 자리표시자라
+            // 여기서 직접 읽지 않고, 아래 설정 저장소 로드 직후 같은 분기를 다시 적용한다.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -5086,7 +5110,25 @@ fn main() {
                 tracing::info!(locale = locale.code(), "applied stored general.language at boot");
             }
 
+            let hide_dock_at_boot: bool = settings_store
+                .get(settings_keys::GENERAL_HIDE_DOCK_ICON)
+                .unwrap_or(true);
             *state.store.lock().unwrap() = settings_store;
+
+            // ⭐ 이슈 #145 — 저장된 Dock 숨김 값(부재 = true=숨김)을 기동 시 반영한다.
+            // `LSUIElement=true` 번들에서 런타임 `Regular` 전환은
+            // `NSApplication.setActivationPolicy` 가 처리한다(실기기 검증 필요).
+            #[cfg(target_os = "macos")]
+            {
+                let policy = if hide_dock_at_boot {
+                    tauri::ActivationPolicy::Accessory
+                } else {
+                    tauri::ActivationPolicy::Regular
+                };
+                if let Err(e) = app.handle().set_activation_policy(policy) {
+                    tracing::warn!(error = %e, "failed to apply dock icon policy at boot");
+                }
+            }
 
             // ⭐ B-2(이슈 #39, `menu-bar-and-lifecycle.md` §3.5-a) — 거울
             // (`general.launchOnLogin`)과 OS 정본을 맞춘다. `login_item::
@@ -6578,13 +6620,15 @@ fn on_front_app_changed(
 }
 
 // ============================================================================
-// F-10 §3.5 — General 탭 백엔드(Launch on login / Hide menu bar icon).
+// F-10 §3.5 — General 탭 백엔드(Launch on login / Hide menu bar icon / Hide Dock icon).
 //
-// `ui/settings.html` 은 두 체크박스를 `data-key="general.launchOnLogin"`/
-// `"general.hideMenuBarIcon"` 로 이미 배선해 두었다 — 값은 범용 `commit(key,
-// value)` 경로를 거쳐 `settings_set` 커맨드로 들어온다(전용 커맨드를 직접 부르지
-// 않는다). 그래서 실제 로직은 여기 `*_internal` 두 함수에 두고, `settings_set` 과
-// 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을 복제하지 않는다.
+// `ui/settings.html` 은 세 체크박스를 `data-key="general.launchOnLogin"`/
+// `"general.hideMenuBarIcon"`/`"general.hideDockIcon"` 로 이미 배선해 두었다 — 값은
+// 범용 `commit(key, value)` 경로를 거쳐 `settings_set` 커맨드로 들어온다(전용 커맨드를
+// 직접 부르지 않는다). 그래서 실제 로직은 여기 `*_internal` 세 함수에 두고,
+// `settings_set` 과 아래 전용 `#[tauri::command]` 양쪽이 그 함수를 부른다 — 로직을
+// 복제하지 않는다. `Hide Dock icon` 만 앱 핸들이 추가로 필요하다(활성화 정책 전환용) —
+// `settings_set` 이 이미 `app: AppHandle` 을 받으므로 그대로 전달한다.
 // ============================================================================
 
 /// `Launch on login` 체크박스 — `login_item::set_enabled` 로 OS 에 등록/해제한 뒤
@@ -6750,6 +6794,47 @@ fn set_hide_menu_bar_icon_internal(state: &Arc<AppState>, on: bool) -> Result<()
 #[tauri::command]
 fn general_set_hide_menu_bar_icon(state: State<'_, Arc<AppState>>, on: bool) -> Result<(), String> {
     set_hide_menu_bar_icon_internal(&state, on)
+}
+
+/// 이슈 #145 `Hide Dock icon` 체크박스 — 저장 후 활성화 정책을 즉시 반영한다.
+/// 저장 규약은 `set_hide_menu_bar_icon_internal` 과 같다(값을 그대로 저장 — 부재 =
+/// 숨김이므로 숨김 상태에서 저장 파일에 키가 없어도 된다).
+fn set_hide_dock_icon_internal(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+    on: bool,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().map_err(|e| e.to_string())?;
+        store
+            .set(settings_keys::GENERAL_HIDE_DOCK_ICON, &on)
+            .map_err(|e| e.to_string())?;
+    }
+    // `LSUIElement=true` 번들에서 런타임 `Regular` 전환은
+    // `NSApplication.setActivationPolicy` 가 처리한다(실기기 검증 필요).
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if on {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn general_set_hide_dock_icon(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    on: bool,
+) -> Result<(), String> {
+    set_hide_dock_icon_internal(&app, &state, on)
 }
 
 #[cfg(test)]
@@ -8169,10 +8254,18 @@ mod tests {
 
         let preset_options_json = obj["presetOptions"].as_object().unwrap();
         assert!(preset_options_json.contains_key("capsRemapTargets"));
+        assert!(preset_options_json.contains_key("doubleTapShiftSides"));
+        assert_eq!(
+            preset_options_json["doubleTapShiftSides"].as_array().unwrap().len(),
+            3
+        );
 
         let general_json = obj["general"].as_object().unwrap();
         assert!(general_json.contains_key("launchOnLogin"));
         assert!(general_json.contains_key("hideMenuBarIcon"));
+        assert!(general_json.contains_key("hideDockIcon"));
+        // 이슈 #145 — 부재 = 숨김이므로 빈 스토어에서는 ☑ 다.
+        assert_eq!(general_json["hideDockIcon"], true);
 
         assert_eq!(obj["lastTab"], "hyperkey"); // 빈 스토어의 기본값
         assert_eq!(obj["saveError"], "디스크 가득 참");
@@ -8318,6 +8411,17 @@ mod tests {
         assert!(store
             .get::<bool>(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
             .unwrap_or(false));
+    }
+
+    // 이슈 #145 — `general.hideDockIcon` 부재 = 숨김(true). `hideMenuBarIcon`(부재 =
+    // ☐)과 극성이 반대다.
+    #[test]
+    fn hide_dock_icon_defaults_to_hidden() {
+        let store = SettingsStore::in_memory();
+        assert!(general_view(&store, false).hide_dock_icon);
+        let mut store = SettingsStore::in_memory();
+        store.set(settings_keys::GENERAL_HIDE_DOCK_ICON, &false).unwrap();
+        assert!(!general_view(&store, false).hide_dock_icon);
     }
 
     // menu_ids 상수들이 서로 다르다 — 오타로 두 메뉴 항목이 같은 id 를 갖는 회귀를 막는다.
