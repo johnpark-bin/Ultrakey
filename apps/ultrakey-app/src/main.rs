@@ -74,8 +74,8 @@ use ultrakey_platform::login_item;
 use ultrakey_platform::single_instance::{self, ShowSettingsObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 use ultrakey_presets::{
-    ArrowKeySet, BracketPair, Conflict, ConflictKind, HomeRowScheme, PasteTrigger, PresetSettings,
-    QuickPressCapsAction, RemapCapsTarget,
+    ArrowKeySet, BracketPair, Conflict, ConflictKind, DoubleTapShiftSide, HomeRowScheme,
+    PasteTrigger, PresetSettings, QuickPressCapsAction, RemapCapsTarget,
 };
 use ultrakey_seek_session::{ClickSettings, SeekSettings, SeekShortcut};
 
@@ -364,6 +364,16 @@ fn paste_trigger_label_key(v: PasteTrigger) -> Option<&'static str> {
     }
 }
 
+/// ⭐ 이슈 #143 — `Double tap shift = caps lock` side 팝업 3종은 키캡 각인이 아니라
+/// 서술형 항목이라 `PasteTrigger` 와 같은 관례로 카탈로그를 거친다.
+fn double_tap_shift_side_label_key(v: DoubleTapShiftSide) -> Option<&'static str> {
+    match v {
+        DoubleTapShiftSide::Left => Some("settings.presets.option.double_tap.left"),
+        DoubleTapShiftSide::Right => Some("settings.presets.option.double_tap.right"),
+        DoubleTapShiftSide::Either => Some("settings.presets.option.double_tap.either"),
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PresetOptionsView {
@@ -371,11 +381,12 @@ struct PresetOptionsView {
     caps_quick_actions: Vec<PresetOptionView>,
     arrow_key_sets: Vec<PresetOptionView>,
     home_row_schemes: Vec<PresetOptionView>,
+    double_tap_shift_sides: Vec<PresetOptionView>,
     bracket_pairs: Vec<PresetOptionView>,
     paste_triggers: Vec<PresetOptionView>,
 }
 
-/// 팝업 6종 전량(50/48/2/2/4/4) — 값은 매번 다시 계산해도 비용이 무시할 만한
+/// 팝업 7종 전량(50/48/2/2/3/4/4) — 값은 매번 다시 계산해도 비용이 무시할 만한
 /// 정적 목록이라 캐시하지 않는다.
 fn preset_options_view() -> PresetOptionsView {
     PresetOptionsView {
@@ -394,6 +405,10 @@ fn preset_options_view() -> PresetOptionsView {
         home_row_schemes: HomeRowScheme::all()
             .iter()
             .map(|&v| preset_option_view(v, v.label(), home_row_scheme_label_key(v)))
+            .collect(),
+        double_tap_shift_sides: DoubleTapShiftSide::all()
+            .iter()
+            .map(|&v| preset_option_view(v, v.label(), double_tap_shift_side_label_key(v)))
             .collect(),
         bracket_pairs: BracketPair::all()
             .iter()
@@ -457,6 +472,7 @@ struct PresetsView {
     caps_hjkl_arrows: CapsHjklArrowsView,
     caps_home_row: CapsHomeRowView,
     double_tap_shift_to_caps: bool,
+    double_tap_shift_side: String,
     left_right_shift_to_caps: bool,
     shift_caps_to_caps: bool,
     shift_quick_press_brackets: ShiftQuickPressBracketsView,
@@ -491,6 +507,7 @@ fn presets_view(p: &PresetSettings) -> PresetsView {
             scheme: serde_variant_name(&p.caps_home_row.scheme),
         },
         double_tap_shift_to_caps: p.double_tap_shift_to_caps,
+        double_tap_shift_side: serde_variant_name(&p.double_tap_shift_side),
         left_right_shift_to_caps: p.left_right_shift_to_caps,
         shift_caps_to_caps: p.shift_caps_to_caps,
         shift_quick_press_brackets: ShiftQuickPressBracketsView {
@@ -1790,6 +1807,9 @@ fn apply_preset_setting(
         }
         k if k == keys::PRESETS_DOUBLE_TAP_SHIFT_TO_CAPS => {
             presets.double_tap_shift_to_caps = parse(value, key)?
+        }
+        k if k == keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE => {
+            presets.double_tap_shift_side = parse(value, key)?
         }
         k if k == keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS => {
             presets.left_right_shift_to_caps = parse(value, key)?
@@ -7529,7 +7549,7 @@ mod tests {
         assert_eq!(compute_caps_lock_alias(&synthesize, false, false, true), None);
     }
 
-    // preset_options_view() — 팝업 6종 개수(50/48/2/2/4/4)와 labelKey 배정.
+    // preset_options_view() — 팝업 7종 개수(50/48/2/2/3/4/4)와 labelKey 배정.
     #[test]
     fn preset_options_view_has_expected_counts_and_label_keys() {
         let opts = preset_options_view();
@@ -7537,6 +7557,7 @@ mod tests {
         assert_eq!(opts.caps_quick_actions.len(), 48);
         assert_eq!(opts.arrow_key_sets.len(), 2);
         assert_eq!(opts.home_row_schemes.len(), 2);
+        assert_eq!(opts.double_tap_shift_sides.len(), 3);
         assert_eq!(opts.bracket_pairs.len(), 4);
         assert_eq!(opts.paste_triggers.len(), 4);
 
@@ -7585,6 +7606,17 @@ mod tests {
             hyper_trigger.label_key.as_deref(),
             Some("settings.presets.option.paste.hyper")
         );
+
+        // ⭐ 이슈 #143 — side 팝업은 서술형 항목이라 labelKey 를 갖는다(PasteTrigger 관례).
+        let side = opts
+            .double_tap_shift_sides
+            .iter()
+            .find(|o| o.value == "Either")
+            .unwrap();
+        assert_eq!(
+            side.label_key.as_deref(),
+            Some("settings.presets.option.double_tap.either")
+        );
     }
 
     // presets_view() — variant 이름이 저장 형식(serde 기본값)과 일치한다.
@@ -7600,7 +7632,17 @@ mod tests {
         let view = presets_view(&presets);
         assert_eq!(view.caps_lock_remap.target, "Esc");
         assert_eq!(view.caps_home_row.scheme, "SymbolRow");
+        assert_eq!(view.double_tap_shift_side, "Either");
         assert_eq!(view.quick_press_duration_ms, 1000);
+    }
+
+    #[test]
+    fn presets_view_carries_double_tap_shift_side_variant_name() {
+        let presets = PresetSettings {
+            double_tap_shift_side: DoubleTapShiftSide::Left,
+            ..PresetSettings::default()
+        };
+        assert_eq!(presets_view(&presets).double_tap_shift_side, "Left");
     }
 
     // 충돌 응답 JSON 모양 — kind/disableLabelKeys.
@@ -7636,6 +7678,18 @@ mod tests {
         )
         .unwrap();
         assert!(presets.caps_space_enter);
+    }
+
+    #[test]
+    fn validate_and_apply_preset_updates_double_tap_shift_side() {
+        let mut presets = PresetSettings::default();
+        validate_and_apply_preset(
+            &mut presets,
+            keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE,
+            &serde_json::json!("Left"),
+        )
+        .unwrap();
+        assert_eq!(presets.double_tap_shift_side, DoubleTapShiftSide::Left);
     }
 
     #[test]
@@ -8105,6 +8159,8 @@ mod tests {
         let presets_json = obj["presets"].as_object().unwrap();
         assert!(presets_json.contains_key("capsLockRemap"));
         assert!(presets_json.contains_key("quickPressDurationMs"));
+        assert!(presets_json.contains_key("doubleTapShiftSide"));
+        assert_eq!(presets_json["doubleTapShiftSide"], "Either");
         // ⭐ 이슈 #77 — General 탭 Advanced 섹션의 synthesize 체크박스가 이 값을
         // 렌더한다(`$("synthesize-caps-remap").checked = state.presets.
         // synthesizeCapsLockRemap`). 설정 화면은 카탈로그 부재 = 기본값(꺼짐)을

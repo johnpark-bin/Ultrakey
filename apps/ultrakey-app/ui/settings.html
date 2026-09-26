@@ -652,6 +652,7 @@
           <input type="checkbox" id="p-double-shift" data-key="presets.doubleTapShiftToCaps" />
           <span id="p-double-shift-label"></span>
         </label>
+        <select id="p-double-shift-side" data-key="presets.doubleTapShiftSide"></select>
       </div>
 
       <div class="row">
@@ -1689,6 +1690,7 @@ if (!tauri || !tauri.core) {
     fillSelect("p-caps-quick-action", opts.capsQuickActions);
     fillSelect("p-caps-hjkl-set", opts.arrowKeySets);
     fillSelect("p-caps-home-scheme", opts.homeRowSchemes);
+    fillSelect("p-double-shift-side", opts.doubleTapShiftSides);
     fillSelect("p-shift-brackets-pair", opts.bracketPairs);
     fillSelect("p-paste-plain-trigger", opts.pasteTriggers);
   }
@@ -2722,6 +2724,7 @@ if (!tauri || !tauri.core) {
       ["p-caps-quick", "p-caps-quick-action", p.capsQuickPress.enabled, p.capsQuickPress.action],
       ["p-caps-hjkl", "p-caps-hjkl-set", p.capsHjklArrows.enabled, p.capsHjklArrows.keySet],
       ["p-caps-home", "p-caps-home-scheme", p.capsHomeRow.enabled, p.capsHomeRow.scheme],
+      ["p-double-shift", "p-double-shift-side", p.doubleTapShiftToCaps, p.doubleTapShiftSide],
       ["p-shift-brackets", "p-shift-brackets-pair", p.shiftQuickPressBrackets.enabled, p.shiftQuickPressBrackets.pair],
       ["p-paste-plain", "p-paste-plain-trigger", p.pasteWithoutFormatting.enabled, p.pasteWithoutFormatting.trigger],
     ];
@@ -2734,7 +2737,6 @@ if (!tauri || !tauri.core) {
     for (const [id, value] of [
       ["p-caps-space", p.capsSpaceEnter],
       ["p-caps-wasd", p.capsWasdArrows],
-      ["p-double-shift", p.doubleTapShiftToCaps],
       ["p-both-shift", p.leftRightShiftToCaps],
       ["p-shift-caps", p.shiftCapsToCaps],
       ["p-hyper-delete", p.hyperDeleteToForward],
