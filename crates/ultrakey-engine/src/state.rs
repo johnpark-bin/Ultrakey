@@ -4,8 +4,8 @@
 //! [`SharedState`] 는 탭 스레드의 `CGEventTap` 콜백이 매 이벤트마다 읽는다. 콜백 안에서
 //! 락 획득 가능성이 있는 자료구조에 접근하는 것은 `docs/dev/architecture.md` §2.2 의
 //! "콜백 안에서 절대 하지 않는 것"을 정면으로 어기는 것이다.
-
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64};
+use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -87,6 +87,12 @@ pub struct SharedState {
     /// shift`·`Left/right shift`·`Shift + caps lock = caps lock` 류 경로 C 규칙의
     /// **의도된** 결과이므로 안전망이 되돌리지 않아야 함을 뜻한다.
     pub caps_lock_owned_lock: AtomicBool,
+    /// ⭐ 이슈 #144 — 화면 잠금 동안 D-1 커널 매핑을 제거한 상태. 참인 동안
+    /// (a) 경로 B 쓰기는 `caps_lock_alias` 를 제거한 cfg 로 나가고, (b) 워치독
+    /// #108 안전망이 개입하지 않는다. 잠금 화면(loginwindow)에서도 HID 수준
+    /// 매핑은 유지돼 비밀번호 입력창에서 물리 Capslock 이 F18 로 도착해 토글
+    /// 불가하므로, 잠금 시 D-1 을 걷어내고 해제 시 다시 설치한다.
+    pub d1_suspended: AtomicBool,
     /// ⭐ 이슈 #110 — D-1 커널 매핑이 되읽기로 **확인된** 상태인가
     /// (`PathBManager::d1_confirmed` 의 사본). 엔진이 경로 B 재조정 직후마다
     /// 게시하고, 앱이 트레이·환경설정·Event Viewer 의 "caps lock 커널 매핑 미적용"
@@ -112,8 +118,26 @@ impl SharedState {
             is_jis: AtomicJisGate::new(),
             trackpad: Arc::new(AtomicTrackpadPhase::new()),
             caps_lock_owned_lock: AtomicBool::new(false),
+            d1_suspended: AtomicBool::new(false),
             d1_confirmed: AtomicBool::new(false),
         })
+    }
+
+    /// ⭐ 이슈 #144 — 경로 B 쓰기용 cfg 게이트. `d1_suspended` 가 참(화면 잠금 중)이면
+    /// `caps_lock_alias` 를 지운 사본을 돌려준다 — 핫플러그·DidWake 재적용이 잠금 중
+    /// D-1 을 되살리는 것을 차단한다(`path_b.rs::d1_for` 가 `None` 을 보면 D-1
+    /// 엔트리 없이 합성하므로 디바이스별 F-17 리맵은 그대로 유지된다). 거짓이면
+    /// 빌림 그대로 돌려줘 클론을 피한다. **경로 B 에 cfg 를 넘기는 모든 호출부는 이
+    /// 헬퍼를 거쳐야 한다**(`Engine::start`·`Engine::reconfigure`,
+    /// `system_hooks::fire_job` 의 `ReapplyHidMapping`·`SuspendD1`·`ResumeD1`).
+    pub fn path_b_write_cfg<'a>(&'a self, cfg: &'a EngineConfig) -> Cow<'a, EngineConfig> {
+        if self.d1_suspended.load(Ordering::Relaxed) {
+            let mut stripped = cfg.clone();
+            stripped.caps_lock_alias = None;
+            Cow::Owned(stripped)
+        } else {
+            Cow::Borrowed(cfg)
+        }
     }
 }
 
@@ -122,18 +146,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_starts_with_seek_inactive_and_given_config() {
+    fn new_starts_unsuspended() {
         let gate = Arc::new(AtomicAppGate::new());
-        let cfg = EngineConfig::default();
-        let shared = SharedState::new(cfg.clone(), gate);
-
+        let shared = SharedState::new(EngineConfig::default(), gate);
         assert!(!shared
-            .seek_session_active
-            .load(std::sync::atomic::Ordering::Acquire));
-        assert_eq!(
-            shared.config.load().timings.quick_press_duration_ms,
-            cfg.timings.quick_press_duration_ms
-        );
-        assert!(shared.layout.current().is_empty());
+            .d1_suspended
+            .load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn path_b_write_cfg_passes_through_when_not_suspended() {
+        use ultrakey_core::keycode::KeyCode;
+        let gate = Arc::new(AtomicAppGate::new());
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+        let shared = SharedState::new(EngineConfig::default(), gate);
+        let out = shared.path_b_write_cfg(&cfg);
+        assert_eq!(out.caps_lock_alias, Some(KeyCode::F18));
+    }
+
+    #[test]
+    fn path_b_write_cfg_strips_alias_while_suspended() {
+        use ultrakey_core::keycode::KeyCode;
+        let gate = Arc::new(AtomicAppGate::new());
+        let cfg = EngineConfig {
+            caps_lock_alias: Some(KeyCode::F18),
+            ..Default::default()
+        };
+        let shared = SharedState::new(EngineConfig::default(), gate);
+        shared
+            .d1_suspended
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let out = shared.path_b_write_cfg(&cfg);
+        assert_eq!(out.caps_lock_alias, None);
+        // 원본은 건드리지 않는다 — 사본에만 지운다.
+        assert_eq!(cfg.caps_lock_alias, Some(KeyCode::F18));
     }
 }

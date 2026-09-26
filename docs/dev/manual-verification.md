@@ -3270,3 +3270,48 @@ M1 절차와 같다.
 - **F-19.5 US 배리언트(`\`↔`⌥\`)의 일본어 로마자 입력 유효성**(§9 #4, `(미확정)`).
 - **JIS 키보드 미보유로 M5·M8(F-19.3·F-19.6)의 실기기 확인이 불가능** — JIS 키보드 확보 시
   본 절차로 확인하고 `(미확정)` 을 해소한다.
+
+---
+
+## 항목 23 — 잠금 화면 Capslock 고착 수정 (이슈 #144)
+
+> ⭐ **근거**: `../spec/key-remapping-engine.md` §5 항목 28 · `../dev/architecture.md` §6.1
+> D-1 보칙 3. 자동 단위 테스트(`ultrakey-engine` `caps_lock_recovery` suspended 게이트 ·
+> `d1_suspend_needed` · `SharedState::path_b_write_cfg` 게이트 3종)는 macOS 없이
+> `cargo test -p ultrakey-engine` 으로 통과한다 — 이 항목은 그 테스트가 다루지 못하는
+> **실기기 잠금 화면(loginwindow)·실제 비밀번호 입력창**만 다룬다.
+
+### 사전 준비
+
+```sh
+./scripts/build-signed.sh
+open <경로>/Ultrakey.app
+tail -f ~/Library/Logs/Ultrakey/ultrakey.log
+```
+
+캡스락 의존 프리셋을 켜 D-1 이 필요하게 한다(이 절차의 기준 설정: 항목 21 과 같은
+`Remap caps lock to: left control`·`Caps lock + HJKL = 방향키`·
+`Shift + caps lock = caps lock`). 내장 키보드의 조회 명령(항목 21 M0 과 동일):
+
+```sh
+D='{"VendorID":0,"ProductID":0,"PrimaryUsagePage":1,"PrimaryUsage":6}'
+hidutil property --matching "$D" --get UserKeyMapping
+```
+
+### M1~M5 수동 절차
+
+| # | 시나리오 | 조작 | 기대 결과 | 판정 근거 |
+| :--- | :--- | :--- | :--- | :--- |
+| **M1** | D-1 설치 확인 | 위 `--get` | `HIDKeyboardModifierMappingSrc = 30064771129`(0x700000039) · `Dst = 30064771181`(0x70000006D) 행이 있다 | §5 #28 ① |
+| **M2** | 잠금 중 D-1 제거 + 토글 동작 | 화면 잠금 → **SSH/다른 세션**에서 위 `--get` 재실행 → 잠금 화면 비밀번호 입력창에서 Capslock 키를 눌러 본다 | D-1 행이 **없다**(F-17 리맵 행은 그대로). 비밀번호 입력창에서 Capslock 토글이 **동작**한다(LED·대문자). 로그에 `screen lock notification received` → `D-1 kernel mapping removed for the screen lock` | §5 #28 ② |
+| **M3** | 해제 후 D-1 복원 | 잠금 해제 → `session_delay` 경과 후 위 `--get` 재실행 | D-1 행이 **다시 있다**. 로그에 `Path B (F-17) reapply completed` + `D-1 kernel mapping reinstalled after the screen unlock` | §5 #28 ③ |
+| **M4** | 잠금 중 Capslock ON 채택 | 잠금 화면에서 Capslock 을 **킨 채** 잠금 해제 → 해제 후 1초 이상 관찰 | 앱이 Capslock 을 **강제로 끄지 않는다**(대문자 유지·LED 유지). 로그에 `observed = Some(true)` 채택 + 워치독의 `reverting it (issue #108 safety net)` 이 **없다** | §5 #28 ③ · §6.1 보칙 3 |
+| **M5** | 로그 확인 포인트 | `ultrakey.log` 에서 문자열 검색 | `screen lock notification received` → suspend 로그 → 해제 후 `screen unlock notification received` → resume 로그 순서로 남는다 | §5 #28 |
+
+### ⚠️ 이 절차로 확인할 수 없는 것
+
+- **잠금 중 UI 직접 관찰 불가** — 잠금 화면에서는 앱 창·Event Viewer 를 볼 수 없으므로
+  M2 의 `--get` 재실행에는 **SSH 세션(또는 다른 로그인 세션)** 이 필요하다. 그 세션 없이
+  "D-1 행이 없다"를 확인할 방법이 없다.
+- **DidWake 재적용과 ScreenLocked suspend 의 실제 경합 순서** — 수렴성은 코드 근거
+  (발화 시점 플래그 읽기)로만 보장하고, 실기기에서 순서를 강제 재현하는 수단은 없다.
