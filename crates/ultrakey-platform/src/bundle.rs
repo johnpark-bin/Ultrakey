@@ -32,6 +32,7 @@ mod macos_impl {
         (version.majorVersion as u32, version.minorVersion as u32)
     }
 
+
     /// 사용자의 선호 언어 목록(우선순위 순, 예: `["ko-KR", "en-US"]`).
     ///
     /// F-14(A)/D4 로케일 결정(`localization-and-input-sources.md` §3.1.2)의 입력이다 —

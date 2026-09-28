@@ -21,7 +21,7 @@ pub fn frontmost_pid() -> Option<i32> {
 /// pid 로 앱을 활성화한다. 실패·종료된 앱이면 `false`(no-op).
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // ⚠️ `ActivateIgnoringOtherApps` 는 macOS 14 에서 deprecated
-                     // 이지만 최소 지원 12.0 을 위해 의도적으로 쓴다(`click_executor.rs` 와 같은 판단).
+// 이지만 최소 지원 12.0 을 위해 의도적으로 쓴다(`click_executor.rs` 와 같은 판단).
 pub fn activate_pid(pid: i32) -> bool {
     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
     let Some(running) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {

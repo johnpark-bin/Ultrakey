@@ -82,16 +82,10 @@ mod tests {
     /// 클릭한다.
     #[test]
     fn start_and_end_modes_use_edges_not_center() {
-        assert_eq!(
-            point_for(ClickMode::ClickStartMatch, FRAME),
-            start_point(FRAME)
-        );
+        assert_eq!(point_for(ClickMode::ClickStartMatch, FRAME), start_point(FRAME));
         assert_eq!(point_for(ClickMode::ClickEndMatch, FRAME), end_point(FRAME));
         // 중심 (60, 40) 이 아니다.
-        assert_ne!(
-            point_for(ClickMode::ClickEndMatch, FRAME),
-            Point::new(60.0, 40.0)
-        );
+        assert_ne!(point_for(ClickMode::ClickEndMatch, FRAME), Point::new(60.0, 40.0));
     }
 
     /// Q13(D5) — 나머지 6종은 전부 시작 지점을 재사용한다.

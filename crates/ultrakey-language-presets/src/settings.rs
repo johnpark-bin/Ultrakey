@@ -69,9 +69,7 @@ impl JapaneseSettings {
         if self.caps_lock_toggles_eisu_kana {
             rules.push(LanguageRule {
                 id: RuleId::Language(19),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::CAPS_LOCK,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
                 out: LanguageOut::EisuOrKana,
@@ -80,27 +78,17 @@ impl JapaneseSettings {
         if self.command_toggles_eisu_kana {
             rules.push(LanguageRule {
                 id: RuleId::Language(20),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::LEFT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::LEFT_COMMAND },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::JIS_EISU,
-                    flags: EventFlags::NONE,
-                },
+                out: LanguageOut::Key { keycode: KeyCode::JIS_EISU, flags: EventFlags::NONE },
             });
             rules.push(LanguageRule {
                 id: RuleId::Language(20),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::RIGHT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::JIS_KANA,
-                    flags: EventFlags::NONE,
-                },
+                out: LanguageOut::Key { keycode: KeyCode::JIS_KANA, flags: EventFlags::NONE },
             });
         }
         if self.swap_yen_backslash {
@@ -119,17 +107,17 @@ impl JapaneseSettings {
 /// 키보드 타입을 가르므로 한 프리셋이 두 타입을 모두 담는다.
 fn yen_backslash_rules() -> Vec<LanguageRule> {
     let mut rules = Vec::new();
-    for (key, jis) in [(KeyCode::JIS_YEN, true), (KeyCode::ANSI_BACKSLASH, false)] {
+    for (key, jis) in [
+        (KeyCode::JIS_YEN, true),
+        (KeyCode::ANSI_BACKSLASH, false),
+    ] {
         // key 단독 → ⌥+key (key 는 JIS 에서 ¥, US 에서 `\`)
         rules.push(LanguageRule {
             id: RuleId::Language(21),
             trigger: LanguageTrigger::NoModifier { key },
             app_gate: None,
             requires_jis: Some(jis),
-            out: LanguageOut::Key {
-                keycode: key,
-                flags: OPTION_FLAGS,
-            },
+            out: LanguageOut::Key { keycode: key, flags: OPTION_FLAGS },
         });
         // ⌥+key → key (↔ 역방향)
         rules.push(LanguageRule {
@@ -137,10 +125,7 @@ fn yen_backslash_rules() -> Vec<LanguageRule> {
             trigger: LanguageTrigger::OptionOnly { key },
             app_gate: None,
             requires_jis: Some(jis),
-            out: LanguageOut::Key {
-                keycode: key,
-                flags: EventFlags::NONE,
-            },
+            out: LanguageOut::Key { keycode: key, flags: EventFlags::NONE },
         });
     }
     rules
@@ -160,12 +145,7 @@ fn jis_to_us_symbol_rules() -> Vec<LanguageRule> {
     type Row = (KeyCode, bool, KeyCode, EventFlags);
     const ROWS: &[Row] = &[
         // shift+2 `"` → `@` — JIS 에서 `[`(0x21) 단독 = @
-        (
-            KeyCode::ANSI_2,
-            true,
-            KeyCode::ANSI_LEFT_BRACKET,
-            EventFlags::NONE,
-        ),
+        (KeyCode::ANSI_2, true, KeyCode::ANSI_LEFT_BRACKET, EventFlags::NONE),
         // shift+6 `&` → `^` — `=`(0x18) 단독 = ^
         (KeyCode::ANSI_6, true, KeyCode::ANSI_EQUAL, EventFlags::NONE),
         // shift+7 `'` → `&` — shift+6 = &
@@ -177,98 +157,33 @@ fn jis_to_us_symbol_rules() -> Vec<LanguageRule> {
         // shift+0 `0` → `)` — shift+9 = )
         (KeyCode::ANSI_0, true, KeyCode::ANSI_9, LEFT_SHIFT_FLAGS),
         // shift+- `=` → `_` — JIS `_`(0x5E) 단독 = _
-        (
-            KeyCode::ANSI_MINUS,
-            true,
-            KeyCode::JIS_UNDERSCORE,
-            EventFlags::NONE,
-        ),
+        (KeyCode::ANSI_MINUS, true, KeyCode::JIS_UNDERSCORE, EventFlags::NONE),
         // `^` → `=` — shift+- = =
-        (
-            KeyCode::ANSI_EQUAL,
-            false,
-            KeyCode::ANSI_MINUS,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_EQUAL, false, KeyCode::ANSI_MINUS, LEFT_SHIFT_FLAGS),
         // shift+^ `~` → `+` — shift+; = +
-        (
-            KeyCode::ANSI_EQUAL,
-            true,
-            KeyCode::ANSI_SEMICOLON,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_EQUAL, true, KeyCode::ANSI_SEMICOLON, LEFT_SHIFT_FLAGS),
         // ¥ → `` ` `` — shift+[ = `
-        (
-            KeyCode::JIS_YEN,
-            false,
-            KeyCode::ANSI_LEFT_BRACKET,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::JIS_YEN, false, KeyCode::ANSI_LEFT_BRACKET, LEFT_SHIFT_FLAGS),
         // shift+¥ `|` → `~` — shift+= = ~
-        (
-            KeyCode::JIS_YEN,
-            true,
-            KeyCode::ANSI_EQUAL,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::JIS_YEN, true, KeyCode::ANSI_EQUAL, LEFT_SHIFT_FLAGS),
         // `@` → `[` — `]`(0x1E) 단독 = [
-        (
-            KeyCode::ANSI_LEFT_BRACKET,
-            false,
-            KeyCode::ANSI_RIGHT_BRACKET,
-            EventFlags::NONE,
-        ),
+        (KeyCode::ANSI_LEFT_BRACKET, false, KeyCode::ANSI_RIGHT_BRACKET, EventFlags::NONE),
         // shift+@ `` ` `` → `{` — shift+] = {
-        (
-            KeyCode::ANSI_LEFT_BRACKET,
-            true,
-            KeyCode::ANSI_RIGHT_BRACKET,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_LEFT_BRACKET, true, KeyCode::ANSI_RIGHT_BRACKET, LEFT_SHIFT_FLAGS),
         // `[` → `]` — `\`(0x2A) 단독 = ]
-        (
-            KeyCode::ANSI_RIGHT_BRACKET,
-            false,
-            KeyCode::ANSI_BACKSLASH,
-            EventFlags::NONE,
-        ),
+        (KeyCode::ANSI_RIGHT_BRACKET, false, KeyCode::ANSI_BACKSLASH, EventFlags::NONE),
         // shift+[ `{` → `}` — shift+\ = }
-        (
-            KeyCode::ANSI_RIGHT_BRACKET,
-            true,
-            KeyCode::ANSI_BACKSLASH,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_RIGHT_BRACKET, true, KeyCode::ANSI_BACKSLASH, LEFT_SHIFT_FLAGS),
         // shift+; `+` → `:` — quote(0x27) 단독 = :
-        (
-            KeyCode::ANSI_SEMICOLON,
-            true,
-            KeyCode::ANSI_QUOTE,
-            EventFlags::NONE,
-        ),
+        (KeyCode::ANSI_SEMICOLON, true, KeyCode::ANSI_QUOTE, EventFlags::NONE),
         // `:` → `'` — shift+7 = '
-        (
-            KeyCode::ANSI_QUOTE,
-            false,
-            KeyCode::ANSI_7,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_QUOTE, false, KeyCode::ANSI_7, LEFT_SHIFT_FLAGS),
         // shift+: `*` → `"` — shift+2 = "
         (KeyCode::ANSI_QUOTE, true, KeyCode::ANSI_2, LEFT_SHIFT_FLAGS),
         // `]` → `\` — ⛔ ⌥+¥ 경유 합성(직접 0x2A 불가, 명세 §5 #10)
-        (
-            KeyCode::ANSI_BACKSLASH,
-            false,
-            KeyCode::JIS_YEN,
-            OPTION_FLAGS,
-        ),
+        (KeyCode::ANSI_BACKSLASH, false, KeyCode::JIS_YEN, OPTION_FLAGS),
         // shift+] `}` → `|` — shift+¥ = |
-        (
-            KeyCode::ANSI_BACKSLASH,
-            true,
-            KeyCode::JIS_YEN,
-            LEFT_SHIFT_FLAGS,
-        ),
+        (KeyCode::ANSI_BACKSLASH, true, KeyCode::JIS_YEN, LEFT_SHIFT_FLAGS),
     ];
 
     ROWS.iter()
@@ -305,15 +220,10 @@ impl ChineseSettings {
         }
         vec![LanguageRule {
             id: RuleId::Language(23),
-            trigger: LanguageTrigger::AloneTap {
-                key: KeyCode::CAPS_LOCK,
-            },
+            trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
             app_gate: Some(LanguageGate::Chinese),
             requires_jis: None,
-            out: LanguageOut::Key {
-                keycode: KeyCode::SPACE,
-                flags: CTRL_SPACE_FLAGS,
-            },
+            out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: CTRL_SPACE_FLAGS },
         }]
     }
 }
@@ -332,14 +242,8 @@ mod tests {
     #[test]
     fn from_store_on_empty_store_matches_default() {
         let store = SettingsStore::in_memory();
-        assert_eq!(
-            JapaneseSettings::from_store(&store),
-            JapaneseSettings::default()
-        );
-        assert_eq!(
-            ChineseSettings::from_store(&store),
-            ChineseSettings::default()
-        );
+        assert_eq!(JapaneseSettings::from_store(&store), JapaneseSettings::default());
+        assert_eq!(ChineseSettings::from_store(&store), ChineseSettings::default());
     }
 
     #[test]
@@ -350,19 +254,11 @@ mod tests {
 
     #[test]
     fn f193_caps_lock_emits_eisu_or_kana() {
-        let s = JapaneseSettings {
-            caps_lock_toggles_eisu_kana: true,
-            ..Default::default()
-        };
+        let s = JapaneseSettings { caps_lock_toggles_eisu_kana: true, ..Default::default() };
         let rules = s.to_language_rules();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].id, RuleId::Language(19));
-        assert_eq!(
-            rules[0].trigger,
-            LanguageTrigger::AloneTap {
-                key: KeyCode::CAPS_LOCK
-            }
-        );
+        assert_eq!(rules[0].trigger, LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK });
         assert_eq!(rules[0].app_gate, Some(LanguageGate::Japanese));
         assert_eq!(rules[0].out, LanguageOut::EisuOrKana);
     }
@@ -370,78 +266,42 @@ mod tests {
     /// ⭐ 안 A — 저장 키 하나가 규칙 두 개(좌⌘=英数, 우⌘=かな).
     #[test]
     fn f194_command_emits_left_eisuu_right_kana() {
-        let s = JapaneseSettings {
-            command_toggles_eisu_kana: true,
-            ..Default::default()
-        };
+        let s = JapaneseSettings { command_toggles_eisu_kana: true, ..Default::default() };
         let rules = s.to_language_rules();
         assert_eq!(rules.len(), 2);
         assert!(rules.iter().all(|r| r.id == RuleId::Language(20)));
-        assert!(rules.iter().any(|r| r.trigger
-            == LanguageTrigger::AloneTap {
-                key: KeyCode::LEFT_COMMAND
-            }
-            && r.out
-                == LanguageOut::Key {
-                    keycode: KeyCode::JIS_EISU,
-                    flags: EventFlags::NONE
-                }));
-        assert!(rules.iter().any(|r| r.trigger
-            == LanguageTrigger::AloneTap {
-                key: KeyCode::RIGHT_COMMAND
-            }
-            && r.out
-                == LanguageOut::Key {
-                    keycode: KeyCode::JIS_KANA,
-                    flags: EventFlags::NONE
-                }));
+        assert!(rules
+            .iter()
+            .any(|r| r.trigger == LanguageTrigger::AloneTap { key: KeyCode::LEFT_COMMAND }
+                && r.out == LanguageOut::Key { keycode: KeyCode::JIS_EISU, flags: EventFlags::NONE }));
+        assert!(rules
+            .iter()
+            .any(|r| r.trigger == LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND }
+                && r.out == LanguageOut::Key { keycode: KeyCode::JIS_KANA, flags: EventFlags::NONE }));
     }
 
     #[test]
     fn f195_yen_swap_emits_4_rules() {
-        let s = JapaneseSettings {
-            swap_yen_backslash: true,
-            ..Default::default()
-        };
+        let s = JapaneseSettings { swap_yen_backslash: true, ..Default::default() };
         let rules = s.to_language_rules();
         assert_eq!(rules.len(), 4);
         assert!(rules.iter().all(|r| r.id == RuleId::Language(21)));
         // JIS 행 — 0x5D 단독 → ⌥0x5D
-        assert!(rules.iter().any(|r| r.trigger
-            == LanguageTrigger::NoModifier {
-                key: KeyCode::JIS_YEN
-            }
+        assert!(rules.iter().any(|r| r.trigger == LanguageTrigger::NoModifier { key: KeyCode::JIS_YEN }
             && r.requires_jis == Some(true)
-            && r.out
-                == LanguageOut::Key {
-                    keycode: KeyCode::JIS_YEN,
-                    flags: OPTION_FLAGS
-                }));
+            && r.out == LanguageOut::Key { keycode: KeyCode::JIS_YEN, flags: OPTION_FLAGS }));
         // US 행 — 0x2A 단독 → ⌥0x2A (JIS 아님)
-        assert!(rules.iter().any(|r| r.trigger
-            == LanguageTrigger::NoModifier {
-                key: KeyCode::ANSI_BACKSLASH
-            }
+        assert!(rules.iter().any(|r| r.trigger == LanguageTrigger::NoModifier { key: KeyCode::ANSI_BACKSLASH }
             && r.requires_jis == Some(false)));
         // 역방향 ⌥+key → key
-        assert!(rules.iter().any(|r| r.trigger
-            == LanguageTrigger::OptionOnly {
-                key: KeyCode::ANSI_BACKSLASH
-            }
-            && r.out
-                == LanguageOut::Key {
-                    keycode: KeyCode::ANSI_BACKSLASH,
-                    flags: EventFlags::NONE
-                }));
+        assert!(rules.iter().any(|r| r.trigger == LanguageTrigger::OptionOnly { key: KeyCode::ANSI_BACKSLASH }
+            && r.out == LanguageOut::Key { keycode: KeyCode::ANSI_BACKSLASH, flags: EventFlags::NONE }));
     }
 
     /// ⭐ 수용 기준 — F-19.6 은 전부 JIS, 전부 정적.
     #[test]
     fn f196_jis_to_us_emits_20_rules_all_jis() {
-        let s = JapaneseSettings {
-            jis_as_us_symbols: true,
-            ..Default::default()
-        };
+        let s = JapaneseSettings { jis_as_us_symbols: true, ..Default::default() };
         let rules = s.to_language_rules();
         assert_eq!(rules.len(), 20, "카탈로그 원문 20행과 일치해야 한다");
         assert!(rules.iter().all(|r| r.id == RuleId::Language(22)));
@@ -457,10 +317,7 @@ mod tests {
             .collect();
         keys.sort();
         keys.dedup();
-        assert!(
-            keys.len() >= 13,
-            "20행이 13개 이상의 고유 키로 수렴해야 한다(중복 from 허용): {keys:?}"
-        );
+        assert!(keys.len() >= 13, "20행이 13개 이상의 고유 키로 수렴해야 한다(중복 from 허용): {keys:?}");
     }
 
     /// ⛔ 부정형 — `international3(0x5D) → backslash(0x2A)` 직접 매핑이 없다(명세 §5 #10,
@@ -469,11 +326,7 @@ mod tests {
     /// 역방향(⌥\ → \) 동작이라 정상이다.
     #[test]
     fn forbidden_direct_yen_to_backslash_is_absent() {
-        let s = JapaneseSettings {
-            swap_yen_backslash: true,
-            jis_as_us_symbols: true,
-            ..Default::default()
-        };
+        let s = JapaneseSettings { swap_yen_backslash: true, jis_as_us_symbols: true, ..Default::default() };
         for r in s.to_language_rules() {
             let trigger_is_yen = matches!(
                 r.trigger,
@@ -494,30 +347,17 @@ mod tests {
 
     #[test]
     fn f197_chinese_caps_lock_emits_ctrl_space() {
-        let s = ChineseSettings {
-            caps_lock_switches_input_source: true,
-        };
+        let s = ChineseSettings { caps_lock_switches_input_source: true };
         let rules = s.to_language_rules();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].id, RuleId::Language(23));
-        assert_eq!(
-            rules[0].out,
-            LanguageOut::Key {
-                keycode: KeyCode::SPACE,
-                flags: CTRL_SPACE_FLAGS
-            }
-        );
+        assert_eq!(rules[0].out, LanguageOut::Key { keycode: KeyCode::SPACE, flags: CTRL_SPACE_FLAGS });
         assert_eq!(rules[0].app_gate, Some(LanguageGate::Chinese));
     }
 
     #[test]
     fn rules_sorted_by_id() {
-        let s = JapaneseSettings {
-            caps_lock_toggles_eisu_kana: true,
-            command_toggles_eisu_kana: true,
-            swap_yen_backslash: true,
-            jis_as_us_symbols: true,
-        };
+        let s = JapaneseSettings { caps_lock_toggles_eisu_kana: true, command_toggles_eisu_kana: true, swap_yen_backslash: true, jis_as_us_symbols: true };
         let rules = s.to_language_rules();
         let ids: Vec<_> = rules.iter().map(|r| r.id).collect();
         let mut sorted = ids.clone();

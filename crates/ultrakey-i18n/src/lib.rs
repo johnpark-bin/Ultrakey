@@ -480,7 +480,7 @@ mod tests {
         }
     }
 
-    /// ⭐ 이슈 #45 — 전 로케일에서 **탭 라벨 값 == 상세 헤딩 값**이다(이슈가
+/// ⭐ 이슈 #45 — 전 로케일에서 **탭 라벨 값 == 상세 헤딩 값**이다(이슈가
     /// 해소한 "사이드바는 영문인데 상세 헤딩은 한국어" 어긋남의 재발 방지).
     /// `Keyboards` 는 헤딩이 탭 라벨 키 자체를 재사용하므로(`settings.html` 의
     /// 근거 주석 참고 — 명세 §4.1 키 예산) 애초에 어긋날 구조가 없다.
@@ -499,21 +499,15 @@ mod tests {
                 let label = obj
                     .get(&format!("settings.tab.{tab}"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or_else(|| {
-                        panic!("{} 카탈로그에 settings.tab.{tab} 이 없다", locale.code())
-                    });
+                    .unwrap_or_else(|| panic!("{} 카탈로그에 settings.tab.{tab} 이 없다", locale.code()));
                 let heading = obj
                     .get(&format!("settings.{tab}.heading"))
                     .and_then(|v| v.as_str())
                     .unwrap_or_else(|| {
-                        panic!(
-                            "{} 카탈로그에 settings.{tab}.heading 이 없다",
-                            locale.code()
-                        )
+                        panic!("{} 카탈로그에 settings.{tab}.heading 이 없다", locale.code())
                     });
                 assert_eq!(
-                    label,
-                    heading,
+                    label, heading,
                     "{} 카탈로그의 탭 라벨({label:?})과 상세 헤딩({heading:?})이 다르다 — \
                      이슈 #45 로 전 탭의 라벨↔헤딩을 일치시켰다",
                     locale.code()
@@ -575,30 +569,10 @@ mod tests {
         ];
         for (locale, tab_jp, heading_jp, tab_zh, heading_zh) in expected {
             let catalog = Catalog::for_locale(locale);
-            assert_eq!(
-                catalog.get("settings.tab.japanese"),
-                tab_jp,
-                "{} 카탈로그 tab.japanese",
-                locale.code()
-            );
-            assert_eq!(
-                catalog.get("settings.japanese.heading"),
-                heading_jp,
-                "{} 카탈로그 japanese.heading",
-                locale.code()
-            );
-            assert_eq!(
-                catalog.get("settings.tab.chinese"),
-                tab_zh,
-                "{} 카탈로그 tab.chinese",
-                locale.code()
-            );
-            assert_eq!(
-                catalog.get("settings.chinese.heading"),
-                heading_zh,
-                "{} 카탈로그 chinese.heading",
-                locale.code()
-            );
+            assert_eq!(catalog.get("settings.tab.japanese"), tab_jp, "{} 카탈로그 tab.japanese", locale.code());
+            assert_eq!(catalog.get("settings.japanese.heading"), heading_jp, "{} 카탈로그 japanese.heading", locale.code());
+            assert_eq!(catalog.get("settings.tab.chinese"), tab_zh, "{} 카탈로그 tab.chinese", locale.code());
+            assert_eq!(catalog.get("settings.chinese.heading"), heading_zh, "{} 카탈로그 chinese.heading", locale.code());
         }
     }
 
@@ -721,15 +695,9 @@ mod tests {
 
         let en_keys: BTreeSet<_> = en_entries.keys().cloned().collect();
         let ko_keys: BTreeSet<_> = ko_entries.keys().cloned().collect();
-        assert_eq!(
-            en_keys, ko_keys,
-            "entries() 의 키 집합이 en/ko 사이에 달라서는 안 된다"
-        );
+        assert_eq!(en_keys, ko_keys, "entries() 의 키 집합이 en/ko 사이에 달라서는 안 된다");
 
-        assert_eq!(
-            ko_entries.get("common.ok").map(String::as_str),
-            Some("확인")
-        );
+        assert_eq!(ko_entries.get("common.ok").map(String::as_str), Some("확인"));
 
         let has_korean_value = ko_entries
             .values()

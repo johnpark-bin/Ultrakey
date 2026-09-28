@@ -138,15 +138,11 @@ impl NsWindowHandle {
     #[must_use]
     pub fn from_tauri_ptr(ptr: *mut core::ffi::c_void) -> Option<Self> {
         if ptr.is_null() {
-            tracing::error!(
-                "ns_window() returned null; cannot apply native overlay window settings"
-            );
+            tracing::error!("ns_window() returned null; cannot apply native overlay window settings");
             return None;
         }
         if !imp::is_ns_window(ptr) {
-            tracing::error!(
-                "ns_window() returned a pointer that is not an NSWindow; skipping setup"
-            );
+            tracing::error!("ns_window() returned a pointer that is not an NSWindow; skipping setup");
             return None;
         }
         Some(Self { ptr })
@@ -285,10 +281,8 @@ mod imp {
             // 셀렉터의 원래 IMP 만 들어간다. 그 셀렉터는 둘 다 인자 없는
             // `-(BOOL)` 이므로 아래 함수 타입이 정확히 그 시그니처다.
             Some(&imp) => unsafe {
-                let f: extern "C-unwind" fn(&AnyObject, Sel) -> Bool = core::mem::transmute::<
-                    usize,
-                    extern "C-unwind" fn(&AnyObject, Sel) -> Bool,
-                >(imp);
+                let f: extern "C-unwind" fn(&AnyObject, Sel) -> Bool =
+                    core::mem::transmute::<usize, extern "C-unwind" fn(&AnyObject, Sel) -> Bool>(imp);
                 f(this, sel)
             },
             // 원래 구현을 못 잡았다면(있을 수 없지만) 보수적으로 YES —
@@ -320,8 +314,7 @@ mod imp {
             return false;
         };
         // SAFETY: `method` 는 방금 이 클래스에서 얻은 유효한 메서드다.
-        let types =
-            unsafe { objc2::ffi::method_getTypeEncoding(std::ptr::from_ref(method).cast()) };
+        let types = unsafe { objc2::ffi::method_getTypeEncoding(std::ptr::from_ref(method).cast()) };
         // SAFETY: `cls` 는 유효한 클래스이고, `replacement` 는 이 셀렉터와
         // 같은 시그니처(`-(BOOL)`, 인자 없음)를 갖는다. `types` 는 원래
         // 메서드에서 그대로 가져온 인코딩이라 시그니처가 일치한다.
@@ -437,16 +430,10 @@ mod imp {
     }
 
     /// 네 가지 네이티브 요구를 한 번에 건다.
-    pub(super) fn configure(
-        ptr: *mut core::ffi::c_void,
-        kind: OverlayWindowKind,
-        sharing: Sharing,
-    ) -> bool {
+    pub(super) fn configure(ptr: *mut core::ffi::c_void, kind: OverlayWindowKind, sharing: Sharing) -> bool {
         // SAFETY: 호출자 계약 — `ptr` 는 Tauri 가 방금 내준 살아 있는 NSWindow.
         let Some(w) = (unsafe { window(ptr) }) else {
-            tracing::error!(
-                "ns_window() returned null; failed to apply native overlay window settings"
-            );
+            tracing::error!("ns_window() returned null; failed to apply native overlay window settings");
             return false;
         };
 
@@ -552,11 +539,7 @@ mod imp {
 mod imp {
     use super::{OverlayWindowKind, Sharing};
 
-    pub(super) fn configure(
-        _p: *mut core::ffi::c_void,
-        _k: OverlayWindowKind,
-        _s: Sharing,
-    ) -> bool {
+    pub(super) fn configure(_p: *mut core::ffi::c_void, _k: OverlayWindowKind, _s: Sharing) -> bool {
         false
     }
     pub(super) fn order_front_regardless(_p: *mut core::ffi::c_void) {}
@@ -575,6 +558,7 @@ mod imp {
         None
     }
 }
+
 
 /// `NSScreenSaverWindowLevel` — [`configure`] 가 거는 값. 검증이 대조할 상수.
 pub const OVERLAY_WINDOW_LEVEL: isize = 1000;

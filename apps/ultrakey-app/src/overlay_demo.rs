@@ -93,12 +93,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
         focused_display,
         store_origin,
     );
-    tracing::info!(
-        ?mouse,
-        ?focused_display,
-        ?origin,
-        "search bar origin resolved (§3.4 priority rule)"
-    );
+    tracing::info!(?mouse, ?focused_display, ?origin, "search bar origin resolved (§3.4 priority rule)");
 
     let shared = app.state::<Arc<Mutex<SurfaceState>>>().inner().clone();
     let app_for_persist = app.clone();
@@ -107,19 +102,15 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
     let pending_move: Arc<Mutex<Option<(f64, f64)>>> = Arc::new(Mutex::new(None));
     let pending_for_cb = pending_move.clone();
 
-    let renderer =
-        WebviewOverlayRenderer::new(app.clone(), shared).on_search_bar_moved(move |x, y| {
+    let renderer = WebviewOverlayRenderer::new(app.clone(), shared)
+        .on_search_bar_moved(move |x, y| {
             *pending_for_cb.lock().unwrap() = Some((x, y));
         });
 
     // ⭐ §3.5 — 팔레트는 **시스템 외관 모드**를 따르고, 애니메이션은 축소된
     // 모션 설정을 따른다. 둘 다 메인 스레드에서 읽는다.
     let dark = ultrakey_platform::screens::is_dark_appearance().unwrap_or(true);
-    let appearance = if dark {
-        Appearance::Dark
-    } else {
-        Appearance::Light
-    };
+    let appearance = if dark { Appearance::Dark } else { Appearance::Light };
     let reduce_motion = ultrakey_platform::screens::should_reduce_motion();
     tracing::info!(dark, reduce_motion, "appearance/motion settings");
 
@@ -308,9 +299,7 @@ pub fn start(app: &tauri::AppHandle, store_origin: Option<(f64, f64)>) {
 }
 
 /// 메인 스레드에 `NSScreen` 열거를 부탁하고 결과를 받아 온다.
-fn fetch_displays(
-    app: &tauri::AppHandle,
-) -> Option<Vec<ultrakey_overlay::geometry::OverlayDisplay>> {
+fn fetch_displays(app: &tauri::AppHandle) -> Option<Vec<ultrakey_overlay::geometry::OverlayDisplay>> {
     let (tx, rx) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
         let _ = tx.send(overlay_displays());

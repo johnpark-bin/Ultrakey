@@ -9,8 +9,8 @@
 
 use crate::clock::system_time_now;
 use crate::provider::{
-    ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse, LicenseProvider,
-    ValidateRequest, ValidateResponse,
+    ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse,
+    LicenseProvider, ValidateRequest, ValidateResponse,
 };
 
 /// 항상 라이선스 활성으로 응답하는 no-op 구현체.
@@ -39,9 +39,7 @@ impl LicenseProvider for NoopLicenseProvider {
         // no-op — 비활성화 항상 성공. device_id 는 로그/재검증에 쓰지 않지만 요청
         // 계약은 그대로 받는다.
         let _ = request;
-        DeactivateResponse::Deactivated {
-            activations_used: 0,
-        }
+        DeactivateResponse::Deactivated { activations_used: 0 }
     }
 
     fn validate(&self, request: ValidateRequest) -> ValidateResponse {
@@ -88,7 +86,10 @@ mod tests {
             device_id: "device-1".into(),
             cache_token: None,
         });
-        assert!(matches!(validate, ValidateResponse::Valid { .. }));
+        assert!(matches!(
+            validate,
+            ValidateResponse::Valid { .. }
+        ));
 
         let deactivate = p.deactivate(DeactivateRequest {
             license_key: "key".into(),
@@ -96,9 +97,7 @@ mod tests {
         });
         assert!(matches!(
             deactivate,
-            DeactivateResponse::Deactivated {
-                activations_used: 0
-            }
+            DeactivateResponse::Deactivated { activations_used: 0 }
         ));
     }
 }

@@ -134,8 +134,7 @@ impl SettingsStore {
             Err(e) => {
                 // 파일은 있는데(또는 있을 수도 있는데) 읽을 수 없다 — 권한 등. 파싱
                 // 실패와 같은 층위로 취급해 손상 취급하고 격리를 시도한다.
-                let outcome =
-                    quarantine_corrupt_file(&path, format!("설정 파일을 읽을 수 없음: {e}"));
+                let outcome = quarantine_corrupt_file(&path, format!("설정 파일을 읽을 수 없음: {e}"));
                 let store = SettingsStore {
                     path: Some(path),
                     values: BTreeMap::new(),
@@ -171,12 +170,7 @@ impl SettingsStore {
                 values,
                 schema_version,
             };
-            return (
-                store,
-                LoadOutcome::NewerSchema {
-                    found: schema_version,
-                },
-            );
+            return (store, LoadOutcome::NewerSchema { found: schema_version });
         }
 
         if schema_version < SCHEMA_VERSION {
@@ -370,9 +364,7 @@ fn quarantine_corrupt_file(path: &Path, reason: String) -> LoadOutcome {
         Err(rename_err) => LoadOutcome::Recovered {
             // 옮기지 못했으니 원래 경로가 곧 "지금 손상 내용이 남아 있는 곳"이다.
             backup: path.to_path_buf(),
-            reason: format!(
-                "{reason} (백업 이동 실패: {rename_err} — 손상 파일이 원래 위치에 그대로 남음)"
-            ),
+            reason: format!("{reason} (백업 이동 실패: {rename_err} — 손상 파일이 원래 위치에 그대로 남음)"),
         },
     }
 }
@@ -400,8 +392,7 @@ mod tests {
     /// `remove` 는 "부재 = 기본값"으로 되돌리는 정식 경로다(F-15 §3.4).
     #[test]
     fn remove_deletes_the_key_and_persists() {
-        let dir =
-            std::env::temp_dir().join(format!("ultrakey-store-remove-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ultrakey-store-remove-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("settings.json");
         let _ = std::fs::remove_file(&path);
@@ -426,8 +417,7 @@ mod tests {
     /// 그래야 §8 수용 기준 1·2("건드리지 않으면 파일이 생기지 않는다")가 깨지지 않는다.
     #[test]
     fn removing_an_absent_key_does_not_create_the_file() {
-        let dir =
-            std::env::temp_dir().join(format!("ultrakey-store-noremove-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ultrakey-store-noremove-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("settings.json");
         let _ = std::fs::remove_file(&path);
@@ -491,10 +481,7 @@ mod tests {
         store.set("hyperkey.hyper.enabled", &true).unwrap();
 
         assert!(path.exists());
-        assert_eq!(
-            store.keys().collect::<Vec<_>>(),
-            vec!["hyperkey.hyper.enabled"]
-        );
+        assert_eq!(store.keys().collect::<Vec<_>>(), vec!["hyperkey.hyper.enabled"]);
 
         let raw = std::fs::read_to_string(&path).unwrap();
         let envelope: Envelope = serde_json::from_str(&raw).unwrap();
@@ -557,10 +544,7 @@ mod tests {
             b"{ not valid json",
             "백업에는 손상된 원문이 그대로 보존돼야 한다"
         );
-        assert!(
-            !path.exists(),
-            "원래 경로는 백업으로 옮겨져 비어 있어야 한다"
-        );
+        assert!(!path.exists(), "원래 경로는 백업으로 옮겨져 비어 있어야 한다");
         assert!(store.is_empty());
     }
 
@@ -644,9 +628,6 @@ mod tests {
         let mut store = SettingsStore::in_memory();
         assert_eq!(store.path(), None);
         store.set("ui.lastTab", &"hyperkey".to_string()).unwrap();
-        assert_eq!(
-            store.get::<String>("ui.lastTab"),
-            Some("hyperkey".to_string())
-        );
+        assert_eq!(store.get::<String>("ui.lastTab"), Some("hyperkey".to_string()));
     }
 }

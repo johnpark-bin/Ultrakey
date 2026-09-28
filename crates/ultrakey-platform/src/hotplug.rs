@@ -103,10 +103,7 @@ mod macos_impl {
     /// 였다. 필터 키 하나로 열거·핫플러그 두 경로가 정렬된다. `Device*` 키 자체는
     /// 진단 probe 가 두 필터를 대조할 때만 쓴다(`build_keyboard_matching_dict_with_keys`).
     pub(crate) fn build_keyboard_matching_dict() -> Option<CFRetained<CFMutableDictionary>> {
-        build_keyboard_matching_dict_with_keys(
-            K_IOHID_PRIMARY_USAGE_PAGE_KEY,
-            K_IOHID_PRIMARY_USAGE_KEY,
-        )
+        build_keyboard_matching_dict_with_keys(K_IOHID_PRIMARY_USAGE_PAGE_KEY, K_IOHID_PRIMARY_USAGE_KEY)
     }
 
     /// 매칭 키를 명시적으로 받는 변형 — 이슈 #86 진단 probe(두 필터의 이중 매칭
@@ -459,9 +456,7 @@ pub use macos_impl::{watch_keyboards, KeyboardHotplugWatcher};
 /// `hid_device.rs`(디바이스 열거)가 재사용하는 내부 도구 — 같은 매칭 필터와 같은
 /// 이터레이터 순회 골격을 두 번 만들지 않는다(§3.2 "기존 자산 재사용 판정").
 #[cfg(target_os = "macos")]
-pub(crate) use macos_impl::{
-    build_keyboard_matching_dict, build_keyboard_matching_dict_with_keys, drain_iterator,
-};
+pub(crate) use macos_impl::{build_keyboard_matching_dict, build_keyboard_matching_dict_with_keys, drain_iterator};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {

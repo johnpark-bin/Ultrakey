@@ -16,7 +16,10 @@ use ultrakey_seek::CandidateSource;
 #[must_use]
 pub fn should_use_ax_path(source: CandidateSource, mode: ClickMode) -> bool {
     source == CandidateSource::Accessibility
-        && matches!(mode, ClickMode::ClickStartMatch | ClickMode::ClickEndMatch)
+        && matches!(
+            mode,
+            ClickMode::ClickStartMatch | ClickMode::ClickEndMatch
+        )
 }
 
 /// 클릭 시점 재조회(`AXUIElementCopyElementAtPosition`)의 결과 — 세 갈래.
@@ -136,21 +139,9 @@ mod tests {
     /// 조용히 취소다(창 닫힘 — J5).
     #[test]
     fn missing_or_failed_requery_cancels_even_if_press_would_succeed() {
-        assert_eq!(
-            ax_path_outcome(Requery::Missing, Press::Succeeded),
-            AxOutcome::Cancel
-        );
-        assert_eq!(
-            ax_path_outcome(Requery::Missing, Press::Failed),
-            AxOutcome::Cancel
-        );
-        assert_eq!(
-            ax_path_outcome(Requery::Failed, Press::Succeeded),
-            AxOutcome::Cancel
-        );
-        assert_eq!(
-            ax_path_outcome(Requery::Failed, Press::Failed),
-            AxOutcome::Cancel
-        );
+        assert_eq!(ax_path_outcome(Requery::Missing, Press::Succeeded), AxOutcome::Cancel);
+        assert_eq!(ax_path_outcome(Requery::Missing, Press::Failed), AxOutcome::Cancel);
+        assert_eq!(ax_path_outcome(Requery::Failed, Press::Succeeded), AxOutcome::Cancel);
+        assert_eq!(ax_path_outcome(Requery::Failed, Press::Failed), AxOutcome::Cancel);
     }
 }

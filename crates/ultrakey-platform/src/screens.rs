@@ -50,9 +50,7 @@ mod macos_impl {
         NSApplication, NSApplicationDidChangeScreenParametersNotification, NSEvent, NSScreen,
         NSWorkspace,
     };
-    use objc2_foundation::{
-        MainThreadMarker, NSNotification, NSNotificationCenter, NSNumber, NSString,
-    };
+    use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSNumber, NSString};
 
     /// `NSScreen` 목록을 좌상단 원점 좌표로 돌려준다.
     ///
@@ -156,9 +154,7 @@ mod macos_impl {
         let Some(obj) = desc.objectForKey(&key) else {
             return 0;
         };
-        obj.downcast::<NSNumber>()
-            .map(|n| n.unsignedIntValue())
-            .unwrap_or(0)
+        obj.downcast::<NSNumber>().map(|n| n.unsignedIntValue()).unwrap_or(0)
     }
 
     type Token = Retained<ProtocolObject<dyn NSObjectProtocol>>;
@@ -190,10 +186,7 @@ mod macos_impl {
                     &block,
                 )
             };
-            Self {
-                center,
-                token: Some(token),
-            }
+            Self { center, token: Some(token) }
         }
     }
 

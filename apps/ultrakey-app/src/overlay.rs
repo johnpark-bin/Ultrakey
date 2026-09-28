@@ -118,7 +118,10 @@ impl<R: Runtime> WebviewOverlayRenderer<R> {
 
     /// 검색 바가 움직였을 때 부를 콜백을 건다(§3.4 위치 저장).
     #[must_use]
-    pub fn on_search_bar_moved(mut self, f: impl Fn(f64, f64) + Send + Sync + 'static) -> Self {
+    pub fn on_search_bar_moved(
+        mut self,
+        f: impl Fn(f64, f64) + Send + Sync + 'static,
+    ) -> Self {
         self.on_bar_moved = Some(Arc::new(f));
         self
     }
@@ -126,7 +129,10 @@ impl<R: Runtime> WebviewOverlayRenderer<R> {
     /// ⭐(이슈 #93) 검색 바 창이 키 윈도우 자격을 잃었을 때 부를 콜백을 건다
     /// (`WindowEvent::Focused(false)` — 다국어 세션의 D7 자동 닫힘 신호원).
     #[must_use]
-    pub fn on_search_bar_resign_key(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+    pub fn on_search_bar_resign_key(
+        mut self,
+        f: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         self.on_resign_key = Some(Arc::new(f));
         self
     }
@@ -136,13 +142,7 @@ impl<R: Runtime> WebviewOverlayRenderer<R> {
     /// ⚠️ **메인 스레드로 비동기 디스패치**한다(`architecture.md` §2, `main.rs`
     /// 의 `on_main_thread` 와 같은 규약) — 창 조작을 다른 스레드에서 동기로
     /// 기다리면 그 스레드가 메인 스레드를 붙잡는다.
-    fn spawn_window(
-        &self,
-        label: String,
-        url: &'static str,
-        kind: OverlayWindowKind,
-        rect: (f64, f64, f64, f64),
-    ) {
+    fn spawn_window(&self, label: String, url: &'static str, kind: OverlayWindowKind, rect: (f64, f64, f64, f64)) {
         let app = self.app.clone();
         let (x, y, w, h) = rect;
         let moved_cb = self.on_bar_moved.clone();
@@ -297,9 +297,7 @@ impl<R: Runtime> WebviewOverlayRenderer<R> {
             };
             let Ok(raw) = window.ns_window() else { return };
             // `window` 를 손에 쥔 채 메인 스레드에서 만든다(위와 같은 조건).
-            let Some(handle) = NsWindowHandle::from_tauri_ptr(raw) else {
-                return;
-            };
+            let Some(handle) = NsWindowHandle::from_tauri_ptr(raw) else { return };
             if front {
                 // ⭐ `show()`/`set_focus()` 가 아니다. `orderFrontRegardless` 만이
                 // 앱을 활성화하지 않고 창을 올린다(§3.1 표시 행).
@@ -324,9 +322,9 @@ impl<R: Runtime> WebviewOverlayRenderer<R> {
         if !ready {
             return;
         }
-        if let Err(e) =
-            self.app
-                .emit_to(EventTarget::webview_window(label), "overlay://frame", frame)
+        if let Err(e) = self
+            .app
+            .emit_to(EventTarget::webview_window(label), "overlay://frame", frame)
         {
             tracing::warn!(%label, error = %e, "failed to emit frame");
         }
@@ -370,10 +368,8 @@ impl<R: Runtime> OverlayRenderer for WebviewOverlayRenderer<R> {
             self.bar_created = true;
         }
 
-        let wanted: HashMap<u32, String> = displays
-            .iter()
-            .map(|d| (d.display_id, highlight_label(d.display_id)))
-            .collect();
+        let wanted: HashMap<u32, String> =
+            displays.iter().map(|d| (d.display_id, highlight_label(d.display_id))).collect();
 
         // 사라진 디스플레이의 창을 닫는다(§5 엣지케이스 1 — 핫플러그 해제).
         for (id, label) in &self.surfaces {
@@ -411,17 +407,10 @@ impl<R: Runtime> OverlayRenderer for WebviewOverlayRenderer<R> {
         Ok(())
     }
 
-    fn present(
-        &mut self,
-        frames: &[OverlayFrame],
-        bar: &SearchBarFrame,
-    ) -> Result<(), RenderError> {
+    fn present(&mut self, frames: &[OverlayFrame], bar: &SearchBarFrame) -> Result<(), RenderError> {
         for frame in frames {
             let Some(label) = self.surfaces.get(&frame.display_id).cloned() else {
-                tracing::warn!(
-                    display_id = frame.display_id,
-                    "no window for this display; dropping frame"
-                );
+                tracing::warn!(display_id = frame.display_id, "no window for this display; dropping frame");
                 continue;
             };
             // ⭐ 연결선이 이 창 몫으로 잘려 들어왔는지까지 남긴다 — 다중
@@ -443,10 +432,8 @@ impl<R: Runtime> OverlayRenderer for WebviewOverlayRenderer<R> {
         let height = SEARCH_BAR_HEIGHT_PT + rows as f64 * MATCH_ROW_PX;
         let changed = {
             let mut shared = self.shared.lock().unwrap();
-            let prev_rows = shared
-                .last_bar
-                .as_ref()
-                .map(|b| b.matches.len().min(MATCH_ROWS_VISIBLE));
+            let prev_rows =
+                shared.last_bar.as_ref().map(|b| b.matches.len().min(MATCH_ROWS_VISIBLE));
             shared.last_bar = Some(bar.clone());
             prev_rows != Some(rows)
         };
@@ -489,12 +476,7 @@ impl<R: Runtime> OverlayRenderer for WebviewOverlayRenderer<R> {
         // ⭐ Tauri 의 `show()` 로 창을 화면에 붙이고, 그다음
         // `orderFrontRegardless` 로 **우리가 건 레벨대로** 올린다.
         // ⛔ `set_focus()` 는 절대 부르지 않는다.
-        for label in self
-            .surfaces
-            .values()
-            .cloned()
-            .chain(std::iter::once(SEARCH_BAR_LABEL.to_string()))
-        {
+        for label in self.surfaces.values().cloned().chain(std::iter::once(SEARCH_BAR_LABEL.to_string())) {
             let app = self.app.clone();
             let l = label.clone();
             let _ = self.app.run_on_main_thread(move || {
@@ -640,18 +622,11 @@ pub fn overlay_surface_ready(app: tauri::AppHandle, label: String) {
     tracing::debug!(%label, has_frame = frame.is_some(), "overlay surface ready");
     if label == SEARCH_BAR_LABEL {
         if let Some(bar) = bar {
-            let _ = app.emit_to(
-                EventTarget::webview_window(&label),
-                "overlay://searchbar",
-                &bar,
-            );
+            let _ =
+                app.emit_to(EventTarget::webview_window(&label), "overlay://searchbar", &bar);
         }
     } else if let Some(frame) = frame {
-        let _ = app.emit_to(
-            EventTarget::webview_window(&label),
-            "overlay://frame",
-            &frame,
-        );
+        let _ = app.emit_to(EventTarget::webview_window(&label), "overlay://frame", &frame);
     }
 }
 
@@ -663,10 +638,7 @@ pub fn overlay_surface_ready(app: tauri::AppHandle, label: String) {
 /// 있으면 F-01 이 붙일 자리가 명확해진다.
 #[tauri::command]
 pub fn overlay_select_match(index: usize) {
-    tracing::debug!(
-        index,
-        "search bar match row clicked; applying the selection is F-01's scope"
-    );
+    tracing::debug!(index, "search bar match row clicked; applying the selection is F-01's scope");
 }
 
 // ── 검색 바 위치 영속화 (F-15 "부재 = 기본값") ──────────────────────────────
@@ -698,10 +670,7 @@ pub fn persist_search_bar_origin(store: &mut SettingsStore, x: f64, y: f64) {
 /// 전용이기 때문이다([`screens::screens`] 참조).
 #[must_use]
 pub fn overlay_displays() -> Vec<OverlayDisplay> {
-    screens::screens()
-        .into_iter()
-        .map(to_overlay_display)
-        .collect()
+    screens::screens().into_iter().map(to_overlay_display).collect()
 }
 
 fn to_overlay_display(s: ScreenInfo) -> OverlayDisplay {
@@ -745,11 +714,7 @@ impl OverlayController {
     }
 
     /// F-02 `on_display` 콜백의 소비자 (S-1·S-6).
-    pub fn ingest_display(
-        &mut self,
-        display_id: u32,
-        candidates: Vec<ultrakey_seek::TextCandidate>,
-    ) {
+    pub fn ingest_display(&mut self, display_id: u32, candidates: Vec<ultrakey_seek::TextCandidate>) {
         self.session.ingest_display(display_id, candidates);
         self.repaint();
     }
@@ -794,10 +759,7 @@ impl OverlayController {
         if self.session.displays() == displays.as_slice() {
             return;
         }
-        tracing::info!(
-            count = displays.len(),
-            "display configuration changed; repositioning overlay"
-        );
+        tracing::info!(count = displays.len(), "display configuration changed; repositioning overlay");
         self.refresh_displays(displays);
     }
 
@@ -861,12 +823,7 @@ mod tests {
     fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
             display_id: id,
-            frame: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
+            frame: Rect { x, y, width: w, height: h },
             backing_scale: 2.0,
         }
     }
@@ -892,12 +849,7 @@ mod tests {
         let previous = OverlayFrame {
             display_id: 1,
             highlights: Vec::new(),
-            line: Some(Segment {
-                x1: 0.0,
-                y1: 0.0,
-                x2: 10.0,
-                y2: 10.0,
-            }),
+            line: Some(Segment { x1: 0.0, y1: 0.0, x2: 10.0, y2: 10.0 }),
             palette: light.clone(),
             animate: true,
             omitted: 3,
@@ -906,10 +858,7 @@ mod tests {
         assert_eq!(cleared.display_id, 1);
         assert!(cleared.highlights.is_empty());
         assert_eq!(cleared.line, None);
-        assert_eq!(
-            cleared.palette, light,
-            "빈 프레임의 palette 는 직전 프레임에서 상속된다"
-        );
+        assert_eq!(cleared.palette, light, "빈 프레임의 palette 는 직전 프레임에서 상속된다");
         assert!(!cleared.animate);
         assert_eq!(cleared.omitted, 0);
 
@@ -956,12 +905,7 @@ mod tests {
             1,
             vec![TextCandidate::ocr(
                 "Save".into(),
-                Rect {
-                    x: 10.0,
-                    y: 10.0,
-                    width: 40.0,
-                    height: 20.0,
-                },
+                Rect { x: 10.0, y: 10.0, width: 40.0, height: 20.0 },
                 0.9,
                 1,
             )],
@@ -973,10 +917,7 @@ mod tests {
 
         // present 가 last_frames 에 실재 프레임을 기록했다(미준비 창 = 보관만).
         let stored = shared.lock().unwrap();
-        assert!(stored
-            .last_frames
-            .values()
-            .any(|f| !f.highlights.is_empty()));
+        assert!(stored.last_frames.values().any(|f| !f.highlights.is_empty()));
         drop(stored);
 
         // ⭐ 창이 준비된 경로(즉시 emit → emit_to)도 panic 없이 지나가는지

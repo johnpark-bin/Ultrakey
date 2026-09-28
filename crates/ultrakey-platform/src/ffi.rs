@@ -378,9 +378,15 @@ pub(crate) const K_UC_KEY_TRANSLATE_NO_DEAD_KEYS_MASK: u32 = 1;
 // toll-free bridged 라 `*const CFDictionary` 로 선언한다.
 #[link(name = "Security", kind = "framework")]
 extern "C" {
-    pub(crate) fn SecItemCopyMatching(query: *const CFDictionary, result: *mut *mut c_void) -> i32;
+    pub(crate) fn SecItemCopyMatching(
+        query: *const CFDictionary,
+        result: *mut *mut c_void,
+    ) -> i32;
 
-    pub(crate) fn SecItemAdd(attributes: *const CFDictionary, result: *mut *mut c_void) -> i32;
+    pub(crate) fn SecItemAdd(
+        attributes: *const CFDictionary,
+        result: *mut *mut c_void,
+    ) -> i32;
 
     pub(crate) fn SecItemUpdate(
         query: *const CFDictionary,

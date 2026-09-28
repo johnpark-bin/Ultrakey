@@ -37,7 +37,8 @@ fn main() {
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2_core_graphics::{
-        CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType,
+        CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
+        CGEventType,
     };
     use std::time::Duration;
 

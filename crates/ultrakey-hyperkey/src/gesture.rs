@@ -150,7 +150,9 @@ impl GestureParams {
         touches: &'a [GestureTouch],
     ) -> impl Iterator<Item = &'a GestureTouch> + use<'a> {
         let params = *self;
-        touches.iter().filter(move |t| !params.rejects(t))
+        touches
+            .iter()
+            .filter(move |t| !params.rejects(t))
     }
 }
 
@@ -221,7 +223,8 @@ impl GestureMachine {
 
     /// 프레임 하나를 소비한다. `now` 는 호출자가 주입하는 단조 밀리초다.
     pub fn on_frame(&mut self, frame: &GestureFrame<'_>, now: Millis) -> GestureVerdict {
-        let valid: Vec<GestureTouch> = self.params.valid_touches(frame.touches).copied().collect();
+        let valid: Vec<GestureTouch> =
+            self.params.valid_touches(frame.touches).copied().collect();
         match self.state {
             State::Idle => self.on_idle(&valid, now),
             State::ZoneContact {

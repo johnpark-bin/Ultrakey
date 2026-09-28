@@ -39,11 +39,7 @@ fn main() {
             let ms = t.elapsed().as_secs_f64() * 1000.0;
             let hangul = obs
                 .iter()
-                .filter(|o| {
-                    o.text
-                        .chars()
-                        .any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
-                })
+                .filter(|o| o.text.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)))
                 .count();
             let conf = if obs.is_empty() {
                 0.0
@@ -56,11 +52,7 @@ fn main() {
             );
             let sample: Vec<&str> = obs
                 .iter()
-                .filter(|o| {
-                    o.text
-                        .chars()
-                        .any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c))
-                })
+                .filter(|o| o.text.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)))
                 .take(6)
                 .map(|o| o.text.as_str())
                 .collect();

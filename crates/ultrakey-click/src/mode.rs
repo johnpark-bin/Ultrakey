@@ -156,7 +156,10 @@ mod tests {
             EventFlags::COMMAND | EventFlags::CONTROL,
             EventFlags::SHIFT | EventFlags::ALTERNATE,
             EventFlags::COMMAND | EventFlags::CONTROL | EventFlags::SHIFT,
-            EventFlags::COMMAND | EventFlags::CONTROL | EventFlags::ALTERNATE | EventFlags::SHIFT,
+            EventFlags::COMMAND
+                | EventFlags::CONTROL
+                | EventFlags::ALTERNATE
+                | EventFlags::SHIFT,
         ];
         for mods in undefined {
             assert_eq!(

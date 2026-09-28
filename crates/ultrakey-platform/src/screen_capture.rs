@@ -78,10 +78,7 @@ mod macos_impl {
         // `count` 는 유효한 출력 포인터다. CG 는 버퍼 크기를 넘겨 쓰지 않는다.
         let err = unsafe { CGGetActiveDisplayList(MAX_DISPLAYS, ids.as_mut_ptr(), &mut count) };
         if err != objc2_core_graphics::CGError::Success {
-            tracing::warn!(
-                ?err,
-                "CGGetActiveDisplayList failed; returning empty display list"
-            );
+            tracing::warn!(?err, "CGGetActiveDisplayList failed; returning empty display list");
             return Vec::new();
         }
         ids.iter()

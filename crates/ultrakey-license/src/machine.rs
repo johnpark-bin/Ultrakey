@@ -8,10 +8,12 @@
 //! 상태 머신 단위 테스트는 provider 를 목으로 바꿔가며 전이를 검증한다.
 
 use crate::clock::{Clock, Timestamp};
-use crate::decision::{cache_within_grace, evaluate_trial, next_last_seen, OfflineGrace};
+use crate::decision::{
+    cache_within_grace, evaluate_trial, next_last_seen, OfflineGrace,
+};
 use crate::provider::{
-    ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse, LicenseProvider,
-    ValidateRequest, ValidateResponse,
+    ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse,
+    LicenseProvider, ValidateRequest, ValidateResponse,
 };
 use crate::state::LicenseState;
 use crate::store::{CacheStore, LicenseCache, TrialClock, TrialRecord, TrialStore};
@@ -103,9 +105,11 @@ impl LicenseMachine {
         let activations = self
             .cache
             .read_cache()
-            .map(|c| ActivationsView {
-                used: c.activations_used,
-                limit: c.activations_limit,
+            .map(|c| {
+                ActivationsView {
+                    used: c.activations_used,
+                    limit: c.activations_limit,
+                }
             })
             .filter(|_| state == LicenseState::Licensed);
 
@@ -276,16 +280,10 @@ impl LicenseMachine {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivationOutcome {
-    Activated {
-        activations_used: u32,
-        activations_limit: u32,
-    },
+    Activated { activations_used: u32, activations_limit: u32 },
     InvalidKey,
     Refunded,
-    LimitReached {
-        activations_used: u32,
-        activations_limit: u32,
-    },
+    LimitReached { activations_used: u32, activations_limit: u32 },
     NetworkError,
 }
 
@@ -403,9 +401,7 @@ mod tests {
         let res = m.evaluate_on_start();
         assert_eq!(res.state, LicenseState::Trial);
         assert_eq!(res.trial.unwrap().days_remaining, Some(TRIAL_DAYS));
-        let t = store
-            .read()
-            .expect("최초 실행에서 기산점이 기록되어야 한다");
+        let t = store.read().expect("최초 실행에서 기산점이 기록되어야 한다");
         assert_eq!(t.clock.trial_started_at, T0);
     }
 
@@ -429,10 +425,7 @@ mod tests {
         let out = m.activate("KEY".into(), "DEV".into());
         assert!(matches!(
             out,
-            ActivationOutcome::Activated {
-                activations_limit: 3,
-                ..
-            }
+            ActivationOutcome::Activated { activations_limit: 3, .. }
         ));
         assert!(store.read_cache().is_some());
 
@@ -519,12 +512,7 @@ mod tests {
         m.activate("KEY".into(), "DEV".into());
 
         let out = m.deactivate("KEY".into(), "DEV".into());
-        assert_eq!(
-            out,
-            DeactivationOutcome::Deactivated {
-                activations_used: 0
-            }
-        );
+        assert_eq!(out, DeactivationOutcome::Deactivated { activations_used: 0 });
         assert!(store.read_cache().is_none());
 
         // 체험이 남아 있으므로(5일) 체험 중으로 복귀.

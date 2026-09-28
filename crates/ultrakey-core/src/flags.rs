@@ -61,8 +61,9 @@ impl EventFlags {
     /// ⭐ 실측: `~/Library/Preferences/com.knollsoft.Superkey.plist` 의
     /// `hyperFlags = 1966080` (`hyperkey.md` §3.1, app-bundle-analysis.md §2.1).
     /// `1966080 = 0x1E0000 = SHIFT(0x20000) | CONTROL(0x40000) | ALTERNATE(0x80000) | COMMAND(0x100000)`.
-    pub const HYPER_WITH_SHIFT: EventFlags =
-        EventFlags(Self::SHIFT.0 | Self::CONTROL.0 | Self::ALTERNATE.0 | Self::COMMAND.0);
+    pub const HYPER_WITH_SHIFT: EventFlags = EventFlags(
+        Self::SHIFT.0 | Self::CONTROL.0 | Self::ALTERNATE.0 | Self::COMMAND.0,
+    );
 
     /// hyper (`Include shift in hyper key` ☐) = `⌃⌥⌘`(shift 제외).
     pub const HYPER_NO_SHIFT: EventFlags =

@@ -319,9 +319,7 @@ impl SeekSessionMachine {
                 // 같은 경로 + toggle → 닫는다.
                 (ActivationPath::GlobalShortcut, SessionMode::Toggle) => {
                     self.session = None;
-                    vec![SessionEffect::Closed {
-                        reason: CloseReason::Toggled,
-                    }]
+                    vec![SessionEffect::Closed { reason: CloseReason::Toggled }]
                 }
                 // §3.3 — 다른 경로로 열린 세션에 들어온 트리거는 무시한다.
                 _ => Vec::new(),
@@ -564,10 +562,9 @@ impl SeekSessionMachine {
         let mut extra: Vec<TextCandidate> = Vec::new();
         for candidate in &cache.candidates {
             match candidate.display_id {
-                Some(display_id) if live_displays.contains(&display_id) => by_display
-                    .entry(display_id)
-                    .or_default()
-                    .push(candidate.clone()),
+                Some(display_id) if live_displays.contains(&display_id) => {
+                    by_display.entry(display_id).or_default().push(candidate.clone())
+                }
                 Some(display_id) => {
                     tracing::debug!(
                         display_id,
@@ -579,9 +576,7 @@ impl SeekSessionMachine {
         }
 
         for (display_id, candidates) in &by_display {
-            session
-                .overlay
-                .ingest_display(*display_id, candidates.clone());
+            session.overlay.ingest_display(*display_id, candidates.clone());
         }
         if !extra.is_empty() {
             session.overlay.ingest_extra(extra);
@@ -1309,7 +1304,10 @@ mod tests {
             "Settings"
         );
 
-        let effects = machine.handle_key(&key_down(KeyCode::RETURN, EventFlags::NONE), Some('\r'));
+        let effects = machine.handle_key(
+            &key_down(KeyCode::RETURN, EventFlags::NONE),
+            Some('\r'),
+        );
         assert_eq!(effects.len(), 1);
         let SessionEffect::Confirm(confirmed) = &effects[0] else {
             panic!("Confirm 이어야 한다: {effects:?}")
@@ -1430,16 +1428,10 @@ mod tests {
         // 검증에서 이걸 막지 않아 세션이 여는 순간 닫혔다.
         let opening_down = key_down(KeyCode::SPACE, EventFlags::ALTERNATE);
         assert!(machine.handle_key(&opening_down, Some(' ')).is_empty());
-        assert!(
-            machine.is_active(),
-            "세션을 연 그 누름이 세션을 닫으면 안 된다"
-        );
+        assert!(machine.is_active(), "세션을 연 그 누름이 세션을 닫으면 안 된다");
 
         // ② 그 키가 떼어진다 — 이제 빗장이 풀린다.
-        let opening_up = InputEvent {
-            kind: EventKind::KeyUp,
-            ..opening_down
-        };
+        let opening_up = InputEvent { kind: EventKind::KeyUp, ..opening_down };
         assert!(machine.handle_key(&opening_up, None).is_empty());
         assert!(machine.is_active());
 
@@ -1453,9 +1445,7 @@ mod tests {
         let effects = machine.handle_key(&ev, Some(' '));
         assert_eq!(
             effects,
-            vec![SessionEffect::Closed {
-                reason: CloseReason::Toggled
-            }]
+            vec![SessionEffect::Closed { reason: CloseReason::Toggled }]
         );
         assert!(!machine.is_active());
     }
@@ -1476,10 +1466,7 @@ mod tests {
 
         let ev = key_down(KeyCode::SPACE, EventFlags::ALTERNATE);
         assert!(machine.handle_key(&ev, Some(' ')).is_empty());
-        assert!(
-            machine.is_active(),
-            "다른 경로의 트리거는 세션을 닫지 않는다"
-        );
+        assert!(machine.is_active(), "다른 경로의 트리거는 세션을 닫지 않는다");
     }
 
     /// modifier 가 다르면 그냥 검색어 문자다 — 조합이 아니다.
@@ -1753,11 +1740,7 @@ mod tests {
         let effects = machine.set_query_external("검색".to_string());
         assert_eq!(effects, vec![SessionEffect::Repaint]);
         assert_eq!(machine.query(), "검색");
-        assert_eq!(
-            machine.state(),
-            SessionState::Opening,
-            "검출 전엔 Opening 유지"
-        );
+        assert_eq!(machine.state(), SessionState::Opening, "검출 전엔 Opening 유지");
 
         // 후보가 도착하면 누적된 쿼리로 즉시 필터된다(`machine.rs` §5 #3 버퍼링).
         let _ = machine.ingest_display(
@@ -1765,10 +1748,7 @@ mod tests {
             vec![candidate("검색기록", 0.0), candidate("설정", 100.0)],
         );
         let bar = machine.overlay().unwrap().search_bar_frame();
-        assert_eq!(
-            bar.total_matches, 1,
-            "버퍼된 쿼리가 도착 후보에 적용돼야 한다"
-        );
+        assert_eq!(bar.total_matches, 1, "버퍼된 쿼리가 도착 후보에 적용돼야 한다");
         assert_eq!(bar.matches[0].text, "검색기록");
     }
 
@@ -1806,11 +1786,7 @@ mod tests {
         // ② 검출 중 사용자 입력("설정" — IME 조합 → 100ms debounce 뒤 SetQuery).
         let effects = machine.set_query_external("설정".to_string());
         assert_eq!(effects, vec![SessionEffect::Repaint]);
-        assert_eq!(
-            machine.state(),
-            SessionState::Opening,
-            "검출 전엔 Opening 유지"
-        );
+        assert_eq!(machine.state(), SessionState::Opening, "검출 전엔 Opening 유지");
         let bar1 = machine.overlay().unwrap().search_bar_frame();
         assert!(bar1.detecting);
         assert_eq!(bar1.total_matches, 0);
@@ -1826,29 +1802,16 @@ mod tests {
             ],
         );
         let bar2 = machine.overlay().unwrap().search_bar_frame();
-        assert_eq!(
-            bar2.total_matches, 2,
-            "증분 트리거 — 버퍼된 쿼리로 즉시 필터링"
-        );
-        assert!(
-            bar2.detecting,
-            "아직 검출 진행 중 — '찾는 중…' 유지(잠정 매치)"
-        );
+        assert_eq!(bar2.total_matches, 2, "증분 트리거 — 버퍼된 쿼리로 즉시 필터링");
+        assert!(bar2.detecting, "아직 검출 진행 중 — '찾는 중…' 유지(잠정 매치)");
         assert_eq!(machine.state(), SessionState::Opening);
 
         // ④ 검출 완료 — detecting=false + Opening→Querying 전이(버퍼된 쿼리 있음).
         let effects = machine.finish_detection();
         assert_eq!(effects, vec![SessionEffect::Repaint]);
-        assert_eq!(
-            machine.state(),
-            SessionState::Querying,
-            "버퍼된 쿼리가 있으므로 Ready 가 아니라 Querying"
-        );
+        assert_eq!(machine.state(), SessionState::Querying, "버퍼된 쿼리가 있으므로 Ready 가 아니라 Querying");
         let bar3 = machine.overlay().unwrap().search_bar_frame();
-        assert!(
-            !bar3.detecting,
-            "검출 완료 — 카운터 '없음'/'k / n' 확정 분기"
-        );
+        assert!(!bar3.detecting, "검출 완료 — 카운터 '없음'/'k / n' 확정 분기");
         assert_eq!(bar3.total_matches, 2);
     }
 
@@ -1868,11 +1831,7 @@ mod tests {
         let effects = machine.set_query_external(String::new());
         assert_eq!(effects, vec![SessionEffect::Repaint]);
         assert!(machine.query().is_empty());
-        assert_eq!(
-            machine.state(),
-            SessionState::Querying,
-            "Backspace 분기와 같은 결"
-        );
+        assert_eq!(machine.state(), SessionState::Querying, "Backspace 분기와 같은 결");
         assert_eq!(
             machine.overlay().unwrap().search_bar_frame().total_matches,
             0
@@ -1926,17 +1885,11 @@ mod tests {
         let _ = machine.ingest_display(1, vec![candidate("설정", 0.0)]);
         let _ = machine.finish_detection();
         let _ = machine.set_query_external("설".to_string());
-        assert_eq!(
-            machine.overlay().unwrap().search_bar_frame().total_matches,
-            1
-        );
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 1);
         let _ = machine.handle_key(&key_down(KeyCode::RETURN, EventFlags::NONE), Some('\r'));
         assert_eq!(machine.state(), SessionState::Confirming);
 
-        assert!(
-            machine.defocused().is_empty(),
-            "Confirming 은 닫으면 안 된다"
-        );
+        assert!(machine.defocused().is_empty(), "Confirming 은 닫으면 안 된다");
         assert!(machine.is_active());
     }
 
@@ -1966,21 +1919,11 @@ mod tests {
             candidate("Row B", 100.0),
             TextCandidate::accessibility(
                 "AX Cancel".to_string(),
-                Rect {
-                    x: 500.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
+                Rect { x: 500.0, y: 0.0, width: 10.0, height: 10.0 },
             ),
             TextCandidate::window_title(
                 "Settings".to_string(),
-                Rect {
-                    x: 800.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
+                Rect { x: 800.0, y: 0.0, width: 10.0, height: 10.0 },
                 42,
                 1337,
             ),
@@ -2034,11 +1977,7 @@ mod tests {
         let cache =
             SeekDetectionCache::new(vec![candidate("Row A", 0.0), candidate("Row B", 100.0)]);
         let _ = machine.inject_cached(&cache);
-        assert_eq!(
-            machine.state(),
-            SessionState::Querying,
-            "질의가 있으므로 Querying"
-        );
+        assert_eq!(machine.state(), SessionState::Querying, "질의가 있으므로 Querying");
         assert_eq!(
             machine.overlay().unwrap().search_bar_frame().total_matches,
             2,
@@ -2069,10 +2008,7 @@ mod tests {
         assert!(machine.is_active(), "빈 캐시 주입은 세션을 닫지 않는다");
         assert_eq!(machine.state(), SessionState::Ready);
         assert!(!machine.overlay().unwrap().is_detecting());
-        assert_eq!(
-            machine.overlay().unwrap().search_bar_frame().total_matches,
-            0
-        );
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 0);
         assert_eq!(machine.all_candidates(), Some(Vec::new()));
     }
 
@@ -2140,15 +2076,13 @@ mod tests {
             false,
             (0.0, 0.0),
         );
-        let _ = machine.ingest_display(1, vec![candidate("Row A", 0.0), candidate("Row B", 100.0)]);
+        let _ = machine.ingest_display(
+            1,
+            vec![candidate("Row A", 0.0), candidate("Row B", 100.0)],
+        );
         let _ = machine.ingest_extra(vec![TextCandidate::window_title(
             "Settings".to_string(),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 800.0,
-                height: 600.0,
-            },
+            Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 },
             42,
             1337,
         )]);
@@ -2159,10 +2093,7 @@ mod tests {
         for c in ['r', 'o', 'w'] {
             let _ = machine.handle_key(&key_down(KeyCode(0), EventFlags::NONE), Some(c));
         }
-        assert_eq!(
-            machine.overlay().unwrap().search_bar_frame().total_matches,
-            2
-        );
+        assert_eq!(machine.overlay().unwrap().search_bar_frame().total_matches, 2);
 
         let all = machine.all_candidates().expect("세션이 있으므로 Some");
         assert_eq!(all.len(), 3, "by_display 2 + extra 1");
@@ -2198,23 +2129,13 @@ mod tests {
             candidate("Row A", 0.0), // 디스플레이 1 — 살아 있다.
             TextCandidate::ocr(
                 "Ghost".to_string(),
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
+                Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
                 0.9,
                 99, // 현재 세션에 없는 디스플레이.
             ),
             TextCandidate::accessibility(
                 "AX Cancel".to_string(),
-                Rect {
-                    x: 500.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
+                Rect { x: 500.0, y: 0.0, width: 10.0, height: 10.0 },
             ),
         ]);
         let _ = machine.inject_cached(&cache);

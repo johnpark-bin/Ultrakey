@@ -539,10 +539,7 @@ mod tests {
 
     impl HidMappingBackend for FakeBackend {
         fn read_current(&self, device: &DeviceMatch) -> Result<DeviceMappingRead, HidMappingError> {
-            if self
-                .unmatched
-                .contains(&(device.vendor_id, device.product_id))
-            {
+            if self.unmatched.contains(&(device.vendor_id, device.product_id)) {
                 return Ok(DeviceMappingRead {
                     services: vec![],
                     aggregated: vec![],
@@ -1200,13 +1197,7 @@ mod tests {
         // 옛 매칭 사전이 내장 키보드에 대해 정확히 이랬다 — --set 은 exit 0, 되읽기는 0행.
         let err = verify_readback(&device_a(), &[d1()], &read_of(vec![])).unwrap_err();
         assert!(
-            matches!(
-                err,
-                HidMappingError::NotApplied {
-                    matched_services: 0,
-                    ..
-                }
-            ),
+            matches!(err, HidMappingError::NotApplied { matched_services: 0, .. }),
             "{err}"
         );
     }
@@ -1262,10 +1253,7 @@ mod tests {
         assert!(!mgr.d1_confirmed(), "되읽기에 없으면 D-1 은 미확인이다");
         // ③(정확집합)을 건너뛰었으므로 원장은 ①의 상위집합(우리 것 포함)으로 남는다 —
         // 다음 재조정이 다시 시도할 수 있게.
-        assert_eq!(
-            ledger.load().get(&dev).cloned().unwrap_or_default(),
-            vec![d1()]
-        );
+        assert_eq!(ledger.load().get(&dev).cloned().unwrap_or_default(), vec![d1()]);
     }
 
     #[test]

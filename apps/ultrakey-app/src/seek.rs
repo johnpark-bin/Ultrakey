@@ -428,7 +428,9 @@ impl SeekController {
                     env.shared
                         .seek_session_active
                         .store(false, Ordering::Release);
-                    env.shared.seek_input_box.store(false, Ordering::Release);
+                    env.shared
+                        .seek_input_box
+                        .store(false, Ordering::Release);
                     env.shared
                         .seek_semicolon_cycles
                         .store(false, Ordering::Release);
@@ -762,9 +764,10 @@ fn run_worker(
     // ⭐ F-04(이슈 #44) — `NullClickExecutor` 자리를 실 구현으로 교체한다.
     // executor 는 이 워커가 단독 소유하므로 설정은 `configure` 호출로만
     // 바뀐다(락 없음).
-    let executor: Box<dyn ClickExecutor + Send> = Box::new(
-        crate::click_executor::ClickExecutor::new(app.clone(), initial_click_settings),
-    );
+    let executor: Box<dyn ClickExecutor + Send> = Box::new(crate::click_executor::ClickExecutor::new(
+        app.clone(),
+        initial_click_settings,
+    ));
 
     let env = WorkerEnv {
         app,

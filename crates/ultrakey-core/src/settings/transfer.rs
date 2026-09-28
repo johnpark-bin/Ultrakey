@@ -174,8 +174,8 @@ pub fn serialize_export(envelope: &ExportEnvelope) -> Result<String, StoreError>
 
 /// 파일 내용을 봉투로 해석한다. ⭐ **저장소를 건드리지 않는다** — 판정만 한다.
 pub fn parse_export(raw: &str) -> Result<ExportEnvelope, ImportError> {
-    let envelope: ExportEnvelope =
-        serde_json::from_str(raw).map_err(|e| ImportError::NotAnExportFile(e.to_string()))?;
+    let envelope: ExportEnvelope = serde_json::from_str(raw)
+        .map_err(|e| ImportError::NotAnExportFile(e.to_string()))?;
 
     if envelope.kind != EXPORT_KIND {
         return Err(ImportError::WrongKind {
@@ -267,8 +267,7 @@ pub fn apply_import(
         removed_keys,
         absent_devices,
         backup,
-        migrated_from: (envelope.schema_version < SCHEMA_VERSION)
-            .then_some(envelope.schema_version),
+        migrated_from: (envelope.schema_version < SCHEMA_VERSION).then_some(envelope.schema_version),
     })
 }
 
@@ -342,12 +341,7 @@ mod tests {
         ]);
         let env = build_export(&store, "0.1.0", "t".into());
 
-        assert_eq!(
-            env.values.len(),
-            1,
-            "제외 대상이 빠져야 한다: {:?}",
-            env.values
-        );
+        assert_eq!(env.values.len(), 1, "제외 대상이 빠져야 한다: {:?}", env.values);
         assert!(!env.values.contains_key("perDevice._managed"));
         assert!(!env.values.contains_key("ui.lastTab"));
     }
@@ -436,10 +430,7 @@ mod tests {
     #[test]
     fn import_keeps_this_devices_kernel_ledger_and_window_state() {
         let (mut store, _g) = store_with(&[
-            (
-                "perDevice._managed",
-                json!({"5ac:24f": [{"src": 1, "dst": 2}]}),
-            ),
+            ("perDevice._managed", json!({"5ac:24f": [{"src": 1, "dst": 2}]})),
             ("ui.windowWidth", json!(900)),
             ("hyperkey.hyper.enabled", json!(true)),
         ]);
@@ -500,10 +491,7 @@ mod tests {
             values: BTreeMap::from([("hyperkey.hyper.enabled".to_string(), json!(true))]),
         };
         let outcome = apply_import(&mut store, &env, &[], "pre-import-test").unwrap();
-        assert_eq!(
-            outcome.backup, None,
-            "저장 파일이 없었으면 백업할 것도 없다"
-        );
+        assert_eq!(outcome.backup, None, "저장 파일이 없었으면 백업할 것도 없다");
         assert_eq!(store.get::<bool>("hyperkey.hyper.enabled"), Some(true));
     }
 
@@ -520,10 +508,7 @@ mod tests {
             app_version: "0.1.0".into(),
             values: BTreeMap::from([
                 ("perDevice.5ac:24f.keyRemap.rows".to_string(), json!([])),
-                (
-                    "perDevice.dead:beef.functionKeys.f1".to_string(),
-                    json!("Mute"),
-                ),
+                ("perDevice.dead:beef.functionKeys.f1".to_string(), json!("Mute")),
                 ("perDevice.all.keyRemap.rows".to_string(), json!([])),
             ]),
         };
@@ -538,10 +523,7 @@ mod tests {
 
     #[test]
     fn device_id_extraction_ignores_the_common_layer_and_the_ledger() {
-        assert_eq!(
-            device_id_of("perDevice.5ac:24f.keyRemap.rows"),
-            Some("5ac:24f")
-        );
+        assert_eq!(device_id_of("perDevice.5ac:24f.keyRemap.rows"), Some("5ac:24f"));
         assert_eq!(device_id_of("perDevice.all.keyRemap.rows"), None);
         assert_eq!(device_id_of("perDevice._managed"), None);
         assert_eq!(device_id_of("hyperkey.hyper.enabled"), None);

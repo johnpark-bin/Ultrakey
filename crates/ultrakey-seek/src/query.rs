@@ -76,12 +76,7 @@ mod tests {
     fn candidate(text: &str) -> TextCandidate {
         TextCandidate::ocr(
             text.to_string(),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
+            Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
             0.9,
             1,
         )
@@ -137,9 +132,7 @@ mod tests {
     #[test]
     fn empty_query_matches_all_when_configured() {
         let candidates = vec![candidate("A"), candidate("B")];
-        let params = QueryParams {
-            empty_query_matches_all: true,
-        };
+        let params = QueryParams { empty_query_matches_all: true };
         let matched = filter_by_query(&candidates, "", params);
         assert_eq!(matched.len(), 2);
     }
@@ -151,9 +144,7 @@ mod tests {
         let matched = filter_by_query(&candidates, "   ", QueryParams::default());
         assert!(matched.is_empty());
 
-        let params = QueryParams {
-            empty_query_matches_all: true,
-        };
+        let params = QueryParams { empty_query_matches_all: true };
         let matched_all = filter_by_query(&candidates, "   ", params);
         assert_eq!(matched_all.len(), 1);
     }

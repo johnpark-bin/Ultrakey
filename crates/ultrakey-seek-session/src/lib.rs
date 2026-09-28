@@ -39,9 +39,7 @@ pub mod settings;
 
 pub use cache::SeekDetectionCache;
 pub use config::{ActivationPath, SeekConfig, SessionMode};
-pub use confirm::{
-    ClickError, ClickExecutor, ClickSettings, ConfirmAction, ConfirmedMatch, NullClickExecutor,
-};
+pub use confirm::{ClickError, ClickExecutor, ClickSettings, ConfirmAction, ConfirmedMatch, NullClickExecutor};
 pub use keys::{classify, SessionKey};
 pub use machine::{CloseReason, SeekSessionMachine, SessionEffect, SessionState};
 pub use settings::{SeekSettings, SeekShortcut};

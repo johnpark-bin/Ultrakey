@@ -3,9 +3,9 @@
 
 use super::GestureFrame;
 use crate::gesture::{GestureMachine, GestureParams, GestureTouch, GestureVerdict};
-use crate::TrackpadArea;
 use ultrakey_core::time::Millis;
 use ultrakey_core::trackpad::TrackpadPhase;
+use crate::TrackpadArea;
 
 /// 표면 크기 가정: 150mm × 80mm — 테스트 전체가 이 비율을 고정한다.
 const W: f64 = 150.0;
@@ -213,10 +213,7 @@ fn force_release_engaged_publishes_release_signal() {
     let engage = GestureFrame {
         touches: &[touch(1, GestureTouch::STAGE_TOUCHING, tx, ty)],
     };
-    assert_eq!(
-        m.on_frame(&engage, Millis(10)),
-        GestureVerdict::HyperEngaged
-    );
+    assert_eq!(m.on_frame(&engage, Millis(10)), GestureVerdict::HyperEngaged);
 
     // Engaged 도중 설정이 꺼졌다 → 강제 해제(§8).
     assert_eq!(m.force_release(), GestureVerdict::HyperReleased);
@@ -300,10 +297,7 @@ fn freeze_precedes_trigger_as_separate_steps() {
     // 5mm 하향 = 프리즈(4mm) 초과, 트리거(9mm) 미달. 시작점(0.97) 기준 누적.
     let p5 = touch(1, GestureTouch::STAGE_TOUCHING, 0.5, 0.97 - 5.0 / H);
     let frame2 = GestureFrame { touches: &[p5] };
-    assert_eq!(
-        m.on_frame(&frame2, Millis(30)),
-        GestureVerdict::CursorFrozen
-    );
+    assert_eq!(m.on_frame(&frame2, Millis(30)), GestureVerdict::CursorFrozen);
     assert_eq!(m.phase(), TrackpadPhase::Frozen);
 
     // 10mm 하향(누적, 시작점 기준) — 트리거.
@@ -347,17 +341,11 @@ fn engaged_survives_extra_touch() {
     m.on_frame(&down, Millis(0));
     let p9 = touch(1, GestureTouch::STAGE_TOUCHING, 0.5, 0.97 - 10.0 / H);
     let engage = GestureFrame { touches: &[p9] };
-    assert_eq!(
-        m.on_frame(&engage, Millis(10)),
-        GestureVerdict::HyperEngaged
-    );
+    assert_eq!(m.on_frame(&engage, Millis(10)), GestureVerdict::HyperEngaged);
 
     // 두 번째 접촉이 닿아도 유지.
     let frame2 = GestureFrame {
-        touches: &[
-            touch(1, GestureTouch::STAGE_TOUCHING, 0.5, 0.85),
-            touch(2, GestureTouch::STAGE_MAKE_TOUCH, 0.3, 0.3),
-        ],
+        touches: &[touch(1, GestureTouch::STAGE_TOUCHING, 0.5, 0.85), touch(2, GestureTouch::STAGE_MAKE_TOUCH, 0.3, 0.3)],
     };
     assert_eq!(m.on_frame(&frame2, Millis(100)), GestureVerdict::Unchanged);
     assert_eq!(m.phase(), TrackpadPhase::Engaged);

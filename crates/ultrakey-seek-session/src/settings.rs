@@ -182,7 +182,9 @@ impl SeekSettings {
             // 쓰면 부재가 `false` 로 읽혀 켜짐(☑) 클론 결정을 조용히 어기게 된다 —
             // `change_click_modes_with_modifiers` 의 "부재 = true" 주석 관례를
             // 따른다. ⚠️ 실측 기본값이 없는 신규 기능이라 이 값은 클론 설계 결정이다.
-            include_window_titles: store.get(keys::SEEK_INCLUDE_WINDOW_TITLES).unwrap_or(true),
+            include_window_titles: store
+                .get(keys::SEEK_INCLUDE_WINDOW_TITLES)
+                .unwrap_or(true),
         }
     }
 
@@ -311,11 +313,7 @@ mod tests {
     fn from_store_search_language_absent_en_and_nonenglish() {
         let store = SettingsStore::in_memory();
         assert_eq!(SeekSettings::from_store(&store).search_language, None);
-        assert!(
-            !SeekSettings::from_store(&store)
-                .to_config(false)
-                .input_box_mode
-        );
+        assert!(!SeekSettings::from_store(&store).to_config(false).input_box_mode);
 
         let mut store = SettingsStore::in_memory();
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"en").unwrap();
@@ -326,34 +324,22 @@ mod tests {
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"ko").unwrap();
         let settings = SeekSettings::from_store(&store);
         assert_eq!(settings.search_language.as_deref(), Some("ko"));
-        assert!(
-            settings.to_config(false).input_box_mode,
-            "비영어 명시 → 인풋 박스"
-        );
+        assert!(settings.to_config(false).input_box_mode, "비영어 명시 → 인풋 박스");
 
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"zh").unwrap();
         let settings = SeekSettings::from_store(&store);
         assert_eq!(settings.search_language.as_deref(), Some("zh"));
-        assert!(
-            settings.to_config(false).input_box_mode,
-            "비영어 명시 → 인풋 박스"
-        );
+        assert!(settings.to_config(false).input_box_mode, "비영어 명시 → 인풋 박스");
 
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"ja").unwrap();
         let settings = SeekSettings::from_store(&store);
         assert_eq!(settings.search_language.as_deref(), Some("ja"));
-        assert!(
-            settings.to_config(false).input_box_mode,
-            "비영어 명시 → 인풋 박스"
-        );
+        assert!(settings.to_config(false).input_box_mode, "비영어 명시 → 인풋 박스");
 
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"es").unwrap();
         let settings = SeekSettings::from_store(&store);
         assert_eq!(settings.search_language.as_deref(), Some("es"));
-        assert!(
-            settings.to_config(false).input_box_mode,
-            "비영어 명시 → 인풋 박스"
-        );
+        assert!(settings.to_config(false).input_box_mode, "비영어 명시 → 인풋 박스");
 
         // 빈 문자열은 부재와 같은 취급(영어 기본으로 정규화).
         store.set(keys::SEEK_SEARCH_LANGUAGE, &"").unwrap();
@@ -428,10 +414,14 @@ mod tests {
         );
 
         let mut store = SettingsStore::in_memory();
-        store.set(keys::SEEK_INCLUDE_WINDOW_TITLES, &false).unwrap();
+        store
+            .set(keys::SEEK_INCLUDE_WINDOW_TITLES, &false)
+            .unwrap();
         assert!(!SeekSettings::from_store(&store).include_window_titles);
 
-        store.set(keys::SEEK_INCLUDE_WINDOW_TITLES, &true).unwrap();
+        store
+            .set(keys::SEEK_INCLUDE_WINDOW_TITLES, &true)
+            .unwrap();
         assert!(SeekSettings::from_store(&store).include_window_titles);
     }
 

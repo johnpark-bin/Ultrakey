@@ -279,11 +279,7 @@ impl KeyStateTable {
         let mut n = 0usize;
 
         for rule in &rules.modifier_rules {
-            if let Some(existing) = new_slots[..n]
-                .iter_mut()
-                .flatten()
-                .find(|s| s.key == rule.source)
-            {
+            if let Some(existing) = new_slots[..n].iter_mut().flatten().find(|s| s.key == rule.source) {
                 existing.kind = Some(rule.kind);
                 existing.rule_flags = rule.flags;
             } else if n < MAX_TRACKED_KEYS {
@@ -318,11 +314,7 @@ impl KeyStateTable {
                 _ => EventFlags::NONE,
             };
 
-            if let Some(existing) = new_slots[..n]
-                .iter_mut()
-                .flatten()
-                .find(|s| s.key == sa.key)
-            {
+            if let Some(existing) = new_slots[..n].iter_mut().flatten().find(|s| s.key == sa.key) {
                 existing.has_quick_press = sa.quick_press.is_some();
                 existing.has_double_tap = sa.double_tap.is_some();
                 // 같은 키가 hyper/meh/bleh 소스이기도 하면 그쪽 flags 가 우선한다 —
@@ -474,10 +466,7 @@ mod tests {
 
         // 같은 규칙으로 다시 등록해도 활성 상태가 유지되어야 한다.
         t.register_sources(&rules);
-        assert_eq!(
-            t.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(t.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
     }
 
     #[test]
@@ -546,10 +535,7 @@ mod tests {
 
         // 슬롯이 하나로 합쳐졌다 — modifier 정보와 액션 정보를 동시에 담는다.
         assert_eq!(t.slot_count(), 1);
-        assert_eq!(
-            t.slot_flags_for(KeyCode::CAPS_LOCK),
-            EventFlags::HYPER_WITH_SHIFT
-        );
+        assert_eq!(t.slot_flags_for(KeyCode::CAPS_LOCK), EventFlags::HYPER_WITH_SHIFT);
         assert!(t.has_quick_press(KeyCode::CAPS_LOCK));
         assert!(!t.has_double_tap(KeyCode::CAPS_LOCK));
     }

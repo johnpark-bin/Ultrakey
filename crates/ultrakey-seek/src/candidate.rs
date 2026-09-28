@@ -89,12 +89,7 @@ mod tests {
     /// §3.2 A4 — OCR 후보 생성자가 source/confidence/display_id 를 명세대로 채우는가.
     #[test]
     fn ocr_constructor_fills_source_confidence_display_id() {
-        let rect = Rect {
-            x: 1.0,
-            y: 2.0,
-            width: 3.0,
-            height: 4.0,
-        };
+        let rect = Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 };
         let c = TextCandidate::ocr("Hello".to_string(), rect, 0.87, 5);
         assert_eq!(c.text, "Hello");
         assert_eq!(c.frame, rect);
@@ -107,12 +102,7 @@ mod tests {
     /// (AX 에는 신뢰도 개념이 없고, 디스플레이를 특정하지 않는다).
     #[test]
     fn accessibility_constructor_has_no_confidence_or_display_id() {
-        let rect = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 10.0,
-            height: 10.0,
-        };
+        let rect = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
         let c = TextCandidate::accessibility("World".to_string(), rect);
         assert_eq!(c.text, "World");
         assert_eq!(c.frame, rect);
@@ -127,12 +117,7 @@ mod tests {
     /// 전용 필드(confidence/display_id)는 None 으로 둬야 한다.
     #[test]
     fn window_title_constructor_fills_window_id_and_pid() {
-        let rect = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 800.0,
-            height: 600.0,
-        };
+        let rect = Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
         let c = TextCandidate::window_title("Settings".to_string(), rect, 42, 1337);
         assert_eq!(c.text, "Settings");
         assert_eq!(c.frame, rect);

@@ -352,7 +352,10 @@ fn start_sessions(
                     force_touch = device.supports_force.unwrap_or(false),
                     "Registered multitouch device for the hyper gesture"
                 );
-                sessions.push(DeviceSession { device_id, session });
+                sessions.push(DeviceSession {
+                    device_id,
+                    session,
+                });
             }
             Err(e) => {
                 // 그 장치만 포기한다 — 나머지 장치와 이 기능에는 무영향(§8).

@@ -43,9 +43,7 @@ impl EventKind {
     pub fn is_drag(self) -> bool {
         matches!(
             self,
-            EventKind::LeftMouseDragged
-                | EventKind::RightMouseDragged
-                | EventKind::OtherMouseDragged
+            EventKind::LeftMouseDragged | EventKind::RightMouseDragged | EventKind::OtherMouseDragged
         )
     }
 
@@ -61,10 +59,7 @@ impl EventKind {
 
     /// 키보드 이벤트(마우스·탭 상태 통지 제외).
     pub fn is_key(self) -> bool {
-        matches!(
-            self,
-            EventKind::KeyDown | EventKind::KeyUp | EventKind::FlagsChanged
-        )
+        matches!(self, EventKind::KeyDown | EventKind::KeyUp | EventKind::FlagsChanged)
     }
 }
 

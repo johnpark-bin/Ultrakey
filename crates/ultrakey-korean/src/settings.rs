@@ -190,15 +190,10 @@ impl KoreanSettings {
             // "modifier 부재" 는 F-19 AloneTap 의 FSM(단독 탭/홀드 경계)이 보장한다.
             rules.push(LanguageRule {
                 id: RuleId::Language(17),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::CAPS_LOCK,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
                 app_gate: Some(LanguageGate::Korean),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::SPACE,
-                    flags: EventFlags(0x0004_0001),
-                },
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
             });
         }
 
@@ -207,15 +202,10 @@ impl KoreanSettings {
             // `active_synth_flags` 검사(arbitration.rs) + 충돌 대화상자가 담당(명세 §3.6).
             rules.push(LanguageRule {
                 id: RuleId::Language(18),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::RIGHT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
                 app_gate: Some(LanguageGate::Korean),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::SPACE,
-                    flags: EventFlags(0x0004_0001),
-                },
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
             });
         }
 
@@ -242,10 +232,7 @@ mod tests {
     #[test]
     fn from_store_on_empty_store_matches_default() {
         let store = SettingsStore::in_memory();
-        assert_eq!(
-            KoreanSettings::from_store(&store),
-            KoreanSettings::default()
-        );
+        assert_eq!(KoreanSettings::from_store(&store), KoreanSettings::default());
     }
 
     /// ⚠️ 부재 = true 반전의 핵심 회귀 테스트 — 다른 필드를 하나 건드려도
@@ -259,10 +246,7 @@ mod tests {
 
         let s = KoreanSettings::from_store(&store);
         assert!(s.won_key_types_backtick);
-        assert!(
-            s.disable_in_remote_desktop,
-            "부재 상태의 항목 5 는 true 로 읽혀야 한다"
-        );
+        assert!(s.disable_in_remote_desktop, "부재 상태의 항목 5 는 true 로 읽혀야 한다");
     }
 
     /// 사용자가 명시적으로 항목 5 를 끄면 그 값을 그대로 읽는다.
@@ -341,11 +325,7 @@ mod tests {
             ..KoreanSettings::default()
         };
         let rules = s.to_rules();
-        assert_eq!(
-            rules.len(),
-            2,
-            "2단계(한/영·한자) 두 규칙이 나와야 한다: {rules:?}"
-        );
+        assert_eq!(rules.len(), 2, "2단계(한/영·한자) 두 규칙이 나와야 한다: {rules:?}");
 
         assert_eq!(rules[0].id, RuleId::Korean(14));
         assert_eq!(rules[0].trigger_key, KeyCode::JIS_KANA);
@@ -376,11 +356,7 @@ mod tests {
             right_command_switches_input_source: false,
         };
         let rules = s.to_rules();
-        assert_eq!(
-            rules.len(),
-            4,
-            "F-16.1~F-16.4 네 규칙 전부가 나와야 한다: {rules:?}"
-        );
+        assert_eq!(rules.len(), 4, "F-16.1~F-16.4 네 규칙 전부가 나와야 한다: {rules:?}");
     }
 
     // ── ⭐ K9(이슈 #73, D-K18) — modifier+문자키 영어 소문자 변환 ─────────────────

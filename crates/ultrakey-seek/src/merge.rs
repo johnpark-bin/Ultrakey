@@ -176,12 +176,7 @@ mod tests {
     use crate::transform::Rect;
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
-        Rect {
-            x,
-            y,
-            width: w,
-            height: h,
-        }
+        Rect { x, y, width: w, height: h }
     }
 
     /// §3.4 M3 — OCR 과 AX 가 같은 위치·같은 텍스트일 때 OCR 이 남고 AX 가
@@ -424,9 +419,7 @@ mod tests {
         ];
         let merged = merge_window_titles(Vec::new(), titles);
         assert_eq!(merged.len(), 2);
-        assert!(merged
-            .iter()
-            .all(|c| c.source == CandidateSource::WindowTitle));
+        assert!(merged.iter().all(|c| c.source == CandidateSource::WindowTitle));
         let ids: Vec<Option<u32>> = merged.iter().map(|c| c.window_id).collect();
         assert_eq!(ids, vec![Some(1), Some(2)]);
     }

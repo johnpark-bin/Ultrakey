@@ -24,10 +24,10 @@ use ultrakey_license::{
 use ultrakey_platform::device_id;
 
 // 저장소 구현체 — 컴파일 타임 분기(위 모듈 독 주석·명세 §3.5 개정 참조).
-#[cfg(not(feature = "keychain-store"))]
-use ultrakey_license::{FileStore, InMemoryStore};
 #[cfg(feature = "keychain-store")]
 use ultrakey_platform::keychain::KeychainStore;
+#[cfg(not(feature = "keychain-store"))]
+use ultrakey_license::{FileStore, InMemoryStore};
 
 /// F-12 실행 시점 상태 판정·활성화·비활성화를 앱 루프에 노출하는 컨트롤러.
 ///
@@ -75,7 +75,12 @@ impl LicenseController {
 
         let provider: Arc<dyn ultrakey_license::LicenseProvider> =
             Arc::new(NoopLicenseProvider::new());
-        let machine = LicenseMachine::new(Arc::new(SystemClock), trial, cache.clone(), provider);
+        let machine = LicenseMachine::new(
+            Arc::new(SystemClock),
+            trial,
+            cache.clone(),
+            provider,
+        );
         Arc::new(Self {
             machine: Mutex::new(machine),
             store: cache,

@@ -8,10 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use ultrakey_core::settings::{keys, SettingsStore};
 
-use crate::popups::{
-    ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger,
-    QuickPressCapsAction, RemapCapsTarget,
-};
+use crate::popups::{ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
 
 fn default_remap_caps_target() -> RemapCapsTarget {
     RemapCapsTarget::LeftControl
@@ -56,10 +53,7 @@ pub struct CapsLockRemapSettings {
 
 impl Default for CapsLockRemapSettings {
     fn default() -> Self {
-        CapsLockRemapSettings {
-            enabled: false,
-            target: RemapCapsTarget::LeftControl,
-        }
+        CapsLockRemapSettings { enabled: false, target: RemapCapsTarget::LeftControl }
     }
 }
 
@@ -75,10 +69,7 @@ pub struct CapsQuickPressSettings {
 
 impl Default for CapsQuickPressSettings {
     fn default() -> Self {
-        CapsQuickPressSettings {
-            enabled: false,
-            action: QuickPressCapsAction::CapsLock,
-        }
+        CapsQuickPressSettings { enabled: false, action: QuickPressCapsAction::CapsLock }
     }
 }
 
@@ -93,10 +84,7 @@ pub struct CapsHjklArrowsSettings {
 
 impl Default for CapsHjklArrowsSettings {
     fn default() -> Self {
-        CapsHjklArrowsSettings {
-            enabled: false,
-            key_set: ArrowKeySet::Hjkl,
-        }
+        CapsHjklArrowsSettings { enabled: false, key_set: ArrowKeySet::Hjkl }
     }
 }
 
@@ -111,10 +99,7 @@ pub struct CapsHomeRowSettings {
 
 impl Default for CapsHomeRowSettings {
     fn default() -> Self {
-        CapsHomeRowSettings {
-            enabled: false,
-            scheme: HomeRowScheme::SymbolRow,
-        }
+        CapsHomeRowSettings { enabled: false, scheme: HomeRowScheme::SymbolRow }
     }
 }
 
@@ -130,10 +115,7 @@ pub struct ShiftQuickPressBracketsSettings {
 
 impl Default for ShiftQuickPressBracketsSettings {
     fn default() -> Self {
-        ShiftQuickPressBracketsSettings {
-            enabled: false,
-            pair: BracketPair::Parens,
-        }
+        ShiftQuickPressBracketsSettings { enabled: false, pair: BracketPair::Parens }
     }
 }
 
@@ -148,10 +130,7 @@ pub struct PasteWithoutFormattingSettings {
 
 impl Default for PasteWithoutFormattingSettings {
     fn default() -> Self {
-        PasteWithoutFormattingSettings {
-            enabled: false,
-            trigger: PasteTrigger::RightCommand,
-        }
+        PasteWithoutFormattingSettings { enabled: false, trigger: PasteTrigger::RightCommand }
     }
 }
 
@@ -248,17 +227,13 @@ impl PresetSettings {
     pub fn from_store(store: &SettingsStore) -> Self {
         PresetSettings {
             caps_lock_remap: CapsLockRemapSettings {
-                enabled: store
-                    .get(keys::PRESETS_CAPS_LOCK_REMAP_ENABLED)
-                    .unwrap_or_default(),
+                enabled: store.get(keys::PRESETS_CAPS_LOCK_REMAP_ENABLED).unwrap_or_default(),
                 target: store
                     .get(keys::PRESETS_CAPS_LOCK_REMAP_TARGET)
                     .unwrap_or(RemapCapsTarget::LeftControl),
             },
             caps_quick_press: CapsQuickPressSettings {
-                enabled: store
-                    .get(keys::PRESETS_CAPS_QUICK_PRESS_ENABLED)
-                    .unwrap_or_default(),
+                enabled: store.get(keys::PRESETS_CAPS_QUICK_PRESS_ENABLED).unwrap_or_default(),
                 action: store
                     .get(keys::PRESETS_CAPS_QUICK_PRESS_ACTION)
                     .unwrap_or(QuickPressCapsAction::CapsLock),
@@ -267,24 +242,16 @@ impl PresetSettings {
                 .get::<u64>(keys::PRESETS_QUICK_PRESS_DURATION_MS)
                 .map(|ms| ms.clamp(250, 2000))
                 .unwrap_or(1000),
-            caps_space_enter: store
-                .get(keys::PRESETS_CAPS_SPACE_ENTER)
-                .unwrap_or_default(),
-            caps_wasd_arrows: store
-                .get(keys::PRESETS_CAPS_WASD_ARROWS)
-                .unwrap_or_default(),
+            caps_space_enter: store.get(keys::PRESETS_CAPS_SPACE_ENTER).unwrap_or_default(),
+            caps_wasd_arrows: store.get(keys::PRESETS_CAPS_WASD_ARROWS).unwrap_or_default(),
             caps_hjkl_arrows: CapsHjklArrowsSettings {
-                enabled: store
-                    .get(keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED)
-                    .unwrap_or_default(),
+                enabled: store.get(keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED).unwrap_or_default(),
                 key_set: store
                     .get(keys::PRESETS_CAPS_HJKL_ARROWS_KEY_SET)
                     .unwrap_or(ArrowKeySet::Hjkl),
             },
             caps_home_row: CapsHomeRowSettings {
-                enabled: store
-                    .get(keys::PRESETS_CAPS_HOME_ROW_ENABLED)
-                    .unwrap_or_default(),
+                enabled: store.get(keys::PRESETS_CAPS_HOME_ROW_ENABLED).unwrap_or_default(),
                 scheme: store
                     .get(keys::PRESETS_CAPS_HOME_ROW_SCHEME)
                     .unwrap_or(HomeRowScheme::SymbolRow),
@@ -298,9 +265,7 @@ impl PresetSettings {
             left_right_shift_to_caps: store
                 .get(keys::PRESETS_LEFT_RIGHT_SHIFT_TO_CAPS)
                 .unwrap_or_default(),
-            shift_caps_to_caps: store
-                .get(keys::PRESETS_SHIFT_CAPS_TO_CAPS)
-                .unwrap_or_default(),
+            shift_caps_to_caps: store.get(keys::PRESETS_SHIFT_CAPS_TO_CAPS).unwrap_or_default(),
             shift_quick_press_brackets: ShiftQuickPressBracketsSettings {
                 enabled: store
                     .get(keys::PRESETS_SHIFT_QUICK_PRESS_BRACKETS_ENABLED)
@@ -312,9 +277,7 @@ impl PresetSettings {
             hyper_delete_to_forward: store
                 .get(keys::PRESETS_HYPER_DELETE_TO_FORWARD)
                 .unwrap_or_default(),
-            delete_to_forward: store
-                .get(keys::PRESETS_DELETE_TO_FORWARD)
-                .unwrap_or_default(),
+            delete_to_forward: store.get(keys::PRESETS_DELETE_TO_FORWARD).unwrap_or_default(),
             shift_delete_to_forward: store
                 .get(keys::PRESETS_SHIFT_DELETE_TO_FORWARD)
                 .unwrap_or_default(),
@@ -326,9 +289,7 @@ impl PresetSettings {
                     .get(keys::PRESETS_PASTE_WITHOUT_FORMATTING_TRIGGER)
                     .unwrap_or(PasteTrigger::RightCommand),
             },
-            home_end_on_lines: store
-                .get(keys::PRESETS_HOME_END_ON_LINES)
-                .unwrap_or_default(),
+            home_end_on_lines: store.get(keys::PRESETS_HOME_END_ON_LINES).unwrap_or_default(),
             synthesize_caps_lock_remap: store
                 .get(keys::PRESETS_SYNTHESIZE_CAPS_LOCK_REMAP)
                 .unwrap_or_default(),
@@ -343,10 +304,7 @@ mod tests {
     #[test]
     fn from_store_on_empty_store_matches_default() {
         let store = SettingsStore::in_memory();
-        assert_eq!(
-            PresetSettings::from_store(&store),
-            PresetSettings::default()
-        );
+        assert_eq!(PresetSettings::from_store(&store), PresetSettings::default());
     }
 
     #[test]
@@ -373,10 +331,7 @@ mod tests {
         assert!(!s.delete_to_forward);
         assert!(!s.shift_delete_to_forward);
         assert!(!s.paste_without_formatting.enabled);
-        assert_eq!(
-            s.paste_without_formatting.trigger,
-            PasteTrigger::RightCommand
-        );
+        assert_eq!(s.paste_without_formatting.trigger, PasteTrigger::RightCommand);
         assert!(!s.home_end_on_lines);
         assert!(!s.synthesize_caps_lock_remap);
     }
@@ -384,29 +339,14 @@ mod tests {
     #[test]
     fn from_store_clamps_quick_press_duration_to_valid_range() {
         let mut store = SettingsStore::in_memory();
-        store
-            .set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &50u64)
-            .unwrap();
-        assert_eq!(
-            PresetSettings::from_store(&store).quick_press_duration_ms,
-            250
-        );
+        store.set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &50u64).unwrap();
+        assert_eq!(PresetSettings::from_store(&store).quick_press_duration_ms, 250);
 
-        store
-            .set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &5000u64)
-            .unwrap();
-        assert_eq!(
-            PresetSettings::from_store(&store).quick_press_duration_ms,
-            2000
-        );
+        store.set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &5000u64).unwrap();
+        assert_eq!(PresetSettings::from_store(&store).quick_press_duration_ms, 2000);
 
-        store
-            .set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &1500u64)
-            .unwrap();
-        assert_eq!(
-            PresetSettings::from_store(&store).quick_press_duration_ms,
-            1500
-        );
+        store.set(keys::PRESETS_QUICK_PRESS_DURATION_MS, &1500u64).unwrap();
+        assert_eq!(PresetSettings::from_store(&store).quick_press_duration_ms, 1500);
     }
 
     #[test]
@@ -418,10 +358,7 @@ mod tests {
         assert!(s.caps_space_enter);
         assert_eq!(
             s,
-            PresetSettings {
-                caps_space_enter: true,
-                ..PresetSettings::default()
-            }
+            PresetSettings { caps_space_enter: true, ..PresetSettings::default() }
         );
     }
 
@@ -433,12 +370,7 @@ mod tests {
             DoubleTapShiftSide::Either
         );
         let mut store = SettingsStore::in_memory();
-        store
-            .set(
-                keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE,
-                &DoubleTapShiftSide::Left,
-            )
-            .unwrap();
+        store.set(keys::PRESETS_DOUBLE_TAP_SHIFT_SIDE, &DoubleTapShiftSide::Left).unwrap();
         assert_eq!(
             PresetSettings::from_store(&store).double_tap_shift_side,
             DoubleTapShiftSide::Left
@@ -454,40 +386,22 @@ mod tests {
     #[test]
     fn serde_round_trip() {
         let s = PresetSettings {
-            caps_lock_remap: CapsLockRemapSettings {
-                enabled: true,
-                target: RemapCapsTarget::Esc,
-            },
-            caps_quick_press: CapsQuickPressSettings {
-                enabled: true,
-                action: QuickPressCapsAction::Slash,
-            },
+            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::Esc },
+            caps_quick_press: CapsQuickPressSettings { enabled: true, action: QuickPressCapsAction::Slash },
             quick_press_duration_ms: 500,
             caps_space_enter: true,
             caps_wasd_arrows: true,
-            caps_hjkl_arrows: CapsHjklArrowsSettings {
-                enabled: true,
-                key_set: ArrowKeySet::Ijkl,
-            },
-            caps_home_row: CapsHomeRowSettings {
-                enabled: true,
-                scheme: HomeRowScheme::FunctionRow,
-            },
+            caps_hjkl_arrows: CapsHjklArrowsSettings { enabled: true, key_set: ArrowKeySet::Ijkl },
+            caps_home_row: CapsHomeRowSettings { enabled: true, scheme: HomeRowScheme::FunctionRow },
             double_tap_shift_to_caps: true,
             double_tap_shift_side: DoubleTapShiftSide::Left,
             left_right_shift_to_caps: true,
             shift_caps_to_caps: true,
-            shift_quick_press_brackets: ShiftQuickPressBracketsSettings {
-                enabled: true,
-                pair: BracketPair::Angles,
-            },
+            shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Angles },
             hyper_delete_to_forward: true,
             delete_to_forward: true,
             shift_delete_to_forward: true,
-            paste_without_formatting: PasteWithoutFormattingSettings {
-                enabled: true,
-                trigger: PasteTrigger::HyperKey,
-            },
+            paste_without_formatting: PasteWithoutFormattingSettings { enabled: true, trigger: PasteTrigger::HyperKey },
             home_end_on_lines: true,
             synthesize_caps_lock_remap: true,
         };

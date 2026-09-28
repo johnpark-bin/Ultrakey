@@ -23,15 +23,15 @@ use axuielement::ax_attribute::attributes as ax_attr;
 use axuielement::ax_attribute::roles::AX_WINDOW_ROLE;
 use axuielement::AXUIElement;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-use ultrakey_click::path::{self, AxOutcome, Press, Requery};
-use ultrakey_click::plan::ClickPlan;
-use ultrakey_click::{mode, point, visible};
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::keycode::KeyCode;
 use ultrakey_platform::click_synthesis;
 use ultrakey_platform::event::SyntheticEvent;
 use ultrakey_seek::Rect;
 use ultrakey_seek_session::confirm::{ClickError, ClickSettings, ConfirmAction, ConfirmedMatch};
+use ultrakey_click::path::{self, AxOutcome, Press, Requery};
+use ultrakey_click::plan::ClickPlan;
+use ultrakey_click::{mode, point, visible};
 
 /// AX 호출 메시징 타임아웃(초) — `ax_text.rs` 의 기본값과 같다. 응답 없는 앱이
 /// 워커를 영원히 블로킹하지 않게 한다(§5 #1, 엣지 14).
@@ -176,7 +176,11 @@ impl ultrakey_seek_session::ClickExecutor for ClickExecutor {
                 AxOutcome::Pressed => {
                     let x = plan.point.x;
                     let y = plan.point.y;
-                    tracing::debug!(x, y, "performed AX press on element at ({x}, {y})");
+                    tracing::debug!(
+                        x,
+                        y,
+                        "performed AX press on element at ({x}, {y})"
+                    );
                     return Ok(());
                 }
                 AxOutcome::CoordinateFallback => {
@@ -240,10 +244,7 @@ fn find_window_ancestor(mut element: AXUIElement) -> Option<AXUIElement> {
         if role.as_deref() == Some(AX_WINDOW_ROLE) {
             return Some(element);
         }
-        element = element
-            .element_attribute(ax_attr::AX_PARENT_ATTRIBUTE)
-            .ok()
-            .flatten()?;
+        element = element.element_attribute(ax_attr::AX_PARENT_ATTRIBUTE).ok().flatten()?;
     }
     None
 }
@@ -288,17 +289,9 @@ impl ClickExecutor {
         }
 
         if ax_raised {
-            tracing::debug!(
-                window_id,
-                pid,
-                "fronted the target window (AX raise + app activation)"
-            );
+            tracing::debug!(window_id, pid, "fronted the target window (AX raise + app activation)");
         } else {
-            tracing::warn!(
-                window_id,
-                pid,
-                "AX window raise failed; only app-level activation was applied"
-            );
+            tracing::warn!(window_id, pid, "AX window raise failed; only app-level activation was applied");
         }
         Ok(())
     }
@@ -308,10 +301,7 @@ impl ClickExecutor {
     /// `false` 를 돌려준다 — 호출자가 앱 수준 활성화 폴백으로 흡수한다.
     fn raise_window_via_ax(&self, window_id: u32, pid: i32) -> bool {
         let Some(app) = AXUIElement::from_pid(pid) else {
-            tracing::warn!(
-                pid,
-                "failed to create AXUIElement for pid; falling back to app activation"
-            );
+            tracing::warn!(pid, "failed to create AXUIElement for pid; falling back to app activation");
             return false;
         };
         let _ = app.set_timeout(AX_TIMEOUT_SECS);
@@ -319,10 +309,7 @@ impl ClickExecutor {
         let windows = match app.attribute(ax_attr::AX_WINDOWS_ATTRIBUTE).ok().flatten() {
             Some(value) => value.as_array().unwrap_or_default(),
             None => {
-                tracing::warn!(
-                    pid,
-                    "failed to read AXWindows; falling back to app activation"
-                );
+                tracing::warn!(pid, "failed to read AXWindows; falling back to app activation");
                 return false;
             }
         };
@@ -426,8 +413,7 @@ impl ClickExecutor {
         // `clickReturnClick` — 두 번째 클릭은 원래 커서 위치(§3.3 표). 플랜
         // 산출 시점에는 알 수 없어 지금(그 어떤 이동·클릭 전에) 기억한다.
         if plan.second_click_at_origin {
-            plan.second_point =
-                click_synthesis::cursor_position().map(|(x, y)| point::Point::new(x, y));
+            plan.second_point = click_synthesis::cursor_position().map(|(x, y)| point::Point::new(x, y));
             if plan.second_point.is_none() {
                 tracing::debug!("failed to read the current cursor position; reusing the match point for the second click");
             }
@@ -438,11 +424,7 @@ impl ClickExecutor {
             if !click_synthesis::warp_cursor(plan.point.x, plan.point.y) {
                 let x = plan.point.x;
                 let y = plan.point.y;
-                tracing::warn!(
-                    x,
-                    y,
-                    "failed to warp cursor to ({x}, {y}); cursor stays put"
-                );
+                tracing::warn!(x, y, "failed to warp cursor to ({x}, {y}); cursor stays put");
             }
             return Ok(());
         }
@@ -462,8 +444,7 @@ impl ClickExecutor {
             }
 
             let (px, py) = if index > 0 && plan.second_click_at_origin {
-                plan.second_point
-                    .map_or((plan.point.x, plan.point.y), |p| (p.x, p.y))
+                plan.second_point.map_or((plan.point.x, plan.point.y), |p| (p.x, p.y))
             } else {
                 (plan.point.x, plan.point.y)
             };
@@ -490,12 +471,10 @@ impl ClickExecutor {
         // 1 회 보낸다. `SyntheticEvent` 가 자동으로 마커를 심어(A3) 탭 트램폴린
         // 0-a 에서 통과한다.
         if plan.copy_after {
-            if let Some(down) = SyntheticEvent::keyboard(KeyCode::ANSI_C, true, EventFlags::COMMAND)
-            {
+            if let Some(down) = SyntheticEvent::keyboard(KeyCode::ANSI_C, true, EventFlags::COMMAND) {
                 down.post();
             }
-            if let Some(up) = SyntheticEvent::keyboard(KeyCode::ANSI_C, false, EventFlags::COMMAND)
-            {
+            if let Some(up) = SyntheticEvent::keyboard(KeyCode::ANSI_C, false, EventFlags::COMMAND) {
                 up.post();
             }
         }
@@ -546,8 +525,7 @@ fn run_on_main_thread<T: Send + 'static>(
 #[allow(deprecated)]
 fn activate_application(app: &tauri::AppHandle, pid: i32) -> bool {
     run_on_main_thread(app, move || {
-        let Some(running) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-        else {
+        let Some(running) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
             return false;
         };
         running.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps)

@@ -39,10 +39,7 @@ pub fn is_input_box_pass_key(ev: &InputEvent, semicolon_cycles: bool) -> bool {
 
     match ev.keycode {
         // 인터·세션 컨트롤 키 — 반드시 소비(웹뷰에 빼앗기면 안 된다).
-        KeyCode::RETURN
-        | KeyCode::ESCAPE
-        | KeyCode::UP_ARROW
-        | KeyCode::DOWN_ARROW
+        KeyCode::RETURN | KeyCode::ESCAPE | KeyCode::UP_ARROW | KeyCode::DOWN_ARROW
         | KeyCode::TAB => return false,
         // Backspace — 인풋 박스가 조합 단계를 포함해 처리. ⌘⌃ 없이 단독 키일
         // 때만(위 match 는 이미 제어 키를 걸렀다 — 아래에서 ⌘⌃ 은 돌려준다).

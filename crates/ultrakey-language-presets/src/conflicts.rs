@@ -73,8 +73,7 @@ pub fn detect_language_conflict(
     if !new_value {
         return None;
     }
-    let shared =
-        language_shared_source_keys(active_keys, changing_key, presets_caps_quick_enabled)?;
+    let shared = language_shared_source_keys(active_keys, changing_key, presets_caps_quick_enabled)?;
     Some(LanguageConflict {
         kind: LanguageConflictKind::LanguageKeycodeShared,
         to_disable: shared,
@@ -163,10 +162,7 @@ mod tests {
     #[test]
     fn turning_off_never_conflicts() {
         for k in CAPS_LOCK_LANGUAGE_KEYS {
-            assert!(
-                detect_language_conflict(&active(CAPS_LOCK_LANGUAGE_KEYS), false, k, false)
-                    .is_none()
-            );
+            assert!(detect_language_conflict(&active(CAPS_LOCK_LANGUAGE_KEYS), false, k, false).is_none());
         }
     }
 
@@ -174,10 +170,7 @@ mod tests {
     #[test]
     fn f191_conflicts_with_f193_and_f197() {
         let c = detect_language_conflict(
-            &active(&[
-                keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA,
-                keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE,
-            ]),
+            &active(&[keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA, keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE]),
             false,
             keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE,
             true,
@@ -185,12 +178,8 @@ mod tests {
         .expect("캡스락 소스 규칙 2개가 이미 활성이면 충돌이다");
         assert_eq!(c.kind, LanguageConflictKind::LanguageKeycodeShared);
         assert_eq!(c.to_disable.len(), 2);
-        assert!(c
-            .to_disable
-            .contains(&keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA));
-        assert!(c
-            .to_disable
-            .contains(&keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE));
+        assert!(c.to_disable.contains(&keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA));
+        assert!(c.to_disable.contains(&keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE));
     }
 
     /// ⭐ 크로스 패밀리 — F-08.2(Quick press caps lock)가 켜져 있는데 F-19.1 을 켜려 하면
@@ -229,10 +218,7 @@ mod tests {
             true,
         )
         .expect("우⌘ 소스 규칙이 이미 활성이면 충돌이다");
-        assert_eq!(
-            c.to_disable,
-            vec![keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE]
-        );
+        assert_eq!(c.to_disable, vec![keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE]);
     }
 
     /// F-19.5(JIS 행) ↔ F-19.6 — 0x5D 소스 공유.
@@ -244,10 +230,7 @@ mod tests {
             keys::JAPANESE_SWAP_YEN_BACKSLASH,
             true,
         );
-        assert_eq!(
-            both.map(|c| c.to_disable),
-            Some(vec![keys::JAPANESE_JIS_AS_US_SYMBOLS])
-        );
+        assert_eq!(both.map(|c| c.to_disable), Some(vec![keys::JAPANESE_JIS_AS_US_SYMBOLS]));
 
         let reverse = detect_language_conflict(
             &active(&[keys::JAPANESE_SWAP_YEN_BACKSLASH]),
@@ -255,28 +238,13 @@ mod tests {
             keys::JAPANESE_JIS_AS_US_SYMBOLS,
             true,
         );
-        assert_eq!(
-            reverse.map(|c| c.to_disable),
-            Some(vec![keys::JAPANESE_SWAP_YEN_BACKSLASH])
-        );
+        assert_eq!(reverse.map(|c| c.to_disable), Some(vec![keys::JAPANESE_SWAP_YEN_BACKSLASH]));
     }
 
     /// ⛔ 제외 pair — 캡스락 아닌 키·무관 키는 충돌이 아니다.
     #[test]
     fn unrelated_keys_do_not_conflict() {
-        assert!(detect_language_conflict(
-            &active(&[keys::JAPANESE_JIS_AS_US_SYMBOLS]),
-            false,
-            keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE,
-            true
-        )
-        .is_none());
-        assert!(detect_language_conflict(
-            &active(CAPS_LOCK_LANGUAGE_KEYS),
-            false,
-            keys::KOREAN_WON_KEY_TYPES_BACKTICK,
-            true
-        )
-        .is_none());
+        assert!(detect_language_conflict(&active(&[keys::JAPANESE_JIS_AS_US_SYMBOLS]), false, keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE, true).is_none());
+        assert!(detect_language_conflict(&active(CAPS_LOCK_LANGUAGE_KEYS), false, keys::KOREAN_WON_KEY_TYPES_BACKTICK, true).is_none());
     }
 }

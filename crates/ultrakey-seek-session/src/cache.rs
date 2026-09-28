@@ -113,12 +113,7 @@ mod tests {
     fn candidate(text: &str) -> TextCandidate {
         TextCandidate::ocr(
             text.to_string(),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 10.0,
-                height: 10.0,
-            },
+            Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 },
             0.9,
             1,
         )

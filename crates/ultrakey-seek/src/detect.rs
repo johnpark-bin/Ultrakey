@@ -178,8 +178,7 @@ pub fn detect_candidates(
             .into_iter()
             .map(|o| {
                 // A3 — §3.2.3 의 좌표 변환.
-                let rect =
-                    normalized_bbox_to_global(&frame, o.bbox_x, o.bbox_y, o.bbox_w, o.bbox_h);
+                let rect = normalized_bbox_to_global(&frame, o.bbox_x, o.bbox_y, o.bbox_w, o.bbox_h);
                 // A4 — 후보 생성.
                 TextCandidate::ocr(o.text, rect, o.confidence, frame.display_id)
             })

@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use ultrakey_seek::{filter_by_query, merge::sort_reading_order, QueryParams, Rect, TextCandidate};
+use ultrakey_seek::{merge::sort_reading_order, filter_by_query, QueryParams, Rect, TextCandidate};
 
 use crate::geometry::{self, OverlayDisplay};
 use crate::model::{Highlight, MatchRow, OverlayFrame, SearchBarFrame, Segment};
@@ -39,9 +39,7 @@ pub const HIGHLIGHT_CAP_PER_DISPLAY: usize = 200;
 pub const MATCH_LIST_MAX: usize = 100;
 
 /// 이 세션의 내부 필터링 파라미터. 모듈 상단의 "빈 질의 = 매치 없음" 절 참조.
-const QUERY_PARAMS: QueryParams = QueryParams {
-    empty_query_matches_all: false,
-};
+const QUERY_PARAMS: QueryParams = QueryParams { empty_query_matches_all: false };
 
 /// Seek 오버레이 세션 — 검색어·후보·선택·디스플레이 배치를 함께 들고 있다.
 #[derive(Debug)]
@@ -69,14 +67,8 @@ impl OverlaySession {
     /// 세션을 연다. **후보 0개로 즉시 연다** — 검출을 기다리지 않는다(S-6).
     /// `detecting` 은 `true` 로 시작한다.
     #[must_use]
-    pub fn open(
-        displays: Vec<OverlayDisplay>,
-        appearance: Appearance,
-        reduce_motion: bool,
-    ) -> Self {
-        let bar_origin = displays
-            .first()
-            .map_or((0.0, 0.0), geometry::default_bar_origin);
+    pub fn open(displays: Vec<OverlayDisplay>, appearance: Appearance, reduce_motion: bool) -> Self {
+        let bar_origin = displays.first().map_or((0.0, 0.0), geometry::default_bar_origin);
 
         Self {
             displays,
@@ -109,10 +101,7 @@ impl OverlaySession {
     /// 호출할 때마다 이전 값을 통째로 교체한다 — AX 패스는 디스플레이별로
     /// 나뉘어 오지 않으므로 부분 갱신할 키가 없다.
     pub fn ingest_extra(&mut self, candidates: Vec<TextCandidate>) {
-        tracing::trace!(
-            count = candidates.len(),
-            "seek overlay: received candidates with no display assigned"
-        );
+        tracing::trace!(count = candidates.len(), "seek overlay: received candidates with no display assigned");
         self.extra = candidates;
         self.recompute_matching();
     }
@@ -183,29 +172,19 @@ impl OverlaySession {
     /// 중 하나로 재배치한다(§5 #14).
     pub fn set_displays(&mut self, displays: Vec<OverlayDisplay>) {
         let surviving_ids: HashSet<u32> = displays.iter().map(|d| d.display_id).collect();
-        let removed = self
-            .by_display
-            .keys()
-            .filter(|id| !surviving_ids.contains(id))
-            .count();
+        let removed = self.by_display.keys().filter(|id| !surviving_ids.contains(id)).count();
         if removed > 0 {
-            tracing::debug!(
-                removed,
-                "seek overlay: dropping candidates for displays removed by hotplug"
-            );
+            tracing::debug!(removed, "seek overlay: dropping candidates for displays removed by hotplug");
         }
         self.by_display.retain(|id, _| surviving_ids.contains(id));
         self.displays = displays;
         self.recompute_matching();
 
         let bar_still_visible =
-            geometry::display_for_point(&self.displays, self.bar_origin.0, self.bar_origin.1)
-                .is_some();
+            geometry::display_for_point(&self.displays, self.bar_origin.0, self.bar_origin.1).is_some();
         if !bar_still_visible {
             if let Some(first) = self.displays.first() {
-                tracing::debug!(
-                    "seek overlay: display with the search bar disappeared; repositioning"
-                );
+                tracing::debug!("seek overlay: display with the search bar disappeared; repositioning");
                 self.bar_origin = geometry::default_bar_origin(first);
             }
             // 남은 디스플레이가 하나도 없으면(극단 케이스) 위치를 그대로
@@ -312,9 +291,8 @@ impl OverlaySession {
 
                 // §4.2 상한 — 비선택 하이라이트만 자른다. 선택된 매치는 위에서
                 // 이미 상한과 무관하게 확보돼 있다.
-                let omitted = unselected_highlights
-                    .len()
-                    .saturating_sub(HIGHLIGHT_CAP_PER_DISPLAY);
+                let omitted =
+                    unselected_highlights.len().saturating_sub(HIGHLIGHT_CAP_PER_DISPLAY);
                 unselected_highlights.truncate(HIGHLIGHT_CAP_PER_DISPLAY);
 
                 let mut highlights = unselected_highlights;
@@ -419,12 +397,7 @@ mod tests {
     fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
             display_id: id,
-            frame: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
+            frame: Rect { x, y, width: w, height: h },
             backing_scale: 2.0,
         }
     }
@@ -432,12 +405,7 @@ mod tests {
     fn candidate(text: &str, display_id: u32, x: f64, y: f64) -> TextCandidate {
         TextCandidate::ocr(
             text.to_string(),
-            Rect {
-                x,
-                y,
-                width: 10.0,
-                height: 10.0,
-            },
+            Rect { x, y, width: 10.0, height: 10.0 },
             0.9,
             display_id,
         )
@@ -450,10 +418,7 @@ mod tests {
     /// 하이라이트만 늘어나는가(다른 디스플레이는 영향받지 않는가).
     #[test]
     fn s6_open_zero_highlights_then_incremental_ingest_per_display() {
-        let displays = vec![
-            display(1, 0.0, 0.0, 1000.0, 1000.0),
-            display(2, 1000.0, 0.0, 1000.0, 1000.0),
-        ];
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0), display(2, 1000.0, 0.0, 1000.0, 1000.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
         assert!(session.is_detecting());
 
@@ -465,10 +430,7 @@ mod tests {
         // 그 **뒤에** 도착한다(주 디스플레이 ≈ 335 ms, 전체 ≈ 775 ms). 질의를
         // 먼저 걸어 두고 후보가 늘어나는 것을 본다.
         session.set_query("a");
-        assert!(
-            session.frames().iter().all(|f| f.highlights.is_empty()),
-            "후보가 없으면 여전히 0개"
-        );
+        assert!(session.frames().iter().all(|f| f.highlights.is_empty()), "후보가 없으면 여전히 0개");
 
         session.ingest_display(1, vec![candidate("Alpha", 1, 10.0, 10.0)]);
         let frames1 = session.frames();
@@ -503,18 +465,11 @@ mod tests {
 
         session.ingest_display(
             1,
-            vec![
-                candidate("Alpha New1", 1, 10.0, 10.0),
-                candidate("Alpha New2", 1, 30.0, 10.0),
-            ],
+            vec![candidate("Alpha New1", 1, 10.0, 10.0), candidate("Alpha New2", 1, 30.0, 10.0)],
         );
         let frame = &session.frames()[0];
         assert_eq!(frame.highlights.len(), 2);
-        assert!(session
-            .search_bar_frame()
-            .matches
-            .iter()
-            .all(|m| m.text != "Alpha Old"));
+        assert!(session.search_bar_frame().matches.iter().all(|m| m.text != "Alpha Old"));
     }
 
     /// `ingest_extra`(AX 등 디스플레이 미특정 후보)도 반영되고, 다시 부르면 교체된다.
@@ -525,12 +480,7 @@ mod tests {
         session.set_query("button");
         session.ingest_extra(vec![TextCandidate::accessibility(
             "AX Button".to_string(),
-            Rect {
-                x: 100.0,
-                y: 100.0,
-                width: 40.0,
-                height: 20.0,
-            },
+            Rect { x: 100.0, y: 100.0, width: 40.0, height: 20.0 },
         )]);
         assert_eq!(session.frames()[0].highlights.len(), 1);
         assert_eq!(
@@ -552,9 +502,8 @@ mod tests {
         let displays = vec![display(1, 0.0, 0.0, 10_000.0, 10.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
         session.set_query("item");
-        let candidates: Vec<TextCandidate> = (0..500)
-            .map(|i| candidate(&format!("Item {i}"), 1, f64::from(i) * 10.0, 0.0))
-            .collect();
+        let candidates: Vec<TextCandidate> =
+            (0..500).map(|i| candidate(&format!("Item {i}"), 1, f64::from(i) * 10.0, 0.0)).collect();
         session.ingest_display(1, candidates);
 
         for _ in 0..400 {
@@ -566,20 +515,9 @@ mod tests {
         assert_eq!(frames.len(), 1);
         let frame = &frames[0];
 
-        assert_eq!(
-            frame.highlights.len(),
-            HIGHLIGHT_CAP_PER_DISPLAY + 1,
-            "비선택 200 + 선택 1"
-        );
-        assert!(frame
-            .highlights
-            .iter()
-            .any(|h| h.selected && h.label == "401"));
-        assert_eq!(
-            frame.omitted,
-            500 - 1 - HIGHLIGHT_CAP_PER_DISPLAY,
-            "비선택 499개 중 200개 초과분"
-        );
+        assert_eq!(frame.highlights.len(), HIGHLIGHT_CAP_PER_DISPLAY + 1, "비선택 200 + 선택 1");
+        assert!(frame.highlights.iter().any(|h| h.selected && h.label == "401"));
+        assert_eq!(frame.omitted, 500 - 1 - HIGHLIGHT_CAP_PER_DISPLAY, "비선택 499개 중 200개 초과분");
     }
 
     // ── 순환 ────────────────────────────────────────────────────────────
@@ -624,10 +562,7 @@ mod tests {
     /// 가 하나 줄어드는가. 검색 바가 사라진 디스플레이에 있었으면 옮겨졌는가.
     #[test]
     fn hotplug_removes_display_candidates_and_relocates_search_bar() {
-        let displays = vec![
-            display(1, 0.0, 0.0, 1000.0, 1000.0),
-            display(2, 1000.0, 0.0, 1000.0, 1000.0),
-        ];
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0), display(2, 1000.0, 0.0, 1000.0, 1000.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
         session.set_query("row");
         session.ingest_display(1, vec![candidate("Row A", 1, 10.0, 10.0)]);
@@ -657,10 +592,7 @@ mod tests {
     /// 검색 바가 살아남은 디스플레이 위에 있었다면 재배치되지 않는다.
     #[test]
     fn hotplug_does_not_relocate_bar_still_on_surviving_display() {
-        let displays = vec![
-            display(1, 0.0, 0.0, 1000.0, 1000.0),
-            display(2, 1000.0, 0.0, 1000.0, 1000.0),
-        ];
+        let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0), display(2, 1000.0, 0.0, 1000.0, 1000.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
         session.set_search_bar_origin(100.0, 100.0); // 디스플레이 1 위.
 
@@ -676,13 +608,7 @@ mod tests {
     fn set_query_empty_yields_nothing_and_non_empty_filters() {
         let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
-        session.ingest_display(
-            1,
-            vec![
-                candidate("Save", 1, 0.0, 0.0),
-                candidate("Cancel", 1, 100.0, 0.0),
-            ],
-        );
+        session.ingest_display(1, vec![candidate("Save", 1, 0.0, 0.0), candidate("Cancel", 1, 100.0, 0.0)]);
 
         // ⭐ 빈 질의 — 후보가 2개 들어와 있어도 아무것도 그리지 않는다.
         assert!(session.frames()[0].highlights.is_empty());
@@ -704,13 +630,7 @@ mod tests {
         let displays = vec![display(1, 0.0, 0.0, 1000.0, 1000.0)];
         let mut session = OverlaySession::open(displays, Appearance::Light, false);
         session.set_query("row");
-        session.ingest_display(
-            1,
-            vec![
-                candidate("Row A", 1, 0.0, 0.0),
-                candidate("Row B", 1, 10.0, 0.0),
-            ],
-        );
+        session.ingest_display(1, vec![candidate("Row A", 1, 0.0, 0.0), candidate("Row B", 1, 10.0, 0.0)]);
         session.cycle_next();
         assert_eq!(session.selected().unwrap().text, "Row B");
 
@@ -750,15 +670,9 @@ mod tests {
         //    인덱스 1 로 당긴다(0 은 아니다 — 리셋이 아니라 clamp).
         session.ingest_display(
             1,
-            vec![
-                candidate("Row A", 1, 0.0, 0.0),
-                candidate("Row B", 1, 10.0, 0.0),
-            ],
+            vec![candidate("Row A", 1, 0.0, 0.0), candidate("Row B", 1, 10.0, 0.0)],
         );
-        assert_eq!(
-            session.selected_index, 1,
-            "범위 밖 → 마지막 유효 인덱스로 clamp"
-        );
+        assert_eq!(session.selected_index, 1, "범위 밖 → 마지막 유효 인덱스로 clamp");
         assert_eq!(session.selected().unwrap().text, "Row B");
         assert_eq!(
             session.search_bar_frame().selected_index,
@@ -772,10 +686,7 @@ mod tests {
         //    다르다 — 그래도 위치는 보존됐는지를 보는 것이지 텍스트가
         //    아니다).
         session.ingest_display(1, five);
-        assert_eq!(
-            session.selected_index, 1,
-            "같은 길이 교체는 인덱스를 보존한다 (0 리셋 금지)"
-        );
+        assert_eq!(session.selected_index, 1, "같은 길이 교체는 인덱스를 보존한다 (0 리셋 금지)");
         assert_eq!(session.selected().unwrap().text, "Row 1");
     }
 }

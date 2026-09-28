@@ -281,12 +281,7 @@ mod tests {
     fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
             display_id: id,
-            frame: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
+            frame: Rect { x, y, width: w, height: h },
             backing_scale: 2.0,
         }
     }
@@ -337,12 +332,7 @@ mod tests {
     #[test]
     fn to_local_negative_origin_display() {
         let d = display(2, -2560.0, 0.0, 2560.0, 1440.0);
-        let global = Rect {
-            x: -2000.0,
-            y: 300.0,
-            width: 50.0,
-            height: 20.0,
-        };
+        let global = Rect { x: -2000.0, y: 300.0, width: 50.0, height: 20.0 };
         let local = to_local(&d, &global);
         assert!(approx_eq(local.x, 560.0));
         assert!(approx_eq(local.y, 300.0));
@@ -357,18 +347,8 @@ mod tests {
         let a = display(1, 0.0, 0.0, 1000.0, 1000.0);
         let b = display(2, 1000.0, 0.0, 1000.0, 1000.0);
         let displays = [a, b];
-        assert_eq!(
-            display_for_point(&displays, 1500.0, 500.0)
-                .unwrap()
-                .display_id,
-            2
-        );
-        assert_eq!(
-            display_for_point(&displays, 500.0, 500.0)
-                .unwrap()
-                .display_id,
-            1
-        );
+        assert_eq!(display_for_point(&displays, 1500.0, 500.0).unwrap().display_id, 2);
+        assert_eq!(display_for_point(&displays, 500.0, 500.0).unwrap().display_id, 1);
     }
 
     #[test]
@@ -456,10 +436,7 @@ mod tests {
         let displays = [a, b];
         let (x, y) = resolve_search_bar_origin(&displays, Some((2000.0, 500.0)), None, None);
         // 디스플레이 2: 폭 2000, 검색 바 400 → 중앙 x = 1000 + 800.
-        assert!(approx_eq(
-            x,
-            1000.0 + (2000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0
-        ));
+        assert!(approx_eq(x, 1000.0 + (2000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0));
         assert!(approx_eq(y, 0.0 + 1000.0 * 0.2));
     }
 
@@ -516,10 +493,7 @@ mod tests {
         let displays = [a];
         let stored = Some((5000.0, 5000.0)); // 핫플러그로 사라진 화면의 흔적
         let (x, y) = resolve_search_bar_origin(&displays, Some((500.0, 500.0)), None, stored);
-        assert!(approx_eq(
-            x,
-            (1000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0
-        ));
+        assert!(approx_eq(x, (1000.0 - crate::session::SEARCH_BAR_WIDTH_PT) / 2.0));
         assert!(approx_eq(y, 1000.0 * 0.2));
     }
 
@@ -538,10 +512,7 @@ mod tests {
     /// 디스플레이가 없으면 (0, 0).
     #[test]
     fn resolve_origin_empty_displays_is_zero() {
-        assert_eq!(
-            resolve_search_bar_origin(&[], Some((0.0, 0.0)), Some(1), Some((5.0, 5.0))),
-            (0.0, 0.0)
-        );
+        assert_eq!(resolve_search_bar_origin(&[], Some((0.0, 0.0)), Some(1), Some((5.0, 5.0))), (0.0, 0.0));
     }
 
     // ── clip_segment ─────────────────────────────────────────────────────
@@ -549,12 +520,7 @@ mod tests {
     #[test]
     fn clip_segment_fully_inside_is_shifted_to_local_unchanged() {
         let d = display(1, 100.0, 50.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: 200.0,
-            y1: 150.0,
-            x2: 300.0,
-            y2: 250.0,
-        };
+        let seg = Segment { x1: 200.0, y1: 150.0, x2: 300.0, y2: 250.0 };
         let clipped = clip_segment(&d, seg).unwrap();
         assert!(approx_eq(clipped.x1, 100.0));
         assert!(approx_eq(clipped.y1, 100.0));
@@ -565,12 +531,7 @@ mod tests {
     #[test]
     fn clip_segment_fully_outside_is_none() {
         let d = display(1, 0.0, 0.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: 2000.0,
-            y1: 2000.0,
-            x2: 3000.0,
-            y2: 3000.0,
-        };
+        let seg = Segment { x1: 2000.0, y1: 2000.0, x2: 3000.0, y2: 3000.0 };
         assert!(clip_segment(&d, seg).is_none());
     }
 
@@ -578,12 +539,7 @@ mod tests {
     fn clip_segment_one_end_inside_one_outside() {
         let d = display(1, 0.0, 0.0, 1000.0, 1000.0);
         // 안쪽 (500,500) 에서 시작해 오른쪽 밖 (1500,500) 으로 나간다.
-        let seg = Segment {
-            x1: 500.0,
-            y1: 500.0,
-            x2: 1500.0,
-            y2: 500.0,
-        };
+        let seg = Segment { x1: 500.0, y1: 500.0, x2: 1500.0, y2: 500.0 };
         let clipped = clip_segment(&d, seg).unwrap();
         assert!(approx_eq(clipped.x1, 500.0));
         assert!(approx_eq(clipped.y1, 500.0));
@@ -598,22 +554,14 @@ mod tests {
     fn two_pieces_across_boundary_reassemble_without_gap() {
         let left = display(1, 0.0, 0.0, 1000.0, 1000.0);
         let right = display(2, 1000.0, 0.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: 500.0,
-            y1: 500.0,
-            x2: 1500.0,
-            y2: 700.0,
-        };
+        let seg = Segment { x1: 500.0, y1: 500.0, x2: 1500.0, y2: 700.0 };
 
         let left_piece = clip_segment(&left, seg).unwrap();
         let right_piece = clip_segment(&right, seg).unwrap();
 
         // 각 조각을 전역 좌표로 되돌린다.
         let left_end_global = (left_piece.x2 + left.frame.x, left_piece.y2 + left.frame.y);
-        let right_start_global = (
-            right_piece.x1 + right.frame.x,
-            right_piece.y1 + right.frame.y,
-        );
+        let right_start_global = (right_piece.x1 + right.frame.x, right_piece.y1 + right.frame.y);
 
         // 왼쪽 조각의 끝점과 오른쪽 조각의 시작점이 경계(x=1000)에서 정확히 맞물린다.
         assert!(approx_eq(left_end_global.0, 1000.0));
@@ -632,12 +580,7 @@ mod tests {
     #[test]
     fn clip_segment_vertical_line_no_divide_by_zero() {
         let d = display(1, 0.0, 0.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: 500.0,
-            y1: -100.0,
-            x2: 500.0,
-            y2: 1500.0,
-        };
+        let seg = Segment { x1: 500.0, y1: -100.0, x2: 500.0, y2: 1500.0 };
         let clipped = clip_segment(&d, seg).unwrap();
         assert!(approx_eq(clipped.x1, 500.0));
         assert!(approx_eq(clipped.y1, 0.0));
@@ -649,12 +592,7 @@ mod tests {
     #[test]
     fn clip_segment_horizontal_line_no_divide_by_zero() {
         let d = display(1, 0.0, 0.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: -100.0,
-            y1: 500.0,
-            x2: 1500.0,
-            y2: 500.0,
-        };
+        let seg = Segment { x1: -100.0, y1: 500.0, x2: 1500.0, y2: 500.0 };
         let clipped = clip_segment(&d, seg).unwrap();
         assert!(approx_eq(clipped.x1, 0.0));
         assert!(approx_eq(clipped.y1, 500.0));
@@ -666,12 +604,7 @@ mod tests {
     #[test]
     fn clip_segment_vertical_line_outside_x_range_is_none() {
         let d = display(1, 0.0, 0.0, 1000.0, 1000.0);
-        let seg = Segment {
-            x1: 2000.0,
-            y1: -100.0,
-            x2: 2000.0,
-            y2: 1500.0,
-        };
+        let seg = Segment { x1: 2000.0, y1: -100.0, x2: 2000.0, y2: 1500.0 };
         assert!(clip_segment(&d, seg).is_none());
     }
 
@@ -682,12 +615,7 @@ mod tests {
     fn clip_segment_with_gap_between_displays() {
         let left = display(1, 0.0, 0.0, 1000.0, 1000.0);
         let right = display(2, 2000.0, 0.0, 1000.0, 1000.0); // 1000~2000 사이가 빈틈
-        let seg = Segment {
-            x1: 500.0,
-            y1: 500.0,
-            x2: 2500.0,
-            y2: 500.0,
-        };
+        let seg = Segment { x1: 500.0, y1: 500.0, x2: 2500.0, y2: 500.0 };
 
         let left_piece = clip_segment(&left, seg).unwrap();
         assert!(approx_eq(left_piece.x1, 500.0));
@@ -703,12 +631,7 @@ mod tests {
     #[test]
     fn clip_segment_display_far_from_segment_path_is_none() {
         let elsewhere = display(3, 5000.0, 5000.0, 100.0, 100.0);
-        let seg = Segment {
-            x1: 500.0,
-            y1: 500.0,
-            x2: 2500.0,
-            y2: 500.0,
-        };
+        let seg = Segment { x1: 500.0, y1: 500.0, x2: 2500.0, y2: 500.0 };
         assert!(clip_segment(&elsewhere, seg).is_none());
     }
 }
@@ -721,12 +644,7 @@ mod boundary_regression_tests {
     fn d(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
             display_id: id,
-            frame: Rect {
-                x,
-                y,
-                width: w,
-                height: h,
-            },
+            frame: Rect { x, y, width: w, height: h },
             backing_scale: 1.0,
         }
     }
@@ -740,12 +658,7 @@ mod boundary_regression_tests {
         let d1 = d(3, 0.0, 0.0, 3840.0, 1600.0);
         let d2 = d(2, -2560.0, 0.0, 2560.0, 1440.0);
         // 검색 바 하단 중앙(실측 위치 (-1480, 288) + (200, 40)).
-        let seg = Segment {
-            x1: -1280.0,
-            y1: 328.0,
-            x2: 1500.0,
-            y2: 700.0,
-        };
+        let seg = Segment { x1: -1280.0, y1: 328.0, x2: 1500.0, y2: 700.0 };
 
         let c2 = clip_segment(&d2, seg).expect("보조 화면 몫이 있어야 한다");
         let c1 = clip_segment(&d1, seg).expect("⭐ 주 화면 몫도 있어야 한다 — 없으면 선이 끊긴다");

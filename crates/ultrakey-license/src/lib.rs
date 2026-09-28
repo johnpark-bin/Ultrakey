@@ -31,7 +31,6 @@ pub use decision::{
     cache_within_grace, is_clock_rollback, next_last_seen, OfflineGrace, TrialDecisionOutcome,
     TRIAL_DAYS,
 };
-pub use file_store::FileStore;
 pub use machine::{
     ActivationOutcome, ActivationsView, DeactivationOutcome, EvaluateResult, LicenseMachine,
     RevalidateOutcome, TrialInfo,
@@ -41,5 +40,6 @@ pub use provider::{
     ActivationRequest, ActivationResponse, DeactivateRequest, DeactivateResponse, LicenseKey,
     LicenseProvider, ValidateRequest, ValidateResponse, ValidationStatus,
 };
+pub use file_store::FileStore;
 pub use state::LicenseState;
 pub use store::{CacheStore, InMemoryStore, LicenseCache, TrialClock, TrialRecord, TrialStore};

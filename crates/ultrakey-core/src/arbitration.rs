@@ -17,8 +17,8 @@ use crate::keystate::{KeyStateTable, KoreanLatch};
 use crate::korean::{self, KoreanImeState, KoreanTrigger};
 use crate::quickpress::{QuickPressConfig, QuickPressEvent, QuickPressState};
 use crate::rules::{
-    ComboRule, HoldCondition, LanguageGate, LanguageOut, LanguageRule, LanguageTrigger,
-    ModifierKind, RuleAction, RuleId,
+    ComboRule, HoldCondition, LanguageGate, LanguageOut, LanguageRule, LanguageTrigger, ModifierKind,
+    RuleAction, RuleId,
 };
 use crate::settings::EngineConfig;
 use crate::time::Millis;
@@ -205,10 +205,7 @@ impl Outcome {
     }
 
     fn push(&mut self, ev: SynthEvent) {
-        debug_assert!(
-            self.len < MAX_EMIT,
-            "Outcome 버퍼 초과 — MAX_EMIT 를 늘려야 한다"
-        );
+        debug_assert!(self.len < MAX_EMIT, "Outcome 버퍼 초과 — MAX_EMIT 를 늘려야 한다");
         if self.len < MAX_EMIT {
             self.buf[self.len] = ev;
             self.len += 1;
@@ -216,10 +213,7 @@ impl Outcome {
     }
 
     fn push_effect(&mut self, e: Effect) {
-        debug_assert!(
-            self.effect_len < MAX_EFFECTS,
-            "Outcome 효과 버퍼 초과 — MAX_EFFECTS 를 늘려야 한다"
-        );
+        debug_assert!(self.effect_len < MAX_EFFECTS, "Outcome 효과 버퍼 초과 — MAX_EFFECTS 를 늘려야 한다");
         if self.effect_len < MAX_EFFECTS {
             self.effects[self.effect_len] = e;
             self.effect_len += 1;
@@ -609,7 +603,9 @@ impl Arbiter {
         // 발화하지 않는다**(`korean::lowercase_action_for` 내부) — 앱 단축키(⌘C 등)와
         // 대문자 의도를 보호한다. 그래서 Preset 앞에 두어도 앱 단축키를 삼키지 않는다.
         // 끄면(기본) 아무 일도 하지 않는다 — 기존 동작과 완전히 같다.
-        if cfg.korean_modifier_lowercase && kind == EventKind::KeyDown && !gates.korean_app_excluded
+        if cfg.korean_modifier_lowercase
+            && kind == EventKind::KeyDown
+            && !gates.korean_app_excluded
         {
             let pressed = |k: KeyCode| self.state.is_pressed(k);
             if let Some(lower) = korean::lowercase_action_for(ev.keycode, &pressed) {
@@ -664,10 +660,8 @@ impl Arbiter {
             if ev.kind.is_click() || ev.kind.is_drag() || ev.kind.is_move() || ev.kind.is_scroll() {
                 out.layer = Layer::HyperModifier;
                 if self.mouse_should_apply(cfg, ev.kind) {
-                    out.disposition = Disposition::PassWithFlags(Self::strip_caps_lock_bit(
-                        cfg,
-                        ev.flags | active,
-                    ));
+                    out.disposition =
+                        Disposition::PassWithFlags(Self::strip_caps_lock_bit(cfg, ev.flags | active));
                 }
                 return out;
             }
@@ -822,11 +816,9 @@ impl Arbiter {
                 // 뒤 Consume 한다. F-08.10(`Shift + caps lock = caps lock`)이 F-08.2(quick
                 // press caps lock)를 무효화하는 것이 이 규칙의 구현이다(R3/v1.62).
                 let mut out = Outcome::consume(Layer::PresetCombo);
-                if let Some(rule) = self.find_matching_combo(
-                    &cfg.rules.combo_rules,
-                    ev.keycode,
-                    gates.trackpad_hyper_active,
-                ) {
+                if let Some(rule) =
+                    self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode, gates.trackpad_hyper_active)
+                {
                     self.fire_combo(cfg, &rule, ev, &mut out);
                     return out;
                 }
@@ -846,7 +838,8 @@ impl Arbiter {
                         out.layer = Layer::PresetCombo;
                         if let Some(action) = source_actions.and_then(|sa| sa.quick_press) {
                             Self::push_full_action(&mut out, action);
-                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out) {
+                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out)
+                        {
                             // ⭐ F-19 — 단독 탭 발화(down+up 쌍)를 다룬 경우.
                             out.disposition = Disposition::Consume;
                             return out;
@@ -881,7 +874,8 @@ impl Arbiter {
                         out.layer = Layer::PresetCombo;
                         if let Some(action) = source_actions.and_then(|sa| sa.quick_press) {
                             Self::push_full_action(&mut out, action);
-                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out) {
+                        } else if self.fire_language_alone_tap(cfg, ev.keycode, gates, &mut out)
+                        {
                             // ⭐ F-19 — 단독 탭 발화(down+up 쌍)를 다룬 경우.
                             out.disposition = Disposition::Consume;
                             return out;
@@ -917,18 +911,11 @@ impl Arbiter {
     /// 합성 `FlagsChanged`, (b) 프리셋 hold_remap 대상이 있으면 그 키의 `KeyDown`.
     /// 둘 다 있을 수 있다(한 키가 동시에 modifier 소스이자 hold_remap 대상인 구성은
     /// 설정 UI 가 충돌로 막지만, 이 함수 자체는 어느 조합이든 안전하게 처리한다).
-    fn emit_hold_start(
-        &self,
-        cfg: &EngineConfig,
-        key: KeyCode,
-        base_flags: EventFlags,
-        out: &mut Outcome,
-    ) {
+    fn emit_hold_start(&self, cfg: &EngineConfig, key: KeyCode, base_flags: EventFlags, out: &mut Outcome) {
         let mut substituted = false;
 
         if let Some(rule) = cfg.rules.modifier_rule_for(key) {
-            let flags =
-                Self::strip_caps_lock_bit(cfg, base_flags | self.state.active_synth_flags());
+            let flags = Self::strip_caps_lock_bit(cfg, base_flags | self.state.active_synth_flags());
             out.push(SynthEvent {
                 kind: EventKind::FlagsChanged,
                 keycode: rule.source,
@@ -938,11 +925,7 @@ impl Arbiter {
             substituted = true;
         }
 
-        if let Some(action) = cfg
-            .rules
-            .source_actions_for(key)
-            .and_then(|sa| sa.hold_remap)
-        {
+        if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
             match Self::modifier_target_of(action) {
                 // ⭐ 대상이 modifier 키다 — `FlagsChanged` + 해당 비트로 낸다(이슈 #19 증상 A).
                 Some((target, mf)) => {
@@ -950,11 +933,7 @@ impl Arbiter {
                         cfg,
                         base_flags | self.state.active_synth_flags() | mf,
                     );
-                    out.push(SynthEvent {
-                        kind: EventKind::FlagsChanged,
-                        keycode: target,
-                        flags,
-                    });
+                    out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode: target, flags });
                 }
                 None => Self::push_key_down(out, action),
             }
@@ -971,13 +950,7 @@ impl Arbiter {
     }
 
     /// `key` 의 hold 가 해제됐을 때의 효과 — `emit_hold_start` 의 대응.
-    fn emit_hold_end(
-        &self,
-        cfg: &EngineConfig,
-        key: KeyCode,
-        base_flags: EventFlags,
-        out: &mut Outcome,
-    ) {
+    fn emit_hold_end(&self, cfg: &EngineConfig, key: KeyCode, base_flags: EventFlags, out: &mut Outcome) {
         let mut substituted = false;
 
         if let Some(rule) = cfg.rules.modifier_rule_for(key) {
@@ -995,11 +968,7 @@ impl Arbiter {
             substituted = true;
         }
 
-        if let Some(action) = cfg
-            .rules
-            .source_actions_for(key)
-            .and_then(|sa| sa.hold_remap)
-        {
+        if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
             match Self::modifier_target_of(action) {
                 Some((target, mf)) => {
                     // 이 규칙의 비트만 벗기되, 여전히 active 인 다른 슬롯이 같은
@@ -1007,11 +976,7 @@ impl Arbiter {
                     // 구성) 그 비트는 살려 둔다 — 위 modifier_rule 분기와 같은 규약이다.
                     let remaining = self.state.active_synth_flags();
                     let flags = Self::strip_caps_lock_bit(cfg, (base_flags & !mf) | remaining);
-                    out.push(SynthEvent {
-                        kind: EventKind::FlagsChanged,
-                        keycode: target,
-                        flags,
-                    });
+                    out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode: target, flags });
                 }
                 None => Self::push_key_up(out, action),
             }
@@ -1094,28 +1059,12 @@ impl Arbiter {
     fn push_key_action(out: &mut Outcome, keycode: KeyCode, flags: EventFlags) {
         match keycode.modifier_flags() {
             Some(mf) => {
-                out.push(SynthEvent {
-                    kind: EventKind::FlagsChanged,
-                    keycode,
-                    flags: flags | mf,
-                });
-                out.push(SynthEvent {
-                    kind: EventKind::FlagsChanged,
-                    keycode,
-                    flags: flags & !mf,
-                });
+                out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode, flags: flags | mf });
+                out.push(SynthEvent { kind: EventKind::FlagsChanged, keycode, flags: flags & !mf });
             }
             None => {
-                out.push(SynthEvent {
-                    kind: EventKind::KeyDown,
-                    keycode,
-                    flags,
-                });
-                out.push(SynthEvent {
-                    kind: EventKind::KeyUp,
-                    keycode,
-                    flags,
-                });
+                out.push(SynthEvent { kind: EventKind::KeyDown, keycode, flags });
+                out.push(SynthEvent { kind: EventKind::KeyUp, keycode, flags });
             }
         }
     }
@@ -1124,22 +1073,14 @@ impl Arbiter {
     /// 내지 않는다 — "소비만 하고 아무것도 내지 않음"(F-08.1 `nothing (disable it)`).
     fn push_key_down(out: &mut Outcome, action: RuleAction) {
         if let RuleAction::Key { keycode, flags } = action {
-            out.push(SynthEvent {
-                kind: EventKind::KeyDown,
-                keycode,
-                flags,
-            });
+            out.push(SynthEvent { kind: EventKind::KeyDown, keycode, flags });
         }
     }
 
     /// hold_remap 의 `KeyUp` 절반.
     fn push_key_up(out: &mut Outcome, action: RuleAction) {
         if let RuleAction::Key { keycode, flags } = action {
-            out.push(SynthEvent {
-                kind: EventKind::KeyUp,
-                keycode,
-                flags,
-            });
+            out.push(SynthEvent { kind: EventKind::KeyUp, keycode, flags });
         }
     }
 
@@ -1168,11 +1109,9 @@ impl Arbiter {
         if kind != EventKind::KeyDown {
             return false;
         }
-        if let Some(rule) = self.find_matching_combo(
-            &cfg.rules.combo_rules,
-            ev.keycode,
-            gates.trackpad_hyper_active,
-        ) {
+        if let Some(rule) =
+            self.find_matching_combo(&cfg.rules.combo_rules, ev.keycode, gates.trackpad_hyper_active)
+        {
             self.fire_combo(cfg, &rule, ev, out);
             true
         } else {
@@ -1219,12 +1158,10 @@ impl Arbiter {
         match cond {
             HoldCondition::Key(k) => self.state.is_pressed(k),
             HoldCondition::EitherShift => {
-                self.state.is_pressed(KeyCode::LEFT_SHIFT)
-                    || self.state.is_pressed(KeyCode::RIGHT_SHIFT)
+                self.state.is_pressed(KeyCode::LEFT_SHIFT) || self.state.is_pressed(KeyCode::RIGHT_SHIFT)
             }
             HoldCondition::EitherCommand => {
-                self.state.is_pressed(KeyCode::LEFT_COMMAND)
-                    || self.state.is_pressed(KeyCode::RIGHT_COMMAND)
+                self.state.is_pressed(KeyCode::LEFT_COMMAND) || self.state.is_pressed(KeyCode::RIGHT_COMMAND)
             }
             HoldCondition::HyperActive => {
                 self.state.is_kind_active(ModifierKind::Hyper) || trackpad_hyper
@@ -1234,22 +1171,13 @@ impl Arbiter {
 
     /// 조합 하나를 발화한다 — 액션을 `out` 에 반영하고, 트리거 키(그리고 P7 이 요구하는
     /// 경우 hold 키까지)의 FSM 을 `Suppressed` 로 전이시킨다.
-    fn fire_combo(
-        &mut self,
-        _cfg: &EngineConfig,
-        rule: &ComboRule,
-        ev: &InputEvent,
-        out: &mut Outcome,
-    ) {
+    fn fire_combo(&mut self, _cfg: &EngineConfig, rule: &ComboRule, ev: &InputEvent, out: &mut Outcome) {
         out.layer = Layer::PresetCombo;
         out.disposition = Disposition::Consume;
         out.rule = Some(rule.id);
 
         match rule.action {
-            RuleAction::Key {
-                keycode,
-                flags: action_flags,
-            } => {
+            RuleAction::Key { keycode, flags: action_flags } => {
                 // P5 — 조합이 낸 출력에는 hyper 합성 flags 와 caps lock 잠금 비트를 얹지
                 // 않는다. `Caps lock + W = ▲` 의 의도는 방향키이지 `⌃⌥⌘⇧▲` 가 아니다.
                 let base = ev.flags & !self.state.active_synth_flags() & !EventFlags::CAPS_LOCK;
@@ -1262,8 +1190,7 @@ impl Arbiter {
         }
 
         // P6 — 트리거가 된 추적 키는 Suppressed 로(등록돼 있지 않으면 조용히 무시된다).
-        self.state
-            .set_machine(rule.trigger, QuickPressState::Suppressed);
+        self.state.set_machine(rule.trigger, QuickPressState::Suppressed);
 
         // P7 — F-08.9(좌우 shift 동시)는 trigger 도 shift, hold 도 shift 다. 발화 시
         // 좌·우 shift FSM 을 둘 다 Suppressed 로 만들어, "양쪽 shift 를 빠르게 두 번"
@@ -1272,8 +1199,7 @@ impl Arbiter {
             let is_shift_pair = matches!(rule.trigger, KeyCode::LEFT_SHIFT | KeyCode::RIGHT_SHIFT)
                 && matches!(hold_key, KeyCode::LEFT_SHIFT | KeyCode::RIGHT_SHIFT);
             if is_shift_pair {
-                self.state
-                    .set_machine(hold_key, QuickPressState::Suppressed);
+                self.state.set_machine(hold_key, QuickPressState::Suppressed);
             }
         }
     }
@@ -1313,10 +1239,11 @@ impl Arbiter {
                 true
             }
             EventKind::KeyDown => {
-                let Some(rule) =
-                    cfg.rules.korean_rules.iter().find(|r| {
-                        r.trigger_key == ev.keycode && self.korean_trigger_met(r.trigger)
-                    })
+                let Some(rule) = cfg
+                    .rules
+                    .korean_rules
+                    .iter()
+                    .find(|r| r.trigger_key == ev.keycode && self.korean_trigger_met(r.trigger))
                 else {
                     return false;
                 };
@@ -1337,10 +1264,8 @@ impl Arbiter {
                     // (예: SPACE 의 또 다른 변형)로 등록하는 규칙이 추가되면 이
                     // 확인이 없을 경우 다른 규칙의 래치가 억제를 잘못 트리거할 수
                     // 있다.
-                    if let Some(latch) = self
-                        .state
-                        .korean_latch(rule.trigger_key)
-                        .filter(|l| l.id == rule.id)
+                    if let Some(latch) =
+                        self.state.korean_latch(rule.trigger_key).filter(|l| l.id == rule.id)
                     {
                         out.layer = Layer::KoreanInput;
                         out.disposition = Disposition::Consume;
@@ -1405,9 +1330,7 @@ impl Arbiter {
                 let shift_pressed = self.state.is_pressed(KeyCode::LEFT_SHIFT)
                     || self.state.is_pressed(KeyCode::RIGHT_SHIFT);
                 let other_modifier_pressed = MODIFIER_KEYS.iter().any(|k| {
-                    *k != KeyCode::LEFT_SHIFT
-                        && *k != KeyCode::RIGHT_SHIFT
-                        && self.state.is_pressed(*k)
+                    *k != KeyCode::LEFT_SHIFT && *k != KeyCode::RIGHT_SHIFT && self.state.is_pressed(*k)
                 });
                 shift_pressed && !other_modifier_pressed
             }
@@ -1434,7 +1357,9 @@ impl Arbiter {
         use crate::jis::JisState;
         matches!(
             (requires_jis, gates.is_jis),
-            (None, _) | (Some(true), JisState::Jis) | (Some(false), JisState::NotJis)
+            (None, _)
+                | (Some(true), JisState::Jis)
+                | (Some(false), JisState::NotJis)
         )
     }
 
@@ -1461,8 +1386,7 @@ impl Arbiter {
                 let option_pressed = self.state.is_pressed(KeyCode::LEFT_OPTION)
                     || self.state.is_pressed(KeyCode::RIGHT_OPTION);
                 let other_modifier_pressed = MODIFIER_KEYS.iter().any(|k| {
-                    *k != KeyCode::LEFT_OPTION
-                        && *k != KeyCode::RIGHT_OPTION
+                    *k != KeyCode::LEFT_OPTION && *k != KeyCode::RIGHT_OPTION
                         && self.state.is_pressed(*k)
                 });
                 option_pressed && !other_modifier_pressed
@@ -1527,7 +1451,8 @@ impl Arbiter {
                 let Some(rule) = cfg.rules.language_rules.iter().find(|r| {
                     // AloneTap 은 이 경로가 아니다 — 아래에서 걸러낸다.
                     !matches!(r.trigger, LanguageTrigger::AloneTap { .. })
-                        && Self::language_trigger_key(r) == Some(ev.keycode)
+                        && Self::language_trigger_key(r)
+                            == Some(ev.keycode)
                         && self.language_trigger_met(&r.trigger)
                 }) else {
                     return false;
@@ -1598,21 +1523,11 @@ impl Arbiter {
     }
 
     /// 계층 4 — 단순 리매핑.
-    fn evaluate_simple_remap(
-        &self,
-        cfg: &EngineConfig,
-        ev: &InputEvent,
-        out: &mut Outcome,
-    ) -> bool {
+    fn evaluate_simple_remap(&self, cfg: &EngineConfig, ev: &InputEvent, out: &mut Outcome) -> bool {
         if !(ev.kind == EventKind::KeyDown || ev.kind == EventKind::KeyUp) {
             return false;
         }
-        let Some(remap) = cfg
-            .rules
-            .simple_remaps
-            .iter()
-            .find(|r| r.from == ev.keycode)
-        else {
+        let Some(remap) = cfg.rules.simple_remaps.iter().find(|r| r.from == ev.keycode) else {
             return false;
         };
         out.layer = Layer::SimpleRemap;
@@ -1652,11 +1567,7 @@ impl Arbiter {
                     // ⭐ M2 — `WaitingSecondTap` 타임아웃으로 유예됐던 quick press 를 이제
                     // 실제로 방출한다. M1 은 이 액션 자체가 없어 무시했었다.
                     out.layer = Layer::PresetCombo;
-                    if let Some(action) = cfg
-                        .rules
-                        .source_actions_for(key)
-                        .and_then(|sa| sa.quick_press)
-                    {
+                    if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.quick_press) {
                         Self::push_full_action(&mut out, action);
                     }
                 }
@@ -1684,11 +1595,7 @@ impl Arbiter {
                     out.layer = Layer::HyperModifier;
                     substituted = true;
                 }
-                if let Some(action) = cfg
-                    .rules
-                    .source_actions_for(key)
-                    .and_then(|sa| sa.hold_remap)
-                {
+                if let Some(action) = cfg.rules.source_actions_for(key).and_then(|sa| sa.hold_remap) {
                     // ⭐ 대상이 modifier 면 "비어 있는 flags 의 flagsChanged" 로 놓아야
                     // 한다 — `KeyUp` 을 내면 받는 앱은 애초에 눌린 적이 없다고 보므로
                     // stuck modifier 가 그대로 남는다(이슈 #19 증상 A 와 같은 뿌리).
@@ -1719,10 +1626,7 @@ mod tests {
     use super::*;
     use crate::event::EventKind;
     use crate::korean::{KoreanImeState, KoreanTrigger};
-    use crate::rules::{
-        ComboRule, HoldCondition, KoreanRule, ModifierKind, ModifierRule, RuleId, SimpleRemap,
-        SourceKeyActions,
-    };
+    use crate::rules::{ComboRule, HoldCondition, KoreanRule, ModifierKind, ModifierRule, RuleId, SimpleRemap, SourceKeyActions};
 
     fn hyper_config() -> EngineConfig {
         let mut cfg = EngineConfig::default();
@@ -1779,28 +1683,15 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let caps_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let caps_down = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(caps_down.layer(), Layer::HyperModifier);
         assert_eq!(caps_down.disposition(), Disposition::Consume);
         assert_eq!(caps_down.emitted().len(), 1);
         assert_eq!(caps_down.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
 
-        let w_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_W, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        let w_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), GateSnapshot::default(), Millis(10));
         assert_eq!(w_down.layer(), Layer::HyperModifier);
-        assert_eq!(
-            w_down.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT)
-        );
+        assert_eq!(w_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
     }
 
     /// 테스트 #3 — v1.62 재현: shift 를 누른 채 caps lock keyDown → quick press 머신이
@@ -1811,37 +1702,17 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let shift_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let shift_down = arb.arbitrate(&cfg, &key_down(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
         assert_eq!(shift_down.layer(), Layer::Passthrough);
 
-        let caps_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(5),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        let caps_down = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(5));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
         assert_eq!(caps_down.disposition(), Disposition::Consume);
 
-        let caps_up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::CAPS_LOCK, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        let caps_up = arb.arbitrate(&cfg, &key_up(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(20));
         assert_eq!(caps_up.emitted().len(), 1);
         assert_eq!(caps_up.emitted()[0].kind, EventKind::FlagsChanged);
-        assert!(!caps_up.emitted()[0]
-            .flags
-            .contains(EventFlags::HYPER_WITH_SHIFT));
+        assert!(!caps_up.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT));
     }
 
     /// 테스트 #4 — `Include shift in hyper key` OFF → HYPER_NO_SHIFT 만 합성.
@@ -1855,12 +1726,7 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.emitted()[0].flags, EventFlags::HYPER_NO_SHIFT);
         assert!(!out.emitted()[0].flags.contains(EventFlags::SHIFT));
     }
@@ -1876,12 +1742,7 @@ mod tests {
             flags: EventFlags::MEH,
         });
         let mut meh_arb = Arbiter::new(&meh_cfg);
-        let meh_out = meh_arb.arbitrate(
-            &meh_cfg,
-            &key_down(KeyCode::RIGHT_OPTION, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let meh_out = meh_arb.arbitrate(&meh_cfg, &key_down(KeyCode::RIGHT_OPTION, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(meh_out.emitted()[0].flags, EventFlags::MEH);
 
         let mut bleh_cfg = EngineConfig::default();
@@ -1891,12 +1752,7 @@ mod tests {
             flags: EventFlags::BLEH,
         });
         let mut bleh_arb = Arbiter::new(&bleh_cfg);
-        let bleh_out = bleh_arb.arbitrate(
-            &bleh_cfg,
-            &key_down(KeyCode::RIGHT_COMMAND, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let bleh_out = bleh_arb.arbitrate(&bleh_cfg, &key_down(KeyCode::RIGHT_COMMAND, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert!(bleh_out.emitted()[0].flags.contains(EventFlags::BLEH));
         assert!(!bleh_out.emitted()[0].flags.contains(EventFlags::ALTERNATE));
     }
@@ -1916,18 +1772,8 @@ mod tests {
             flags: EventFlags::BLEH,
         });
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::RIGHT_OPTION, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let bleh_out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::RIGHT_COMMAND, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(1),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::RIGHT_OPTION, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let bleh_out = arb.arbitrate(&cfg, &key_down(KeyCode::RIGHT_COMMAND, EventFlags::NONE), GateSnapshot::default(), Millis(1));
 
         let flags = bleh_out.emitted()[0].flags;
         assert!(flags.contains(EventFlags::MEH));
@@ -1941,27 +1787,15 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(first.emitted().len(), 1);
 
         let mut repeat_ev = key_down(KeyCode::CAPS_LOCK, EventFlags::NONE);
         repeat_ev.autorepeat = true;
         let repeat = arb.arbitrate(&cfg, &repeat_ev, GateSnapshot::default(), Millis(50));
         assert_eq!(repeat.disposition(), Disposition::Consume);
-        assert_eq!(
-            repeat.emitted().len(),
-            0,
-            "autorepeat 은 HoldStart 를 다시 내면 안 된다"
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(repeat.emitted().len(), 0, "autorepeat 은 HoldStart 를 다시 내면 안 된다");
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
     }
 
     /// 테스트 #7 — short-circuit: 상위 계층이 성립하면 하위 계층이 평가되지 않는다.
@@ -1976,12 +1810,7 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.layer(), Layer::HyperModifier);
         assert_eq!(out.emitted()[0].keycode, KeyCode::CAPS_LOCK);
         assert_ne!(out.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
@@ -1993,15 +1822,7 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot { seek_active: true, ..Default::default() }, Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle);
@@ -2067,22 +1888,12 @@ mod tests {
         cfg.rules.seek_trigger = Some(KeyCode::F13);
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.layer(), Layer::SeekSession);
         assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
 
         // 릴리즈 시점의 modifier 스냅샷(F-04 §5 #10) — ⌥ 를 누른 채 뗀 상황.
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F13, EventFlags::ALTERNATE),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::ALTERNATE), GateSnapshot::default(), Millis(20));
         assert_eq!(up.layer(), Layer::SeekSession);
         assert_eq!(up.effects(), [Effect::SeekTriggerUp(EventFlags::ALTERNATE)]);
     }
@@ -2097,26 +1908,13 @@ mod tests {
         cfg.rules.seek_trigger = Some(KeyCode::F13);
         let mut arb = Arbiter::new(&cfg);
 
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(first.effects(), [Effect::SeekTriggerDown]);
 
-        let repeat = arb.arbitrate(
-            &cfg,
-            &key_down_repeat(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        let repeat = arb.arbitrate(&cfg, &key_down_repeat(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(50));
         assert_eq!(repeat.layer(), Layer::SeekSession);
         assert_eq!(repeat.disposition(), Disposition::Consume);
-        assert!(
-            repeat.effects().is_empty(),
-            "autorepeat 다운은 SeekTriggerDown 을 다시 내면 안 된다"
-        );
+        assert!(repeat.effects().is_empty(), "autorepeat 다운은 SeekTriggerDown 을 다시 내면 안 된다");
     }
 
     /// #4 — `seek_trigger_beats_hyper_source_on_same_key`. `key-remapping-engine.md`
@@ -2137,15 +1935,8 @@ mod tests {
         );
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.effects(), [Effect::SeekTriggerDown]);
-        assert!(
-            out.emitted().is_empty(),
-            "hyper 합성 flagsChanged 가 나가면 안 된다"
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::Idle,
-            "hyper FSM 은 건드리지 않는다"
-        );
+        assert!(out.emitted().is_empty(), "hyper 합성 flagsChanged 가 나가면 안 된다");
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "hyper FSM 은 건드리지 않는다");
     }
 
     /// #5 — `seek_trigger_beats_quick_press_action_on_same_key`. 같은 근거(§3-b) —
@@ -2178,15 +1969,8 @@ mod tests {
             Millis(10),
         );
         assert_eq!(up.effects(), [Effect::SeekTriggerUp(EventFlags::CAPS_LOCK)]);
-        assert!(
-            !up.effects().contains(&Effect::ToggleCapsLock),
-            "quick press 액션이 발화하면 안 된다"
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::Idle,
-            "quick press FSM 은 건드리지 않는다"
-        );
+        assert!(!up.effects().contains(&Effect::ToggleCapsLock), "quick press 액션이 발화하면 안 된다");
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "quick press FSM 은 건드리지 않는다");
     }
 
     /// #6 — `seek_trigger_resolves_d1_alias`(D-1, `architecture.md` §6.1). caps lock 이
@@ -2200,12 +1984,7 @@ mod tests {
         cfg.rules.seek_trigger = Some(KeyCode::CAPS_LOCK);
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.layer(), Layer::SeekSession);
         assert_eq!(down.effects(), [Effect::SeekTriggerDown]);
     }
@@ -2221,10 +2000,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -2246,28 +2022,15 @@ mod tests {
     fn session_active_normalizes_flags_changed_before_routing() {
         let cfg = EngineConfig::default();
         let mut arb = Arbiter::new(&cfg);
-        let gates = GateSnapshot {
-            seek_active: true,
-            ..Default::default()
-        };
+        let gates = GateSnapshot { seek_active: true, ..Default::default() };
 
-        let down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            gates,
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), gates, Millis(0));
         match down.effects()[0] {
             Effect::SeekKey(ev) => assert_eq!(ev.kind, EventKind::KeyDown),
             other => panic!("SeekKey 가 아니다: {other:?}"),
         }
 
-        let up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            gates,
-            Millis(10),
-        );
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), gates, Millis(10));
         match up.effects()[0] {
             Effect::SeekKey(ev) => assert_eq!(ev.kind, EventKind::KeyUp),
             other => panic!("SeekKey 가 아니다: {other:?}"),
@@ -2288,15 +2051,7 @@ mod tests {
             flags: EventFlags::NONE,
             autorepeat: false,
         };
-        let out = arb.arbitrate(
-            &cfg,
-            &click,
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &click, GateSnapshot { seek_active: true, ..Default::default() }, Millis(0));
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
     }
@@ -2313,40 +2068,16 @@ mod tests {
     fn session_active_keeps_pressed_table_in_sync() {
         let cfg = EngineConfig::default();
         let mut arb = Arbiter::new(&cfg);
-        let session_open = GateSnapshot {
-            seek_active: true,
-            ..Default::default()
-        };
+        let session_open = GateSnapshot { seek_active: true, ..Default::default() };
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            session_open,
-            Millis(0),
-        );
-        assert!(
-            arb.state.is_pressed(KeyCode::LEFT_SHIFT),
-            "세션 중 down 이 테이블에 반영돼야 한다"
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), session_open, Millis(0));
+        assert!(arb.state.is_pressed(KeyCode::LEFT_SHIFT), "세션 중 down 이 테이블에 반영돼야 한다");
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            session_open,
-            Millis(10),
-        );
-        assert!(
-            !arb.state.is_pressed(KeyCode::LEFT_SHIFT),
-            "세션 중 up 도 테이블에 반영돼야 한다"
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), session_open, Millis(10));
+        assert!(!arb.state.is_pressed(KeyCode::LEFT_SHIFT), "세션 중 up 도 테이블에 반영돼야 한다");
 
         // 세션을 닫는다 — 실제로는 F-01 이 `seek_session_active` 를 false 로 내린다.
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(20));
         assert!(
             arb.state.is_pressed(KeyCode::LEFT_SHIFT),
             "테이블이 어긋나 있었다면(수정 전 코드) 이 이벤트가 KeyUp 으로 오판돼 false 로 남았을 것이다"
@@ -2381,10 +2112,7 @@ mod tests {
         let up = arb.arbitrate(
             &cfg,
             &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(50),
         );
         assert_eq!(up.layer(), Layer::SeekSession);
@@ -2409,10 +2137,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.layer(), Layer::SeekSession);
@@ -2431,10 +2156,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_up(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -2452,10 +2174,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &flags_changed(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -2472,10 +2191,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.layer(), Layer::SeekSession);
@@ -2500,10 +2216,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.layer(), Layer::SeekSession);
@@ -2531,15 +2244,7 @@ mod tests {
             flags: EventFlags::NONE,
             autorepeat: false,
         };
-        let out = arb.arbitrate(
-            &cfg,
-            &click,
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &click, GateSnapshot { seek_active: true, ..Default::default() }, Millis(0));
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
     }
@@ -2551,17 +2256,8 @@ mod tests {
         let cfg = EngineConfig::default();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert_eq!(
-            out.layer(),
-            Layer::Passthrough,
-            "세션 밖에서는 통과 경로여야 한다"
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(out.layer(), Layer::Passthrough, "세션 밖에서는 통과 경로여야 한다");
         assert_eq!(out.disposition(), Disposition::Pass);
     }
 
@@ -2575,10 +2271,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::JIS_KANA, EventFlags::COMMAND),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -2588,10 +2281,7 @@ mod tests {
         let fc_out = arb.arbitrate(
             &cfg,
             &flags_changed(KeyCode::JIS_KANA, EventFlags::SHIFT),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(10),
         );
         assert_eq!(fc_out.disposition(), Disposition::Pass);
@@ -2714,11 +2404,7 @@ mod tests {
             input_box_gates(false),
             Millis(0),
         );
-        assert_eq!(
-            out.disposition(),
-            Disposition::Pass,
-            "⌥+문자는 데드키로 통과"
-        );
+        assert_eq!(out.disposition(), Disposition::Pass, "⌥+문자는 데드키로 통과");
         assert!(out.effects().is_empty());
     }
 
@@ -2743,11 +2429,7 @@ mod tests {
             gates,
             Millis(0),
         );
-        assert_eq!(
-            out.disposition(),
-            Disposition::Consume,
-            "단축키 조합은 통과 금지"
-        );
+        assert_eq!(out.disposition(), Disposition::Consume, "단축키 조합은 통과 금지");
         assert_eq!(out.effects().len(), 1);
 
         // 같은 ⌥ 조합이지만 **다른** keycode 는 통과한다(문자).
@@ -2796,10 +2478,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -2822,31 +2501,13 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            gates,
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), gates, Millis(0));
         assert_eq!(down.layer(), Layer::SeekSession);
-        assert_eq!(
-            down.disposition(),
-            Disposition::Pass,
-            "⌃Space down 은 시스템 전환으로 통과"
-        );
+        assert_eq!(down.disposition(), Disposition::Pass, "⌃Space down 은 시스템 전환으로 통과");
         assert!(down.effects().is_empty(), "SeekKey 를 내면 안 된다");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            gates,
-            Millis(10),
-        );
-        assert_eq!(
-            up.disposition(),
-            Disposition::Pass,
-            "⌃Space up 도 같은 경로로 통과"
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)), gates, Millis(10));
+        assert_eq!(up.disposition(), Disposition::Pass, "⌃Space up 도 같은 경로로 통과");
         assert!(up.effects().is_empty());
     }
 
@@ -2910,11 +2571,7 @@ mod tests {
             gates,
             Millis(0),
         );
-        assert_eq!(
-            out.disposition(),
-            Disposition::Consume,
-            "토글 조합은 통과 금지"
-        );
+        assert_eq!(out.disposition(), Disposition::Consume, "토글 조합은 통과 금지");
         assert_eq!(out.effects().len(), 1);
         assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
     }
@@ -2953,10 +2610,7 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -2973,17 +2627,10 @@ mod tests {
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            GateSnapshot {
-                seek_active: true,
-                ..Default::default()
-            },
+            GateSnapshot { seek_active: true, ..Default::default() },
             Millis(0),
         );
-        assert_eq!(
-            out.layer(),
-            Layer::SeekSession,
-            "한국어 규칙이 발화하면 안 된다"
-        );
+        assert_eq!(out.layer(), Layer::SeekSession, "한국어 규칙이 발화하면 안 된다");
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.effects().len(), 1);
         assert!(matches!(out.effects()[0], Effect::SeekKey(_)));
@@ -2997,50 +2644,22 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(0),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
         assert_eq!(down.layer(), Layer::KoreanInput);
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].kind, EventKind::KeyDown);
         assert_eq!(down.emitted()[0].keycode, KeyCode::SPACE);
-        assert_eq!(
-            down.emitted()[0].flags,
-            EventFlags(0x0004_0001),
-            "⇧ 제거 + ⌃ 치환"
-        );
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "⇧ 제거 + ⌃ 치환");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(15),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(15));
         assert_eq!(up.layer(), Layer::KoreanInput);
         assert_eq!(up.disposition(), Disposition::Consume);
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
-        assert_eq!(
-            up.emitted()[0].flags,
-            EventFlags(0x0004_0001),
-            "래치가 같은 치환으로 짝을 맞춘다"
-        );
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "래치가 같은 치환으로 짝을 맞춘다");
 
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            gates,
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(20));
         assert!(!arb.state.is_pressed(KeyCode::LEFT_SHIFT));
     }
 
@@ -3073,35 +2692,13 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert!(
-            !arb.state.active_synth_flags().is_empty(),
-            "F13 이 hyper 로 확정돼야 한다"
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert!(!arb.state.active_synth_flags().is_empty(), "F13 이 hyper 로 확정돼야 한다");
 
         let gates = input_box_gates(false);
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(10),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(20),
-        );
-        assert_ne!(
-            out.layer(),
-            Layer::KoreanInput,
-            "hyper 활성 중 F-16.1 은 발화하지 않아야 한다"
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
+        assert_ne!(out.layer(), Layer::KoreanInput, "hyper 활성 중 F-16.1 은 발화하지 않아야 한다");
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
     }
@@ -3130,38 +2727,18 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
 
         // 세션 밖 — F13 이 hyper 로 hold 확정된다(T8 과 동일 준비).
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert!(
-            !arb.state.active_synth_flags().is_empty(),
-            "F13 이 hyper 로 확정돼야 한다"
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert!(!arb.state.active_synth_flags().is_empty(), "F13 이 hyper 로 확정돼야 한다");
 
         // 세션이 열린다(인풋 박스) — F5: 세션 게이트가 `is_tracked` 앞이라 아래
         // F13 KeyUp 은 FSM 이 아니라 계층 1(SeekKey)로 소비된다.
         let gates = input_box_gates(false);
-        let release = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F13, EventFlags::NONE),
-            gates,
-            Millis(5),
-        );
-        assert_eq!(
-            release.layer(),
-            Layer::SeekSession,
-            "세션 중 F13 릴리즈는 SeekKey 로 소비된다(F5)"
-        );
+        let release = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::NONE), gates, Millis(5));
+        assert_eq!(release.layer(), Layer::SeekSession, "세션 중 F13 릴리즈는 SeekKey 로 소비된다(F5)");
 
         // 정본 눌림 테이블은 세션과 무관하게 갱신된다(:456-460) — F13 은 이제
         // 물리적으로 눌려 있지 않다.
-        assert!(
-            !arb.state.is_pressed(KeyCode::F13),
-            "정본 눌림 테이블은 세션 중에도 갱신된다"
-        );
+        assert!(!arb.state.is_pressed(KeyCode::F13), "정본 눌림 테이블은 세션 중에도 갱신된다");
 
         // ⭐ P2 리뷰 반영 — 채택안(후보 ②)은 `active_synth_flags()` 자체를 고치지
         // 않는다: FSM 슬롯은 의도적으로 `HoldConfirmed` 로 남는다(§3 "FSM 슬롯
@@ -3179,18 +2756,8 @@ mod tests {
             "F13 이 물리적으로 뗀 뒤에는 pressed-필터 판정이 stale 을 걸러내야 한다"
         );
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(10),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
         assert_eq!(
             out.layer(),
             Layer::KoreanInput,
@@ -3205,12 +2772,7 @@ mod tests {
     fn input_box_f16_1_han_eng_key_still_passes_original() {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            input_box_gates(false),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), input_box_gates(false), Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.emitted().is_empty(), "치환 이벤트를 내면 안 된다");
@@ -3223,12 +2785,7 @@ mod tests {
     fn input_box_f16_1_hanja_key_still_consumed() {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            input_box_gates(false),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), input_box_gates(false), Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.effects().len(), 1);
@@ -3243,47 +2800,19 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates_open = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates_open,
-            Millis(0),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates_open,
-            Millis(10),
-        );
-        assert_eq!(
-            down.disposition(),
-            Disposition::Consume,
-            "세션 중 발화(래치 세움)"
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates_open, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates_open, Millis(10));
+        assert_eq!(down.disposition(), Disposition::Consume, "세션 중 발화(래치 세움)");
 
         // 세션이 그 사이 닫혔다 — space up 은 세션 밖 계층 3 으로 온다.
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(20));
         assert_eq!(up.layer(), Layer::KoreanInput);
         assert_eq!(up.disposition(), Disposition::Consume);
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
-        assert_eq!(
-            up.emitted()[0].flags,
-            EventFlags(0x0004_0001),
-            "같은 치환으로 짝을 맞춘다"
-        );
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "같은 치환으로 짝을 맞춘다");
 
         // 래치가 소비됐으므로 이후 일반 공백은 정상 통과.
-        let plain = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(30),
-        );
+        let plain = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags::NONE), GateSnapshot::default(), Millis(30));
         assert_eq!(plain.disposition(), Disposition::Pass);
     }
 
@@ -3296,27 +2825,12 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates_open = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates_open,
-            Millis(0),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates_open,
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates_open, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates_open, Millis(10));
         assert_eq!(down.disposition(), Disposition::Consume, "F-16.1 발화");
 
         // ⌃ 를 추가한 채 space 를 뗀다 — D2 가 잔존 래치를 소비해야 한다.
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            gates_open,
-            Millis(20),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0004_0001)), gates_open, Millis(20));
         assert_eq!(up.layer(), Layer::KoreanInput, "D1 통과로 우회되면 안 된다");
         assert_eq!(up.disposition(), Disposition::Consume);
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
@@ -3324,23 +2838,9 @@ mod tests {
 
         // 래치가 소비됐다 — shift 를 정리한 뒤 평범한 공백 down 은 정상 통과
         // (shift 가 눌린 채면 F-16.1 이 다시 발화하는 것이 정상이라 먼저 뗀다).
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            gates_open,
-            Millis(30),
-        );
-        let plain = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags::NONE),
-            gates_open,
-            Millis(40),
-        );
-        assert_eq!(
-            plain.disposition(),
-            Disposition::Pass,
-            "잔존 래치가 없어야 정상 통과"
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates_open, Millis(30));
+        let plain = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags::NONE), gates_open, Millis(40));
+        assert_eq!(plain.disposition(), Disposition::Pass, "잔존 래치가 없어야 정상 통과");
     }
 
     /// T-③(리뷰 ③, ⭐ 이슈 #127 로 기대값 정정) — **autorepeat**: 세션 + F-16.1 켬 +
@@ -3356,40 +2856,17 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(0),
-        );
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
         assert_eq!(first.emitted().len(), 1);
 
         let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
         repeat.autorepeat = true;
         let second = arb.arbitrate(&cfg, &repeat, gates, Millis(50));
-        assert_eq!(
-            second.disposition(),
-            Disposition::Consume,
-            "원본 SPACE는 계속 삼켜야 한다"
-        );
-        assert_eq!(
-            second.emitted().len(),
-            0,
-            "래치가 이미 섰으면 autorepeat 은 재발화하지 않는다(#127)"
-        );
+        assert_eq!(second.disposition(), Disposition::Consume, "원본 SPACE는 계속 삼켜야 한다");
+        assert_eq!(second.emitted().len(), 0, "래치가 이미 섰으면 autorepeat 은 재발화하지 않는다(#127)");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(60),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(60));
         assert_eq!(up.emitted().len(), 1, "up 은 한 번만 나가야 한다");
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
         assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001));
@@ -3409,30 +2886,13 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(0),
-        );
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(10),
-        );
-        assert_eq!(
-            first.disposition(),
-            Disposition::Consume,
-            "최초 down 은 F-16.1 발화"
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
+        assert_eq!(first.disposition(), Disposition::Consume, "최초 down 은 F-16.1 발화");
         assert_eq!(first.emitted().len(), 1, "최초 down 은 합성 KeyDown 1회");
 
-        let mut total_synth_keydowns = first
-            .emitted()
-            .iter()
-            .filter(|e| e.kind == EventKind::KeyDown)
-            .count();
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
 
         for i in 1..=3u64 {
             let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
@@ -3443,11 +2903,8 @@ mod tests {
                 Disposition::Consume,
                 "autorepeat {i}회차도 원본은 삼켜야 한다(검색어에 공백이 들어가면 안 됨)"
             );
-            total_synth_keydowns += out
-                .emitted()
-                .iter()
-                .filter(|e| e.kind == EventKind::KeyDown)
-                .count();
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
         }
 
         assert_eq!(
@@ -3455,12 +2912,7 @@ mod tests {
             "1 press = 정확히 1 합성 KeyDown — autorepeat 은 재발화 금지(#127)"
         );
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(200),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(200));
         assert_eq!(up.disposition(), Disposition::Consume);
         assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
@@ -3474,12 +2926,7 @@ mod tests {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
         let first = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
@@ -3489,39 +2936,21 @@ mod tests {
         assert_eq!(first.layer(), Layer::KoreanInput);
         assert_eq!(first.emitted().len(), 1);
 
-        let mut total_synth_keydowns = first
-            .emitted()
-            .iter()
-            .filter(|e| e.kind == EventKind::KeyDown)
-            .count();
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
 
         for i in 1..=3u64 {
             let mut repeat = key_down(KeyCode::SPACE, EventFlags(0x0002_0002));
             repeat.autorepeat = true;
             let out = arb.arbitrate(&cfg, &repeat, GateSnapshot::default(), Millis(10 + i * 30));
-            assert_eq!(
-                out.disposition(),
-                Disposition::Consume,
-                "autorepeat {i}회차"
-            );
-            total_synth_keydowns += out
-                .emitted()
-                .iter()
-                .filter(|e| e.kind == EventKind::KeyDown)
-                .count();
+            assert_eq!(out.disposition(), Disposition::Consume, "autorepeat {i}회차");
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
         }
 
-        assert_eq!(
-            total_synth_keydowns, 1,
-            "계층 3도 1 press = 정확히 1 합성 KeyDown(#127)"
-        );
+        assert_eq!(total_synth_keydowns, 1, "계층 3도 1 press = 정확히 1 합성 KeyDown(#127)");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            GateSnapshot::default(),
-            Millis(200),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(200));
         assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
     }
@@ -3544,11 +2973,8 @@ mod tests {
         assert_eq!(first.layer(), Layer::KoreanInput);
         assert_eq!(first.emitted().len(), 1);
 
-        let mut total_synth_keydowns = first
-            .emitted()
-            .iter()
-            .filter(|e| e.kind == EventKind::KeyDown)
-            .count();
+        let mut total_synth_keydowns =
+            first.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
 
         for i in 1..=3u64 {
             let out = arb.arbitrate(
@@ -3557,29 +2983,14 @@ mod tests {
                 GateSnapshot::default(),
                 Millis(10 + i * 30),
             );
-            assert_eq!(
-                out.disposition(),
-                Disposition::Consume,
-                "autorepeat {i}회차"
-            );
-            total_synth_keydowns += out
-                .emitted()
-                .iter()
-                .filter(|e| e.kind == EventKind::KeyDown)
-                .count();
+            assert_eq!(out.disposition(), Disposition::Consume, "autorepeat {i}회차");
+            total_synth_keydowns +=
+                out.emitted().iter().filter(|e| e.kind == EventKind::KeyDown).count();
         }
 
-        assert_eq!(
-            total_synth_keydowns, 1,
-            "F-16.2 도 1 press = 정확히 1 합성 KeyDown(#127)"
-        );
+        assert_eq!(total_synth_keydowns, 1, "F-16.2 도 1 press = 정확히 1 합성 KeyDown(#127)");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(200),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(200));
         assert_eq!(up.emitted().len(), 1, "1 press = 정확히 1 합성 KeyUp");
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
     }
@@ -3591,38 +3002,17 @@ mod tests {
     fn f16_3_hanja_autorepeat_key_down_is_substituted_every_time() {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
-        let gates = GateSnapshot {
-            korean_ime: KoreanImeState::Active,
-            ..Default::default()
-        };
+        let gates = GateSnapshot { korean_ime: KoreanImeState::Active, ..Default::default() };
 
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
         assert_eq!(first.layer(), Layer::KoreanInput);
         assert_eq!(first.emitted().len(), 1);
 
         for i in 1..=3u64 {
-            let repeat = arb.arbitrate(
-                &cfg,
-                &key_down_repeat(KeyCode::JIS_EISU, EventFlags::NONE),
-                gates,
-                Millis(10 * i),
-            );
-            assert_eq!(
-                repeat.layer(),
-                Layer::KoreanInput,
-                "반복 {i}회차에서 치환되지 않았다"
-            );
+            let repeat = arb.arbitrate(&cfg, &key_down_repeat(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(10 * i));
+            assert_eq!(repeat.layer(), Layer::KoreanInput, "반복 {i}회차에서 치환되지 않았다");
             assert_eq!(repeat.disposition(), Disposition::Consume);
-            assert_eq!(
-                repeat.emitted().len(),
-                1,
-                "F-16.3 은 토글이 아니라 매 tick 재발화해야 한다"
-            );
+            assert_eq!(repeat.emitted().len(), 1, "F-16.3 은 토글이 아니라 매 tick 재발화해야 한다");
             assert_eq!(repeat.emitted()[0].keycode, KeyCode::RETURN);
         }
     }
@@ -3635,29 +3025,11 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
-        assert_eq!(
-            down.disposition(),
-            Disposition::Pass,
-            "modifier 없는 공백은 통과"
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags::NONE), gates, Millis(0));
+        assert_eq!(down.disposition(), Disposition::Pass, "modifier 없는 공백은 통과");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags::NONE),
-            gates,
-            Millis(10),
-        );
-        assert_eq!(
-            up.disposition(),
-            Disposition::Pass,
-            "래치 없이 KeyUp 을 소비하면 안 된다"
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags::NONE), gates, Millis(10));
+        assert_eq!(up.disposition(), Disposition::Pass, "래치 없이 KeyUp 을 소비하면 안 된다");
         assert!(up.effects().is_empty());
     }
 
@@ -3667,17 +3039,8 @@ mod tests {
     fn input_box_f16_1_control_space_still_passes_d1() {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            input_box_gates(false),
-            Millis(0),
-        );
-        assert_ne!(
-            out.layer(),
-            Layer::KoreanInput,
-            "⌃Space 는 F-16.1 대상이 아니다"
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), input_box_gates(false), Millis(0));
+        assert_ne!(out.layer(), Layer::KoreanInput, "⌃Space 는 F-16.1 대상이 아니다");
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
@@ -3697,20 +3060,14 @@ mod tests {
                 app_gate: None,
                 requires_jis: Some(jis),
                 // ⇧ ⌃⌥⌘ 가 없는 raw `key` → ⌥+key (0x0008_0020 = ALTERNATE | NX_DEVICELALTKEYMASK)
-                out: LanguageOut::Key {
-                    keycode: key,
-                    flags: EventFlags(0x0008_0020),
-                },
+                out: LanguageOut::Key { keycode: key, flags: EventFlags(0x0008_0020) },
             });
             rules.push(LanguageRule {
                 id: RuleId::Language(21),
                 trigger: LanguageTrigger::OptionOnly { key },
                 app_gate: None,
                 requires_jis: Some(jis),
-                out: LanguageOut::Key {
-                    keycode: key,
-                    flags: EventFlags::NONE,
-                },
+                out: LanguageOut::Key { keycode: key, flags: EventFlags::NONE },
             });
         }
         rules
@@ -3722,12 +3079,7 @@ mod tests {
         type Row = (KeyCode, bool, KeyCode, u64);
         const ROWS: &[Row] = &[
             // shift+2 `"` → `@`
-            (
-                KeyCode::ANSI_2,
-                true,
-                KeyCode::ANSI_LEFT_BRACKET,
-                0x0000_0000,
-            ),
+            (KeyCode::ANSI_2, true, KeyCode::ANSI_LEFT_BRACKET, 0x0000_0000),
             // shift+6 `&` → `^`
             (KeyCode::ANSI_6, true, KeyCode::ANSI_EQUAL, 0x0000_0000),
             // shift+7 `'` → `&`
@@ -3739,76 +3091,31 @@ mod tests {
             // shift+0 `0` → `)`
             (KeyCode::ANSI_0, true, KeyCode::ANSI_9, 0x0002_0002),
             // shift+- `=` → `_`
-            (
-                KeyCode::ANSI_MINUS,
-                true,
-                KeyCode::JIS_UNDERSCORE,
-                0x0000_0000,
-            ),
+            (KeyCode::ANSI_MINUS, true, KeyCode::JIS_UNDERSCORE, 0x0000_0000),
             // `^` → `=`
             (KeyCode::ANSI_EQUAL, false, KeyCode::ANSI_MINUS, 0x0002_0002),
             // shift+^ `~` → `+`
-            (
-                KeyCode::ANSI_EQUAL,
-                true,
-                KeyCode::ANSI_SEMICOLON,
-                0x0002_0002,
-            ),
+            (KeyCode::ANSI_EQUAL, true, KeyCode::ANSI_SEMICOLON, 0x0002_0002),
             // ¥ → `
-            (
-                KeyCode::JIS_YEN,
-                false,
-                KeyCode::ANSI_LEFT_BRACKET,
-                0x0002_0002,
-            ),
+            (KeyCode::JIS_YEN, false, KeyCode::ANSI_LEFT_BRACKET, 0x0002_0002),
             // shift+¥ `|` → `~`  ⭐ T-118-3 이 이 행을 쓴다
             (KeyCode::JIS_YEN, true, KeyCode::ANSI_EQUAL, 0x0002_0002),
             // `@` → `[`
-            (
-                KeyCode::ANSI_LEFT_BRACKET,
-                false,
-                KeyCode::ANSI_RIGHT_BRACKET,
-                0x0000_0000,
-            ),
+            (KeyCode::ANSI_LEFT_BRACKET, false, KeyCode::ANSI_RIGHT_BRACKET, 0x0000_0000),
             // shift+@ `` ` `` → `{`
-            (
-                KeyCode::ANSI_LEFT_BRACKET,
-                true,
-                KeyCode::ANSI_RIGHT_BRACKET,
-                0x0002_0002,
-            ),
+            (KeyCode::ANSI_LEFT_BRACKET, true, KeyCode::ANSI_RIGHT_BRACKET, 0x0002_0002),
             // `[` → `]`
-            (
-                KeyCode::ANSI_RIGHT_BRACKET,
-                false,
-                KeyCode::ANSI_BACKSLASH,
-                0x0000_0000,
-            ),
+            (KeyCode::ANSI_RIGHT_BRACKET, false, KeyCode::ANSI_BACKSLASH, 0x0000_0000),
             // shift+[ `{` → `}`
-            (
-                KeyCode::ANSI_RIGHT_BRACKET,
-                true,
-                KeyCode::ANSI_BACKSLASH,
-                0x0002_0002,
-            ),
+            (KeyCode::ANSI_RIGHT_BRACKET, true, KeyCode::ANSI_BACKSLASH, 0x0002_0002),
             // shift+; `+` → `:`
-            (
-                KeyCode::ANSI_SEMICOLON,
-                true,
-                KeyCode::ANSI_QUOTE,
-                0x0000_0000,
-            ),
+            (KeyCode::ANSI_SEMICOLON, true, KeyCode::ANSI_QUOTE, 0x0000_0000),
             // `:` → `'`
             (KeyCode::ANSI_QUOTE, false, KeyCode::ANSI_7, 0x0002_0002),
             // shift+: `*` → `"`
             (KeyCode::ANSI_QUOTE, true, KeyCode::ANSI_2, 0x0002_0002),
             // `]` → `\` (⌥¥ 경유 합성)
-            (
-                KeyCode::ANSI_BACKSLASH,
-                false,
-                KeyCode::JIS_YEN,
-                0x0008_0020,
-            ),
+            (KeyCode::ANSI_BACKSLASH, false, KeyCode::JIS_YEN, 0x0008_0020),
             // shift+] `}` → `|`
             (KeyCode::ANSI_BACKSLASH, true, KeyCode::JIS_YEN, 0x0002_0002),
         ];
@@ -3822,10 +3129,7 @@ mod tests {
                 },
                 app_gate: None,
                 requires_jis: Some(true),
-                out: LanguageOut::Key {
-                    keycode: to,
-                    flags: EventFlags(flags),
-                },
+                out: LanguageOut::Key { keycode: to, flags: EventFlags(flags) },
             })
             .collect()
     }
@@ -3841,35 +3145,23 @@ mod tests {
             // F-19.1 ko — 캡스락 단독 탭 → ⌃Space (Language(17))
             LanguageRule {
                 id: RuleId::Language(17),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::CAPS_LOCK,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
                 app_gate: Some(LanguageGate::Korean),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::SPACE,
-                    flags: EventFlags(0x0004_0001),
-                },
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
             },
             // F-19.2 ko — 우⌘ 단독 탭 → ⌃Space (Language(18))
             LanguageRule {
                 id: RuleId::Language(18),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::RIGHT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
                 app_gate: Some(LanguageGate::Korean),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::SPACE,
-                    flags: EventFlags(0x0004_0001),
-                },
+                out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
             },
             // F-19.3 ja — 캡스락 단독 탭 → 英数/かな (Language(19))
             LanguageRule {
                 id: RuleId::Language(19),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::CAPS_LOCK,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
                 out: LanguageOut::EisuOrKana,
@@ -3877,43 +3169,28 @@ mod tests {
             // F-19.4 ja — ⌘ 단독 탭: 좌⌘=英数·우⌘=かな (Language(20), 안 A)
             LanguageRule {
                 id: RuleId::Language(20),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::LEFT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::LEFT_COMMAND },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::JIS_EISU,
-                    flags: EventFlags::NONE,
-                },
+                out: LanguageOut::Key { keycode: KeyCode::JIS_EISU, flags: EventFlags::NONE },
             },
             LanguageRule {
                 id: RuleId::Language(20),
-                trigger: LanguageTrigger::AloneTap {
-                    key: KeyCode::RIGHT_COMMAND,
-                },
+                trigger: LanguageTrigger::AloneTap { key: KeyCode::RIGHT_COMMAND },
                 app_gate: Some(LanguageGate::Japanese),
                 requires_jis: None,
-                out: LanguageOut::Key {
-                    keycode: KeyCode::JIS_KANA,
-                    flags: EventFlags::NONE,
-                },
+                out: LanguageOut::Key { keycode: KeyCode::JIS_KANA, flags: EventFlags::NONE },
             },
         ];
         cfg.rules.language_rules.extend(f19_5_yen_backslash_rules()); // F-19.5
-        cfg.rules.language_rules.extend(f19_6_jis_us_rows()); // F-19.6
+        cfg.rules.language_rules.extend(f19_6_jis_us_rows());         // F-19.6
         cfg.rules.language_rules.push(LanguageRule {
             // F-19.7 zh — 캡스락 단독 탭 → ⌃Space (Language(23))
             id: RuleId::Language(23),
-            trigger: LanguageTrigger::AloneTap {
-                key: KeyCode::CAPS_LOCK,
-            },
+            trigger: LanguageTrigger::AloneTap { key: KeyCode::CAPS_LOCK },
             app_gate: Some(LanguageGate::Chinese),
             requires_jis: None,
-            out: LanguageOut::Key {
-                keycode: KeyCode::SPACE,
-                flags: EventFlags(0x0004_0001),
-            },
+            out: LanguageOut::Key { keycode: KeyCode::SPACE, flags: EventFlags(0x0004_0001) },
         });
         cfg.rules.language_rules.sort_by_key(|r| r.id);
         cfg
@@ -3936,26 +3213,12 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         for hex in [0x0004_0001u64, 0x000C_0001, 0x0006_0001] {
             let flags = EventFlags(hex);
-            let out = arb.arbitrate(
-                &cfg,
-                &key_down(KeyCode::SPACE, flags),
-                input_box_gates(false),
-                Millis(0),
-            );
+            let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, flags), input_box_gates(false), Millis(0));
             assert_eq!(out.layer(), Layer::SeekSession, "{hex:#x} — D1 통과 지점");
             assert_eq!(out.disposition(), Disposition::Pass);
             assert!(out.effects().is_empty(), "{hex:#x} — SeekKey 금지");
-            let up = arb.arbitrate(
-                &cfg,
-                &key_up(KeyCode::SPACE, flags),
-                input_box_gates(false),
-                Millis(1),
-            );
-            assert_eq!(
-                up.disposition(),
-                Disposition::Pass,
-                "{hex:#x} KeyUp 도 Pass — 키 페어"
-            );
+            let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, flags), input_box_gates(false), Millis(1));
+            assert_eq!(up.disposition(), Disposition::Pass, "{hex:#x} KeyUp 도 Pass — 키 페어");
         }
     }
 
@@ -3967,46 +3230,18 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let gates = input_box_gates(false);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(0),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(10));
         assert_eq!(down.layer(), Layer::KoreanInput, "D2 발화 — F-19 소비 금지");
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].keycode, KeyCode::SPACE);
-        assert_eq!(
-            down.emitted()[0].flags,
-            EventFlags(0x0004_0001),
-            "⇧ 제거 + ⌃ 치환"
-        );
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "⇧ 제거 + ⌃ 치환");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(15),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(15));
         assert_eq!(up.layer(), Layer::KoreanInput);
-        assert_eq!(
-            up.emitted()[0].flags,
-            EventFlags(0x0004_0001),
-            "래치가 같은 치환으로 짝을 맞춘다"
-        );
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            gates,
-            Millis(20),
-        );
+        assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "래치가 같은 치환으로 짝을 맞춘다");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(20));
     }
 
     /// T-118-2b — F-19 전체 로드 + **F-16.1 꺼짐(기본 구성)** + 인풋 박스 + ⇧+Space →
@@ -4016,19 +3251,11 @@ mod tests {
     fn input_box_f19_loaded_f16_1_off_shift_space_passes() {
         let cfg = f19_all_presets_config();
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            input_box_gates(false),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.emitted().is_empty(), "치환 이벤트 금지");
-        assert!(
-            out.effects().is_empty(),
-            "F-19 가 SPACE 를 소비하면 안 된다"
-        );
+        assert!(out.effects().is_empty(), "F-19 가 SPACE 를 소비하면 안 된다");
     }
 
     /// T-118-3 — F-19.6(JIS→US 20행) 의 경계: ⛔ **`is_jis = Jis` 게이트 명시 필수**
@@ -4039,61 +3266,25 @@ mod tests {
     #[test]
     fn f19_6_shift_yen_fires_outside_session_but_not_in_input_box() {
         let cfg = f19_all_presets_config();
-        let jis_gates = GateSnapshot {
-            is_jis: crate::jis::JisState::Jis,
-            ..Default::default()
-        };
+        let jis_gates = GateSnapshot { is_jis: crate::jis::JisState::Jis, ..Default::default() };
 
         // ① 세션 밖 — shift+¥(| → ~ = shift+=) 행 11.
         let mut out_arb = Arbiter::new(&cfg);
-        out_arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            jis_gates,
-            Millis(0),
-        );
-        let down = out_arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)),
-            jis_gates,
-            Millis(10),
-        );
+        out_arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), jis_gates, Millis(0));
+        let down = out_arb.arbitrate(&cfg, &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), jis_gates, Millis(10));
         assert_eq!(down.layer(), Layer::LanguageInput, "F-19.6 발화");
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].keycode, KeyCode::ANSI_EQUAL);
-        assert_eq!(
-            down.emitted()[0].flags,
-            EventFlags(0x0002_0002),
-            "shift+=(~) 치환"
-        );
-        let up = out_arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::JIS_YEN, EventFlags(0x0002_0002)),
-            jis_gates,
-            Millis(15),
-        );
-        assert_eq!(
-            up.disposition(),
-            Disposition::Consume,
-            "래치가 KeyUp 짝을 소비"
-        );
+        assert_eq!(down.emitted()[0].flags, EventFlags(0x0002_0002), "shift+=(~) 치환");
+        let up = out_arb.arbitrate(&cfg, &key_up(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), jis_gates, Millis(15));
+        assert_eq!(up.disposition(), Disposition::Consume, "래치가 KeyUp 짝을 소비");
         assert_eq!(up.emitted()[0].keycode, KeyCode::ANSI_EQUAL);
-        out_arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            jis_gates,
-            Millis(20),
-        );
+        out_arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), jis_gates, Millis(20));
 
         // ② 세션 중(인풋 박스) — 계층 1 소비. F-19 평가(계층 3)는 short-circuit 으로 미도달.
         let mut in_arb = Arbiter::new(&cfg);
-        let out = in_arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)),
-            input_box_gates(false),
-            Millis(0),
-        );
+        let out = in_arb.arbitrate(&cfg, &key_down(KeyCode::JIS_YEN, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Consume);
         assert!(out.emitted().is_empty(), "F-19 치환 방출 금지");
@@ -4108,44 +3299,21 @@ mod tests {
     fn input_box_f19_caps_lock_alone_tap_never_fires_in_session() {
         let cfg = f19_all_presets_config();
         let mut arb = Arbiter::new(&cfg);
-        assert!(
-            arb.state.has_quick_press(KeyCode::CAPS_LOCK),
-            "캡스락이 추적 슬롯에 등록돼야 한다"
-        );
+        assert!(arb.state.has_quick_press(KeyCode::CAPS_LOCK), "캡스락이 추적 슬롯에 등록돼야 한다");
         let gates = input_box_gates(false);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), gates, Millis(0));
         assert_eq!(down.layer(), Layer::SeekSession);
         assert_eq!(down.disposition(), Disposition::Consume);
-        assert!(
-            down.emitted().is_empty(),
-            "AloneTap(⌃Space 합성) 이 세션 중 발화하면 안 된다"
-        );
+        assert!(down.emitted().is_empty(), "AloneTap(⌃Space 합성) 이 세션 중 발화하면 안 된다");
         assert_eq!(down.effects().len(), 1);
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            gates,
-            Millis(10),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::CAPS_LOCK, EventFlags::NONE), gates, Millis(10));
         assert_eq!(up.disposition(), Disposition::Consume);
         assert!(up.emitted().is_empty());
 
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::Idle,
-            "세션 중 FSM 개입 금지 — Idle 유지"
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::RIGHT_COMMAND),
-            QuickPressState::Idle
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "세션 중 FSM 개입 금지 — Idle 유지");
+        assert_eq!(arb.state.machine(KeyCode::RIGHT_COMMAND), QuickPressState::Idle);
     }
 
     /// T-118-5 — F-19 전체 로드 + **세션 밖** ⌃Space → 원본 그대로 **Pass**(Passthrough).
@@ -4154,12 +3322,7 @@ mod tests {
     fn f19_loaded_out_of_session_control_space_passes() {
         let cfg = f19_all_presets_config();
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0004_0001)), GateSnapshot::default(), Millis(0));
         assert_eq!(out.layer(), Layer::Passthrough);
         assert_eq!(out.disposition(), Disposition::Pass);
         assert!(out.effects().is_empty());
@@ -4171,32 +3334,13 @@ mod tests {
     fn f19_loaded_out_of_session_f16_1_shift_space_fires() {
         let cfg = f16_1_with_f19_all_presets_config();
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert_eq!(
-            down.layer(),
-            Layer::KoreanInput,
-            "세션 밖 F-16.1 은 F-19 와 공존해도 발화"
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(10));
+        assert_eq!(down.layer(), Layer::KoreanInput, "세션 밖 F-16.1 은 F-19 와 공존해도 발화");
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), GateSnapshot::default(), Millis(20));
     }
 
     // ── ⭐(이슈 #121) — 사용자 실기기 설정 전량 재현: F-16.1 + F-08 프리셋 + hyper(우⌘) ─────
@@ -4231,87 +3375,27 @@ mod tests {
         cfg.rules.korean_rules = vec![korean_rule_shift_space(), korean_rule_won_grave()];
         cfg.rules.combo_rules = vec![
             // F-08.6 — 캡스락 + H/J/K/L = ◀ ▼ ▲ ▶
-            ComboRule {
-                id: RuleId::Preset(6),
-                hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
-                trigger: KeyCode::ANSI_H,
-                action: RuleAction::Key {
-                    keycode: KeyCode::LEFT_ARROW,
-                    flags: EventFlags::NONE,
-                },
-            },
-            ComboRule {
-                id: RuleId::Preset(6),
-                hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
-                trigger: KeyCode::ANSI_J,
-                action: RuleAction::Key {
-                    keycode: KeyCode::DOWN_ARROW,
-                    flags: EventFlags::NONE,
-                },
-            },
-            ComboRule {
-                id: RuleId::Preset(6),
-                hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
-                trigger: KeyCode::ANSI_K,
-                action: RuleAction::Key {
-                    keycode: KeyCode::UP_ARROW,
-                    flags: EventFlags::NONE,
-                },
-            },
-            ComboRule {
-                id: RuleId::Preset(6),
-                hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
-                trigger: KeyCode::ANSI_L,
-                action: RuleAction::Key {
-                    keycode: KeyCode::RIGHT_ARROW,
-                    flags: EventFlags::NONE,
-                },
-            },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_H, action: RuleAction::Key { keycode: KeyCode::LEFT_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_J, action: RuleAction::Key { keycode: KeyCode::DOWN_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_K, action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE } },
+            ComboRule { id: RuleId::Preset(6), hold: HoldCondition::Key(KeyCode::CAPS_LOCK), trigger: KeyCode::ANSI_L, action: RuleAction::Key { keycode: KeyCode::RIGHT_ARROW, flags: EventFlags::NONE } },
             // F-08.9 — 좌/우 shift 동시 = caps lock (양방향)
-            ComboRule {
-                id: RuleId::Preset(9),
-                hold: HoldCondition::Key(KeyCode::RIGHT_SHIFT),
-                trigger: KeyCode::LEFT_SHIFT,
-                action: RuleAction::ToggleCapsLock,
-            },
-            ComboRule {
-                id: RuleId::Preset(9),
-                hold: HoldCondition::Key(KeyCode::LEFT_SHIFT),
-                trigger: KeyCode::RIGHT_SHIFT,
-                action: RuleAction::ToggleCapsLock,
-            },
+            ComboRule { id: RuleId::Preset(9), hold: HoldCondition::Key(KeyCode::RIGHT_SHIFT), trigger: KeyCode::LEFT_SHIFT, action: RuleAction::ToggleCapsLock },
+            ComboRule { id: RuleId::Preset(9), hold: HoldCondition::Key(KeyCode::LEFT_SHIFT), trigger: KeyCode::RIGHT_SHIFT, action: RuleAction::ToggleCapsLock },
             // F-08.10 — shift + caps lock = caps lock
-            ComboRule {
-                id: RuleId::Preset(10),
-                hold: HoldCondition::EitherShift,
-                trigger: KeyCode::CAPS_LOCK,
-                action: RuleAction::ToggleCapsLock,
-            },
+            ComboRule { id: RuleId::Preset(10), hold: HoldCondition::EitherShift, trigger: KeyCode::CAPS_LOCK, action: RuleAction::ToggleCapsLock },
         ];
         cfg.rules.combo_rules.sort_by_key(|r| r.id);
         cfg.rules.simple_remaps = vec![
-            SimpleRemap {
-                id: RuleId::Preset(16),
-                from: KeyCode::HOME,
-                to: KeyCode::LEFT_ARROW,
-                add_flags: EventFlags::COMMAND,
-            },
-            SimpleRemap {
-                id: RuleId::Preset(16),
-                from: KeyCode::END,
-                to: KeyCode::RIGHT_ARROW,
-                add_flags: EventFlags::COMMAND,
-            },
+            SimpleRemap { id: RuleId::Preset(16), from: KeyCode::HOME, to: KeyCode::LEFT_ARROW, add_flags: EventFlags::COMMAND },
+            SimpleRemap { id: RuleId::Preset(16), from: KeyCode::END, to: KeyCode::RIGHT_ARROW, add_flags: EventFlags::COMMAND },
         ];
         // F-08.1(캡스락→좌컨트롤 hold_remap) + F-08.2(quick press caps = caps lock)
         cfg.rules.source_actions = vec![SourceKeyActions {
             key: KeyCode::CAPS_LOCK,
             quick_press: Some(RuleAction::ToggleCapsLock),
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         }];
         // F-05 — 우⌘ 소스 hyper (includeShiftInHyper=false → HYPER_NO_SHIFT)
         cfg.rules.modifier_rules = vec![ModifierRule {
@@ -4345,87 +3429,31 @@ mod tests {
 
         for tap in 0..3u64 {
             let base = 100 * tap;
-            arb.arbitrate(
-                &cfg,
-                &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-                gates,
-                Millis(base),
-            );
-            let down = arb.arbitrate(
-                &cfg,
-                &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-                gates,
-                Millis(base + 10),
-            );
+            arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(base));
+            let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(base + 10));
             assert_eq!(down.layer(), Layer::KoreanInput, "탭 {tap}: D2 발화");
-            assert_eq!(
-                down.disposition(),
-                Disposition::Consume,
-                "탭 {tap}: 삼키면 1·2번째 전환이 죽는다"
-            );
+            assert_eq!(down.disposition(), Disposition::Consume, "탭 {tap}: 삼키면 1·2번째 전환이 죽는다");
             assert_eq!(down.emitted().len(), 1, "탭 {tap}: ⌃Space down 1개");
             assert_eq!(down.emitted()[0].kind, EventKind::KeyDown, "탭 {tap}");
-            assert_eq!(
-                down.emitted()[0].flags,
-                EventFlags(0x0004_0001),
-                "탭 {tap}: ⇧ 제거 + ⌃ 치환"
-            );
+            assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001), "탭 {tap}: ⇧ 제거 + ⌃ 치환");
 
-            let up = arb.arbitrate(
-                &cfg,
-                &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-                gates,
-                Millis(base + 15),
-            );
+            let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(base + 15));
             assert_eq!(up.layer(), Layer::KoreanInput, "탭 {tap}: 래치 KeyUp");
             assert_eq!(up.disposition(), Disposition::Consume, "탭 {tap}");
             assert_eq!(up.emitted()[0].kind, EventKind::KeyUp, "탭 {tap}");
-            assert_eq!(
-                up.emitted()[0].flags,
-                EventFlags(0x0004_0001),
-                "탭 {tap}: 래치가 같은 치환으로 짝"
-            );
+            assert_eq!(up.emitted()[0].flags, EventFlags(0x0004_0001), "탭 {tap}: 래치가 같은 치환으로 짝");
 
-            arb.arbitrate(
-                &cfg,
-                &release_modifier(KeyCode::LEFT_SHIFT),
-                gates,
-                Millis(base + 20),
-            );
+            arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(base + 20));
         }
 
         // 우shift 변형 — 사용자가 어느 shift 를 누르는지 미기록이므로 양쪽을 고정한다.
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::RIGHT_SHIFT, 0x0002_0004),
-            gates,
-            Millis(400),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0004)),
-            gates,
-            Millis(410),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::RIGHT_SHIFT, 0x0002_0004), gates, Millis(400));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0004)), gates, Millis(410));
         assert_eq!(down.layer(), Layer::KoreanInput, "우shift 변형: D2 발화");
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0004)),
-            gates,
-            Millis(415),
-        );
-        assert_eq!(
-            up.disposition(),
-            Disposition::Consume,
-            "우shift 변형: 래치 KeyUp"
-        );
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::RIGHT_SHIFT),
-            gates,
-            Millis(420),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0004)), gates, Millis(415));
+        assert_eq!(up.disposition(), Disposition::Consume, "우shift 변형: 래치 KeyUp");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::RIGHT_SHIFT), gates, Millis(420));
     }
 
     /// ⭐ 이슈 #121 보조 — 같은 설정에서 **F-16.1 만 꺼지면**(부재 = 기본) ⇧+Space 는
@@ -4436,18 +3464,9 @@ mod tests {
         let mut cfg = issue121_user_settings_config();
         cfg.rules.korean_rules = vec![korean_rule_won_grave()]; // F-16.1 제거 — F-16.4 만
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            input_box_gates(false),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), input_box_gates(false), Millis(0));
         assert_eq!(out.layer(), Layer::SeekSession);
-        assert_eq!(
-            out.disposition(),
-            Disposition::Pass,
-            "F-08 프리셋이 SPACE 를 삼키면 안 된다"
-        );
+        assert_eq!(out.disposition(), Disposition::Pass, "F-08 프리셋이 SPACE 를 삼키면 안 된다");
         assert!(out.effects().is_empty(), "검색어 공백");
     }
 
@@ -4462,55 +3481,20 @@ mod tests {
         let out = GateSnapshot::default();
 
         // ① shift+a — 일반 타이핑 대문자.
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            out,
-            Millis(0),
-        );
-        let a = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)),
-            out,
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), out, Millis(0));
+        let a = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)), out, Millis(10));
         assert_eq!(a.disposition(), Disposition::Pass, "shift+a 통과(대문자)");
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            out,
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), out, Millis(20));
 
         // ② ⇧+Space — 세션 밖 계층 3 F-16.1 발화(⌃Space 치환).
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            out,
-            Millis(30),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            out,
-            Millis(40),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), out, Millis(30));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), out, Millis(40));
         assert_eq!(down.layer(), Layer::KoreanInput, "세션 밖 F-16.1 발화");
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            out,
-            Millis(45),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), out, Millis(45));
         assert_eq!(up.disposition(), Disposition::Consume);
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            out,
-            Millis(50),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), out, Millis(50));
     }
 
     /// ⭐ 이슈 #121 (리뷰 6번 반영) — **세션 열림 직전(진입 직후 첫 탭)**: ⌥Space 로
@@ -4526,17 +3510,8 @@ mod tests {
         let closed = GateSnapshot::default();
 
         // ① 세션 밖 — ⌥ down. LEFT_OPTION 은 미추적 키라 원본 통과(눌림 테이블 갱신).
-        let opt_down = arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020),
-            closed,
-            Millis(0),
-        );
-        assert_eq!(
-            opt_down.disposition(),
-            Disposition::Pass,
-            "세션 밖 ⌥ 는 통과"
-        );
+        let opt_down = arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020), closed, Millis(0));
+        assert_eq!(opt_down.disposition(), Disposition::Pass, "세션 밖 ⌥ 는 통과");
 
         // ② 게이트 전환(⌥Space 재입력 = 세션 열림) — space down/up·⌥ up 이
         // 인풋 박스 세션에서 소비된다(SeekKey — 재입력 토글 경로).
@@ -4548,69 +3523,23 @@ mod tests {
             seek_shortcut_mods: EventFlags::ALTERNATE.0,
             ..Default::default()
         };
-        let space_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0008_0020)),
-            open,
-            Millis(10),
-        );
-        assert_eq!(
-            space_down.disposition(),
-            Disposition::Consume,
-            "⌥Space down 은 토글 조합으로 소비"
-        );
-        let space_up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0008_0020)),
-            open,
-            Millis(15),
-        );
+        let space_down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0008_0020)), open, Millis(10));
+        assert_eq!(space_down.disposition(), Disposition::Consume, "⌥Space down 은 토글 조합으로 소비");
+        let space_up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0008_0020)), open, Millis(15));
         assert_eq!(space_up.disposition(), Disposition::Consume);
-        let opt_up = arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_OPTION),
-            open,
-            Millis(20),
-        );
-        assert_eq!(
-            opt_up.disposition(),
-            Disposition::Consume,
-            "⌥ up 도 세션 소비"
-        );
-        assert!(
-            !arb.state.is_pressed(KeyCode::LEFT_OPTION),
-            "⌥ 잔류 금지 — 첫 탭 ShiftOnly 의 '다른 modifier 미눌림'"
-        );
+        let opt_up = arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_OPTION), open, Millis(20));
+        assert_eq!(opt_up.disposition(), Disposition::Consume, "⌥ up 도 세션 소비");
+        assert!(!arb.state.is_pressed(KeyCode::LEFT_OPTION), "⌥ 잔류 금지 — 첫 탭 ShiftOnly 의 '다른 modifier 미눌림'");
 
         // ③ 첫 ⇧+Space 탭 — ⌥ 잔류 없이 1회 발화.
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            open,
-            Millis(30),
-        );
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            open,
-            Millis(40),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), open, Millis(30));
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), open, Millis(40));
         assert_eq!(down.layer(), Layer::KoreanInput, "진입 직후 첫 탭: D2 발화");
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            open,
-            Millis(45),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), open, Millis(45));
         assert_eq!(up.disposition(), Disposition::Consume, "래치 KeyUp");
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            open,
-            Millis(50),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), open, Millis(50));
     }
 
     /// ⭐ 이슈 #121 (리뷰 6번 반영) — **특성화**: 눌림 테이블에 stale modifier(⌥)가
@@ -4626,50 +3555,17 @@ mod tests {
         let gates = input_box_gates(false);
 
         // 릴리즈가 유실된 stale ⌥ 눌림을 재현(실기기 드롭 시나리오).
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020),
-            gates,
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_OPTION, 0x0008_0020), gates, Millis(0));
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            gates,
-            Millis(10),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(20),
-        );
-        assert_ne!(
-            out.layer(),
-            Layer::KoreanInput,
-            "stale ⌥ 가 ShiftOnly 를 깨면 D2 미발화"
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), gates, Millis(10));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(20));
+        assert_ne!(out.layer(), Layer::KoreanInput, "stale ⌥ 가 ShiftOnly 를 깨면 D2 미발화");
         assert_eq!(out.layer(), Layer::SeekSession);
         assert_eq!(out.disposition(), Disposition::Pass, "검색어 공백으로 통과");
         assert!(out.effects().is_empty());
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            gates,
-            Millis(25),
-        );
-        assert_eq!(
-            up.disposition(),
-            Disposition::Pass,
-            "래치도 없으므로 KeyUp 통과"
-        );
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            gates,
-            Millis(30),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), gates, Millis(25));
+        assert_eq!(up.disposition(), Disposition::Pass, "래치도 없으므로 KeyUp 통과");
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), gates, Millis(30));
     }
 
     /// 테스트 #8 — force_reset 이 합성 중이던 modifier 에 대해 off flagsChanged 를 방출.
@@ -4677,12 +3573,7 @@ mod tests {
     fn force_reset_emits_off_for_active_modifiers() {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert!(!arb.state.active_synth_flags().is_empty());
 
         let out = arb.force_reset(&cfg);
@@ -4700,12 +3591,7 @@ mod tests {
     fn mouse_apply_respects_per_kind_toggles() {
         let cfg = hyper_config(); // 기본 MouseApply: click=true, drag=false
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         let click_ev = InputEvent {
             kind: EventKind::LeftMouseDown,
@@ -4714,10 +3600,7 @@ mod tests {
             autorepeat: false,
         };
         let click_out = arb.arbitrate(&cfg, &click_ev, GateSnapshot::default(), Millis(10));
-        assert_eq!(
-            click_out.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT)
-        );
+        assert_eq!(click_out.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
 
         let drag_ev = InputEvent {
             kind: EventKind::LeftMouseDragged,
@@ -4736,16 +3619,8 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
     }
 
     #[test]
@@ -4764,12 +3639,7 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.emitted().len(), 1);
         assert_eq!(out.emitted()[0].kind, EventKind::FlagsChanged);
@@ -4781,25 +3651,13 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.emitted().len(), 1);
         assert_eq!(out.emitted()[0].kind, EventKind::FlagsChanged);
-        assert!(!out.emitted()[0]
-            .flags
-            .contains(EventFlags::HYPER_WITH_SHIFT));
+        assert!(!out.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT));
     }
 
     #[test]
@@ -4807,25 +3665,12 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let caps = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let caps = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(caps.disposition(), Disposition::Consume);
 
-        let a_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
         assert_eq!(a_down.layer(), Layer::HyperModifier);
-        assert_eq!(
-            a_down.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT)
-        );
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
         if let Disposition::PassWithFlags(flags) = a_down.disposition() {
             assert!(flags.contains(EventFlags::CONTROL));
             assert!(flags.contains(EventFlags::ALTERNATE));
@@ -4844,23 +3689,10 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let a_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
-        assert_eq!(
-            a_down.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_NO_SHIFT)
-        );
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_NO_SHIFT));
         if let Disposition::PassWithFlags(flags) = a_down.disposition() {
             assert!(flags.contains(EventFlags::CONTROL));
             assert!(flags.contains(EventFlags::ALTERNATE));
@@ -4875,27 +3707,11 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         assert!(!arb.state.is_pressed(KeyCode::CAPS_LOCK));
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert!(
-            arb.state.is_pressed(KeyCode::CAPS_LOCK),
-            "첫 FlagsChanged 이후 정본 눌림 테이블은 눌림으로 기록돼야 한다"
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert!(arb.state.is_pressed(KeyCode::CAPS_LOCK), "첫 FlagsChanged 이후 정본 눌림 테이블은 눌림으로 기록돼야 한다");
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert!(
-            !arb.state.is_pressed(KeyCode::CAPS_LOCK),
-            "두 번째 FlagsChanged 이후에는 뗌으로 기록돼야 한다"
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+        assert!(!arb.state.is_pressed(KeyCode::CAPS_LOCK), "두 번째 FlagsChanged 이후에는 뗌으로 기록돼야 한다");
     }
 
     #[test]
@@ -4908,12 +3724,7 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
         assert_eq!(out.disposition(), Disposition::Pass);
         assert_eq!(out.layer(), Layer::Passthrough);
         assert!(arb.state.active_synth_flags().is_empty());
@@ -4929,36 +3740,16 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let f13_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let f13_down = arb.arbitrate(&cfg, &key_down(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(f13_down.disposition(), Disposition::Consume);
         assert_eq!(f13_down.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
 
-        let a_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert_eq!(
-            a_down.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT)
-        );
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+        assert_eq!(a_down.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
 
-        let f13_up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F13, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        let f13_up = arb.arbitrate(&cfg, &key_up(KeyCode::F13, EventFlags::NONE), GateSnapshot::default(), Millis(20));
         assert_eq!(f13_up.disposition(), Disposition::Consume);
-        assert!(!f13_up.emitted()[0]
-            .flags
-            .contains(EventFlags::HYPER_WITH_SHIFT));
+        assert!(!f13_up.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT));
     }
 
     #[test]
@@ -4966,26 +3757,13 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert!(arb.state.is_pressed(KeyCode::CAPS_LOCK));
 
         arb.force_reset(&cfg);
-        assert!(
-            !arb.state.is_pressed(KeyCode::CAPS_LOCK),
-            "force_reset 은 정본 눌림 테이블도 지운다"
-        );
+        assert!(!arb.state.is_pressed(KeyCode::CAPS_LOCK), "force_reset 은 정본 눌림 테이블도 지운다");
 
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(100));
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
     }
@@ -4994,12 +3772,7 @@ mod tests {
     fn flags_changed_activated_hyper_applies_to_mouse_click_but_not_drag() {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         let click_ev = InputEvent {
             kind: EventKind::LeftMouseDown,
@@ -5008,10 +3781,7 @@ mod tests {
             autorepeat: false,
         };
         let click_out = arb.arbitrate(&cfg, &click_ev, GateSnapshot::default(), Millis(10));
-        assert_eq!(
-            click_out.disposition(),
-            Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT)
-        );
+        assert_eq!(click_out.disposition(), Disposition::PassWithFlags(EventFlags::HYPER_WITH_SHIFT));
 
         let drag_ev = InputEvent {
             kind: EventKind::LeftMouseDragged,
@@ -5069,10 +3839,7 @@ mod tests {
             (flags & EventFlags::CAPS_LOCK) == EventFlags::NONE,
             "통과 이벤트에 alphaShift 가 남아 있다: {flags:?}"
         );
-        assert_eq!(
-            flags & EventFlags::HYPER_WITH_SHIFT,
-            EventFlags::HYPER_WITH_SHIFT
-        );
+        assert_eq!(flags & EventFlags::HYPER_WITH_SHIFT, EventFlags::HYPER_WITH_SHIFT);
     }
 
     #[test]
@@ -5092,10 +3859,7 @@ mod tests {
         // 자체가 성립하지 않는다 — 실물 이벤트 모양대로 두 비트를 함께 싣는다.
         arb.arbitrate(
             &cfg,
-            &flags_changed(
-                KeyCode::RIGHT_COMMAND,
-                EventFlags::CAPS_LOCK | EventFlags::COMMAND,
-            ),
+            &flags_changed(KeyCode::RIGHT_COMMAND, EventFlags::CAPS_LOCK | EventFlags::COMMAND),
             GateSnapshot::default(),
             Millis(0),
         );
@@ -5125,19 +3889,11 @@ mod tests {
         cfg.caps_lock_alias = Some(KeyCode::F18);
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.layer(), Layer::HyperModifier);
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
     }
 
     /// alias 가 없으면(caps_lock_alias: None) F18 은 그냥 평범한 F-키다 — 별도 규칙이
@@ -5147,12 +3903,7 @@ mod tests {
         let cfg = hyper_config(); // caps_lock_alias: None (기본값)
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.layer(), Layer::Passthrough);
         assert_eq!(out.disposition(), Disposition::Pass);
     }
@@ -5199,25 +3950,12 @@ mod tests {
                 id: RuleId::Preset(12),
                 hold: HoldCondition::HyperActive,
                 trigger: KeyCode::DELETE,
-                action: RuleAction::Key {
-                    keycode: KeyCode::FORWARD_DELETE,
-                    flags: EventFlags::NONE,
-                },
+                action: RuleAction::Key { keycode: KeyCode::FORWARD_DELETE, flags: EventFlags::NONE },
             });
             let mut arb = Arbiter::new(&cfg);
 
-            arb.arbitrate(
-                &cfg,
-                &key_down(source, EventFlags::NONE),
-                GateSnapshot::default(),
-                Millis(0),
-            );
-            let out = arb.arbitrate(
-                &cfg,
-                &key_down(KeyCode::DELETE, EventFlags::NONE),
-                GateSnapshot::default(),
-                Millis(10),
-            );
+            arb.arbitrate(&cfg, &key_down(source, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+            let out = arb.arbitrate(&cfg, &key_down(KeyCode::DELETE, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
             assert_eq!(out.layer(), Layer::PresetCombo, "source={source:?}");
             assert_eq!(out.disposition(), Disposition::Consume);
@@ -5239,25 +3977,12 @@ mod tests {
             id: RuleId::Preset(12),
             hold: HoldCondition::HyperActive,
             trigger: KeyCode::DELETE,
-            action: RuleAction::Key {
-                keycode: KeyCode::FORWARD_DELETE,
-                flags: EventFlags::NONE,
-            },
+            action: RuleAction::Key { keycode: KeyCode::FORWARD_DELETE, flags: EventFlags::NONE },
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::DELETE, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::DELETE, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
         assert_eq!(out.rule(), Some(RuleId::Preset(12)));
     }
@@ -5269,12 +3994,7 @@ mod tests {
         let cfg = hyper_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         assert_eq!(out.layer(), Layer::Passthrough);
         assert_eq!(out.rule(), None);
@@ -5289,36 +4009,17 @@ mod tests {
             id: RuleId::Preset(5),
             hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
             trigger: KeyCode::ANSI_W,
-            action: RuleAction::Key {
-                keycode: KeyCode::UP_ARROW,
-                flags: EventFlags::NONE,
-            },
+            action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE },
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_W, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
         assert_eq!(out.layer(), Layer::PresetCombo);
         assert_eq!(out.emitted().len(), 2);
         assert_eq!(out.emitted()[0].keycode, KeyCode::UP_ARROW);
-        assert!(
-            !out.emitted()[0]
-                .flags
-                .contains(EventFlags::HYPER_WITH_SHIFT),
-            "hyper flags 가 새어 나왔다: {:?}",
-            out.emitted()[0].flags
-        );
+        assert!(!out.emitted()[0].flags.contains(EventFlags::HYPER_WITH_SHIFT), "hyper flags 가 새어 나왔다: {:?}", out.emitted()[0].flags);
     }
 
     /// R3/v1.62 — `Shift + caps lock = caps lock` 과 `Quick press caps lock` 동시 활성.
@@ -5335,52 +4036,24 @@ mod tests {
         });
         cfg.rules.source_actions.push(SourceKeyActions {
             key: KeyCode::CAPS_LOCK,
-            quick_press: Some(RuleAction::Key {
-                keycode: KeyCode::CAPS_LOCK,
-                flags: EventFlags::NONE,
-            }),
+            quick_press: Some(RuleAction::Key { keycode: KeyCode::CAPS_LOCK, flags: EventFlags::NONE }),
             double_tap: None,
             hold_remap: None,
         });
         let mut arb = Arbiter::new(&cfg);
 
         // shift 를 먼저 누른다 — shift 는 추적 대상이 아니므로 그냥 눌림 테이블에만 기록.
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
 
         // caps lock 을 톡 눌렀다 뗀다(quick press 조건을 만족할 만큼 짧게).
-        let down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(5),
-        );
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(5));
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.layer(), Layer::PresetCombo);
-        assert_eq!(
-            down.effects(),
-            &[Effect::ToggleCapsLock],
-            "P6: shift+caps 조합만 발화해야 한다"
-        );
-        assert!(
-            down.emitted().is_empty(),
-            "조합은 캡스락 키 이벤트를 합성하지 않는다(ToggleCapsLock 은 effect)"
-        );
+        assert_eq!(down.effects(), &[Effect::ToggleCapsLock], "P6: shift+caps 조합만 발화해야 한다");
+        assert!(down.emitted().is_empty(), "조합은 캡스락 키 이벤트를 합성하지 않는다(ToggleCapsLock 은 effect)");
 
-        let up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(50),
-        );
-        assert!(
-            up.emitted().is_empty(),
-            "Suppressed → Idle 은 quick press 를 내면 안 된다"
-        );
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(50));
+        assert!(up.emitted().is_empty(), "Suppressed → Idle 은 quick press 를 내면 안 된다");
         assert!(up.effects().is_empty());
     }
 
@@ -5404,12 +4077,7 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
 
         // 1) 물리 shift 를 정말로 누른다 — 정상 판정, 테이블에 참으로 기록된다.
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
 
         // 2) 게이트가 걸린 동안의 반복 `force_reset` 을 흉내낸다 — shift 는 물리적으로
         // 여전히 눌려 있지만 테이블은 강제로 비워진다(0-c/0-d, engine.rs 602-616).
@@ -5418,21 +4086,11 @@ mod tests {
         // 3) 사용자가 마침내 shift 를 뗀다 — **진짜** 뗌이다. flags 에 SHIFT 비트가
         // 없으므로 새 판정은 눌림 테이블(거짓으로 어긋나 있음)과 무관하게 이걸
         // KeyUp 으로 확정해야 한다.
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::NONE), GateSnapshot::default(), Millis(20));
 
         // 4) caps lock 을 누른다 — shift 는 실제로도 테이블상으로도 이미 뗀 상태이니
         // F-08.10 이 발화해서는 안 된다.
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(30),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(30));
         assert!(
             out.effects().is_empty(),
             "stale 로 고착된 shift 눌림 때문에 ToggleCapsLock 이 오발화했다: {:?}",
@@ -5457,41 +4115,17 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
 
         // 양쪽 shift 를 다 누른다 — 둘 다 SHIFT family 비트를 싣는다.
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(10));
 
         // 왼쪽만 뗀다 — 오른쪽이 여전히 SHIFT 비트를 얹고 있으므로 flags 에는
         // 비트가 남아 있다. 이번 뗌은 여전히 눌림 테이블 판정(LEFT_SHIFT 만 확정)으로
         // 처리돼야 한다.
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(20));
 
         // caps lock 을 누르면 오른쪽 shift 가 여전히 눌려 있으니 F-08.10 이 발화해야 한다.
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(30),
-        );
-        assert_eq!(
-            out.effects(),
-            &[Effect::ToggleCapsLock],
-            "오른쪽 shift 가 여전히 눌려 있다"
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::SHIFT), GateSnapshot::default(), Millis(30));
+        assert_eq!(out.effects(), &[Effect::ToggleCapsLock], "오른쪽 shift 가 여전히 눌려 있다");
     }
 
     /// R1 — `Remap caps lock to:` 와 `Quick press caps lock to execute:` 동시 활성에서
@@ -5501,37 +4135,18 @@ mod tests {
         let mut cfg = EngineConfig::default();
         cfg.rules.source_actions.push(SourceKeyActions {
             key: KeyCode::CAPS_LOCK,
-            quick_press: Some(RuleAction::Key {
-                keycode: KeyCode::ESCAPE,
-                flags: EventFlags::NONE,
-            }),
+            quick_press: Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE }),
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
 
         // 짧게 눌렀다 뗌 — quick press(ESC) 만 나온다, LEFT_CONTROL 은 나오지 않는다.
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(100));
         assert_eq!(up.emitted().len(), 2);
         assert_eq!(up.emitted()[0].keycode, KeyCode::ESCAPE);
-        assert!(!up
-            .emitted()
-            .iter()
-            .any(|e| e.keycode == KeyCode::LEFT_CONTROL));
+        assert!(!up.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_CONTROL));
     }
 
     /// P2 — quick press 액션이 등록된 키가 `PendingDown` 인 동안 다른 키가 눌리면 즉시
@@ -5549,40 +4164,18 @@ mod tests {
         let mut cfg = EngineConfig::default();
         cfg.rules.source_actions.push(SourceKeyActions {
             key: KeyCode::CAPS_LOCK,
-            quick_press: Some(RuleAction::Key {
-                keycode: KeyCode::ESCAPE,
-                flags: EventFlags::NONE,
-            }),
+            quick_press: Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE }),
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::PendingDown { since: Millis(0) }
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::PendingDown { since: Millis(0) });
 
         // 다른 키(A)의 keyDown — P2 에 의해 즉시 HoldConfirmed 로 확정돼야 한다.
-        let a_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
         // hold_remap 대상(LEFT_CONTROL)이 "눌린 것"으로 A 의 처리에 실려 나와야 한다.
         // ⭐ 기대값의 출처는 구현 상수가 아니라 macOS 헤더다:
         //   kCGEventFlagMaskControl = 0x00040000 (`CGEventTypes.h`)
@@ -5638,63 +4231,24 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
 
         // 왼쪽부터 눌러 PendingDown 진입(quick press 없이 double tap 만 있으니 PendingDown 을 거친다).
-        let left_down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let left_down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
         assert!(left_down.effects().is_empty());
-        assert_eq!(
-            arb.state.machine(KeyCode::LEFT_SHIFT),
-            QuickPressState::PendingDown { since: Millis(0) }
-        );
+        assert_eq!(arb.state.machine(KeyCode::LEFT_SHIFT), QuickPressState::PendingDown { since: Millis(0) });
 
         // 오른쪽 shift 다운 — P6 조합 우선 체크가 오른쪽 자신의 FSM 진입보다 먼저 발화해야 한다.
-        let right_down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(5),
-        );
+        let right_down = arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(5));
         assert_eq!(right_down.effects(), &[Effect::ToggleCapsLock]);
-        assert_eq!(
-            arb.state.machine(KeyCode::LEFT_SHIFT),
-            QuickPressState::Suppressed,
-            "P7: hold 키도 Suppressed 여야 한다"
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::RIGHT_SHIFT),
-            QuickPressState::Suppressed
-        );
+        assert_eq!(arb.state.machine(KeyCode::LEFT_SHIFT), QuickPressState::Suppressed, "P7: hold 키도 Suppressed 여야 한다");
+        assert_eq!(arb.state.machine(KeyCode::RIGHT_SHIFT), QuickPressState::Suppressed);
 
         // 두 shift 를 뗀다 — 토글이 추가로 나오면 안 된다.
-        let left_up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        let left_up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(10));
         assert!(left_up.effects().is_empty());
-        let right_up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert!(
-            right_up.effects().is_empty(),
-            "P7: Suppressed → Idle 은 double tap 을 내면 안 된다"
-        );
+        let right_up = arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(10));
+        assert!(right_up.effects().is_empty(), "P7: Suppressed → Idle 은 double tap 을 내면 안 된다");
 
-        assert_eq!(
-            arb.state.machine(KeyCode::LEFT_SHIFT),
-            QuickPressState::Idle
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::RIGHT_SHIFT),
-            QuickPressState::Idle
-        );
+        assert_eq!(arb.state.machine(KeyCode::LEFT_SHIFT), QuickPressState::Idle);
+        assert_eq!(arb.state.machine(KeyCode::RIGHT_SHIFT), QuickPressState::Idle);
     }
 
     /// 좌/우 shift 는 `FlagsChanged` 로도 keycode 로 정확히 구분돼 각자의 quick press
@@ -5716,32 +4270,12 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let left_up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        let left_up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(50));
         assert_eq!(left_up.effects(), &[Effect::TypeChar('(')]);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(100),
-        );
-        let right_up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(150),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(100));
+        let right_up = arb.arbitrate(&cfg, &flags_changed(KeyCode::RIGHT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(150));
         assert_eq!(right_up.effects(), &[Effect::TypeChar(')')]);
     }
 
@@ -5761,24 +4295,11 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
         assert!(down.effects().is_empty());
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::PendingDown { since: Millis(0) }
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::PendingDown { since: Millis(0) });
 
-        let up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(300),
-        );
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(300));
         assert_eq!(up.effects(), &[Effect::ToggleCapsLock]);
     }
 
@@ -5797,38 +4318,19 @@ mod tests {
             id: RuleId::Preset(5),
             hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
             trigger: KeyCode::ANSI_W,
-            action: RuleAction::Key {
-                keycode: KeyCode::UP_ARROW,
-                flags: EventFlags::NONE,
-            },
+            action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE },
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::PendingDown { since: Millis(0) }
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::PendingDown { since: Millis(0) });
 
         let tick = arb.on_tick(&cfg, Millis(1200));
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
         // 이 키는 modifier 소스가 아니므로 flagsChanged 는 나오지 않는다.
         assert!(tick.emitted().is_empty());
 
-        let w_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_W, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(1210),
-        );
+        let w_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), GateSnapshot::default(), Millis(1210));
         assert_eq!(w_down.layer(), Layer::PresetCombo);
         assert_eq!(w_down.emitted()[0].keycode, KeyCode::UP_ARROW);
     }
@@ -5844,10 +4346,7 @@ mod tests {
 
     /// D-1 이 켜진 최소 구성 — `caps_lock_alias: Some(F18)`, 규칙은 각 테스트가 채운다.
     fn d1_cfg() -> EngineConfig {
-        EngineConfig {
-            caps_lock_alias: Some(KeyCode::F18),
-            ..EngineConfig::default()
-        }
+        EngineConfig { caps_lock_alias: Some(KeyCode::F18), ..EngineConfig::default() }
     }
 
     /// `kVK_ANSI_C = 0x08`(`Carbon/HIToolbox/Events.h`). `keycode.rs` 의 35종 소스 키
@@ -5866,19 +4365,13 @@ mod tests {
             key: KeyCode::CAPS_LOCK,
             quick_press: None,
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         cfg.rules.combo_rules.push(ComboRule {
             id: RuleId::Preset(4),
             hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
             trigger: KeyCode::ANSI_H,
-            action: RuleAction::Key {
-                keycode: KeyCode::LEFT_ARROW,
-                flags: EventFlags::NONE,
-            },
+            action: RuleAction::Key { keycode: KeyCode::LEFT_ARROW, flags: EventFlags::NONE },
         });
         cfg.rules.combo_rules.push(ComboRule {
             id: RuleId::Preset(10),
@@ -5897,38 +4390,16 @@ mod tests {
         let cfg = issue_110_cfg();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.emitted().len(), 2, "{:?}", out.emitted());
-        assert!(out
-            .emitted()
-            .iter()
-            .all(|e| e.kind == EventKind::FlagsChanged && e.keycode == KeyCode::LEFT_CONTROL));
-        assert!(
-            out.emitted()[0].flags.contains(EventFlags::CONTROL),
-            "첫 번째는 control 눌림"
-        );
-        assert!(
-            !out.emitted()[1].flags.contains(EventFlags::CONTROL),
-            "두 번째는 control 뗌"
-        );
-        assert!(
-            !arb.is_pressed(KeyCode::CAPS_LOCK),
-            "눌림 테이블은 뗌으로 끝나야 한다"
-        );
+        assert!(out.emitted().iter().all(|e| e.kind == EventKind::FlagsChanged && e.keycode == KeyCode::LEFT_CONTROL));
+        assert!(out.emitted()[0].flags.contains(EventFlags::CONTROL), "첫 번째는 control 눌림");
+        assert!(!out.emitted()[1].flags.contains(EventFlags::CONTROL), "두 번째는 control 뗌");
+        assert!(!arb.is_pressed(KeyCode::CAPS_LOCK), "눌림 테이블은 뗌으로 끝나야 한다");
 
         // 뒤이은 H — control 도 방향키도 아니다.
-        let h = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_H, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(200),
-        );
+        let h = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_H, EventFlags::NONE), GateSnapshot::default(), Millis(200));
         assert_eq!(h.disposition(), Disposition::Pass, "{h:?}");
         assert!(h.emitted().is_empty());
         assert_eq!(h.rule(), None);
@@ -5940,31 +4411,14 @@ mod tests {
     #[test]
     fn issue_110_raw_caps_with_quick_press_action_fires_quick_press_not_hold() {
         let mut cfg = issue_110_cfg();
-        cfg.rules.source_actions[0].quick_press = Some(RuleAction::Key {
-            keycode: KeyCode::ESCAPE,
-            flags: EventFlags::NONE,
-        });
+        cfg.rules.source_actions[0].quick_press = Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE });
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
         assert_eq!(out.disposition(), Disposition::Consume);
-        let esc: Vec<_> = out
-            .emitted()
-            .iter()
-            .filter(|e| e.keycode == KeyCode::ESCAPE)
-            .collect();
+        let esc: Vec<_> = out.emitted().iter().filter(|e| e.keycode == KeyCode::ESCAPE).collect();
         assert_eq!(esc.len(), 2, "escape down/up 한 쌍: {:?}", out.emitted());
-        assert!(
-            out.emitted()
-                .iter()
-                .all(|e| e.keycode != KeyCode::LEFT_CONTROL),
-            "hold 는 확정되지 않는다"
-        );
+        assert!(out.emitted().iter().all(|e| e.keycode != KeyCode::LEFT_CONTROL), "hold 는 확정되지 않는다");
         assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
         assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle);
     }
@@ -5977,39 +4431,14 @@ mod tests {
         let cfg = issue_110_cfg();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(
-                KeyCode::CAPS_LOCK,
-                EventFlags::SHIFT | EventFlags::CAPS_LOCK,
-            ),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::SHIFT | EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(10));
         assert_eq!(out.disposition(), Disposition::Consume);
         assert_eq!(out.rule(), Some(RuleId::Preset(10)), "조합 자체는 매칭된다");
-        assert!(
-            out.effects().is_empty(),
-            "ToggleCapsLock 은 이 분기에서 떨어진다: {:?}",
-            out.effects()
-        );
-        assert!(
-            out.emitted().is_empty(),
-            "control 합성 없음: {:?}",
-            out.emitted()
-        );
+        assert!(out.effects().is_empty(), "ToggleCapsLock 은 이 분기에서 떨어진다: {:?}", out.effects());
+        assert!(out.emitted().is_empty(), "control 합성 없음: {:?}", out.emitted());
         assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::Idle,
-            "Suppressed → Idle 로 닫힌다"
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::Idle, "Suppressed → Idle 로 닫힌다");
     }
 
     /// T9b — 같은 raw 이벤트를 연속으로 넣어도 매번 독립된 탭이다(고착·누적 없음).
@@ -6018,18 +4447,8 @@ mod tests {
         let cfg = issue_110_cfg();
         let mut arb = Arbiter::new(&cfg);
         for i in 0..3u64 {
-            let out = arb.arbitrate(
-                &cfg,
-                &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-                GateSnapshot::default(),
-                Millis(i * 100),
-            );
-            assert_eq!(
-                out.emitted().len(),
-                2,
-                "매번 control on/off 쌍: {:?}",
-                out.emitted()
-            );
+            let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(i * 100));
+            assert_eq!(out.emitted().len(), 2, "매번 control on/off 쌍: {:?}", out.emitted());
             assert!(out.effects().is_empty());
             assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
         }
@@ -6042,28 +4461,13 @@ mod tests {
         let cfg = issue_110_cfg();
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.emitted().len(), 1, "hold 시작 — control 눌림 하나만");
         assert!(arb.is_pressed(KeyCode::CAPS_LOCK));
-        let h = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_H, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        let h = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_H, EventFlags::NONE), GateSnapshot::default(), Millis(100));
         assert_eq!(h.rule(), Some(RuleId::Preset(4)));
         assert!(h.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_ARROW));
-        arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(200),
-        );
+        arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(200));
         assert!(!arb.is_pressed(KeyCode::CAPS_LOCK));
     }
 
@@ -6074,16 +4478,8 @@ mod tests {
         let mut cfg = issue_110_cfg();
         cfg.caps_lock_alias = None;
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert!(
-            arb.is_pressed(KeyCode::CAPS_LOCK),
-            "alias 없이는 종전 동작(첫 FlagsChanged = 눌림)"
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::CAPS_LOCK), GateSnapshot::default(), Millis(0));
+        assert!(arb.is_pressed(KeyCode::CAPS_LOCK), "alias 없이는 종전 동작(첫 FlagsChanged = 눌림)");
     }
 
     /// `Remap caps lock to: left control` 이 D-1 아래에서 실제로 도착하는 F18 의
@@ -6097,20 +4493,12 @@ mod tests {
             key: KeyCode::CAPS_LOCK,
             quick_press: None,
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
 
         // quick press 액션이 없으므로 keyDown 즉시 hold 확정된다.
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.disposition(), Disposition::Consume);
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
@@ -6121,17 +4509,9 @@ mod tests {
         // 기대값의 출처는 macOS 헤더다: kCGEventFlagMaskControl = 0x00040000
         // (`CGEventTypes.h`), NX_DEVICELCTLKEYMASK = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`).
         const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
-        assert_eq!(
-            down.emitted()[0].flags.0 & LEFT_CONTROL_HELD,
-            LEFT_CONTROL_HELD
-        );
+        assert_eq!(down.emitted()[0].flags.0 & LEFT_CONTROL_HELD, LEFT_CONTROL_HELD);
 
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(50));
         assert_eq!(up.emitted().len(), 1);
         assert_eq!(up.emitted()[0].kind, EventKind::FlagsChanged);
         assert_eq!(up.emitted()[0].keycode, KeyCode::LEFT_CONTROL);
@@ -6148,25 +4528,12 @@ mod tests {
             key: KeyCode::CAPS_LOCK,
             quick_press: None,
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let c_down = arb.arbitrate(
-            &cfg,
-            &key_down(ANSI_C, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let c_down = arb.arbitrate(&cfg, &key_down(ANSI_C, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
         const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
         match c_down.disposition() {
@@ -6195,18 +4562,8 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(100));
 
         assert_eq!(up.effects(), &[Effect::ToggleCapsLock]);
         assert!(up.emitted().is_empty());
@@ -6228,18 +4585,10 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         let tick = arb.on_tick(&cfg, Millis(1100));
 
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
         assert!(
             tick.emitted().is_empty(),
             "hold 확정이 원본 F18 을 되살렸다 — D-1 구성에서 그것은 아무 앱에도 의미가 없다"
@@ -6255,10 +4604,7 @@ mod tests {
             id: RuleId::Preset(5),
             hold: HoldCondition::Key(KeyCode::CAPS_LOCK),
             trigger: KeyCode::ANSI_W,
-            action: RuleAction::Key {
-                keycode: KeyCode::UP_ARROW,
-                flags: EventFlags::NONE,
-            },
+            action: RuleAction::Key { keycode: KeyCode::UP_ARROW, flags: EventFlags::NONE },
         });
         // CAPS_LOCK 을 추적 키로 만들어야 F18 도착이 `handle_tracked_key_event` 를 탄다.
         cfg.rules.source_actions.push(SourceKeyActions {
@@ -6269,18 +4615,8 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let w_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_W, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let w_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_W, EventFlags::NONE), GateSnapshot::default(), Millis(10));
 
         assert_eq!(w_down.disposition(), Disposition::Consume);
         assert_eq!(w_down.emitted().len(), 2);
@@ -6291,11 +4627,7 @@ mod tests {
         // 안 된다.
         const CAPS_LOCK_BIT: u64 = 0x0001_0000;
         for e in w_down.emitted() {
-            assert_eq!(
-                e.flags.0 & CAPS_LOCK_BIT,
-                0,
-                "조합 출력에 caps lock 잠금 비트가 실렸다"
-            );
+            assert_eq!(e.flags.0 & CAPS_LOCK_BIT, 0, "조합 출력에 caps lock 잠금 비트가 실렸다");
         }
     }
 
@@ -6308,33 +4640,15 @@ mod tests {
         let mut cfg_d1 = hyper_config();
         cfg_d1.caps_lock_alias = Some(KeyCode::F18);
         let mut arb_d1 = Arbiter::new(&cfg_d1);
-        let d1_down = arb_d1.arbitrate(
-            &cfg_d1,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let d1_up = arb_d1.arbitrate(
-            &cfg_d1,
-            &key_up(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        let d1_down = arb_d1.arbitrate(&cfg_d1, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let d1_up = arb_d1.arbitrate(&cfg_d1, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(50));
 
         let cfg_no_d1 = hyper_config(); // caps_lock_alias: None (기본값)
         let mut arb_no_d1 = Arbiter::new(&cfg_no_d1);
-        let no_d1_down = arb_no_d1.arbitrate(
-            &cfg_no_d1,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let no_d1_up = arb_no_d1.arbitrate(
-            &cfg_no_d1,
-            &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        let no_d1_down =
+            arb_no_d1.arbitrate(&cfg_no_d1, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let no_d1_up =
+            arb_no_d1.arbitrate(&cfg_no_d1, &flags_changed(KeyCode::CAPS_LOCK, EventFlags::NONE), GateSnapshot::default(), Millis(50));
 
         assert_eq!(d1_down.disposition(), no_d1_down.disposition());
         assert_eq!(d1_down.emitted(), no_d1_down.emitted());
@@ -6355,19 +4669,11 @@ mod tests {
             key: KeyCode::CAPS_LOCK,
             quick_press: None,
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::ESCAPE,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::ESCAPE, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.emitted().len(), 1);
         assert_eq!(down.emitted()[0].kind, EventKind::KeyDown);
         assert_eq!(down.emitted()[0].keycode, KeyCode::ESCAPE);
@@ -6382,22 +4688,11 @@ mod tests {
             key: KeyCode::CAPS_LOCK,
             quick_press: None,
             double_tap: None,
-            hold_remap: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_CONTROL,
-                flags: EventFlags::NONE,
-            }),
+            hold_remap: Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE }),
         });
         let mut arb = Arbiter::new(&cfg);
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::CAPS_LOCK),
-            QuickPressState::HoldConfirmed
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        assert_eq!(arb.state.machine(KeyCode::CAPS_LOCK), QuickPressState::HoldConfirmed);
 
         let out = arb.force_reset(&cfg);
         const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
@@ -6405,12 +4700,7 @@ mod tests {
             .emitted()
             .iter()
             .find(|e| e.keycode == KeyCode::LEFT_CONTROL)
-            .unwrap_or_else(|| {
-                panic!(
-                    "hold_remap 해제 이벤트가 방출되지 않았다: {:?}",
-                    out.emitted()
-                )
-            });
+            .unwrap_or_else(|| panic!("hold_remap 해제 이벤트가 방출되지 않았다: {:?}", out.emitted()));
         assert_eq!(
             released.kind,
             EventKind::FlagsChanged,
@@ -6427,27 +4717,14 @@ mod tests {
         let mut cfg = d1_cfg();
         cfg.rules.source_actions.push(SourceKeyActions {
             key: KeyCode::CAPS_LOCK,
-            quick_press: Some(RuleAction::Key {
-                keycode: KeyCode::LEFT_COMMAND,
-                flags: EventFlags::NONE,
-            }),
+            quick_press: Some(RuleAction::Key { keycode: KeyCode::LEFT_COMMAND, flags: EventFlags::NONE }),
             double_tap: None,
             hold_remap: None,
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::F18, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        arb.arbitrate(&cfg, &key_down(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(0));
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::F18, EventFlags::NONE), GateSnapshot::default(), Millis(100));
 
         const LEFT_COMMAND_HELD: u64 = 0x0010_0008;
         assert_eq!(up.emitted().len(), 2);
@@ -6455,10 +4732,7 @@ mod tests {
             assert_eq!(e.kind, EventKind::FlagsChanged);
             assert_eq!(e.keycode, KeyCode::LEFT_COMMAND);
         }
-        assert_eq!(
-            up.emitted()[0].flags.0 & LEFT_COMMAND_HELD,
-            LEFT_COMMAND_HELD
-        );
+        assert_eq!(up.emitted()[0].flags.0 & LEFT_COMMAND_HELD, LEFT_COMMAND_HELD);
         assert_eq!(up.emitted()[1].flags.0 & LEFT_COMMAND_HELD, 0);
     }
 
@@ -6480,24 +4754,10 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(50),
-        );
-        let second_down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(100),
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(50));
+        let second_down =
+            arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(100));
 
         assert_eq!(second_down.effects(), &[Effect::ToggleCapsLock]);
     }
@@ -6522,12 +4782,7 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let shift_down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let shift_down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
         assert_eq!(
             shift_down.disposition(),
             Disposition::Pass,
@@ -6536,12 +4791,7 @@ mod tests {
 
         // 뒤따르는 다른 키(A)의 keyDown 도 shift 를 막지 않아야 한다 — dispatch_other_key_down
         // 이 대체 출력 없는 슬롯을 HoldConfirmed 로 전이시키더라도 아무것도 합성하지 않는다.
-        let a_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        let a_down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
         assert_eq!(
             a_down.disposition(),
             Disposition::Pass,
@@ -6564,27 +4814,13 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        let down = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
         assert_eq!(down.disposition(), Disposition::Pass);
-        let up = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(50),
-        );
+        let up = arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(50));
         assert_eq!(up.disposition(), Disposition::Pass);
 
         let tick = arb.on_tick(&cfg, Millis(400)); // double tap 간격(300ms) 초과
-        assert!(
-            tick.emitted().is_empty(),
-            "원본이 이미 통과했으므로 되살릴 것이 없다: {:?}",
-            tick.emitted()
-        );
+        assert!(tick.emitted().is_empty(), "원본이 이미 통과했으므로 되살릴 것이 없다: {:?}", tick.emitted());
         assert!(tick.effects().is_empty());
     }
 
@@ -6602,28 +4838,13 @@ mod tests {
         });
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
-        assert_eq!(
-            arb.state.machine(KeyCode::LEFT_SHIFT),
-            QuickPressState::HoldConfirmed
-        );
+        arb.arbitrate(&cfg, &flags_changed(KeyCode::LEFT_SHIFT, EventFlags::SHIFT), GateSnapshot::default(), Millis(0));
+        arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(10));
+        assert_eq!(arb.state.machine(KeyCode::LEFT_SHIFT), QuickPressState::HoldConfirmed);
 
         let out = arb.force_reset(&cfg);
         assert!(
-            !out.emitted()
-                .iter()
-                .any(|e| e.keycode == KeyCode::LEFT_SHIFT),
+            !out.emitted().iter().any(|e| e.keycode == KeyCode::LEFT_SHIFT),
             "원본을 통과시켜 온 키인데 force_reset 이 LEFT_SHIFT 이벤트를 합성해 냈다: {:?}",
             out.emitted()
         );
@@ -6651,7 +4872,7 @@ mod tests {
             requires_korean_ime: false,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags(0x0004_0001), // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)
-            is_input_source_toggle: true,       // #127 — ⌃Space 시스템 토글
+            is_input_source_toggle: true, // #127 — ⌃Space 시스템 토글
         }
     }
 
@@ -6664,7 +4885,7 @@ mod tests {
             requires_korean_ime: true,
             out_keycode: KeyCode::ANSI_GRAVE,
             out_flags: EventFlags(0x0008_0020), // ALTERNATE(0x80000) | NX_DEVICELALTKEYMASK(0x20)
-            is_input_source_toggle: false,      // #127 — 실제 문자 출력, autorepeat 마다 재발화
+            is_input_source_toggle: false, // #127 — 실제 문자 출력, autorepeat 마다 재발화
         }
     }
 
@@ -6677,7 +4898,7 @@ mod tests {
             requires_korean_ime: false,
             out_keycode: KeyCode::SPACE,
             out_flags: EventFlags(0x0004_0001), // CONTROL(0x40000) | NX_DEVICELCTLKEYMASK(0x1)
-            is_input_source_toggle: true,       // #127 — ⌃Space 시스템 토글
+            is_input_source_toggle: true, // #127 — ⌃Space 시스템 토글
         }
     }
 
@@ -6690,7 +4911,7 @@ mod tests {
             requires_korean_ime: true,
             out_keycode: KeyCode::RETURN,
             out_flags: EventFlags(0x0008_0040), // ALTERNATE(0x80000) | NX_DEVICERALTKEYMASK(0x40)
-            is_input_source_toggle: false,      // #127 — 실제 RETURN 출력, autorepeat 마다 재발화
+            is_input_source_toggle: false, // #127 — 실제 RETURN 출력, autorepeat 마다 재발화
         }
     }
 
@@ -6754,12 +4975,7 @@ mod tests {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::SPACE, EventFlags(0x0002_0002)),
@@ -6777,22 +4993,12 @@ mod tests {
 
         // 사용자가 space 를 뗀 뒤 shift 도 뗀다 — 래치(D-K6)가 keyUp 도 같은 치환으로
         // 짝을 맞춘다. `release_modifier` 로 실제 `FlagsChanged`(off) 모양을 재현한다.
-        let space_up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)),
-            GateSnapshot::default(),
-            Millis(15),
-        );
+        let space_up = arb.arbitrate(&cfg, &key_up(KeyCode::SPACE, EventFlags(0x0002_0002)), GateSnapshot::default(), Millis(15));
         assert_eq!(space_up.layer(), Layer::KoreanInput);
         assert_eq!(space_up.emitted()[0].kind, EventKind::KeyUp);
         assert_eq!(space_up.emitted()[0].flags, EventFlags(0x0004_0001));
 
-        arb.arbitrate(
-            &cfg,
-            &release_modifier(KeyCode::LEFT_SHIFT),
-            GateSnapshot::default(),
-            Millis(20),
-        );
+        arb.arbitrate(&cfg, &release_modifier(KeyCode::LEFT_SHIFT), GateSnapshot::default(), Millis(20));
         assert!(!arb.state.is_pressed(KeyCode::LEFT_SHIFT));
     }
 
@@ -6802,12 +5008,7 @@ mod tests {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
         arb.arbitrate(
             &cfg,
             &press_modifier(KeyCode::LEFT_COMMAND, 0x0012_000A),
@@ -6831,12 +5032,7 @@ mod tests {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::SPACE, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::SPACE, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -6852,12 +5048,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
 
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -6876,12 +5067,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -6896,12 +5082,7 @@ mod tests {
         let gates = GateSnapshot::default();
         assert_eq!(gates.korean_ime, KoreanImeState::Unknown);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -6926,18 +5107,8 @@ mod tests {
 
         for (modifier, press_flags, grave_flags) in cases {
             let mut arb = Arbiter::new(&cfg);
-            arb.arbitrate(
-                &cfg,
-                &press_modifier(*modifier, *press_flags),
-                gates,
-                Millis(0),
-            );
-            let out = arb.arbitrate(
-                &cfg,
-                &key_down(KeyCode::ANSI_GRAVE, EventFlags(*grave_flags)),
-                gates,
-                Millis(10),
-            );
+            arb.arbitrate(&cfg, &press_modifier(*modifier, *press_flags), gates, Millis(0));
+            let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags(*grave_flags)), gates, Millis(10));
 
             assert_ne!(
                 out.layer(),
@@ -6967,10 +5138,7 @@ mod tests {
             GateSnapshot::default(),
             Millis(0),
         );
-        assert_eq!(
-            arb.state.machine(KeyCode::RIGHT_SHIFT),
-            QuickPressState::HoldConfirmed
-        );
+        assert_eq!(arb.state.machine(KeyCode::RIGHT_SHIFT), QuickPressState::HoldConfirmed);
         assert_eq!(hold.layer(), Layer::HyperModifier);
 
         let out = arb.arbitrate(
@@ -6985,10 +5153,7 @@ mod tests {
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.layer(), Layer::HyperModifier);
         let flags = passed_flags(&out);
-        assert_eq!(
-            flags & EventFlags::HYPER_WITH_SHIFT,
-            EventFlags::HYPER_WITH_SHIFT
-        );
+        assert_eq!(flags & EventFlags::HYPER_WITH_SHIFT, EventFlags::HYPER_WITH_SHIFT);
     }
 
     /// 시나리오 9 — ⭐ 앱 제외 게이트가 켜진 상태 → F-16 규칙이 전부 통과되지만
@@ -7009,23 +5174,13 @@ mod tests {
         };
 
         // F-16.4 — modifier 없이 grave 를 눌러도 개입하지 않는다(앱 제외).
-        let grave_out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            excluded_gates,
-            Millis(0),
-        );
+        let grave_out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), excluded_gates, Millis(0));
         assert_ne!(grave_out.layer(), Layer::KoreanInput);
         assert_eq!(grave_out.disposition(), Disposition::Pass);
 
         // hyper 는 같은 게이트 스냅샷 아래서도 정상 동작한다 — korean_app_excluded 는
         // 계층 3 안의 F-16 규칙 평가에만 영향을 준다.
-        let caps_down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE),
-            excluded_gates,
-            Millis(10),
-        );
+        let caps_down = arb.arbitrate(&cfg, &key_down(KeyCode::CAPS_LOCK, EventFlags::NONE), excluded_gates, Millis(10));
         assert_eq!(caps_down.layer(), Layer::HyperModifier);
         assert_eq!(caps_down.emitted()[0].flags, EventFlags::HYPER_WITH_SHIFT);
     }
@@ -7049,18 +5204,8 @@ mod tests {
 
         // caps lock 은 modifier 소스로 등록돼 있지 않다 — 이 테스트는 순수하게
         // "눌려 있음" 상태만 필요하다. FlagsChanged 로 눌러 정본 테이블을 채운다.
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::CAPS_LOCK, 0x0001_0000),
-            GateSnapshot::default(),
-            Millis(0),
-        );
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(5),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::CAPS_LOCK, 0x0001_0000), GateSnapshot::default(), Millis(0));
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(5));
 
         let out = arb.arbitrate(
             &cfg,
@@ -7085,12 +5230,7 @@ mod tests {
             ..Default::default()
         };
 
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0008_0020));
 
         // keyUp 이 도착할 때는 IME 가 이미 비활성으로 바뀌었다고 하더라도 — 래치는
@@ -7099,12 +5239,7 @@ mod tests {
             korean_ime: KoreanImeState::Inactive,
             ..Default::default()
         };
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            up_gates,
-            Millis(20),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::ANSI_GRAVE, EventFlags::NONE), up_gates, Millis(20));
 
         assert_eq!(up.layer(), Layer::KoreanInput);
         assert_eq!(up.disposition(), Disposition::Consume);
@@ -7114,12 +5249,7 @@ mod tests {
         assert_eq!(up.emitted()[0].flags, EventFlags(0x0008_0020));
 
         // 래치는 소비된 뒤 지워진다 — 다음 keyUp(대응하는 keyDown 없는)은 통과한다.
-        let stray_up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            up_gates,
-            Millis(30),
-        );
+        let stray_up = arb.arbitrate(&cfg, &key_up(KeyCode::ANSI_GRAVE, EventFlags::NONE), up_gates, Millis(30));
         assert_ne!(stray_up.layer(), Layer::KoreanInput);
     }
 
@@ -7133,12 +5263,7 @@ mod tests {
             ..Default::default()
         };
 
-        let first = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let first = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
         assert_eq!(first.layer(), Layer::KoreanInput);
 
         for i in 1..=3u64 {
@@ -7148,11 +5273,7 @@ mod tests {
                 gates,
                 Millis(10 * i),
             );
-            assert_eq!(
-                repeat.layer(),
-                Layer::KoreanInput,
-                "반복 {i} 회차에서 치환되지 않았다"
-            );
+            assert_eq!(repeat.layer(), Layer::KoreanInput, "반복 {i} 회차에서 치환되지 않았다");
             assert_eq!(repeat.disposition(), Disposition::Consume);
             assert_eq!(repeat.emitted()[0].flags, EventFlags(0x0008_0020));
         }
@@ -7173,12 +5294,7 @@ mod tests {
 
         // grave 가 KeyDown 이 아니라 FlagsChanged 로 도착한다 — normalize_kind 가
         // is_pressed(GRAVE)==false 이므로 이것을 KeyDown 으로 환원해야 한다.
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::ANSI_GRAVE, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::ANSI_GRAVE, EventFlags::NONE), gates, Millis(0));
 
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -7197,12 +5313,7 @@ mod tests {
         let cfg = korean_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -7229,12 +5340,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), gates, Millis(0));
 
         assert_eq!(
             out.layer(),
@@ -7254,12 +5360,7 @@ mod tests {
         let gates = GateSnapshot::default();
         assert_eq!(gates.korean_ime, KoreanImeState::Unknown);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), gates, Millis(0));
 
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
@@ -7276,12 +5377,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
 
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Consume);
@@ -7302,12 +5398,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -7323,12 +5414,7 @@ mod tests {
         let gates = GateSnapshot::default();
         assert_eq!(gates.korean_ime, KoreanImeState::Unknown);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
@@ -7354,18 +5440,8 @@ mod tests {
                 [(KeyCode::JIS_KANA, "한/영"), (KeyCode::JIS_EISU, "한자")]
             {
                 let mut arb = Arbiter::new(&cfg);
-                arb.arbitrate(
-                    &cfg,
-                    &press_modifier(*modifier, *press_flags),
-                    gates,
-                    Millis(0),
-                );
-                let out = arb.arbitrate(
-                    &cfg,
-                    &key_down(trigger_key, EventFlags(*press_flags)),
-                    gates,
-                    Millis(10),
-                );
+                arb.arbitrate(&cfg, &press_modifier(*modifier, *press_flags), gates, Millis(0));
+                let out = arb.arbitrate(&cfg, &key_down(trigger_key, EventFlags(*press_flags)), gates, Millis(10));
 
                 assert_ne!(
                     out.layer(),
@@ -7397,12 +5473,7 @@ mod tests {
 
         // 한/영 — FlagsChanged 로 도착.
         let mut arb = Arbiter::new(&cfg);
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
         assert_eq!(out.emitted()[0].keycode, KeyCode::SPACE);
@@ -7414,12 +5485,7 @@ mod tests {
             korean_ime: KoreanImeState::Active,
             ..Default::default()
         };
-        let out = arb.arbitrate(
-            &cfg,
-            &flags_changed(KeyCode::JIS_EISU, EventFlags::NONE),
-            gates,
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &flags_changed(KeyCode::JIS_EISU, EventFlags::NONE), gates, Millis(0));
         assert_eq!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.emitted()[0].kind, EventKind::KeyDown);
         assert_eq!(out.emitted()[0].keycode, KeyCode::RETURN);
@@ -7437,21 +5503,11 @@ mod tests {
         };
 
         let mut arb = Arbiter::new(&cfg);
-        let han_eng_out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            excluded_gates,
-            Millis(0),
-        );
+        let han_eng_out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), excluded_gates, Millis(0));
         assert_ne!(han_eng_out.layer(), Layer::KoreanInput);
         assert_eq!(han_eng_out.disposition(), Disposition::Pass);
 
-        let hanja_out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            excluded_gates,
-            Millis(10),
-        );
+        let hanja_out = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), excluded_gates, Millis(10));
         assert_ne!(hanja_out.layer(), Layer::KoreanInput);
         assert_eq!(hanja_out.disposition(), Disposition::Pass);
     }
@@ -7464,19 +5520,9 @@ mod tests {
 
         // 한/영.
         let mut arb = Arbiter::new(&cfg);
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(0));
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0004_0001));
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::JIS_KANA, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(10),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_KANA, EventFlags::NONE), GateSnapshot::default(), Millis(10));
         assert_eq!(up.layer(), Layer::KoreanInput);
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
         assert_eq!(up.emitted()[0].keycode, KeyCode::SPACE);
@@ -7489,24 +5535,14 @@ mod tests {
             korean_ime: KoreanImeState::Active,
             ..Default::default()
         };
-        let down = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::JIS_EISU, EventFlags::NONE),
-            active_gates,
-            Millis(0),
-        );
+        let down = arb.arbitrate(&cfg, &key_down(KeyCode::JIS_EISU, EventFlags::NONE), active_gates, Millis(0));
         assert_eq!(down.emitted()[0].flags, EventFlags(0x0008_0040));
 
         let inactive_gates = GateSnapshot {
             korean_ime: KoreanImeState::Inactive,
             ..Default::default()
         };
-        let up = arb.arbitrate(
-            &cfg,
-            &key_up(KeyCode::JIS_EISU, EventFlags::NONE),
-            inactive_gates,
-            Millis(20),
-        );
+        let up = arb.arbitrate(&cfg, &key_up(KeyCode::JIS_EISU, EventFlags::NONE), inactive_gates, Millis(20));
         assert_eq!(up.layer(), Layer::KoreanInput);
         assert_eq!(up.emitted()[0].kind, EventKind::KeyUp);
         assert_eq!(up.emitted()[0].keycode, KeyCode::RETURN);
@@ -7533,12 +5569,7 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
 
         // shift 를 실제 모양(FlagsChanged + device 비트)으로 누른다.
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
 
         let out = arb.arbitrate(
             &cfg,
@@ -7558,12 +5589,7 @@ mod tests {
         let cfg = k9_config();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_COMMAND, 0x0010_0008),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_COMMAND, 0x0010_0008), GateSnapshot::default(), Millis(0));
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::ANSI_C, EventFlags(0x0010_0008)),
@@ -7581,12 +5607,7 @@ mod tests {
         let cfg = EngineConfig::default();
         let mut arb = Arbiter::new(&cfg);
 
-        arb.arbitrate(
-            &cfg,
-            &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        arb.arbitrate(&cfg, &press_modifier(KeyCode::LEFT_SHIFT, 0x0002_0002), GateSnapshot::default(), Millis(0));
         let out = arb.arbitrate(
             &cfg,
             &key_down(KeyCode::ANSI_A, EventFlags(0x0002_0002)),
@@ -7605,12 +5626,7 @@ mod tests {
         let cfg = k9_config();
         let mut arb = Arbiter::new(&cfg);
 
-        let out = arb.arbitrate(
-            &cfg,
-            &key_down(KeyCode::ANSI_A, EventFlags::NONE),
-            GateSnapshot::default(),
-            Millis(0),
-        );
+        let out = arb.arbitrate(&cfg, &key_down(KeyCode::ANSI_A, EventFlags::NONE), GateSnapshot::default(), Millis(0));
 
         assert_ne!(out.layer(), Layer::KoreanInput);
         assert_eq!(out.disposition(), Disposition::Pass);
