@@ -51,6 +51,11 @@ pub enum EngineCommand {
     /// ⭐ 이슈 #140 — 도출된 탭 이벤트 마스크가 현재 탭과 다르면 `force_reset` 뒤
     /// 탭을 재생성한다(`lifecycle::reconfigure_tap_decision`).
     Reconfigure,
+    /// ⭐ 이슈 #152 관측성 — Secure Input 활성 구간은 0-d 게이트 안에 있어
+    /// 이벤트가 탭에 닿지 않으므로(로그 0줄, UI 0신호) 워치독이 전이에서만 이
+    /// 명령을 보낸다. 판정은 하지 않고, 탭 스레드의 드레인 루프가 WARN 로그와
+    /// `EngineEvent::SecureInputChanged` 게시를 맡는다.
+    SecureInputChanged(bool),
     /// ⭐ 이슈 #129 — 인풋 박스 세션 중 D2(F-16.1 세션 재평가)가 낸 합성 이벤트를
     /// 콜백 밖에서 낸다(`engine::emit_outcome`, `docs/plan/issue-129-seek-webview-inputsource.md`
     /// §7.4 순위 1). 판정 로직이 이미 만든 `SynthEvent` 를 그대로 실어 보낼 뿐,

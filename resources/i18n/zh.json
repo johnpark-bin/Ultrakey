@@ -42,6 +42,7 @@
   "menu.launch_on_login.requires_approval": "macOS 要求批准此登录项。请在系统设置 ▸ 通用 ▸ 登录项 中手动开启。",
   "menu.unauthorized.title": "Ultrakey 需要辅助功能权限",
   "menu.status.caps_kernel_map_missing": "Caps Lock 内核重映射未确认 — 预设可能误触发",
+  "menu.status.secure_input_suspended": "⚠️ 安全输入已激活 — 重映射已暂停",
   "menu.unauthorized.authorize": "授予权限…",
   "settings.window.title": "Ultrakey 设置",
   "settings.tab.seek": "Seek",

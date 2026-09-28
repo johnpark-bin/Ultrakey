@@ -42,6 +42,7 @@
   "menu.launch_on_login.requires_approval": "macOS がこのログイン項目の承認を求めています。システム設定 ▸ 一般 ▸ ログイン項目 で手動でオンにしてください。",
   "menu.unauthorized.title": "Ultrakey にはアクセシビリティのアクセス権が必要です",
   "menu.status.caps_kernel_map_missing": "Caps Lock のカーネル再マップが未確認 — プリセットが誤動作する可能性",
+  "menu.status.secure_input_suspended": "⚠️ セキュア入力が有効 — リマップを一時停止中",
   "menu.unauthorized.authorize": "アクセスを許可…",
   "settings.window.title": "Ultrakey 設定",
   "settings.tab.seek": "Seek",
