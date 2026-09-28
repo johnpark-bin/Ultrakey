@@ -600,7 +600,8 @@ fn settings_html_의_한영_한자_컨트롤은_활성이고_hint_문구를_가�
             "korean-han-eng-badge",
         ),
         ("korean-hanja", "korean-hanja-hint", "korean-hanja-badge"),
-    ] {        let input_needle = format!("id=\"{checkbox_id}\"");
+    ] {
+        let input_needle = format!("id=\"{checkbox_id}\"");
         let input_pos = html
             .find(&input_needle)
             .unwrap_or_else(|| panic!("settings.html 에 id=\"{checkbox_id}\" 컨트롤이 없다"));
@@ -704,7 +705,9 @@ fn settings_html에_korean_제외_목록_편집기와_modifier_소문자_옵션�
         );
     }
     assert!(
-        html.contains("id=\"korean-modifier-lowercase\" data-key=\"korean.modifierKeyTypesLowercase\""),
+        html.contains(
+            "id=\"korean-modifier-lowercase\" data-key=\"korean.modifierKeyTypesLowercase\""
+        ),
         "settings.html 에 K9 체크박스(data-key=\"korean.modifierKeyTypesLowercase\")가 없다"
     );
     assert!(
@@ -843,7 +846,10 @@ fn main_rs_의_menu_점_리터럴은_다섯_카탈로그_모두에_있다() {
 
     for locale in LOCALES {
         let keys = flatten_catalog(&read_catalog(locale));
-        let missing: Vec<_> = menu_keys.iter().filter(|k| !keys.contains(k.as_str())).collect();
+        let missing: Vec<_> = menu_keys
+            .iter()
+            .filter(|k| !keys.contains(k.as_str()))
+            .collect();
         assert!(
             missing.is_empty(),
             "{locale}.json 에 없는 메뉴 키: {missing:?}"
@@ -1177,8 +1183,8 @@ fn settings_html의_advanced_details가_기본_접힘이다() {
     let details_pos = html
         .find(details_needle)
         .unwrap_or_else(|| panic!("settings.html 에 <details id=\"general-advanced\"> 가 없다"));
-    let open_attr_in_open_tag = html[details_pos..details_pos + details_needle.len() + 1]
-        .contains("open");
+    let open_attr_in_open_tag =
+        html[details_pos..details_pos + details_needle.len() + 1].contains("open");
     assert!(
         !open_attr_in_open_tag,
         "<details id=\"general-advanced\"> 에 open 속성이 있다 — 기본 접힘으로 출하해야 한다"
@@ -1725,10 +1731,7 @@ fn keyboards_기능2_템플릿_행은_공통_디바이스_어느_선택에서도
     let hidden_at = f[row_at..]
         .find("hidden = false")
         .expect("템플릿 행이 공통 선택 중에도 보이도록(항상 unhide) 설정되어 있지 않다(이슈 #94)");
-    assert!(
-        hidden_at > 0,
-        "도달하지 않는다 — 위 find 가 이미 검사했다"
-    );
+    assert!(hidden_at > 0, "도달하지 않는다 — 위 find 가 이미 검사했다");
     assert!(
         !f[row_at..].contains("hidden = device === \"all\""),
         "템플릿 행에 디바이스 선택 중에만 보이게 하는 숨김 조건이 아직 남아 있다(이슈 #94 §3.7.4 표시 조건 갱신)"
@@ -2051,8 +2054,9 @@ fn read_flags_rs() -> String {
     // crates/ 는 이 워크트리에서 다른 세션이 동시에 작업 중이라 손대지 않는다
     // — 여기서는 읽기만 한다. 경로는 워크스페이스 루트 기준.
     let path = manifest_dir().join("../../crates/ultrakey-core/src/flags.rs");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("crates/ultrakey-core/src/flags.rs 를 읽지 못했다({path:?}): {e}"))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("crates/ultrakey-core/src/flags.rs 를 읽지 못했다({path:?}): {e}")
+    })
 }
 
 /// `needle` 바로 뒤에 나오는 첫 `0x…` 16진수 리터럴 값을 읽는다. JS 상수 선언
@@ -2173,7 +2177,10 @@ fn settings_html_에서_seek_placeholder가_사라졌다() {
 
     let en = read_en_catalog();
     let ko = read_ko_catalog();
-    for old_key in ["settings.placeholder.title", "settings.placeholder.seek.body"] {
+    for old_key in [
+        "settings.placeholder.title",
+        "settings.placeholder.seek.body",
+    ] {
         assert!(
             en.get(old_key).is_none(),
             "en.json 에 옛 Seek 자리표시자 키 {old_key} 가 남아 있다"
@@ -2201,9 +2208,12 @@ fn seek_modifier_비트값이_ultrakey_core_flags와_일치한다() {
     let js_command = extract_hex_const_value(&html, "SEEK_SHORTCUT_MOD_COMMAND =");
 
     let rs_shift = extract_hex_const_value(&flags_rs, "pub const SHIFT: EventFlags = EventFlags(");
-    let rs_control = extract_hex_const_value(&flags_rs, "pub const CONTROL: EventFlags = EventFlags(");
-    let rs_option = extract_hex_const_value(&flags_rs, "pub const ALTERNATE: EventFlags = EventFlags(");
-    let rs_command = extract_hex_const_value(&flags_rs, "pub const COMMAND: EventFlags = EventFlags(");
+    let rs_control =
+        extract_hex_const_value(&flags_rs, "pub const CONTROL: EventFlags = EventFlags(");
+    let rs_option =
+        extract_hex_const_value(&flags_rs, "pub const ALTERNATE: EventFlags = EventFlags(");
+    let rs_command =
+        extract_hex_const_value(&flags_rs, "pub const COMMAND: EventFlags = EventFlags(");
 
     assert_eq!(
         js_shift, rs_shift,
@@ -2490,7 +2500,9 @@ fn main_rs의_프리셋_한국어_규칙_라벨_키가_카탈로그에_실재한
     let literals: Vec<String> = extract_double_quoted_literals(&no_comments)
         .into_iter()
         .filter(|s| {
-            s.starts_with("settings.presets.") || s.starts_with("settings.korean.") || s == "settings.tab.hyperkey"
+            s.starts_with("settings.presets.")
+                || s.starts_with("settings.korean.")
+                || s == "settings.tab.hyperkey"
         })
         .collect();
 
@@ -2510,7 +2522,10 @@ fn main_rs의_프리셋_한국어_규칙_라벨_키가_카탈로그에_실재한
 
     for locale in LOCALES {
         let keys = flatten_catalog(&read_catalog(locale));
-        let missing: Vec<_> = literals.iter().filter(|k| !keys.contains(k.as_str())).collect();
+        let missing: Vec<_> = literals
+            .iter()
+            .filter(|k| !keys.contains(k.as_str()))
+            .collect();
         assert!(
             missing.is_empty(),
             "{locale}.json 에 없는, main.rs 의 규칙 라벨 카탈로그 키: {missing:?}"
@@ -2647,15 +2662,20 @@ fn settings_html_의_선택_상태는_highlight_tint를_쓴다() {
     let html = read_settings_html();
 
     let sidebar_rule = css_rule_body(&html, ".sidebar button[aria-selected=\"true\"] {")
-        .unwrap_or_else(|| panic!("settings.html 에 .sidebar button[aria-selected=true] 규칙이 없다"));
+        .unwrap_or_else(|| {
+            panic!("settings.html 에 .sidebar button[aria-selected=true] 규칙이 없다")
+        });
     assert!(
         sidebar_rule.contains("Highlight"),
         "사이드바 선택 상태가 Highlight(CSS 시스템 강조색) tint 를 쓰지 않는다 — \
          currentColor 회색으로 후퇴하면 hover 와 구분이 약해진다(UXR-01)"
     );
 
-    let pane_rule = css_rule_body(&html, ".keyboards-device-pane [role=\"option\"][aria-selected=\"true\"] {")
-        .unwrap_or_else(|| panic!("settings.html 에 디바이스 목록 선택 상태 규칙이 없다"));
+    let pane_rule = css_rule_body(
+        &html,
+        ".keyboards-device-pane [role=\"option\"][aria-selected=\"true\"] {",
+    )
+    .unwrap_or_else(|| panic!("settings.html 에 디바이스 목록 선택 상태 규칙이 없다"));
     assert!(
         pane_rule.contains("Highlight"),
         "Keyboards 디바이스 목록 선택 상태가 Highlight tint 를 쓰지 않는다(UXR-01)"

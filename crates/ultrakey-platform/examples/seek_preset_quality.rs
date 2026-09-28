@@ -29,7 +29,10 @@ fn main() {
         let Some(cap) = screen_capture::capture_display(*d) else {
             continue;
         };
-        println!("# 디스플레이 id={} ({}x{}px)", d.display_id, cap.image_width_px, cap.image_height_px);
+        println!(
+            "# 디스플레이 id={} ({}x{}px)",
+            d.display_id, cap.image_width_px, cap.image_height_px
+        );
 
         let mut sets: Vec<(&str, BTreeSet<String>, f32)> = Vec::new();
         for (name, preset) in presets {
@@ -41,7 +44,11 @@ fn main() {
                 obs.iter().map(|o| o.confidence).sum::<f32>() / obs.len() as f32
             };
             let set: BTreeSet<String> = obs.iter().map(|o| o.text.trim().to_string()).collect();
-            println!("  {name:<18} 관측 {:>4}개 / 고유 {:>4}개 / 평균신뢰도 {mean_conf:.3}", obs.len(), set.len());
+            println!(
+                "  {name:<18} 관측 {:>4}개 / 고유 {:>4}개 / 평균신뢰도 {mean_conf:.3}",
+                obs.len(),
+                set.len()
+            );
             sets.push((name, set, mean_conf));
         }
 

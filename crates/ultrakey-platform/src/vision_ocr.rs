@@ -137,15 +137,18 @@ mod macos_impl {
     }
 
     fn build_handler(image: &CIImage) -> Retained<VNImageRequestHandler> {
-        let options: Retained<NSDictionary<objc2_vision::VNImageOption, objc2::runtime::AnyObject>> =
-            NSDictionary::new();
+        let options: Retained<
+            NSDictionary<objc2_vision::VNImageOption, objc2::runtime::AnyObject>,
+        > = NSDictionary::new();
         // SAFETY: `options` 는 빈 사전이라 제네릭 타입 요구가 자명하게 만족된다.
         // `image` 는 호출 동안 살아 있고, 핸들러는 이미지를 스스로 retain 한다.
-        unsafe { VNImageRequestHandler::initWithCIImage_options(
-            VNImageRequestHandler::alloc(),
-            image,
-            &options,
-        ) }
+        unsafe {
+            VNImageRequestHandler::initWithCIImage_options(
+                VNImageRequestHandler::alloc(),
+                image,
+                &options,
+            )
+        }
     }
 }
 

@@ -120,8 +120,7 @@ mod macos_impl {
         let mut result: *mut std::ffi::c_void = std::ptr::null_mut();
         // SAFETY: `query` 는 유효한 CFDictionary 를 가리킨다(dict_raw). `result` 는
         // CF_RETURNS_RETAINED 수신지 — 성공 시 우리가 소유권을 받는다.
-        let status =
-            unsafe { crate::ffi::SecItemCopyMatching(dict_raw(&query), &mut result) };
+        let status = unsafe { crate::ffi::SecItemCopyMatching(dict_raw(&query), &mut result) };
         if status != 0 || result.is_null() {
             return None;
         }
@@ -141,8 +140,7 @@ mod macos_impl {
         let update = new_dict();
         update.set(kSecValueData(), &value_data);
         // SAFETY: `query`·`update` 는 각각 유효한 CFDictionary 다(dict_raw).
-        let updated =
-            unsafe { crate::ffi::SecItemUpdate(dict_raw(&query), dict_raw(&update)) };
+        let updated = unsafe { crate::ffi::SecItemUpdate(dict_raw(&query), dict_raw(&update)) };
         if updated == 0 {
             return;
         }

@@ -163,14 +163,20 @@ mod tests {
     #[test]
     fn char_not_producible_by_layout_falls_back_to_unicode_string() {
         let table = LayoutTable::build(&fake_snapshot("qwerty"), &FakeQwerty);
-        assert_eq!(plan_text_output(&table, '€'), TextOutputPlan::UnicodeString('€'));
+        assert_eq!(
+            plan_text_output(&table, '€'),
+            TextOutputPlan::UnicodeString('€')
+        );
     }
 
     /// 빈 표(`LayoutTable::empty()`) — 항상 UnicodeString.
     #[test]
     fn empty_table_always_falls_back_to_unicode_string() {
         let empty = LayoutTable::empty();
-        assert_eq!(plan_text_output(&empty, '('), TextOutputPlan::UnicodeString('('));
+        assert_eq!(
+            plan_text_output(&empty, '('),
+            TextOutputPlan::UnicodeString('(')
+        );
 
         // 아무것도 번역 못 하는 번역기로 빌드해도 결과적으로 빈 표와 같다.
         let built_empty = LayoutTable::build(&fake_snapshot("empty"), &FakeEmpty);

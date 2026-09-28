@@ -212,5 +212,8 @@ fn stats(samples: &[f64]) -> String {
     let max = v[v.len() - 1];
     let median = v[v.len() / 2];
     let mean = v.iter().sum::<f64>() / v.len() as f64;
-    format!("중앙값 {median:>7.1}ms (평균 {mean:.1}, 최소 {min:.1}, 최대 {max:.1}, n={})", v.len())
+    format!(
+        "중앙값 {median:>7.1}ms (평균 {mean:.1}, 최소 {min:.1}, 최대 {max:.1}, n={})",
+        v.len()
+    )
 }

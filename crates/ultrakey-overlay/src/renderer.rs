@@ -42,11 +42,8 @@ pub trait OverlayRenderer {
     fn sync_surfaces(&mut self, displays: &[OverlayDisplay]) -> Result<(), RenderError>;
 
     /// 프레임 목록(디스플레이별)과 검색 바 프레임을 실제 화면에 그린다.
-    fn present(
-        &mut self,
-        frames: &[OverlayFrame],
-        bar: &SearchBarFrame,
-    ) -> Result<(), RenderError>;
+    fn present(&mut self, frames: &[OverlayFrame], bar: &SearchBarFrame)
+        -> Result<(), RenderError>;
 
     /// 검색 바 위치를 옮긴다(사용자 드래그, §3.4 위치 저장).
     fn set_search_bar_origin(&mut self, x: f64, y: f64) -> Result<(), RenderError>;
@@ -115,8 +112,9 @@ impl OverlayRenderer for NullRenderer {
     ) -> Result<(), RenderError> {
         self.last_frames = frames.to_vec();
         self.last_bar = Some(bar.clone());
-        self.lifecycle
-            .push(LifecycleEvent::Present { frames: frames.to_vec() });
+        self.lifecycle.push(LifecycleEvent::Present {
+            frames: frames.to_vec(),
+        });
         Ok(())
     }
 
@@ -148,7 +146,12 @@ mod tests {
     fn display(id: u32, x: f64, y: f64, w: f64, h: f64) -> OverlayDisplay {
         OverlayDisplay {
             display_id: id,
-            frame: Rect { x, y, width: w, height: h },
+            frame: Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            },
             backing_scale: 2.0,
         }
     }
@@ -221,10 +224,7 @@ mod tests {
 
         assert_eq!(
             renderer.lifecycle,
-            vec![
-                LifecycleEvent::Present { frames },
-                LifecycleEvent::Show,
-            ],
+            vec![LifecycleEvent::Present { frames }, LifecycleEvent::Show,],
             "신규 세션의 빈 프레임 present 가 show 보다 앞서야 한다"
         );
     }
@@ -244,7 +244,12 @@ mod tests {
             1,
             vec![TextCandidate::ocr(
                 "Save".into(),
-                Rect { x: 10.0, y: 10.0, width: 40.0, height: 20.0 },
+                Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    width: 40.0,
+                    height: 20.0,
+                },
                 0.9,
                 1,
             )],
@@ -261,17 +266,25 @@ mod tests {
         // 신규 세션 — 후보 0(빈 프레임)으로 연다(S-6).
         let fresh = OverlaySession::open(displays.clone(), Appearance::Light, false);
         let empty = fresh.frames();
-        assert!(empty.iter().all(|f| f.highlights.is_empty() && f.line.is_none()));
+        assert!(empty
+            .iter()
+            .all(|f| f.highlights.is_empty() && f.line.is_none()));
         renderer.present(&empty, &bar).unwrap();
         renderer.show().unwrap();
 
         // ⭐ hide 와 다음 show 사이의 present 는 반드시 빈 프레임이다.
-        let hide_idx = renderer.lifecycle.iter().position(|e| *e == LifecycleEvent::Hide).unwrap();
+        let hide_idx = renderer
+            .lifecycle
+            .iter()
+            .position(|e| *e == LifecycleEvent::Hide)
+            .unwrap();
         let mut after_hide = renderer.lifecycle[hide_idx + 1..].iter();
         let Some(LifecycleEvent::Present { frames }) = after_hide.next() else {
             panic!("hide 직후에는 빈 프레임 present 가 와야 한다 — stale 그림을 그대로 show 하면 재진입 플래시가 난다(이슈 #132)");
         };
-        assert!(frames.iter().all(|f| f.highlights.is_empty() && f.line.is_none()));
+        assert!(frames
+            .iter()
+            .all(|f| f.highlights.is_empty() && f.line.is_none()));
         assert_eq!(after_hide.next(), Some(&LifecycleEvent::Show));
     }
 }

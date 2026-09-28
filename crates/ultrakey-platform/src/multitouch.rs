@@ -219,9 +219,7 @@ pub mod mt {
         /// `Err` — 호출자는 이 기능만 비활성화한다(§8 격하).
         pub fn load() -> Result<Arc<Self>, LoadError> {
             // SAFETY: `FRAMEWORK_PATH` 는 NUL 종료 정적 경로 문자열이다.
-            let handle = unsafe {
-                dlopen(FRAMEWORK_PATH.as_ptr() as *const c_char, RTLD_NOW)
-            };
+            let handle = unsafe { dlopen(FRAMEWORK_PATH.as_ptr() as *const c_char, RTLD_NOW) };
             if handle.is_null() {
                 return Err(LoadError::FrameworkUnavailable);
             }
@@ -564,9 +562,7 @@ pub mod mt {
         frame.len = n;
 
         (ctx.shared.on_frame)(&frame);
-        ctx.shared
-            .last_frame_ms
-            .store(unix_ms(), Ordering::Release);
+        ctx.shared.last_frame_ms.store(unix_ms(), Ordering::Release);
     }
 
     /// `MTTouch` 의 앞쪽 필드들만 읽는다. 오프셋 근거(커뮤니티 헤더 전원 일치):
@@ -646,9 +642,9 @@ pub mod mt {
 pub use mt::DeviceSnapshot;
 
 #[cfg(target_os = "macos")]
-pub use mt::{MultitouchApi, MtDeviceSession, StartError, TouchFrame, TOUCHES_PER_FRAME};
-#[cfg(target_os = "macos")]
 pub use mt::LoadError;
+#[cfg(target_os = "macos")]
+pub use mt::{MtDeviceSession, MultitouchApi, StartError, TouchFrame, TOUCHES_PER_FRAME};
 
 #[cfg(test)]
 mod tests {

@@ -71,14 +71,26 @@ fn fmt_built_in(v: &Option<bool>) -> String {
 }
 
 fn print_raw_service(label: &str, services: &[RawKeyboardService]) {
-    println!("--- {label} — 매칭 서비스 {n}개 (중복 제거 전) ---", n = services.len());
+    println!(
+        "--- {label} — 매칭 서비스 {n}개 (중복 제거 전) ---",
+        n = services.len()
+    );
     if services.is_empty() {
         println!("  (없음)\n");
         return;
     }
     for (i, s) in services.iter().enumerate() {
-        println!("[{i}] RegistryID={}", s.registry_id.map(|r| format!("0x{r:x}")).unwrap_or_else(|| "(못 읽음)".into()));
-        println!("    VID={}  PID={}", fmt_hex(&s.vendor_id), fmt_hex(&s.product_id));
+        println!(
+            "[{i}] RegistryID={}",
+            s.registry_id
+                .map(|r| format!("0x{r:x}"))
+                .unwrap_or_else(|| "(못 읽음)".into())
+        );
+        println!(
+            "    VID={}  PID={}",
+            fmt_hex(&s.vendor_id),
+            fmt_hex(&s.product_id)
+        );
         println!(
             "    Product={}  Transport={}",
             s.product_name.as_deref().unwrap_or("(못 읽음)"),
@@ -114,20 +126,10 @@ fn set_diff(
     device: &[RawKeyboardService],
     primary: &[RawKeyboardService],
 ) -> (Vec<String>, Vec<String>) {
-    let a: std::collections::HashSet<String> =
-        device.iter().map(identity).collect();
-    let b: std::collections::HashSet<String> =
-        primary.iter().map(identity).collect();
-    let a_only: Vec<String> = a
-        .iter()
-        .filter(|id| !b.contains(*id))
-        .cloned()
-        .collect();
-    let b_only: Vec<String> = b
-        .iter()
-        .filter(|id| !a.contains(*id))
-        .cloned()
-        .collect();
+    let a: std::collections::HashSet<String> = device.iter().map(identity).collect();
+    let b: std::collections::HashSet<String> = primary.iter().map(identity).collect();
+    let a_only: Vec<String> = a.iter().filter(|id| !b.contains(*id)).cloned().collect();
+    let b_only: Vec<String> = b.iter().filter(|id| !a.contains(*id)).cloned().collect();
     (a_only, b_only)
 }
 
@@ -139,7 +141,10 @@ fn dedup_pairs(services: &[RawKeyboardService]) -> Vec<String> {
         .iter()
         .filter_map(|s| Some((s.vendor_id?, s.product_id?)))
         .collect();
-    let mut lines: Vec<String> = set.drain().map(|(v, p)| format!("0x{v:x}:0x{p:x}")).collect();
+    let mut lines: Vec<String> = set
+        .drain()
+        .map(|(v, p)| format!("0x{v:x}:0x{p:x}"))
+        .collect();
     lines.sort_unstable();
     lines
 }
@@ -208,7 +213,9 @@ fn main() {
             "(VID,PID) 목록 상이 ⚠️"
         }
     );
-    println!("⛔ 본 기기엔 내장 키보드가 없어 내장 키보드 포함 여부는 실기기 전까지 (미검증)입니다.\n");
+    println!(
+        "⛔ 본 기기엔 내장 키보드가 없어 내장 키보드 포함 여부는 실기기 전까지 (미검증)입니다.\n"
+    );
 
     // ── 출력 3: 기존 dedup 회귀 체크가 깨졌으면 exit 1(스파이크 S-2 게이트)
     let devices = list_attached_keyboards();
@@ -234,7 +241,10 @@ fn main() {
     }
 
     // ⭐ S-2 회귀 확인 — 같은 (VID,PID) 가 두 번 나오면 중복 제거가 깨진 것이다.
-    let mut ids: Vec<(u32, u32)> = devices.iter().map(|d| (d.vendor_id, d.product_id)).collect();
+    let mut ids: Vec<(u32, u32)> = devices
+        .iter()
+        .map(|d| (d.vendor_id, d.product_id))
+        .collect();
     ids.sort_unstable();
     let before = ids.len();
     ids.dedup();

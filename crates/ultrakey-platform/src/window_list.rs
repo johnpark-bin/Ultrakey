@@ -61,9 +61,7 @@ mod macos_impl {
     #![allow(non_snake_case)]
 
     use super::WindowInfo;
-    use objc2_core_foundation::{
-        CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType,
-    };
+    use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 
     /// macOS 실구현.
     pub fn front_layer_windows() -> Vec<WindowInfo> {
@@ -132,7 +130,9 @@ mod macos_impl {
             )
         };
         if raw.is_null() {
-            tracing::debug!("CGWindowListCopyWindowInfo returned NULL; treating window list as empty");
+            tracing::debug!(
+                "CGWindowListCopyWindowInfo returned NULL; treating window list as empty"
+            );
             return None;
         }
         // SAFETY: 위에서 null 이 아님을 확인했다. 타입 캐스트는 "배열의 원소가
@@ -151,7 +151,10 @@ mod macos_impl {
     }
 
     /// `kCGWindow*` dict에서 문자열 키 값을 읽는다.
-    fn read_string(dict: &CFDictionary<CFString, CFType>, key: &'static CFString) -> Option<String> {
+    fn read_string(
+        dict: &CFDictionary<CFString, CFType>,
+        key: &'static CFString,
+    ) -> Option<String> {
         let value = dict.get(key)?;
         let string = value.downcast_ref::<CFString>()?;
         Some(string.to_string())

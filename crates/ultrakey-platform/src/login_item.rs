@@ -43,8 +43,13 @@ pub enum LoginItemError {
 impl std::fmt::Display for LoginItemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoginItemError::Unsupported => write!(f, "login item registration is not supported in this environment"),
-            LoginItemError::RegisterFailed(reason) => write!(f, "login item register/unregister failed: {reason}"),
+            LoginItemError::Unsupported => write!(
+                f,
+                "login item registration is not supported in this environment"
+            ),
+            LoginItemError::RegisterFailed(reason) => {
+                write!(f, "login item register/unregister failed: {reason}")
+            }
         }
     }
 }
@@ -379,7 +384,8 @@ mod tests {
     /// macOS 가 아닌 환경에서도 이 테스트는 그대로 돈다.
     #[test]
     fn build_launch_agent_plist_round_trips_through_xml() {
-        let original = build_launch_agent_plist("app.ultrakey.Ultrakey", Path::new("/bin/ultrakey"));
+        let original =
+            build_launch_agent_plist("app.ultrakey.Ultrakey", Path::new("/bin/ultrakey"));
 
         let mut buf = Vec::new();
         plist::to_writer_xml(&mut buf, &original).expect("plist XML 직렬화 실패");
@@ -388,7 +394,8 @@ mod tests {
         assert!(xml.contains("app.ultrakey.Ultrakey"));
         assert!(xml.contains("<key>RunAtLoad</key>"));
 
-        let decoded: LaunchAgentPlist = plist::from_bytes(xml.as_bytes()).expect("plist XML 파싱 실패");
+        let decoded: LaunchAgentPlist =
+            plist::from_bytes(xml.as_bytes()).expect("plist XML 파싱 실패");
         assert_eq!(decoded, original);
     }
 

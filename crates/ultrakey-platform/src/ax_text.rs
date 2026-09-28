@@ -125,9 +125,7 @@ mod macos_impl {
     /// 경로)은 라운드트립이 하나 더 필요하고, pid 조회와 앱 요소 생성 사이에
     /// 포커스가 바뀌는 경쟁 상태의 여지도 생긴다. 채택한 경로는 그 여지가
     /// 없다.
-    pub fn scan_frontmost_window(
-        params: &AxScanParams,
-    ) -> Result<Vec<AxTextElement>, AxScanError> {
+    pub fn scan_frontmost_window(params: &AxScanParams) -> Result<Vec<AxTextElement>, AxScanError> {
         // 요구사항 8: 권한 부재는 다른 실패와 구분되는 오류로 보고한다.
         if !crate::accessibility::is_process_trusted() {
             return Err(AxScanError::NotTrusted);
@@ -153,8 +151,7 @@ mod macos_impl {
         // 프로세스"가 여기다.
         let _ = focused_app.set_timeout(params.messaging_timeout_secs);
 
-        let Ok(Some(root)) =
-            focused_app.element_attribute(ax_attr::AX_FOCUSED_WINDOW_ATTRIBUTE)
+        let Ok(Some(root)) = focused_app.element_attribute(ax_attr::AX_FOCUSED_WINDOW_ATTRIBUTE)
         else {
             // 포커스된 창이 없음(§5 #6 과 유사한 사례 — 이 앱은 창이 없다) —
             // 이 앱은 건너뛰고 빈 결과로 정상 진행한다.

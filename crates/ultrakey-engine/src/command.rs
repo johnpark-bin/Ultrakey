@@ -19,6 +19,21 @@ use ultrakey_platform::runloop::CommandSignaller;
 ///
 /// ⚠️ `PostSynthEvent(SynthEvent)` 가 있어 더 이상 `Copy` 가 아니다 — 값을 옮겨(move)
 /// 보낸다.
+/// ⭐ 이슈 #149 D2 — `EngineCommand::RecoverTap` 을 보낸 주체. 콜백은 통지 종류를
+/// 이미 알고(`EventKind::TapDisabledByTimeout/UserInput`), 워치독·지연 스케줄러는
+/// 통지 없이 꺼진 탭을 본 자리에서 `WatchdogSilent` 를 만든다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TapDisableReason {
+    /// 비활성화 통지 `TapDisabledByTimeout` — 트램폴린이 통지 예산 안에서 이미
+    /// 재활성화를 시도했다.
+    NotificationTimeout,
+    /// 비활성화 통지 `TapDisabledByUserInput` — 위와 동일.
+    NotificationUserInput,
+    /// 통지 없이 꺼진 탭(워치독 폴링·절전 복귀 지연 재확인) — silent 예산으로
+    /// 재활성화를 시도하는 유일한 경로다.
+    WatchdogSilent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineCommand {
     /// 절전/잠금/Secure Input — stuck modifier 방지(§5 #9). `Arbiter::force_reset` 을
@@ -28,7 +43,10 @@ pub enum EngineCommand {
     /// 연속 재활성화 예산이 소진됐거나 권한이 없으면 탭을 해체한다 — 재생성은
     /// 시도하지 않는다(이슈 #65 Phase 1 리뷰 교정 2, `engine::handle_recover_tap`
     /// 문서 참고).
-    RecoverTap,
+    ///
+    /// ⭐ 이슈 #149 D2 — `reason` 이 `WatchdogSilent` 이고 탭이 꺼져 있으면 silent
+    /// 예산 안에서 `enable()` 을 시도한다. 그 외 KeepAlive 는 기존 관찰 전용 유지.
+    RecoverTap { reason: TapDisableReason },
     /// 설정 교체 후 `Arbiter::reconfigure` 호출 — quick press 슬롯 재구성.
     /// ⭐ 이슈 #140 — 도출된 탭 이벤트 마스크가 현재 탭과 다르면 `force_reset` 뒤
     /// 탭을 재생성한다(`lifecycle::reconfigure_tap_decision`).
@@ -84,7 +102,10 @@ mod tests {
     fn commands_are_drained_in_fifo_order() {
         let (tx, rx) = channel();
         tx.send(EngineCommand::ForceResetState).unwrap();
-        tx.send(EngineCommand::RecoverTap).unwrap();
+        tx.send(EngineCommand::RecoverTap {
+            reason: TapDisableReason::WatchdogSilent,
+        })
+        .unwrap();
         tx.send(EngineCommand::Reconfigure).unwrap();
 
         let mut drained = Vec::new();
@@ -96,7 +117,9 @@ mod tests {
             drained,
             vec![
                 EngineCommand::ForceResetState,
-                EngineCommand::RecoverTap,
+                EngineCommand::RecoverTap {
+                    reason: TapDisableReason::WatchdogSilent,
+                },
                 EngineCommand::Reconfigure,
             ]
         );

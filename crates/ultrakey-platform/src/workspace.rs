@@ -55,8 +55,14 @@ mod macos_impl {
         let obj = info.objectForKey(key)?;
         let app = obj.downcast::<NSRunningApplication>().ok()?;
         Some(AppIdentity {
-            bundle_id: app.bundleIdentifier().map(|s| s.to_string()).unwrap_or_default(),
-            name: app.localizedName().map(|s| s.to_string()).unwrap_or_default(),
+            bundle_id: app
+                .bundleIdentifier()
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+            name: app
+                .localizedName()
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
         })
     }
 

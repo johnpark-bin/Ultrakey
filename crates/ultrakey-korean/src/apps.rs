@@ -169,7 +169,10 @@ mod tests {
     /// 저장 후보 정규화 — 공백 제거, 빈 값은 None.
     #[test]
     fn normalize_bundle_id_trims_and_rejects_empty() {
-        assert_eq!(normalize_bundle_id("  com.x.Y  "), Some("com.x.Y".to_string()));
+        assert_eq!(
+            normalize_bundle_id("  com.x.Y  "),
+            Some("com.x.Y".to_string())
+        );
         assert_eq!(normalize_bundle_id("   "), None);
         assert_eq!(normalize_bundle_id(""), None);
     }
@@ -204,7 +207,10 @@ mod tests {
             "com.realvnc.vncviewer",
             "com.vmware.horizon.client",
         ] {
-            assert!(!ids.contains(&excluded), "확인되지 않은 후보가 목록에 들어갔다: {excluded}");
+            assert!(
+                !ids.contains(&excluded),
+                "확인되지 않은 후보가 목록에 들어갔다: {excluded}"
+            );
         }
     }
 }

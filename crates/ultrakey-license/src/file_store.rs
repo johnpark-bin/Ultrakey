@@ -180,10 +180,8 @@ mod tests {
     impl TempDir {
         fn new() -> Self {
             let n = DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dir = std::env::temp_dir().join(format!(
-                "ultrakey-filestore-{}-{n}",
-                std::process::id()
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("ultrakey-filestore-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
@@ -339,7 +337,9 @@ mod tests {
             h.join().unwrap();
         }
 
-        let record = store.read().expect("마지막 쓰기가 온전한 기록을 남겨야 한다");
+        let record = store
+            .read()
+            .expect("마지막 쓰기가 온전한 기록을 남겨야 한다");
         assert!(record.clock.trial_started_at >= 1_700_000_000);
         assert!(store.read_cache().is_some());
     }

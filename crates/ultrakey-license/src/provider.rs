@@ -50,7 +50,10 @@ pub enum ActivationResponse {
     /// 환불된 키.
     Refunded,
     /// 활성화 슬롯 한도 초과 — 사용자가 다른 기기를 비활성화해야 한다(§5-3).
-    LimitReached { activations_used: u32, activations_limit: u32 },
+    LimitReached {
+        activations_used: u32,
+        activations_limit: u32,
+    },
     /// 네트워크 실패(연결·5xx·타임아웃 공통, §5-8). 서버의 확정 응답이 아니다.
     NetworkError,
 }

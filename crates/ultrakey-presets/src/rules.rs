@@ -3,7 +3,9 @@
 
 use ultrakey_core::flags::EventFlags;
 use ultrakey_core::keycode::KeyCode;
-use ultrakey_core::rules::{ComboRule, HoldCondition, RuleAction, RuleId, SimpleRemap, SourceKeyActions};
+use ultrakey_core::rules::{
+    ComboRule, HoldCondition, RuleAction, RuleId, SimpleRemap, SourceKeyActions,
+};
 
 use crate::settings::PresetSettings;
 
@@ -42,7 +44,10 @@ const HOME_ROW_FUNCTION_KEYS: [KeyCode; 11] = [
 ];
 
 fn key_action(keycode: KeyCode) -> RuleAction {
-    RuleAction::Key { keycode, flags: EventFlags::NONE }
+    RuleAction::Key {
+        keycode,
+        flags: EventFlags::NONE,
+    }
 }
 
 /// 16종 설정을 번역한 결과 — `ultrakey_core::rules::RuleTable` 에 그대로 옮겨 담을 수 있다.
@@ -331,15 +336,25 @@ impl PresetSettings {
         // 위에서 push 한 순서 그대로 유지된다.
         combos.sort_by_key(|r| r.id);
 
-        PresetRules { combos, simple_remaps, source_actions }
+        PresetRules {
+            combos,
+            simple_remaps,
+            source_actions,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::popups::{ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger, QuickPressCapsAction, RemapCapsTarget};
-    use crate::settings::{CapsHjklArrowsSettings, CapsHomeRowSettings, CapsLockRemapSettings, CapsQuickPressSettings, PasteWithoutFormattingSettings, ShiftQuickPressBracketsSettings};
+    use crate::popups::{
+        ArrowKeySet, BracketPair, DoubleTapShiftSide, HomeRowScheme, PasteTrigger,
+        QuickPressCapsAction, RemapCapsTarget,
+    };
+    use crate::settings::{
+        CapsHjklArrowsSettings, CapsHomeRowSettings, CapsLockRemapSettings, CapsQuickPressSettings,
+        PasteWithoutFormattingSettings, ShiftQuickPressBracketsSettings,
+    };
 
     #[test]
     fn all_disabled_yields_no_rules() {
@@ -352,11 +367,18 @@ mod tests {
     #[test]
     fn f08_1_remap_caps_lock_produces_hold_remap_source_action() {
         let settings = PresetSettings {
-            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::Esc },
+            caps_lock_remap: CapsLockRemapSettings {
+                enabled: true,
+                target: RemapCapsTarget::Esc,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let sa = rules.source_actions.iter().find(|s| s.key == KeyCode::CAPS_LOCK).unwrap();
+        let sa = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::CAPS_LOCK)
+            .unwrap();
         assert_eq!(sa.hold_remap, Some(key_action(KeyCode::ESCAPE)));
         assert_eq!(sa.quick_press, None);
     }
@@ -364,33 +386,60 @@ mod tests {
     #[test]
     fn f08_1_nothing_target_maps_to_rule_action_nothing() {
         let settings = PresetSettings {
-            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::Nothing },
+            caps_lock_remap: CapsLockRemapSettings {
+                enabled: true,
+                target: RemapCapsTarget::Nothing,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let sa = rules.source_actions.iter().find(|s| s.key == KeyCode::CAPS_LOCK).unwrap();
+        let sa = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::CAPS_LOCK)
+            .unwrap();
         assert_eq!(sa.hold_remap, Some(RuleAction::Nothing));
     }
 
     #[test]
     fn f08_2_quick_press_caps_lock_merges_with_f08_1_hold_remap() {
         let settings = PresetSettings {
-            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::LeftControl },
-            caps_quick_press: CapsQuickPressSettings { enabled: true, action: QuickPressCapsAction::Esc },
+            caps_lock_remap: CapsLockRemapSettings {
+                enabled: true,
+                target: RemapCapsTarget::LeftControl,
+            },
+            caps_quick_press: CapsQuickPressSettings {
+                enabled: true,
+                action: QuickPressCapsAction::Esc,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
         // R1 — 같은 caps lock 물리 키의 두 규칙(hold_remap·quick_press)이 하나의
         // SourceKeyActions 로 합쳐져야 한다(중복 소스 키 등록을 만들지 않는다).
-        assert_eq!(rules.source_actions.iter().filter(|s| s.key == KeyCode::CAPS_LOCK).count(), 1);
-        let sa = rules.source_actions.iter().find(|s| s.key == KeyCode::CAPS_LOCK).unwrap();
+        assert_eq!(
+            rules
+                .source_actions
+                .iter()
+                .filter(|s| s.key == KeyCode::CAPS_LOCK)
+                .count(),
+            1
+        );
+        let sa = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::CAPS_LOCK)
+            .unwrap();
         assert_eq!(sa.hold_remap, Some(key_action(KeyCode::LEFT_CONTROL)));
         assert_eq!(sa.quick_press, Some(key_action(KeyCode::ESCAPE)));
     }
 
     #[test]
     fn f08_4_caps_space_enter_produces_combo() {
-        let settings = PresetSettings { caps_space_enter: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            caps_space_enter: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 1);
         assert_eq!(rules.combos[0].trigger, KeyCode::SPACE);
@@ -400,64 +449,117 @@ mod tests {
 
     #[test]
     fn f08_5_wasd_produces_4_combos_with_game_movement_mapping() {
-        let settings = PresetSettings { caps_wasd_arrows: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            caps_wasd_arrows: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 4);
         let find = |trigger: KeyCode| rules.combos.iter().find(|c| c.trigger == trigger).unwrap();
         assert_eq!(find(KeyCode::ANSI_W).action, key_action(KeyCode::UP_ARROW));
-        assert_eq!(find(KeyCode::ANSI_A).action, key_action(KeyCode::LEFT_ARROW));
-        assert_eq!(find(KeyCode::ANSI_S).action, key_action(KeyCode::DOWN_ARROW));
-        assert_eq!(find(KeyCode::ANSI_D).action, key_action(KeyCode::RIGHT_ARROW));
+        assert_eq!(
+            find(KeyCode::ANSI_A).action,
+            key_action(KeyCode::LEFT_ARROW)
+        );
+        assert_eq!(
+            find(KeyCode::ANSI_S).action,
+            key_action(KeyCode::DOWN_ARROW)
+        );
+        assert_eq!(
+            find(KeyCode::ANSI_D).action,
+            key_action(KeyCode::RIGHT_ARROW)
+        );
     }
 
     #[test]
     fn f08_6_hjkl_produces_vim_direction_mapping() {
         let settings = PresetSettings {
-            caps_hjkl_arrows: CapsHjklArrowsSettings { enabled: true, key_set: ArrowKeySet::Hjkl },
+            caps_hjkl_arrows: CapsHjklArrowsSettings {
+                enabled: true,
+                key_set: ArrowKeySet::Hjkl,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 4);
         let find = |trigger: KeyCode| rules.combos.iter().find(|c| c.trigger == trigger).unwrap();
-        assert_eq!(find(KeyCode::ANSI_H).action, key_action(KeyCode::LEFT_ARROW));
-        assert_eq!(find(KeyCode::ANSI_J).action, key_action(KeyCode::DOWN_ARROW));
+        assert_eq!(
+            find(KeyCode::ANSI_H).action,
+            key_action(KeyCode::LEFT_ARROW)
+        );
+        assert_eq!(
+            find(KeyCode::ANSI_J).action,
+            key_action(KeyCode::DOWN_ARROW)
+        );
         assert_eq!(find(KeyCode::ANSI_K).action, key_action(KeyCode::UP_ARROW));
-        assert_eq!(find(KeyCode::ANSI_L).action, key_action(KeyCode::RIGHT_ARROW));
+        assert_eq!(
+            find(KeyCode::ANSI_L).action,
+            key_action(KeyCode::RIGHT_ARROW)
+        );
     }
 
     #[test]
     fn f08_7_home_row_symbol_scheme_produces_11_text_combos() {
         let settings = PresetSettings {
-            caps_home_row: CapsHomeRowSettings { enabled: true, scheme: HomeRowScheme::SymbolRow },
+            caps_home_row: CapsHomeRowSettings {
+                enabled: true,
+                scheme: HomeRowScheme::SymbolRow,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 11);
-        let a = rules.combos.iter().find(|c| c.trigger == KeyCode::ANSI_A).unwrap();
+        let a = rules
+            .combos
+            .iter()
+            .find(|c| c.trigger == KeyCode::ANSI_A)
+            .unwrap();
         assert_eq!(a.action, RuleAction::Text('!'));
-        let quote = rules.combos.iter().find(|c| c.trigger == KeyCode::ANSI_QUOTE).unwrap();
+        let quote = rules
+            .combos
+            .iter()
+            .find(|c| c.trigger == KeyCode::ANSI_QUOTE)
+            .unwrap();
         assert_eq!(quote.action, RuleAction::Text('_'));
     }
 
     #[test]
     fn f08_7_home_row_function_scheme_produces_11_key_combos() {
         let settings = PresetSettings {
-            caps_home_row: CapsHomeRowSettings { enabled: true, scheme: HomeRowScheme::FunctionRow },
+            caps_home_row: CapsHomeRowSettings {
+                enabled: true,
+                scheme: HomeRowScheme::FunctionRow,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let a = rules.combos.iter().find(|c| c.trigger == KeyCode::ANSI_A).unwrap();
+        let a = rules
+            .combos
+            .iter()
+            .find(|c| c.trigger == KeyCode::ANSI_A)
+            .unwrap();
         assert_eq!(a.action, key_action(KeyCode::F1));
     }
 
     #[test]
     fn f08_8_double_tap_shift_applies_to_both_shifts() {
         // 기본 side=Either — 종전 동작 그대로 양쪽에 설치된다.
-        let settings = PresetSettings { double_tap_shift_to_caps: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            double_tap_shift_to_caps: true,
+            ..PresetSettings::default()
+        };
         assert_eq!(settings.double_tap_shift_side, DoubleTapShiftSide::Either);
         let rules = settings.to_rules(false);
-        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
-        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        let left = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::LEFT_SHIFT)
+            .unwrap();
+        let right = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::RIGHT_SHIFT)
+            .unwrap();
         assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
         assert_eq!(right.double_tap, Some(RuleAction::ToggleCapsLock));
     }
@@ -470,10 +572,18 @@ mod tests {
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
+        let left = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::LEFT_SHIFT)
+            .unwrap();
         assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
         assert!(
-            rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).is_none(),
+            rules
+                .source_actions
+                .iter()
+                .find(|s| s.key == KeyCode::RIGHT_SHIFT)
+                .is_none(),
             "side=Left 일 때 우 shift 에는 double_tap 규칙이 없어야 한다"
         );
     }
@@ -486,10 +596,18 @@ mod tests {
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        let right = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::RIGHT_SHIFT)
+            .unwrap();
         assert_eq!(right.double_tap, Some(RuleAction::ToggleCapsLock));
         assert!(
-            rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).is_none(),
+            rules
+                .source_actions
+                .iter()
+                .find(|s| s.key == KeyCode::LEFT_SHIFT)
+                .is_none(),
             "side=Right 일 때 좌 shift 에는 double_tap 규칙이 없어야 한다"
         );
     }
@@ -501,12 +619,23 @@ mod tests {
         let settings = PresetSettings {
             double_tap_shift_to_caps: true,
             double_tap_shift_side: DoubleTapShiftSide::Left,
-            shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Parens },
+            shift_quick_press_brackets: ShiftQuickPressBracketsSettings {
+                enabled: true,
+                pair: BracketPair::Parens,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
-        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        let left = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::LEFT_SHIFT)
+            .unwrap();
+        let right = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::RIGHT_SHIFT)
+            .unwrap();
         assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
         assert_eq!(left.quick_press, Some(RuleAction::Text('(')));
         assert_eq!(right.double_tap, None);
@@ -515,17 +644,31 @@ mod tests {
 
     #[test]
     fn f08_9_left_right_shift_produces_2_symmetric_combos() {
-        let settings = PresetSettings { left_right_shift_to_caps: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            left_right_shift_to_caps: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 2);
-        assert!(rules.combos.iter().any(|c| c.trigger == KeyCode::LEFT_SHIFT && c.hold == HoldCondition::Key(KeyCode::RIGHT_SHIFT)));
-        assert!(rules.combos.iter().any(|c| c.trigger == KeyCode::RIGHT_SHIFT && c.hold == HoldCondition::Key(KeyCode::LEFT_SHIFT)));
-        assert!(rules.combos.iter().all(|c| c.action == RuleAction::ToggleCapsLock));
+        assert!(rules.combos.iter().any(|c| c.trigger == KeyCode::LEFT_SHIFT
+            && c.hold == HoldCondition::Key(KeyCode::RIGHT_SHIFT)));
+        assert!(rules
+            .combos
+            .iter()
+            .any(|c| c.trigger == KeyCode::RIGHT_SHIFT
+                && c.hold == HoldCondition::Key(KeyCode::LEFT_SHIFT)));
+        assert!(rules
+            .combos
+            .iter()
+            .all(|c| c.action == RuleAction::ToggleCapsLock));
     }
 
     #[test]
     fn f08_10_shift_caps_to_caps_uses_either_shift_hold() {
-        let settings = PresetSettings { shift_caps_to_caps: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            shift_caps_to_caps: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 1);
         assert_eq!(rules.combos[0].hold, HoldCondition::EitherShift);
@@ -536,12 +679,23 @@ mod tests {
     #[test]
     fn f08_11_quick_press_brackets_splits_pair_across_shifts() {
         let settings = PresetSettings {
-            shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Brackets },
+            shift_quick_press_brackets: ShiftQuickPressBracketsSettings {
+                enabled: true,
+                pair: BracketPair::Brackets,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
-        let right = rules.source_actions.iter().find(|s| s.key == KeyCode::RIGHT_SHIFT).unwrap();
+        let left = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::LEFT_SHIFT)
+            .unwrap();
+        let right = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::RIGHT_SHIFT)
+            .unwrap();
         assert_eq!(left.quick_press, Some(RuleAction::Text('[')));
         assert_eq!(right.quick_press, Some(RuleAction::Text(']')));
     }
@@ -552,19 +706,36 @@ mod tests {
     fn f08_8_and_f08_11_merge_on_same_shift_key() {
         let settings = PresetSettings {
             double_tap_shift_to_caps: true,
-            shift_quick_press_brackets: ShiftQuickPressBracketsSettings { enabled: true, pair: BracketPair::Parens },
+            shift_quick_press_brackets: ShiftQuickPressBracketsSettings {
+                enabled: true,
+                pair: BracketPair::Parens,
+            },
             ..PresetSettings::default()
         };
         let rules = settings.to_rules(false);
-        assert_eq!(rules.source_actions.iter().filter(|s| s.key == KeyCode::LEFT_SHIFT).count(), 1);
-        let left = rules.source_actions.iter().find(|s| s.key == KeyCode::LEFT_SHIFT).unwrap();
+        assert_eq!(
+            rules
+                .source_actions
+                .iter()
+                .filter(|s| s.key == KeyCode::LEFT_SHIFT)
+                .count(),
+            1
+        );
+        let left = rules
+            .source_actions
+            .iter()
+            .find(|s| s.key == KeyCode::LEFT_SHIFT)
+            .unwrap();
         assert_eq!(left.double_tap, Some(RuleAction::ToggleCapsLock));
         assert_eq!(left.quick_press, Some(RuleAction::Text('(')));
     }
 
     #[test]
     fn f08_12_hyper_delete_uses_hyper_active_hold() {
-        let settings = PresetSettings { hyper_delete_to_forward: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            hyper_delete_to_forward: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 1);
         assert_eq!(rules.combos[0].hold, HoldCondition::HyperActive);
@@ -574,7 +745,10 @@ mod tests {
 
     #[test]
     fn f08_13_delete_to_forward_is_simple_remap() {
-        let settings = PresetSettings { delete_to_forward: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            delete_to_forward: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.simple_remaps.len(), 1);
         assert_eq!(rules.simple_remaps[0].from, KeyCode::DELETE);
@@ -583,7 +757,10 @@ mod tests {
 
     #[test]
     fn f08_14_shift_delete_uses_either_shift_hold() {
-        let settings = PresetSettings { shift_delete_to_forward: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            shift_delete_to_forward: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.combos.len(), 1);
         assert_eq!(rules.combos[0].hold, HoldCondition::EitherShift);
@@ -607,14 +784,23 @@ mod tests {
     #[test]
     fn f08_15_paste_trigger_maps_to_hold_condition() {
         let cases = [
-            (PasteTrigger::RightCommand, HoldCondition::Key(KeyCode::RIGHT_COMMAND)),
-            (PasteTrigger::LeftCommand, HoldCondition::Key(KeyCode::LEFT_COMMAND)),
+            (
+                PasteTrigger::RightCommand,
+                HoldCondition::Key(KeyCode::RIGHT_COMMAND),
+            ),
+            (
+                PasteTrigger::LeftCommand,
+                HoldCondition::Key(KeyCode::LEFT_COMMAND),
+            ),
             (PasteTrigger::EitherCommand, HoldCondition::EitherCommand),
             (PasteTrigger::HyperKey, HoldCondition::HyperActive),
         ];
         for (trigger, expected_hold) in cases {
             let settings = PresetSettings {
-                paste_without_formatting: PasteWithoutFormattingSettings { enabled: true, trigger },
+                paste_without_formatting: PasteWithoutFormattingSettings {
+                    enabled: true,
+                    trigger,
+                },
                 ..PresetSettings::default()
             };
             let rules = settings.to_rules(false);
@@ -622,20 +808,34 @@ mod tests {
             assert_eq!(rules.combos[0].trigger, KeyCode::ANSI_V);
             assert_eq!(
                 rules.combos[0].action,
-                RuleAction::Key { keycode: KeyCode::ANSI_V, flags: EventFlags::COMMAND | EventFlags::ALTERNATE | EventFlags::SHIFT }
+                RuleAction::Key {
+                    keycode: KeyCode::ANSI_V,
+                    flags: EventFlags::COMMAND | EventFlags::ALTERNATE | EventFlags::SHIFT
+                }
             );
         }
     }
 
     #[test]
     fn f08_16_home_end_produces_two_simple_remaps_with_command_flag() {
-        let settings = PresetSettings { home_end_on_lines: true, ..PresetSettings::default() };
+        let settings = PresetSettings {
+            home_end_on_lines: true,
+            ..PresetSettings::default()
+        };
         let rules = settings.to_rules(false);
         assert_eq!(rules.simple_remaps.len(), 2);
-        let home = rules.simple_remaps.iter().find(|r| r.from == KeyCode::HOME).unwrap();
+        let home = rules
+            .simple_remaps
+            .iter()
+            .find(|r| r.from == KeyCode::HOME)
+            .unwrap();
         assert_eq!(home.to, KeyCode::LEFT_ARROW);
         assert_eq!(home.add_flags, EventFlags::COMMAND);
-        let end = rules.simple_remaps.iter().find(|r| r.from == KeyCode::END).unwrap();
+        let end = rules
+            .simple_remaps
+            .iter()
+            .find(|r| r.from == KeyCode::END)
+            .unwrap();
         assert_eq!(end.to, KeyCode::RIGHT_ARROW);
         assert_eq!(end.add_flags, EventFlags::COMMAND);
     }
@@ -643,9 +843,9 @@ mod tests {
     #[test]
     fn combos_are_sorted_by_rule_id_ascending() {
         let settings = PresetSettings {
-            home_end_on_lines: true, // 계층4, id 아님(simple_remaps)
+            home_end_on_lines: true,       // 계층4, id 아님(simple_remaps)
             hyper_delete_to_forward: true, // Preset(12)
-            caps_space_enter: true, // Preset(4)
+            caps_space_enter: true,        // Preset(4)
             shift_delete_to_forward: true, // Preset(14)
             ..PresetSettings::default()
         };
@@ -671,15 +871,58 @@ mod tests {
     fn needs_caps_lock_alias_true_for_each_of_the_seven_presets() {
         let base = PresetSettings::default();
         assert!(!base.needs_caps_lock_alias(false));
-        assert!(base.needs_caps_lock_alias(true), "hyper 소스가 caps lock 이면 참");
+        assert!(
+            base.needs_caps_lock_alias(true),
+            "hyper 소스가 caps lock 이면 참"
+        );
 
-        assert!(PresetSettings { caps_lock_remap: CapsLockRemapSettings { enabled: true, ..Default::default() }, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { caps_quick_press: CapsQuickPressSettings { enabled: true, ..Default::default() }, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { caps_space_enter: true, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { caps_wasd_arrows: true, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { caps_hjkl_arrows: CapsHjklArrowsSettings { enabled: true, ..Default::default() }, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { caps_home_row: CapsHomeRowSettings { enabled: true, ..Default::default() }, ..base }.needs_caps_lock_alias(false));
-        assert!(PresetSettings { shift_caps_to_caps: true, ..base }.needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_lock_remap: CapsLockRemapSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_quick_press: CapsQuickPressSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_space_enter: true,
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_wasd_arrows: true,
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_hjkl_arrows: CapsHjklArrowsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            caps_home_row: CapsHomeRowSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(PresetSettings {
+            shift_caps_to_caps: true,
+            ..base
+        }
+        .needs_caps_lock_alias(false));
     }
 
     /// F-08.4(caps lock+space)는 어느 그룹과도 충돌하지 않는다는 것과는 별개로, 이 값도
@@ -688,8 +931,16 @@ mod tests {
     #[test]
     fn double_tap_and_left_right_shift_do_not_need_caps_lock_alias() {
         let base = PresetSettings::default();
-        assert!(!PresetSettings { double_tap_shift_to_caps: true, ..base }.needs_caps_lock_alias(false));
-        assert!(!PresetSettings { left_right_shift_to_caps: true, ..base }.needs_caps_lock_alias(false));
+        assert!(!PresetSettings {
+            double_tap_shift_to_caps: true,
+            ..base
+        }
+        .needs_caps_lock_alias(false));
+        assert!(!PresetSettings {
+            left_right_shift_to_caps: true,
+            ..base
+        }
+        .needs_caps_lock_alias(false));
     }
 
     // ── F-08 → 엔진 규칙 실 설정 통합 테스트 — 이슈 #19 회귀 방지 ────────────────────────
@@ -709,10 +960,16 @@ mod tests {
     #[test]
     fn caps_lock_remap_to_left_control_end_to_end_under_d1() {
         let settings = PresetSettings {
-            caps_lock_remap: CapsLockRemapSettings { enabled: true, target: RemapCapsTarget::LeftControl },
+            caps_lock_remap: CapsLockRemapSettings {
+                enabled: true,
+                target: RemapCapsTarget::LeftControl,
+            },
             ..PresetSettings::default()
         };
-        assert!(settings.needs_caps_lock_alias(false), "D-1 이 켜지는 구성이어야 한다");
+        assert!(
+            settings.needs_caps_lock_alias(false),
+            "D-1 이 켜지는 구성이어야 한다"
+        );
 
         let preset_rules = settings.to_rules(false);
         let mut cfg = EngineConfig::default();
@@ -725,7 +982,12 @@ mod tests {
         let mut arb = Arbiter::new(&cfg);
         let out = arb.arbitrate(
             &cfg,
-            &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::F18, flags: EventFlags::NONE, autorepeat: false },
+            &InputEvent {
+                kind: EventKind::KeyDown,
+                keycode: KeyCode::F18,
+                flags: EventFlags::NONE,
+                autorepeat: false,
+            },
             GateSnapshot::default(),
             Millis(0),
         );
@@ -736,7 +998,10 @@ mod tests {
         // 기대값의 출처는 macOS 헤더다: kCGEventFlagMaskControl = 0x00040000
         // (`CGEventTypes.h`), NX_DEVICELCTLKEYMASK = 0x00000001 (`IOKit/hidsystem/IOLLEvent.h`).
         const LEFT_CONTROL_HELD: u64 = 0x0004_0001;
-        assert_eq!(out.emitted()[0].flags.0 & LEFT_CONTROL_HELD, LEFT_CONTROL_HELD);
+        assert_eq!(
+            out.emitted()[0].flags.0 & LEFT_CONTROL_HELD,
+            LEFT_CONTROL_HELD
+        );
     }
 
     /// `Double tap shift = caps lock`(F-08.8) — architecture.md §6.1 의 D-1 목록에
@@ -745,8 +1010,14 @@ mod tests {
     /// 않는다는 것을 실 설정에서 끝까지 확인한다.
     #[test]
     fn double_tap_shift_preset_keeps_shift_working_end_to_end() {
-        let settings = PresetSettings { double_tap_shift_to_caps: true, ..PresetSettings::default() };
-        assert!(!settings.needs_caps_lock_alias(false), "F-08.8 은 D-1 을 켜지 않는다(architecture.md §6.1)");
+        let settings = PresetSettings {
+            double_tap_shift_to_caps: true,
+            ..PresetSettings::default()
+        };
+        assert!(
+            !settings.needs_caps_lock_alias(false),
+            "F-08.8 은 D-1 을 켜지 않는다(architecture.md §6.1)"
+        );
 
         let preset_rules = settings.to_rules(false);
         let mut cfg = EngineConfig::default();
@@ -776,7 +1047,12 @@ mod tests {
 
         let a_down = arb.arbitrate(
             &cfg,
-            &InputEvent { kind: EventKind::KeyDown, keycode: KeyCode::ANSI_A, flags: EventFlags::NONE, autorepeat: false },
+            &InputEvent {
+                kind: EventKind::KeyDown,
+                keycode: KeyCode::ANSI_A,
+                flags: EventFlags::NONE,
+                autorepeat: false,
+            },
             GateSnapshot::default(),
             Millis(10),
         );

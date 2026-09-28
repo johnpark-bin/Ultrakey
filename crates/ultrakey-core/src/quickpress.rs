@@ -46,9 +46,13 @@ pub enum QuickPressEvent {
 pub enum QuickPressState {
     #[default]
     Idle,
-    PendingDown { since: Millis },
+    PendingDown {
+        since: Millis,
+    },
     HoldConfirmed,
-    WaitingSecondTap { first_up_at: Millis },
+    WaitingSecondTap {
+        first_up_at: Millis,
+    },
     /// ⭐ M2/F-08 — 조합(계층 3)이 이 키를 트리거로 소비했다(`docs/dev/architecture.md`
     /// §6.4 P6·P7). 이 눌림에서는 quick press·double tap 을 내지 않는다 — keyUp 이 오면
     /// 조용히 `Idle` 로 돌아간다. 예: `Shift + caps lock = caps lock` 이 발화하면, 그
@@ -83,7 +87,10 @@ impl QuickPressState {
                     // 없는 경우)도 `PendingDown` 을 거쳐야 두 번째 탭을 감지할 수 있으므로,
                     // 이 조건에 `has_double_tap_action` 을 추가했다 — 빠뜨리면 double tap 판정
                     // 자체가 성립하지 않는다.
-                    (QuickPressState::HoldConfirmed, Some(QuickPressEvent::HoldStart))
+                    (
+                        QuickPressState::HoldConfirmed,
+                        Some(QuickPressEvent::HoldStart),
+                    )
                 } else {
                     (QuickPressState::PendingDown { since: now }, None)
                 }
@@ -126,7 +133,9 @@ impl QuickPressState {
                     (QuickPressState::Idle, Some(QuickPressEvent::HoldEnd))
                 }
             }
-            QuickPressState::HoldConfirmed => (QuickPressState::Idle, Some(QuickPressEvent::HoldEnd)),
+            QuickPressState::HoldConfirmed => {
+                (QuickPressState::Idle, Some(QuickPressEvent::HoldEnd))
+            }
             // M2/F-08 — Suppressed 상태에서 이 키 자신을 뗐다: 조용히 Idle 로 돌아간다.
             // 이벤트 없음(quick press/double tap 방출 금지) — architecture.md §6.4 P6.
             QuickPressState::Suppressed => (QuickPressState::Idle, None),
@@ -137,9 +146,10 @@ impl QuickPressState {
     /// **다른** 키의 keyDown 수신(§3-c 표 3행) — v1.62 예방의 핵심 지점.
     pub fn on_other_key_down(self) -> (Self, Option<QuickPressEvent>) {
         match self {
-            QuickPressState::PendingDown { .. } => {
-                (QuickPressState::HoldConfirmed, Some(QuickPressEvent::HoldStart))
-            }
+            QuickPressState::PendingDown { .. } => (
+                QuickPressState::HoldConfirmed,
+                Some(QuickPressEvent::HoldStart),
+            ),
             other => (other, None),
         }
     }
@@ -150,7 +160,10 @@ impl QuickPressState {
             QuickPressState::PendingDown { since }
                 if now.saturating_sub(since) >= cfg.quick_press_duration =>
             {
-                (QuickPressState::HoldConfirmed, Some(QuickPressEvent::HoldStart))
+                (
+                    QuickPressState::HoldConfirmed,
+                    Some(QuickPressEvent::HoldStart),
+                )
             }
             QuickPressState::WaitingSecondTap { first_up_at }
                 if now.saturating_sub(first_up_at) >= cfg.double_tap_interval =>
@@ -250,7 +263,9 @@ mod tests {
 
     #[test]
     fn waiting_second_tap_double_tap_confirmed_within_interval() {
-        let waiting = QuickPressState::WaitingSecondTap { first_up_at: Millis(100) };
+        let waiting = QuickPressState::WaitingSecondTap {
+            first_up_at: Millis(100),
+        };
         let (next, ev) = waiting.on_key_down(Millis(300), false, &cfg(true));
         assert_eq!(next, QuickPressState::Idle);
         assert_eq!(ev, Some(QuickPressEvent::DoubleTap));
@@ -258,7 +273,9 @@ mod tests {
 
     #[test]
     fn waiting_second_tap_timeout_emits_deferred_quick_press() {
-        let waiting = QuickPressState::WaitingSecondTap { first_up_at: Millis(0) };
+        let waiting = QuickPressState::WaitingSecondTap {
+            first_up_at: Millis(0),
+        };
         let (next, ev) = waiting.on_tick(Millis(300), &cfg(true));
         assert_eq!(next, QuickPressState::Idle);
         assert_eq!(ev, Some(QuickPressEvent::QuickPress));
@@ -277,7 +294,10 @@ mod tests {
     fn suppressed_on_key_up_returns_to_idle_without_event() {
         let (next, ev) = QuickPressState::Suppressed.on_key_up(Millis(10), &cfg(true));
         assert_eq!(next, QuickPressState::Idle);
-        assert_eq!(ev, None, "Suppressed 상태에서 뗌은 quick press/double tap 을 내면 안 된다");
+        assert_eq!(
+            ev, None,
+            "Suppressed 상태에서 뗌은 quick press/double tap 을 내면 안 된다"
+        );
     }
 
     #[test]

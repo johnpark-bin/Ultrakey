@@ -97,13 +97,7 @@ pub struct DisplayFrame {
 ///
 /// 명세 §3.2.3 의 4단계 수식을 그대로 옮긴 것이다.
 #[must_use]
-pub fn normalized_bbox_to_global(
-    frame: &DisplayFrame,
-    bx: f64,
-    by: f64,
-    bw: f64,
-    bh: f64,
-) -> Rect {
+pub fn normalized_bbox_to_global(frame: &DisplayFrame, bx: f64, by: f64, bw: f64, bh: f64) -> Rect {
     // 1) 좌하단 원점 → 좌상단 원점 (정규화 좌표 안에서 y 만 뒤집는다)
     let ty = 1.0 - by - bh;
 
@@ -295,7 +289,10 @@ mod tests {
         };
         let rect_zero = normalized_bbox_to_global(&zero_scale, 0.2, 0.2, 0.3, 0.3);
         let rect_one = normalized_bbox_to_global(&one_scale, 0.2, 0.2, 0.3, 0.3);
-        assert_eq!(rect_zero, rect_one, "scale=0.0 은 1.0 폴백과 동일한 결과를 내야 한다");
+        assert_eq!(
+            rect_zero, rect_one,
+            "scale=0.0 은 1.0 폴백과 동일한 결과를 내야 한다"
+        );
         assert!(rect_zero.x.is_finite());
         assert!(rect_zero.y.is_finite());
         assert!(rect_zero.width.is_finite());
@@ -307,8 +304,18 @@ mod tests {
     /// 겹치지 않는 두 사각형 — IoU·포함 비율 모두 0.
     #[test]
     fn rect_no_overlap_gives_zero_iou_and_containment() {
-        let a = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
-        let b = Rect { x: 20.0, y: 20.0, width: 10.0, height: 10.0 };
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let b = Rect {
+            x: 20.0,
+            y: 20.0,
+            width: 10.0,
+            height: 10.0,
+        };
         assert!(approx_eq(a.intersection_area(&b), 0.0));
         assert!(approx_eq(a.iou(&b), 0.0));
         assert!(approx_eq(a.containment_in(&b), 0.0));
@@ -318,8 +325,18 @@ mod tests {
     /// 완전 포함 — 작은 사각형이 큰 사각형 안에 완전히 들어간 경우.
     #[test]
     fn rect_full_containment() {
-        let outer = Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
-        let inner = Rect { x: 10.0, y: 10.0, width: 20.0, height: 20.0 };
+        let outer = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let inner = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 20.0,
+        };
         assert!(approx_eq(outer.intersection_area(&inner), 400.0));
         // inner 가 outer 안에 완전히 들어가므로 containment_in 은 1.0 이어야 한다.
         assert!(approx_eq(inner.containment_in(&outer), 1.0));
@@ -332,8 +349,18 @@ mod tests {
     /// 부분 겹침 — 손계산: 교집합 25, 합집합 175, IoU = 25/175.
     #[test]
     fn rect_partial_overlap() {
-        let a = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
-        let b = Rect { x: 5.0, y: 5.0, width: 10.0, height: 10.0 };
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let b = Rect {
+            x: 5.0,
+            y: 5.0,
+            width: 10.0,
+            height: 10.0,
+        };
         assert!(approx_eq(a.intersection_area(&b), 25.0));
         assert!(approx_eq(a.iou(&b), 25.0 / 175.0));
     }
@@ -341,8 +368,18 @@ mod tests {
     /// 넓이 0인 사각형 — 나눗셈이 안전하게 0을 반환해야 한다.
     #[test]
     fn rect_zero_area_is_safe() {
-        let zero = Rect { x: 5.0, y: 5.0, width: 0.0, height: 10.0 };
-        let other = Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 };
+        let zero = Rect {
+            x: 5.0,
+            y: 5.0,
+            width: 0.0,
+            height: 10.0,
+        };
+        let other = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
         assert!(approx_eq(zero.area(), 0.0));
         assert!(approx_eq(zero.intersection_area(&other), 0.0));
         assert!(approx_eq(zero.iou(&other), 0.0));
@@ -352,7 +389,12 @@ mod tests {
     /// 중심점 계산.
     #[test]
     fn rect_center() {
-        let r = Rect { x: 2.0, y: 4.0, width: 6.0, height: 8.0 };
+        let r = Rect {
+            x: 2.0,
+            y: 4.0,
+            width: 6.0,
+            height: 8.0,
+        };
         let (cx, cy) = r.center();
         assert!(approx_eq(cx, 5.0));
         assert!(approx_eq(cy, 8.0));

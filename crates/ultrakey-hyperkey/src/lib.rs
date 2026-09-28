@@ -592,7 +592,10 @@ mod tests {
     #[test]
     fn from_store_on_empty_store_matches_default() {
         let store = SettingsStore::in_memory();
-        assert_eq!(HyperkeySettings::from_store(&store), HyperkeySettings::default());
+        assert_eq!(
+            HyperkeySettings::from_store(&store),
+            HyperkeySettings::default()
+        );
     }
 
     // 9. hyperkey.includeShiftInHyper=false 만 저장된 스토어 → 그 필드만 바뀌고
@@ -626,18 +629,26 @@ mod tests {
 
         let settings = HyperkeySettings::from_store(&store);
 
-        assert!(!settings.hyper.enabled, "타입 불일치 값은 기본값으로 대체돼야 한다");
+        assert!(
+            !settings.hyper.enabled,
+            "타입 불일치 값은 기본값으로 대체돼야 한다"
+        );
         assert!(settings.meh.enabled, "다른 키는 영향받지 않아야 한다");
     }
 
-#[test]
-fn serde_uses_stable_variant_names_not_ui_labels() {
-    // ⭐ 저장 형식이 UI 표시 문자열에 결합되지 않았음을 못박는다.
-    // `SourceKey::label()` 은 "caps lock" 이지만 저장은 variant 이름이어야 한다.
-    let s = HyperkeySettings::default();
-    let json = serde_json::to_string(&s).unwrap();
-    assert!(json.contains("CapsLock"), "variant 이름으로 저장되어야 한다: {json}");
-    assert!(!json.contains("caps lock"), "UI 라벨이 저장 형식에 새어 나왔다: {json}");
-}
-
+    #[test]
+    fn serde_uses_stable_variant_names_not_ui_labels() {
+        // ⭐ 저장 형식이 UI 표시 문자열에 결합되지 않았음을 못박는다.
+        // `SourceKey::label()` 은 "caps lock" 이지만 저장은 variant 이름이어야 한다.
+        let s = HyperkeySettings::default();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("CapsLock"),
+            "variant 이름으로 저장되어야 한다: {json}"
+        );
+        assert!(
+            !json.contains("caps lock"),
+            "UI 라벨이 저장 형식에 새어 나왔다: {json}"
+        );
+    }
 }

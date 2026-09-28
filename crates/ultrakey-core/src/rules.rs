@@ -257,9 +257,9 @@ impl RuleTable {
 
     /// `k` 가 언어 AloneTap 규칙의 트리거인가 — 추적 슬롯(FSM) 등록 여부 판정에 쓴다.
     pub fn has_language_alone_tap(&self, k: KeyCode) -> bool {
-        self.language_rules.iter().any(|r| {
-            matches!(r.trigger, LanguageTrigger::AloneTap { key } if key == k)
-        })
+        self.language_rules
+            .iter()
+            .any(|r| matches!(r.trigger, LanguageTrigger::AloneTap { key } if key == k))
     }
 }
 

@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, RecvTimeoutError, Sender};
 
@@ -25,6 +25,9 @@ type TransitionCallback = dyn Fn(PermissionTransition) + Send + Sync;
 pub struct PermissionMonitor {
     model: Arc<Mutex<PermissionModel>>,
     on_transition: Arc<TransitionCallback>,
+    /// ⭐ 이슈 #149 D1 — `check_now`·`report_tap_create_failed` 가 모델에 주입할
+    /// monotonic ms 의 기준점(모니터 생성 시각).
+    baseline: Instant,
     /// 종료 신호. `stop()` 이 `&self` 를 받으므로 `Sender` 자체는 불변으로 두고
     /// 반복 호출에도 안전하게(수신자가 이미 사라졌으면 `send` 가 조용히 실패)
     /// 동작하게 한다.
@@ -48,6 +51,11 @@ impl PermissionMonitor {
         // 주기만큼만 블록한다.
         let (stop_tx, stop_rx) = bounded::<()>(0);
 
+        // ⭐ 이슈 #149 D1 — 순수 모델은 시스템 시계를 모르므로, 모니터 생성 시점을
+        // 기준점으로 잰 경과 ms 를 `observe_trusted` 에 주입한다. 폴링 루프·`check_now`·
+        // `report_tap_create_failed` 가 모두 이 한 기준점을 공유한다.
+        let baseline = Instant::now();
+        let thread_baseline = baseline;
         let thread_model = Arc::clone(&model);
         let thread_callback = Arc::clone(&on_transition);
         // ⚠️ 스레드에 이름을 준다 — 이 스레드가 어떤 콜백을 실행했는지가
@@ -58,6 +66,10 @@ impl PermissionMonitor {
             .name("ultrakey-permission-poll".to_string())
             .spawn(move || loop {
                 let trusted = ultrakey_platform::accessibility::is_process_trusted();
+                let now_ms = thread_baseline
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX)) as u64;
                 // ⚠️ 락을 놓은 뒤에 콜백을 호출한다. `on_transition` 은 결국
                 // `show_modal()` → tao `make_key_and_order_front_sync` → 메인
                 // 스레드로 동기 디스패치(블로킹)까지 이어진다. 그동안 메인
@@ -70,7 +82,7 @@ impl PermissionMonitor {
                     let mut guard = thread_model
                         .lock()
                         .expect("permission model mutex poisoned");
-                    let transition = guard.observe_trusted(trusted);
+                    let transition = guard.observe_trusted(trusted, now_ms);
                     (transition, guard.poll_mode())
                 };
                 if let Some(transition) = transition {
@@ -94,6 +106,7 @@ impl PermissionMonitor {
         PermissionMonitor {
             model,
             on_transition,
+            baseline,
             stop_tx,
             handle: Mutex::new(Some(handle)),
         }
@@ -114,9 +127,10 @@ impl PermissionMonitor {
     /// 교착으로 이어질 수 있다.
     pub fn check_now(&self) -> PermissionState {
         let trusted = ultrakey_platform::accessibility::is_process_trusted();
+        let now_ms = self.elapsed_ms();
         let (transition, state) = {
             let mut guard = self.model.lock().expect("permission model mutex poisoned");
-            let transition = guard.observe_trusted(trusted);
+            let transition = guard.observe_trusted(trusted, now_ms);
             (transition, guard.state())
         };
         if let Some(transition) = transition {
@@ -128,9 +142,10 @@ impl PermissionMonitor {
     /// ⚠️ 락을 놓은 뒤에 콜백을 호출한다(위 `check_now` 와 동일한 이유).
     pub fn report_tap_create_failed(&self) {
         let trusted = ultrakey_platform::accessibility::is_process_trusted();
+        let now_ms = self.elapsed_ms();
         let transition = {
             let mut guard = self.model.lock().expect("permission model mutex poisoned");
-            guard.observe_tap_create_failed(trusted)
+            guard.observe_tap_create_failed(trusted, now_ms)
         };
         if let Some(transition) = transition {
             (self.on_transition)(transition);
@@ -146,6 +161,16 @@ impl PermissionMonitor {
         if let Some(transition) = transition {
             (self.on_transition)(transition);
         }
+    }
+
+    /// ⭐ 이슈 #149 D1 — `baseline` 이후 경과 ms(`u64` 포화). 폴링 루프·`check_now`·
+    /// `report_tap_create_failed` 가 모델(`observe_trusted`/`observe_tap_create_failed`)에
+    /// 주입하는 monotonic 시각이다.
+    fn elapsed_ms(&self) -> u64 {
+        self.baseline
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
     }
 
     /// 폴링 스레드를 종료한다. 여러 번 호출해도 안전하다(두 번째 호출부터는

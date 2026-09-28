@@ -144,10 +144,7 @@ pub const MODIFIER_KEYS: [KeyCode; 10] = [
 /// 눌려 있으면 발화하지 않는다.
 ///
 /// 반환값은 `Some(소문자)` — `None` 이면 발화 조건이 아니다.
-pub fn lowercase_action_for(
-    keycode: KeyCode,
-    pressed: &dyn Fn(KeyCode) -> bool,
-) -> Option<char> {
+pub fn lowercase_action_for(keycode: KeyCode, pressed: &dyn Fn(KeyCode) -> bool) -> Option<char> {
     // ① trigger_key 가 ANSI 문자 키(A~Z, 0x00~0x0C·0x0D..0x20 의 문자 구간)인가.
     let c = char_of_letter_key(keycode)?;
     // ② 어떤 modifier 가 눌려 있는가 — 하나도 없으면 조건이 아니다(F-16.4 영역).
@@ -323,7 +320,12 @@ mod tests {
             (KeyCode::ANSI_N, 'N'),
             (KeyCode::ANSI_M, 'M'),
         ] {
-            assert_eq!(char_of_letter_key(keycode), Some(expected), "keycode {:#04X}", keycode.0);
+            assert_eq!(
+                char_of_letter_key(keycode),
+                Some(expected),
+                "keycode {:#04X}",
+                keycode.0
+            );
         }
 
         // 문자 키가 아닌 것 — 전부 None.

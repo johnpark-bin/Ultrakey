@@ -75,7 +75,10 @@ pub struct SpikeChannel {
 
 impl SpikeChannel {
     fn new() -> Self {
-        Self { ack_tx: Mutex::new(None), ready_tx: Mutex::new(None) }
+        Self {
+            ack_tx: Mutex::new(None),
+            ready_tx: Mutex::new(None),
+        }
     }
 
     fn send_ack(&self, ack: SpikeAck) {
@@ -110,7 +113,12 @@ pub fn overlay_spike_ack(
     build_ms: f64,
     paint_ms: f64,
 ) {
-    channel.send_ack(SpikeAck { seq, label, build_ms, paint_ms });
+    channel.send_ack(SpikeAck {
+        seq,
+        label,
+        build_ms,
+        paint_ms,
+    });
 }
 
 /// 스파이크 창이 리스너 등록을 마쳤다고 알린다.
@@ -192,7 +200,11 @@ pub fn start(app: &tauri::AppHandle) {
         .expect("스파이크 스레드를 만들지 못했다");
 }
 
-type SpikeWindow = (String, tauri::WebviewWindow, ultrakey_platform::screen_capture::DisplayGeometry);
+type SpikeWindow = (
+    String,
+    tauri::WebviewWindow,
+    ultrakey_platform::screen_capture::DisplayGeometry,
+);
 
 fn drive(
     app: &tauri::AppHandle,
@@ -214,14 +226,20 @@ fn drive(
         }
     }
     if ready < windows.len() {
-        tracing::error!(ready, total = windows.len(), "some windows are not ready; continuing anyway");
+        tracing::error!(
+            ready,
+            total = windows.len(),
+            "some windows are not ready; continuing anyway"
+        );
     }
     // 웹뷰 첫 프레임 합성이 끝나도록 잠깐 둔다(콜드 비용을 WARMUP 이 아니라
     // 여기서 흡수시킨다).
     std::thread::sleep(Duration::from_millis(800));
 
     let mut report = String::new();
-    report.push_str("| 렌더러 | 후보 수 | 왕복 중앙값 | 왕복 p95 | 왕복 최대 | build 중앙값 | paint 중앙값 |\n");
+    report.push_str(
+        "| 렌더러 | 후보 수 | 왕복 중앙값 | 왕복 p95 | 왕복 최대 | build 중앙값 | paint 중앙값 |\n",
+    );
     report.push_str("| :--- | ---: | ---: | ---: | ---: | ---: | ---: |\n");
 
     let mut seq: u64 = 0;
@@ -240,7 +258,10 @@ fn drive(
                     .iter()
                     .enumerate()
                     .map(|(i, (_, _, g))| {
-                        (i, make_frame(seq, mode, count, g.width_pt, g.height_pt, rep))
+                        (
+                            i,
+                            make_frame(seq, mode, count, g.width_pt, g.height_pt, rep),
+                        )
                     })
                     .collect();
 
@@ -327,7 +348,11 @@ fn drive(
         }
     }
 
-    tracing::info!("\n=== F-03 P3 measurement ({} windows) ===\n{}", windows.len(), report);
+    tracing::info!(
+        "\n=== F-03 P3 measurement ({} windows) ===\n{}",
+        windows.len(),
+        report
+    );
     write_report(&windows, &report);
 
     // 창을 치우고 프로세스를 끝낸다 — 스파이크는 제품 세션이 아니다.
@@ -341,7 +366,9 @@ fn drive(
 /// 결과를 로그 디렉터리에 마크다운으로도 떨어뜨린다 — `open` 으로 띄우면
 /// stderr 가 사라지므로 파일이 유일하게 확실한 산출물이다.
 fn write_report(windows: &[SpikeWindow], report: &str) {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let dir = std::path::Path::new(&home).join("Library/Logs/Ultrakey");
     let _ = std::fs::create_dir_all(&dir);
     let mut body = String::new();
@@ -369,7 +396,10 @@ fn make_frame(
 ) -> SpikeFrame {
     let mut items = Vec::with_capacity(count);
     // 결정론적인 유사 난수 — 시행마다 좌표가 달라야 레이아웃 재사용을 막는다.
-    let mut s = (seq.wrapping_mul(6364136223846793005).wrapping_add(salt as u64 | 1)) | 1;
+    let mut s = (seq
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(salt as u64 | 1))
+        | 1;
     let mut next = || {
         s ^= s << 13;
         s ^= s >> 7;
@@ -388,8 +418,15 @@ fn make_frame(
             label: format!("match {i}"),
         });
     }
-    let line = items.first().map(|it| [width / 2.0, 60.0, it.x + it.w / 2.0, it.y]);
-    SpikeFrame { seq, mode, items, line }
+    let line = items
+        .first()
+        .map(|it| [width / 2.0, 60.0, it.x + it.w / 2.0, it.y]);
+    SpikeFrame {
+        seq,
+        mode,
+        items,
+        line,
+    }
 }
 
 fn median(v: &mut [f64]) -> f64 {

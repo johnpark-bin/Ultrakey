@@ -36,8 +36,8 @@ mod macos_impl {
     use core::ffi::c_void;
     use core::ptr::NonNull;
     use objc2_core_foundation::{
-        CFArray, CFDictionary, CFNotificationCenter, CFNotificationName,
-        CFNotificationSuspensionBehavior, CFBoolean, CFData, CFString,
+        CFArray, CFBoolean, CFData, CFDictionary, CFNotificationCenter, CFNotificationName,
+        CFNotificationSuspensionBehavior, CFString,
     };
     use ultrakey_core::keycode::KeyCode;
 
@@ -54,10 +54,8 @@ mod macos_impl {
         // SAFETY: `src` 는 위에서 확인한 유효한 포인터다. `TISGetInputSourceProperty`
         // 는 Get 규칙이라 반환값을 release 하면 안 된다.
         let is_ascii_capable = unsafe {
-            let prop = ffi::TISGetInputSourceProperty(
-                src,
-                ffi::kTISPropertyInputSourceIsASCIICapable,
-            );
+            let prop =
+                ffi::TISGetInputSourceProperty(src, ffi::kTISPropertyInputSourceIsASCIICapable);
             if prop.is_null() {
                 false
             } else {
@@ -85,8 +83,7 @@ mod macos_impl {
         // 순회(`iter()`)가 각 `CFString` 을 일시적으로 retain 했다가 `to_string()`
         // 뒤 곧바로 drop 하므로, 배열 자체를 건드리지 않는 한 안전하다.
         let original_languages = unsafe {
-            let prop =
-                ffi::TISGetInputSourceProperty(src, ffi::kTISPropertyInputSourceLanguages);
+            let prop = ffi::TISGetInputSourceProperty(src, ffi::kTISPropertyInputSourceLanguages);
             if prop.is_null() {
                 Vec::new()
             } else {
@@ -259,9 +256,7 @@ mod macos_impl {
     // 핸들 자체를 다른 스레드로 옮겨 보관하는 것은 안전하다.
     unsafe impl Send for InputSourceObserver {}
 
-    pub fn observe_input_source_changes(
-        cb: Box<dyn Fn() + Send + Sync>,
-    ) -> InputSourceObserver {
+    pub fn observe_input_source_changes(cb: Box<dyn Fn() + Send + Sync>) -> InputSourceObserver {
         let ctx_ptr = Box::into_raw(Box::new(ObserverContext { callback: cb }));
 
         if let Some(center) = CFNotificationCenter::distributed_center() {
@@ -306,7 +301,9 @@ mod macos_impl {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos_impl::{current_layout, observe_input_source_changes, translate, InputSourceObserver};
+pub use macos_impl::{
+    current_layout, observe_input_source_changes, translate, InputSourceObserver,
+};
 
 #[cfg(not(target_os = "macos"))]
 mod stub_impl {
@@ -328,9 +325,7 @@ mod stub_impl {
 
     pub struct InputSourceObserver(core::convert::Infallible);
 
-    pub fn observe_input_source_changes(
-        _cb: Box<dyn Fn() + Send + Sync>,
-    ) -> InputSourceObserver {
+    pub fn observe_input_source_changes(_cb: Box<dyn Fn() + Send + Sync>) -> InputSourceObserver {
         panic!("ultrakey-platform: observe_input_source_changes 는 macOS 전용이다")
     }
 }

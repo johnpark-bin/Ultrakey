@@ -33,8 +33,10 @@ const DISABLE_CAPS_LOCK_REMAP: &[&str] = &[keys::PRESETS_CAPS_LOCK_REMAP_ENABLED
 const DISABLE_HJKL: &[&str] = &[keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED];
 const DISABLE_WASD: &[&str] = &[keys::PRESETS_CAPS_WASD_ARROWS];
 const DISABLE_HOME_ROW: &[&str] = &[keys::PRESETS_CAPS_HOME_ROW_ENABLED];
-const DISABLE_WASD_AND_HJKL: &[&str] =
-    &[keys::PRESETS_CAPS_WASD_ARROWS, keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED];
+const DISABLE_WASD_AND_HJKL: &[&str] = &[
+    keys::PRESETS_CAPS_WASD_ARROWS,
+    keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED,
+];
 
 /// 이 설정 키를 이 값으로 바꾸려 할 때 발생하는 충돌. 없으면 `None`.
 ///
@@ -82,9 +84,15 @@ pub fn detect_conflict(
 
         k if k == keys::PRESETS_CAPS_WASD_ARROWS => {
             if current.caps_home_row.enabled {
-                Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_HOME_ROW.to_vec() })
+                Some(Conflict {
+                    kind: ConflictKind::CapsLockHomeRow,
+                    to_disable: DISABLE_HOME_ROW.to_vec(),
+                })
             } else if current.caps_hjkl_arrows.enabled {
-                Some(Conflict { kind: ConflictKind::CapsLockArrows, to_disable: DISABLE_HJKL.to_vec() })
+                Some(Conflict {
+                    kind: ConflictKind::CapsLockArrows,
+                    to_disable: DISABLE_HJKL.to_vec(),
+                })
             } else {
                 None
             }
@@ -92,9 +100,15 @@ pub fn detect_conflict(
 
         k if k == keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED => {
             if current.caps_home_row.enabled {
-                Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_HOME_ROW.to_vec() })
+                Some(Conflict {
+                    kind: ConflictKind::CapsLockHomeRow,
+                    to_disable: DISABLE_HOME_ROW.to_vec(),
+                })
             } else if current.caps_wasd_arrows {
-                Some(Conflict { kind: ConflictKind::CapsLockArrows, to_disable: DISABLE_WASD.to_vec() })
+                Some(Conflict {
+                    kind: ConflictKind::CapsLockArrows,
+                    to_disable: DISABLE_WASD.to_vec(),
+                })
             } else {
                 None
             }
@@ -102,11 +116,18 @@ pub fn detect_conflict(
 
         k if k == keys::PRESETS_CAPS_HOME_ROW_ENABLED => {
             match (current.caps_wasd_arrows, current.caps_hjkl_arrows.enabled) {
-                (true, true) => {
-                    Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_WASD_AND_HJKL.to_vec() })
-                }
-                (true, false) => Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_WASD.to_vec() }),
-                (false, true) => Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_HJKL.to_vec() }),
+                (true, true) => Some(Conflict {
+                    kind: ConflictKind::CapsLockHomeRow,
+                    to_disable: DISABLE_WASD_AND_HJKL.to_vec(),
+                }),
+                (true, false) => Some(Conflict {
+                    kind: ConflictKind::CapsLockHomeRow,
+                    to_disable: DISABLE_WASD.to_vec(),
+                }),
+                (false, true) => Some(Conflict {
+                    kind: ConflictKind::CapsLockHomeRow,
+                    to_disable: DISABLE_HJKL.to_vec(),
+                }),
                 (false, false) => None,
             }
         }
@@ -181,7 +202,10 @@ mod tests {
                 to_disable: vec![keys::PRESETS_CAPS_LOCK_REMAP_ENABLED],
             })
         );
-        assert_eq!(detect_modifier_slot_conflict(&PresetSettings::default()), None);
+        assert_eq!(
+            detect_modifier_slot_conflict(&PresetSettings::default()),
+            None
+        );
     }
 
     /// R2 예외 — caps lock 조합 프리셋(WASD 등)은 hyper 소스가 caps lock 이어도 충돌이
@@ -189,40 +213,95 @@ mod tests {
     #[test]
     fn caps_lock_combo_presets_do_not_conflict_with_hyper_source() {
         let current = PresetSettings::default();
-        assert_eq!(detect_conflict(&current, &[keys::HYPERKEY_HYPER_ENABLED], keys::PRESETS_CAPS_WASD_ARROWS, true), None);
-        assert_eq!(detect_conflict(&current, &[keys::HYPERKEY_HYPER_ENABLED], keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED, true), None);
-        assert_eq!(detect_conflict(&current, &[keys::HYPERKEY_HYPER_ENABLED], keys::PRESETS_CAPS_HOME_ROW_ENABLED, true), None);
+        assert_eq!(
+            detect_conflict(
+                &current,
+                &[keys::HYPERKEY_HYPER_ENABLED],
+                keys::PRESETS_CAPS_WASD_ARROWS,
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            detect_conflict(
+                &current,
+                &[keys::HYPERKEY_HYPER_ENABLED],
+                keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED,
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            detect_conflict(
+                &current,
+                &[keys::HYPERKEY_HYPER_ENABLED],
+                keys::PRESETS_CAPS_HOME_ROW_ENABLED,
+                true
+            ),
+            None
+        );
     }
 
     #[test]
     fn caps_lock_arrows_conflict_both_directions() {
         let hjkl_on = PresetSettings {
-            caps_hjkl_arrows: crate::settings::CapsHjklArrowsSettings { enabled: true, ..Default::default() },
+            caps_hjkl_arrows: crate::settings::CapsHjklArrowsSettings {
+                enabled: true,
+                ..Default::default()
+            },
             ..PresetSettings::default()
         };
         let conflict = detect_conflict(&hjkl_on, &[], keys::PRESETS_CAPS_WASD_ARROWS, true);
-        assert_eq!(conflict, Some(Conflict { kind: ConflictKind::CapsLockArrows, to_disable: DISABLE_HJKL.to_vec() }));
+        assert_eq!(
+            conflict,
+            Some(Conflict {
+                kind: ConflictKind::CapsLockArrows,
+                to_disable: DISABLE_HJKL.to_vec()
+            })
+        );
 
-        let wasd_on = PresetSettings { caps_wasd_arrows: true, ..PresetSettings::default() };
-        let conflict2 = detect_conflict(&wasd_on, &[], keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED, true);
-        assert_eq!(conflict2, Some(Conflict { kind: ConflictKind::CapsLockArrows, to_disable: DISABLE_WASD.to_vec() }));
+        let wasd_on = PresetSettings {
+            caps_wasd_arrows: true,
+            ..PresetSettings::default()
+        };
+        let conflict2 =
+            detect_conflict(&wasd_on, &[], keys::PRESETS_CAPS_HJKL_ARROWS_ENABLED, true);
+        assert_eq!(
+            conflict2,
+            Some(Conflict {
+                kind: ConflictKind::CapsLockArrows,
+                to_disable: DISABLE_WASD.to_vec()
+            })
+        );
     }
 
     #[test]
     fn caps_lock_home_row_conflict_against_wasd_and_hjkl() {
-        let wasd_on = PresetSettings { caps_wasd_arrows: true, ..PresetSettings::default() };
+        let wasd_on = PresetSettings {
+            caps_wasd_arrows: true,
+            ..PresetSettings::default()
+        };
         assert_eq!(
             detect_conflict(&wasd_on, &[], keys::PRESETS_CAPS_HOME_ROW_ENABLED, true),
-            Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_WASD.to_vec() })
+            Some(Conflict {
+                kind: ConflictKind::CapsLockHomeRow,
+                to_disable: DISABLE_WASD.to_vec()
+            })
         );
 
         let home_row_on = PresetSettings {
-            caps_home_row: crate::settings::CapsHomeRowSettings { enabled: true, ..Default::default() },
+            caps_home_row: crate::settings::CapsHomeRowSettings {
+                enabled: true,
+                ..Default::default()
+            },
             ..PresetSettings::default()
         };
         assert_eq!(
             detect_conflict(&home_row_on, &[], keys::PRESETS_CAPS_WASD_ARROWS, true),
-            Some(Conflict { kind: ConflictKind::CapsLockHomeRow, to_disable: DISABLE_HOME_ROW.to_vec() })
+            Some(Conflict {
+                kind: ConflictKind::CapsLockHomeRow,
+                to_disable: DISABLE_HOME_ROW.to_vec()
+            })
         );
     }
 
@@ -231,16 +310,38 @@ mod tests {
     fn caps_space_enter_never_conflicts() {
         let everything_on = PresetSettings {
             caps_wasd_arrows: true,
-            caps_hjkl_arrows: crate::settings::CapsHjklArrowsSettings { enabled: true, ..Default::default() },
-            caps_home_row: crate::settings::CapsHomeRowSettings { enabled: true, ..Default::default() },
+            caps_hjkl_arrows: crate::settings::CapsHjklArrowsSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            caps_home_row: crate::settings::CapsHomeRowSettings {
+                enabled: true,
+                ..Default::default()
+            },
             ..PresetSettings::default()
         };
-        assert_eq!(detect_conflict(&everything_on, &[keys::HYPERKEY_HYPER_ENABLED], keys::PRESETS_CAPS_SPACE_ENTER, true), None);
+        assert_eq!(
+            detect_conflict(
+                &everything_on,
+                &[keys::HYPERKEY_HYPER_ENABLED],
+                keys::PRESETS_CAPS_SPACE_ENTER,
+                true
+            ),
+            None
+        );
     }
 
     #[test]
     fn turning_off_never_conflicts() {
         let current = PresetSettings::default();
-        assert_eq!(detect_conflict(&current, &[keys::HYPERKEY_HYPER_ENABLED], keys::PRESETS_CAPS_LOCK_REMAP_ENABLED, false), None);
+        assert_eq!(
+            detect_conflict(
+                &current,
+                &[keys::HYPERKEY_HYPER_ENABLED],
+                keys::PRESETS_CAPS_LOCK_REMAP_ENABLED,
+                false
+            ),
+            None
+        );
     }
 }

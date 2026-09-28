@@ -160,7 +160,9 @@ impl AppGateController {
                     .any(|id| id == &app.bundle_id),
                 None => false,
             };
-        self.gate.korean_disabled.store(korean_disabled, Ordering::Release);
+        self.gate
+            .korean_disabled
+            .store(korean_disabled, Ordering::Release);
 
         // ⭐ D-7 — japanese/chinese 도 같은 계산 (독립 목록).
         let japanese_disabled = state.japanese_exclusion_enabled
@@ -190,14 +192,20 @@ impl AppGateController {
 
     /// `NSWorkspaceDidActivateApplicationNotification` 수신 시 호출(§3-f).
     pub fn set_front_app(&self, ident: Option<AppIdentity>) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.front_app = ident;
         self.republish(&state);
     }
 
     /// 설정 변경(비활성화 목록 전체 교체) 시 호출.
     pub fn set_disabled_apps(&self, bundle_ids: Vec<String>) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.disabled_apps = bundle_ids;
         self.republish(&state);
     }
@@ -205,7 +213,10 @@ impl AppGateController {
     /// ⭐ D-K3 — "원격 데스크톱 클라이언트에서 한국어 키 처리 끄기" 체크박스(명세 §4.2
     /// 항목 5). 기본값은 `AppGateController::new` 가 이미 `true` 로 채운다.
     pub fn set_korean_exclusion_enabled(&self, enabled: bool) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.korean_exclusion_enabled = enabled;
         self.republish(&state);
     }
@@ -213,14 +224,20 @@ impl AppGateController {
     /// ⭐ D-K3 — 한국어 전용 앱 제외 목록 전체 교체. 목록 자체는 `ultrakey-korean` 이
     /// 소유한다(`default_excluded_bundle_ids()`) — 이 크레이트는 정책을 모른다.
     pub fn set_korean_excluded_apps(&self, bundle_ids: Vec<String>) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.korean_excluded_bundle_ids = bundle_ids;
         self.republish(&state);
     }
 
     /// ⭐ D-7 — "원격 데스크톱 클라이언트에서 일본어 키 처리 끄기" 켜짐/끔(F-19.3·F-19.4).
     pub fn set_japanese_exclusion_enabled(&self, enabled: bool) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.japanese_exclusion_enabled = enabled;
         self.republish(&state);
     }
@@ -228,21 +245,30 @@ impl AppGateController {
     /// ⭐ D-7 — 일본어 전용 앱 제외 목록 전체 교체. 목록은 `ultrakey-language-presets`
     /// 가 소유한다(korean 형 재사용).
     pub fn set_japanese_excluded_apps(&self, bundle_ids: Vec<String>) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.japanese_excluded_bundle_ids = bundle_ids;
         self.republish(&state);
     }
 
     /// ⭐ D-7 — "원격 데스크톱 클라이언트에서 중국어 키 처리 끄기" 켜짐/끔(F-19.7).
     pub fn set_chinese_exclusion_enabled(&self, enabled: bool) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.chinese_exclusion_enabled = enabled;
         self.republish(&state);
     }
 
     /// ⭐ D-7 — 중국어 전용 앱 제외 목록 전체 교체.
     pub fn set_chinese_excluded_apps(&self, bundle_ids: Vec<String>) {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         state.chinese_excluded_bundle_ids = bundle_ids;
         self.republish(&state);
     }
@@ -250,7 +276,10 @@ impl AppGateController {
     /// 메뉴바 `Ignore <최전면앱>` (M3 UI 가 호출) — 현재 최전면 앱을 목록에 넣거나 뺀다.
     /// 반환값은 "토글 후 그 앱이 비활성화 상태인가".
     pub fn toggle_front_app(&self) -> bool {
-        let mut state = self.state.lock().expect("AppGateController 뮤텍스가 오염되었다");
+        let mut state = self
+            .state
+            .lock()
+            .expect("AppGateController 뮤텍스가 오염되었다");
         let Some(bundle_id) = state.front_app.as_ref().map(|a| a.bundle_id.clone()) else {
             // 최전면 앱 정보가 없으면 토글할 대상이 없다 — 조용히 무시.
             return false;
@@ -316,7 +345,10 @@ mod tests {
         let now_disabled = ctrl.toggle_front_app();
         assert!(now_disabled);
         assert!(gate.is_remapping_disabled());
-        assert_eq!(ctrl.disabled_apps(), vec!["com.example.Ghostty".to_string()]);
+        assert_eq!(
+            ctrl.disabled_apps(),
+            vec!["com.example.Ghostty".to_string()]
+        );
 
         let now_disabled2 = ctrl.toggle_front_app();
         assert!(!now_disabled2);

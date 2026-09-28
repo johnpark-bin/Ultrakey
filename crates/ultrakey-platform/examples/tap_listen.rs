@@ -38,7 +38,7 @@ fn main() {}
 
 #[cfg(target_os = "macos")]
 fn main() {
-    use objc2_core_foundation::{CFMachPort, CFRunLoop, kCFRunLoopCommonModes, CFRunLoopSource};
+    use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRunLoop, CFRunLoopSource};
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventMask, CGEventTapLocation, CGEventTapOptions,
         CGEventTapPlacement, CGEventTapProxy, CGEventType,
@@ -52,20 +52,13 @@ fn main() {
         _ud: *mut c_void,
     ) -> *mut CGEvent {
         let ev = unsafe { event.as_ref() };
-        let keycode =
-            CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode);
+        let keycode = CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode);
         let flags = CGEvent::flags(Some(ev)).0;
-        let src_ud =
-            CGEvent::integer_value_field(Some(ev), CGEventField::EventSourceUserData);
+        let src_ud = CGEvent::integer_value_field(Some(ev), CGEventField::EventSourceUserData);
         let mut len: core::ffi::c_ulong = 0;
         let mut buf = [0u16; 8];
         unsafe {
-            CGEvent::keyboard_get_unicode_string(
-                Some(ev),
-                8,
-                &mut len,
-                buf.as_mut_ptr(),
-            );
+            CGEvent::keyboard_get_unicode_string(Some(ev), 8, &mut len, buf.as_mut_ptr());
         }
         let s: String = String::from_utf16_lossy(&buf[..len as usize]);
         println!(
@@ -92,10 +85,11 @@ fn main() {
         eprintln!("탭 생성 실패 — Accessibility 권한을 확인한다");
         std::process::exit(1);
     };
-    let source = CFMachPort::new_run_loop_source(None, Some(&port), 0)
-        .expect("run loop source");
+    let source = CFMachPort::new_run_loop_source(None, Some(&port), 0).expect("run loop source");
     let rl = CFRunLoop::current().expect("run loop");
-    rl.add_source(Some::<&CFRunLoopSource>(&source), unsafe { kCFRunLoopCommonModes });
+    rl.add_source(Some::<&CFRunLoopSource>(&source), unsafe {
+        kCFRunLoopCommonModes
+    });
     CGEvent::tap_enable(&port, true);
     eprintln!("listening…");
     CFRunLoop::run();

@@ -11,12 +11,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod conflicts;
 pub mod popups;
 pub mod rules;
 pub mod settings;
-pub mod conflicts;
 
+pub use conflicts::{detect_conflict, detect_modifier_slot_conflict, Conflict, ConflictKind};
 pub use popups::*;
 pub use rules::PresetRules;
 pub use settings::PresetSettings;
-pub use conflicts::{detect_conflict, detect_modifier_slot_conflict, Conflict, ConflictKind};

@@ -75,9 +75,8 @@ mod macos_impl {
         let connect = connection()?;
         let mut state = false;
         // SAFETY: `connect` 는 `open_connection` 이 확인한 유효한 연결이다.
-        let result = unsafe {
-            ffi::IOHIDGetModifierLockState(connect, K_IOHID_CAPS_LOCK_STATE, &mut state)
-        };
+        let result =
+            unsafe { ffi::IOHIDGetModifierLockState(connect, K_IOHID_CAPS_LOCK_STATE, &mut state) };
         if result == 0 {
             Some(state)
         } else {

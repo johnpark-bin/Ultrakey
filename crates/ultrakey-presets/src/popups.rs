@@ -76,10 +76,55 @@ impl RemapCapsTarget {
     pub fn all() -> &'static [RemapCapsTarget] {
         use RemapCapsTarget::*;
         &[
-            Esc, Nothing, LeftControl, LeftShift, LeftOption, LeftCommand, RightControl, RightShift,
-            RightOption, RightCommand, Return, Delete, DeleteForward, Tab, Spacebar, Home, End, PageUp,
-            PageDown, LeftArrow, RightArrow, UpArrow, DownArrow, Mute, VolumeUp, VolumeDown, F1, F2, F3,
-            F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20, F21, F22, F23,
+            Esc,
+            Nothing,
+            LeftControl,
+            LeftShift,
+            LeftOption,
+            LeftCommand,
+            RightControl,
+            RightShift,
+            RightOption,
+            RightCommand,
+            Return,
+            Delete,
+            DeleteForward,
+            Tab,
+            Spacebar,
+            Home,
+            End,
+            PageUp,
+            PageDown,
+            LeftArrow,
+            RightArrow,
+            UpArrow,
+            DownArrow,
+            Mute,
+            VolumeUp,
+            VolumeDown,
+            F1,
+            F2,
+            F3,
+            F4,
+            F5,
+            F6,
+            F7,
+            F8,
+            F9,
+            F10,
+            F11,
+            F12,
+            F13,
+            F14,
+            F15,
+            F16,
+            F17,
+            F18,
+            F19,
+            F20,
+            F21,
+            F22,
+            F23,
             F24,
         ]
     }
@@ -205,8 +250,10 @@ impl RemapCapsTarget {
         if matches!(self, RemapCapsTarget::Nothing) {
             return Some(RuleAction::Nothing);
         }
-        self.keycode()
-            .map(|keycode| RuleAction::Key { keycode, flags: EventFlags::NONE })
+        self.keycode().map(|keycode| RuleAction::Key {
+            keycode,
+            flags: EventFlags::NONE,
+        })
     }
 }
 
@@ -278,10 +325,53 @@ impl QuickPressCapsAction {
     pub fn all() -> &'static [QuickPressCapsAction] {
         use QuickPressCapsAction::*;
         &[
-            Seek, Esc, CapsLock, LeftControl, LeftShift, LeftOption, LeftCommand, RightControl,
-            RightShift, RightOption, RightCommand, Return, Delete, DeleteForward, Tab, Spacebar, Home,
-            End, PageUp, PageDown, LeftArrow, RightArrow, UpArrow, DownArrow, Mute, VolumeUp, VolumeDown,
-            F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15, F16, F17, F18, F19, F20,
+            Seek,
+            Esc,
+            CapsLock,
+            LeftControl,
+            LeftShift,
+            LeftOption,
+            LeftCommand,
+            RightControl,
+            RightShift,
+            RightOption,
+            RightCommand,
+            Return,
+            Delete,
+            DeleteForward,
+            Tab,
+            Spacebar,
+            Home,
+            End,
+            PageUp,
+            PageDown,
+            LeftArrow,
+            RightArrow,
+            UpArrow,
+            DownArrow,
+            Mute,
+            VolumeUp,
+            VolumeDown,
+            F1,
+            F2,
+            F3,
+            F4,
+            F5,
+            F6,
+            F7,
+            F8,
+            F9,
+            F10,
+            F11,
+            F12,
+            F13,
+            F14,
+            F15,
+            F16,
+            F17,
+            F18,
+            F19,
+            F20,
             Slash,
         ]
     }
@@ -399,7 +489,10 @@ impl QuickPressCapsAction {
 }
 
 fn key(keycode: KeyCode) -> RuleAction {
-    RuleAction::Key { keycode, flags: EventFlags::NONE }
+    RuleAction::Key {
+        keycode,
+        flags: EventFlags::NONE,
+    }
 }
 
 /// `Caps lock +` [팝업] ` = ◀▼▲▶`(F-08.6) — 방향키 트리거 키셋 2종.
@@ -426,8 +519,18 @@ impl ArrowKeySet {
     /// (◀, ▼, ▲, ▶) 순서로 트리거 키코드 4개 — vim 방향 관례.
     pub fn keys(self) -> (KeyCode, KeyCode, KeyCode, KeyCode) {
         match self {
-            ArrowKeySet::Hjkl => (KeyCode::ANSI_H, KeyCode::ANSI_J, KeyCode::ANSI_K, KeyCode::ANSI_L),
-            ArrowKeySet::Ijkl => (KeyCode::ANSI_I, KeyCode::ANSI_J, KeyCode::ANSI_K, KeyCode::ANSI_L),
+            ArrowKeySet::Hjkl => (
+                KeyCode::ANSI_H,
+                KeyCode::ANSI_J,
+                KeyCode::ANSI_K,
+                KeyCode::ANSI_L,
+            ),
+            ArrowKeySet::Ijkl => (
+                KeyCode::ANSI_I,
+                KeyCode::ANSI_J,
+                KeyCode::ANSI_K,
+                KeyCode::ANSI_L,
+            ),
         }
     }
 }
@@ -463,7 +566,12 @@ pub enum BracketPair {
 
 impl BracketPair {
     pub fn all() -> &'static [BracketPair] {
-        &[BracketPair::Parens, BracketPair::Brackets, BracketPair::Braces, BracketPair::Angles]
+        &[
+            BracketPair::Parens,
+            BracketPair::Brackets,
+            BracketPair::Braces,
+            BracketPair::Angles,
+        ]
     }
 
     pub fn label(self) -> &'static str {
@@ -501,7 +609,11 @@ pub enum DoubleTapShiftSide {
 
 impl DoubleTapShiftSide {
     pub fn all() -> &'static [DoubleTapShiftSide] {
-        &[DoubleTapShiftSide::Left, DoubleTapShiftSide::Right, DoubleTapShiftSide::Either]
+        &[
+            DoubleTapShiftSide::Left,
+            DoubleTapShiftSide::Right,
+            DoubleTapShiftSide::Either,
+        ]
     }
 
     pub fn label(self) -> &'static str {
@@ -524,7 +636,12 @@ pub enum PasteTrigger {
 
 impl PasteTrigger {
     pub fn all() -> &'static [PasteTrigger] {
-        &[PasteTrigger::RightCommand, PasteTrigger::LeftCommand, PasteTrigger::EitherCommand, PasteTrigger::HyperKey]
+        &[
+            PasteTrigger::RightCommand,
+            PasteTrigger::LeftCommand,
+            PasteTrigger::EitherCommand,
+            PasteTrigger::HyperKey,
+        ]
     }
 
     pub fn label(self) -> &'static str {
@@ -551,9 +668,18 @@ mod tests {
 
     #[test]
     fn remap_caps_target_f21_to_f24_have_no_keycode_and_action() {
-        for f in [RemapCapsTarget::F21, RemapCapsTarget::F22, RemapCapsTarget::F23, RemapCapsTarget::F24] {
+        for f in [
+            RemapCapsTarget::F21,
+            RemapCapsTarget::F22,
+            RemapCapsTarget::F23,
+            RemapCapsTarget::F24,
+        ] {
             assert_eq!(f.keycode(), None);
-            assert_eq!(f.action(), None, "F21~F24 는 action() 도 None 이어야 UI 가 경고할 수 있다");
+            assert_eq!(
+                f.action(),
+                None,
+                "F21~F24 는 action() 도 None 이어야 UI 가 경고할 수 있다"
+            );
         }
     }
 
@@ -567,7 +693,10 @@ mod tests {
     fn remap_caps_target_normal_key_maps_to_rule_action_key() {
         assert_eq!(
             RemapCapsTarget::LeftControl.action(),
-            Some(RuleAction::Key { keycode: KeyCode::LEFT_CONTROL, flags: EventFlags::NONE })
+            Some(RuleAction::Key {
+                keycode: KeyCode::LEFT_CONTROL,
+                flags: EventFlags::NONE
+            })
         );
     }
 
@@ -590,7 +719,10 @@ mod tests {
     #[test]
     fn quick_press_caps_action_special_cases() {
         assert_eq!(QuickPressCapsAction::Seek.action(), RuleAction::OpenSeek);
-        assert_eq!(QuickPressCapsAction::CapsLock.action(), RuleAction::ToggleCapsLock);
+        assert_eq!(
+            QuickPressCapsAction::CapsLock.action(),
+            RuleAction::ToggleCapsLock
+        );
         assert_eq!(QuickPressCapsAction::Slash.action(), RuleAction::Text('/'));
     }
 
@@ -598,7 +730,10 @@ mod tests {
     fn quick_press_caps_action_key_case() {
         assert_eq!(
             QuickPressCapsAction::F1.action(),
-            RuleAction::Key { keycode: KeyCode::F1, flags: EventFlags::NONE }
+            RuleAction::Key {
+                keycode: KeyCode::F1,
+                flags: EventFlags::NONE
+            }
         );
     }
 
@@ -608,11 +743,21 @@ mod tests {
         assert_eq!(ArrowKeySet::Hjkl.label(), "H J K L");
         assert_eq!(
             ArrowKeySet::Hjkl.keys(),
-            (KeyCode::ANSI_H, KeyCode::ANSI_J, KeyCode::ANSI_K, KeyCode::ANSI_L)
+            (
+                KeyCode::ANSI_H,
+                KeyCode::ANSI_J,
+                KeyCode::ANSI_K,
+                KeyCode::ANSI_L
+            )
         );
         assert_eq!(
             ArrowKeySet::Ijkl.keys(),
-            (KeyCode::ANSI_I, KeyCode::ANSI_J, KeyCode::ANSI_K, KeyCode::ANSI_L)
+            (
+                KeyCode::ANSI_I,
+                KeyCode::ANSI_J,
+                KeyCode::ANSI_K,
+                KeyCode::ANSI_L
+            )
         );
     }
 

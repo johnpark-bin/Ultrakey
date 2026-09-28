@@ -89,7 +89,9 @@ pub fn build_event_mask(needs: &MouseEventNeeds) -> u64 {
     ALL_EVENT_KINDS
         .iter()
         .filter(|&&kind| needs.includes(kind))
-        .fold(0u64, |mask, &kind| mask | cg_event_type_bit(kind).unwrap_or(0))
+        .fold(0u64, |mask, &kind| {
+            mask | cg_event_type_bit(kind).unwrap_or(0)
+        })
 }
 
 /// `CGEventMask` 비트 하나. `TapDisabledBy*` 두 통지는 값이 `0xFFFF_FFFE/F` 라
@@ -149,7 +151,10 @@ mod build_event_mask_tests {
             r#move: true,
             ..MouseEventNeeds::default()
         };
-        assert_eq!(build_event_mask(&needs), bit(10) | bit(11) | bit(12) | bit(5));
+        assert_eq!(
+            build_event_mask(&needs),
+            bit(10) | bit(11) | bit(12) | bit(5)
+        );
     }
 
     #[test]
@@ -203,6 +208,57 @@ pub(crate) struct ReenableBudget {
 /// 고정 안전값이다 — 이 값의 역할은 정책이 아니라 "최악의 경우 몇 번의 즉시 핑퐁을
 /// 허용할 것인가"라는 물리적 상한이라 사용자가 조정할 이유가 없다.
 pub(crate) const REENABLE_MAX_CONSECUTIVE: u32 = 5;
+
+/// ⭐ 이슈 #149 D2 — 통지 없는 비활성화(silent disable)용 분리 재활성화 예산.
+///
+/// 통지 기반 [`ReenableBudget`]과 같은 파일·같은 패턴을 따르되 **독립 카운터**다 —
+/// 통지 소진이 silent 를 소진시키지 않고 그 반대도 아니다. 상한은 통지 예산(5회,
+/// mach 속도 핑퐁 방지)보다 낮은 **3회**다 — 워치독 폴링(기본 1초) 속도로 시도하므로
+/// mach 속도 폭주가 될 수 없고, 3회로도 안 살아나면 `Teardown` 으로 D1 경로에
+/// 이관한다. 리셋 트리거는 통지 예산과 공유한다 — 트램폴린에 실제(비활성화 통지가
+/// 아닌) 이벤트가 도달했다는 사실(`note_real_event`). 소진 뒤에도 영구 거부는
+/// 아니다 — 리셋 가능 카운터라 실제 이벤트 1건이면 다시 찬다.
+///
+/// 플랫폼 FFI 와 무관한 순수 로직이라 `#[cfg(target_os = "macos")]` 밖에 둔다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SilentReenableBudget {
+    consecutive_attempts: u32,
+}
+
+/// 워치독 경로 재활성화 상한 — 통지 예산보다 낮다(위 문서 참고).
+pub(crate) const SILENT_REENABLE_MAX_ATTEMPTS: u32 = 3;
+
+impl SilentReenableBudget {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// 워치독 경로 재활성화 1회를 소비한다. 반환값이 `true` 면 아직 예산 안이라
+    /// `CGEventTapEnable` 재시도를 해도 된다.
+    pub(crate) fn note_watchdog_attempt(&mut self) -> bool {
+        self.consecutive_attempts += 1;
+        self.consecutive_attempts <= SILENT_REENABLE_MAX_ATTEMPTS
+    }
+
+    /// 실제(비활성화 아닌) 이벤트가 탭을 통과했다 — 탭이 살아있다는 증거이므로
+    /// 연속 카운터를 리셋한다. **통지 예산과 함께 호출해야 한다 — 둘은 독립
+    /// 카운터지만 리셋 신호는 공유한다**(이슈 #149 D2).
+    pub(crate) fn note_real_event(&mut self) {
+        self.consecutive_attempts = 0;
+    }
+
+    /// 예산이 소진됐는가 — `handle_recover_tap` 이 탭을 해체할지 판단하는 세 번째
+    /// 축이다(`lifecycle::recover_tap_decision`).
+    pub(crate) fn is_exhausted(&self) -> bool {
+        self.consecutive_attempts > SILENT_REENABLE_MAX_ATTEMPTS
+    }
+
+    /// 지금까지 소비한 시도 횟수 — `handle_recover_tap` 의 WARN 로그(`N/3`)용.
+    /// 예산 판정에 영향을 주지 않는 순수 조회다.
+    pub(crate) fn attempts(&self) -> u32 {
+        self.consecutive_attempts
+    }
+}
 
 impl ReenableBudget {
     pub(crate) fn new() -> Self {
@@ -269,7 +325,10 @@ mod reenable_budget_tests {
         b.note_real_event();
         assert!(!b.is_exhausted());
         for _ in 0..REENABLE_MAX_CONSECUTIVE {
-            assert!(b.note_disable(), "리셋된 뒤에는 다시 한도만큼 허용해야 한다");
+            assert!(
+                b.note_disable(),
+                "리셋된 뒤에는 다시 한도만큼 허용해야 한다"
+            );
         }
     }
 
@@ -280,6 +339,63 @@ mod reenable_budget_tests {
         let b = ReenableBudget::new();
         assert!(!b.is_exhausted());
         assert_eq!(b, ReenableBudget::default());
+    }
+}
+
+#[cfg(test)]
+mod silent_reenable_budget_tests {
+    use super::*;
+
+    /// ⭐ 이슈 #149 D2 — silent 예산은 3회까지 허용하고 4회째부터 거부한다.
+    #[test]
+    fn allows_three_watchdog_attempts_then_denies() {
+        let mut b = SilentReenableBudget::new();
+        for _ in 0..SILENT_REENABLE_MAX_ATTEMPTS {
+            assert!(b.note_watchdog_attempt());
+        }
+        assert!(!b.is_exhausted());
+        assert!(!b.note_watchdog_attempt());
+        assert!(b.is_exhausted());
+    }
+
+    /// ⭐ 이슈 #149 D2 — 소진 뒤에도 실제 이벤트 1건이면 리셋된다(영구 거부 아님).
+    #[test]
+    fn a_single_real_event_resets_the_silent_budget() {
+        let mut b = SilentReenableBudget::new();
+        for _ in 0..=SILENT_REENABLE_MAX_ATTEMPTS {
+            b.note_watchdog_attempt();
+        }
+        assert!(b.is_exhausted());
+        b.note_real_event();
+        assert!(!b.is_exhausted());
+        for _ in 0..SILENT_REENABLE_MAX_ATTEMPTS {
+            assert!(b.note_watchdog_attempt());
+        }
+    }
+
+    /// ⭐ 이슈 #149 D2 — 통지 예산과 독립 카운터다: 한쪽 소진이 다른 쪽에 영향을
+    /// 주지 않는다.
+    #[test]
+    fn silent_and_notification_budgets_are_independent_counters() {
+        let mut notify = ReenableBudget::new();
+        let mut silent = SilentReenableBudget::new();
+        for _ in 0..=REENABLE_MAX_CONSECUTIVE {
+            notify.note_disable();
+        }
+        assert!(notify.is_exhausted());
+        assert!(!silent.is_exhausted());
+        for _ in 0..=SILENT_REENABLE_MAX_ATTEMPTS {
+            silent.note_watchdog_attempt();
+        }
+        assert!(silent.is_exhausted());
+        // 반대 방향도 독립이다.
+        let mut notify2 = ReenableBudget::new();
+        for _ in 0..=SILENT_REENABLE_MAX_ATTEMPTS {
+            silent.note_watchdog_attempt();
+        }
+        assert!(!notify2.is_exhausted());
+        notify2.note_real_event();
+        assert!(!notify2.is_exhausted());
     }
 }
 
@@ -329,7 +445,7 @@ mod macos_impl {
     };
     use ultrakey_core::event::EventKind;
 
-    use super::ReenableBudget;
+    use super::{ReenableBudget, SilentReenableBudget};
 
     /// 콜백 하나가 호출될 때마다 주어지는, 탭 자신을 가리키는 불투명 핸들.
     ///
@@ -353,6 +469,10 @@ mod macos_impl {
         /// 규칙은 [`super::ReenableBudget`] 문서 참고 — 시간이 아니라 실제
         /// 이벤트 통과로만 리셋된다(이슈 #65 Phase 1 리뷰 교정 1).
         reenable_budget: Cell<ReenableBudget>,
+        /// ⭐ 이슈 #149 D2 — 통지 없는 비활성화용 분리 예산. 트램폴린은 항상 같은
+        /// 탭 스레드에서 직렬로만 실행되므로 `Cell` 로 충분하다. 리셋 신호는 통지
+        /// 예산과 공유한다(실제 이벤트 도달 시 둘 다 리셋).
+        silent_budget: Cell<SilentReenableBudget>,
     }
 
     /// `CGEventType` → `ultrakey_core::event::EventKind` 변환. 실제
@@ -447,9 +567,13 @@ mod macos_impl {
         // ⭐ 실제(비활성화 아닌) 이벤트가 여기까지 도달했다 — 탭이 살아서 이벤트를
         // 통과시키고 있다는 증거이므로 연속 재활성화 예산을 리셋한다(이슈 #65
         // Phase 1 리뷰 교정 1). 시간은 이 예산을 리셋하지 않는다 — 오직 이 사실만.
+        // ⭐ 이슈 #149 D2 — silent 예산도 함께 리셋한다(독립 카운터, 공유 리셋 신호).
         let mut budget = ctx.reenable_budget.get();
         budget.note_real_event();
         ctx.reenable_budget.set(budget);
+        let mut silent = ctx.silent_budget.get();
+        silent.note_real_event();
+        ctx.silent_budget.set(silent);
 
         // 0-a: 자기 합성 이벤트 마커 확인 — 무한 루프 방지(§5 엣지 12).
         // SAFETY: `event` 는 콜백 인자로 받은, 이 호출 동안 유효한 이벤트다.
@@ -502,6 +626,8 @@ mod macos_impl {
                 callback,
                 mach_port: RefCell::new(None),
                 reenable_budget: Cell::new(ReenableBudget::new()),
+                // ⭐ 이슈 #149 D2 — 새 탭은 신선한 silent 예산으로 시작한다.
+                silent_budget: Cell::new(SilentReenableBudget::new()),
             });
             let ctx_ptr = Box::into_raw(boxed);
 
@@ -619,6 +745,58 @@ mod macos_impl {
                 Some(ptr) => unsafe { (*ptr.as_ptr()).reenable_budget.get() }.is_exhausted(),
                 None => false,
             }
+        }
+
+        /// ⭐ 이슈 #149 D2 — 지금까지 소비한 silent 시도 횟수(로그 `N/3` 용).
+        /// 예산 판정에 영향을 주지 않는 순수 조회다.
+        pub fn silent_reenable_attempts(&self) -> u32 {
+            match self.ctx {
+                // SAFETY: `reenable_budget_exhausted` 와 동일한 근거.
+                Some(ptr) => unsafe { (*ptr.as_ptr()).silent_budget.get() }.attempts(),
+                None => 0,
+            }
+        }
+
+        /// ⭐ 이슈 #149 D2 — silent 예산이 소진됐는가. `engine.rs` 의
+        /// `handle_recover_tap` 이 탭을 해체할지 판단하는 세 번째 축이다
+        /// (`lifecycle::recover_tap_decision`).
+        pub fn silent_reenable_exhausted(&self) -> bool {
+            match self.ctx {
+                // SAFETY: 위 `reenable_budget_exhausted` 와 동일한 근거 — 이 조회는
+                // `Cell<SilentReenableBudget>::get()` 하나뿐이라 부작용이 없다.
+                Some(ptr) => unsafe { (*ptr.as_ptr()).silent_budget.get() }.is_exhausted(),
+                None => false,
+            }
+        }
+
+        /// ⭐ 이슈 #149 D2 — 워치독 경로 재활성화 시도. silent 예산을 1회
+        /// 소비하면서, 예산 안이면 `CGEventTapEnable(port, true)` 를 부르고 참을
+        /// 돌려준다. 예산 소진이면 아무 것도 하지 않고 거짓을 돌려준다.
+        ///
+        /// 호출자(`engine.rs::handle_recover_tap` 의 KeepAlive 분기)는 시도 뒤
+        /// `is_enabled()` 을 **같은 프레임에서 다시 읽지 않는다** — `CGEventTapIsEnabled`
+        /// 는 마지막 설정 플래그를 읽을 뿐이라 시도 직후에는 항상 stale true 다
+        /// (#65 교정 2 근거). 예산은 시도 자체에서 소비되므로, 실패는 다음
+        /// 워치독 폴링이 식별해 다음 `RecoverTap` 으로 이어진다.
+        pub fn try_watchdog_reenable(&self) -> bool {
+            let Some(ptr) = self.ctx else {
+                return false;
+            };
+            // SAFETY: `reenable_budget_exhausted` 와 동일한 근거 — `create()` 에서
+            // `Box::into_raw` 로 만든 뒤 이 `EventTap` 이 배타 소유해 온 살아있는
+            // 포인터다. 탭 스레드에서만 호출된다(커맨드 perform 콜백 자리).
+            let ctx = unsafe { &*ptr.as_ptr() };
+            let mut budget = ctx.silent_budget.get();
+            let allowed = budget.note_watchdog_attempt();
+            ctx.silent_budget.set(budget);
+            if !allowed {
+                return false;
+            }
+            if let Some(port) = self.mach_port.as_ref() {
+                CGEvent::tap_enable(port, true);
+                return true;
+            }
+            false
         }
     }
 
@@ -756,6 +934,15 @@ mod stub_impl {
             match self.0 {}
         }
         pub fn reenable_budget_exhausted(&self) -> bool {
+            match self.0 {}
+        }
+        pub fn silent_reenable_exhausted(&self) -> bool {
+            match self.0 {}
+        }
+        pub fn silent_reenable_attempts(&self) -> u32 {
+            match self.0 {}
+        }
+        pub fn try_watchdog_reenable(&self) -> bool {
             match self.0 {}
         }
         pub fn mask(&self) -> u64 {

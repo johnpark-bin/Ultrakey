@@ -134,7 +134,9 @@ pub struct TraceRing(ultrakey_platform::trace_ring::SpscRing<TapTrace, TRACE_RIN
 
 impl TraceRing {
     pub fn new() -> Self {
-        TraceRing(ultrakey_platform::trace_ring::SpscRing::new(TapTrace::default()))
+        TraceRing(ultrakey_platform::trace_ring::SpscRing::new(
+            TapTrace::default(),
+        ))
     }
 
     /// 생산자(탭 스레드) 전용. 락 없음·힙 할당 없음 — 콜백에서 불러도 안전하다.
@@ -398,7 +400,10 @@ pub fn disposition_flags_of(d: Disposition) -> u64 {
     }
 }
 
-pub fn disposition_from_code(code: u8, flags: ultrakey_core::flags::EventFlags) -> Option<Disposition> {
+pub fn disposition_from_code(
+    code: u8,
+    flags: ultrakey_core::flags::EventFlags,
+) -> Option<Disposition> {
     Some(match code {
         0 => Disposition::Pass,
         1 => Disposition::PassWithFlags(flags),
@@ -439,7 +444,11 @@ pub fn effect_to_code(e: Effect) -> u8 {
 /// 왕복하므로(위 `effect_to_code` 문서 참고) 실제 payload 를 복원할 수 없다. 호출자가
 /// 아무 값이나 채워 넣어 돌려받는다 — 왕복 테스트가 "이 코드가 어느 variant 인가"만
 /// 확인하면 되기 때문이다.
-pub fn effect_from_code(code: u8, placeholder_char: char, placeholder_seek_key: InputEvent) -> Option<Effect> {
+pub fn effect_from_code(
+    code: u8,
+    placeholder_char: char,
+    placeholder_seek_key: InputEvent,
+) -> Option<Effect> {
     Some(match code {
         0 => Effect::ToggleCapsLock,
         1 => Effect::OpenSeek,
@@ -1103,15 +1112,23 @@ mod tests {
         let json = serde_json::to_value(&record).expect("ViewerRecord 직렬화는 실패하지 않는다");
         let obj = json.as_object().expect("객체여야 한다");
 
-        assert!(obj.contains_key("atMs"), "at_ms 가 camelCase 로 나오지 않았다: {obj:?}");
+        assert!(
+            obj.contains_key("atMs"),
+            "at_ms 가 camelCase 로 나오지 않았다: {obj:?}"
+        );
         assert!(obj.contains_key("resolvedKeycode"));
         assert!(obj.contains_key("aliasActive"));
         assert!(obj.contains_key("dispositionFlags"));
         assert!(obj.contains_key("pathC"));
-        assert!(!obj.contains_key("raw_kind"), "snake_case 필드가 남아 있다: {obj:?}");
+        assert!(
+            !obj.contains_key("raw_kind"),
+            "snake_case 필드가 남아 있다: {obj:?}"
+        );
         assert_eq!(obj.get("rule").and_then(|v| v.as_str()), Some("preset:5"));
         assert_eq!(
-            obj.get("modifiers").and_then(|v| v.as_array()).map(|a| a.len()),
+            obj.get("modifiers")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
             Some(1)
         );
     }

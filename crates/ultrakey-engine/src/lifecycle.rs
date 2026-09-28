@@ -124,31 +124,45 @@ pub fn tap_state_after_reenable(succeeded: bool) -> TapState {
     }
 }
 
-/// `EngineCommand::RecoverTap` 처리 판정 — 순수 함수(이슈 #65 Phase 1 리뷰 교정 2).
+/// `EngineCommand::RecoverTap` 처리 판정 — 순수 함수(이슈 #65 Phase 1 리뷰 교정 2,
+/// ⭐ 이슈 #149 D2 3축 확장).
 ///
-/// 트램폴린의 연속 재활성화 예산(`ultrakey_platform::event_tap::ReenableBudget`)이
-/// 소진됐거나 권한이 이미 없으면 탭을 해체한다 — **재생성을 시도하지 않는다.**
+/// 트램폴린의 연속 재활성화 예산(`ultrakey_platform::event_tap::ReenableBudget`)이나
+/// silent 재활성화 예산(`SilentReenableBudget`)이 소진됐거나 권한이 이미 없으면 탭을
+/// 해체한다 — **재생성을 시도하지 않는다.**
 /// 초안은 "예산 소진 → `handle_recreate_tap`" 을 제안했으나, stale
 /// `AXIsProcessTrusted()` 상황에서는 재생성마다 새 탭 = 새 예산(5회)이 다시 채워져
 /// **더 느린 폭주**가 된다는 것이 리뷰의 기각 사유다 — 재생성은 새 탭 인스턴스를
 /// 만드니 예산도 자연히 리셋되기 때문이다. 복구는 오직 권한 모니터가 `Granted` 를
 /// 재확인해 **완전히 새 `Engine`** 을 만드는 것으로만 일어난다
 /// (`apps/ultrakey-app` 의 `start_engine_if_needed`).
+///
+/// ⭐ 이슈 #149 D2 — `silent_exhausted` 축이 추가됐다. 통지 없는 비활성화는
+/// `KeepAlive` 무한 관찰로 끝나지 않고 3회 silent 시도 뒤 `Teardown` 으로 D1 경로에
+/// 합류한다. 통지 예산(`ReenableBudget`)과 silent 예산은 독립 카운터다 — 서로를
+/// 소비하지 않고, 실제 이벤트 도달 시 둘 다 리셋된다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoverTapDecision {
     /// 탭을 해체하고(`NotInstalled`) `EngineEvent::TapLost` 를 올린다.
     Teardown,
     /// 트램폴린이 예산 안에서 이미 재활성화를 시도했다 — 그 결과를 관찰만 한다.
+    /// (`WatchdogSilent` reason 이고 탭이 꺼져 있으면 `engine.rs` 가 silent 예산
+    /// 안에서 `enable()` 을 먼저 시도한다 — 판정 자체는 그대로 `KeepAlive` 다.)
     KeepAlive,
 }
 
 /// `trusted` = 이 시점의 `AXIsProcessTrusted()`, `reenable_budget_exhausted` =
-/// 트램폴린의 연속 재활성화 예산이 소진됐는가(`EventTap::reenable_budget_exhausted`).
-/// 둘 중 하나라도 참이면 해체한다 — `trusted` 값의 순간적 stale 여부에 단독으로
-/// 의존하지 않기 위해 "탭이 즉시 다시 꺼진다는 사실 자체"(예산 소진)를 대등한
-/// 신호로 둔다(이슈 #65 Phase 1 진단 결론).
-pub fn recover_tap_decision(trusted: bool, reenable_budget_exhausted: bool) -> RecoverTapDecision {
-    if !trusted || reenable_budget_exhausted {
+/// 트램폴린의 연속 재활성화 예산이 소진됐는가(`EventTap::reenable_budget_exhausted`),
+/// `silent_exhausted` = silent 재활성화 예산이 소진됐는가
+/// (`EventTap::silent_reenable_exhausted`). 셋 중 하나라도 참이면 해체한다 —
+/// `trusted` 값의 순간적 stale 여부에 단독으로 의존하지 않기 위해 "탭이 즉시 다시
+/// 꺼진다는 사실 자체"(두 예산 소진)를 대등한 신호로 둔다(이슈 #65 Phase 1 진단 결론).
+pub fn recover_tap_decision(
+    trusted: bool,
+    reenable_budget_exhausted: bool,
+    silent_exhausted: bool,
+) -> RecoverTapDecision {
+    if !trusted || reenable_budget_exhausted || silent_exhausted {
         RecoverTapDecision::Teardown
     } else {
         RecoverTapDecision::KeepAlive
@@ -413,7 +427,7 @@ mod tests {
     #[test]
     fn recover_tap_keeps_alive_when_trusted_and_budget_not_exhausted() {
         assert_eq!(
-            recover_tap_decision(true, false),
+            recover_tap_decision(true, false, false),
             RecoverTapDecision::KeepAlive
         );
     }
@@ -421,7 +435,7 @@ mod tests {
     #[test]
     fn recover_tap_tears_down_when_not_trusted_even_if_budget_remains() {
         assert_eq!(
-            recover_tap_decision(false, false),
+            recover_tap_decision(false, false, false),
             RecoverTapDecision::Teardown
         );
     }
@@ -432,7 +446,7 @@ mod tests {
         // 돌려줘도, "탭이 즉시 다시 꺼진다는 사실 자체"(예산 소진)만으로 해체해야
         // 한다.
         assert_eq!(
-            recover_tap_decision(true, true),
+            recover_tap_decision(true, true, false),
             RecoverTapDecision::Teardown
         );
     }
@@ -440,8 +454,30 @@ mod tests {
     #[test]
     fn recover_tap_tears_down_when_neither_trusted_nor_within_budget() {
         assert_eq!(
-            recover_tap_decision(false, true),
+            recover_tap_decision(false, true, false),
             RecoverTapDecision::Teardown
+        );
+    }
+
+    /// ⭐ 이슈 #149 D2 — silent 예산 축: 통지 예산이 남아 있어도 silent 소진이면 해체.
+    #[test]
+    fn recover_tap_tears_down_when_silent_budget_exhausted() {
+        assert_eq!(
+            recover_tap_decision(true, false, true),
+            RecoverTapDecision::Teardown
+        );
+        assert_eq!(
+            recover_tap_decision(true, true, true),
+            RecoverTapDecision::Teardown
+        );
+    }
+
+    /// ⭐ 이슈 #149 D2 — 세 축 모두 살아 있어야 `KeepAlive` 다.
+    #[test]
+    fn recover_tap_keeps_alive_only_when_all_three_axes_hold() {
+        assert_eq!(
+            recover_tap_decision(true, false, false),
+            RecoverTapDecision::KeepAlive
         );
     }
 

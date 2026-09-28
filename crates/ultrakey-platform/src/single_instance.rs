@@ -51,9 +51,7 @@ mod macos_impl {
     /// 수신된다. 수신 스레드는 알림 센터의 관례(메인 런루프)를 따른다.
     ///
     /// `workspace.rs` 의 `SystemEventObserver` 와 같은 block 기반 패턴이다.
-    pub fn observe_show_settings_requests(
-        cb: Box<dyn Fn() + Send + Sync>,
-    ) -> ShowSettingsObserver {
+    pub fn observe_show_settings_requests(cb: Box<dyn Fn() + Send + Sync>) -> ShowSettingsObserver {
         let center = NSDistributedNotificationCenter::defaultCenter();
         let name = NSString::from_str(SHOW_SETTINGS_NOTIFICATION);
         let block = RcBlock::new(move |_note: NonNull<NSNotification>| {
@@ -63,12 +61,7 @@ mod macos_impl {
         // `Block_copy` 로 자체 사본을 만든다(`workspace.rs` 의 `add_simple`
         // 과 같은 계약). 이름은 방금 만든 유효한 `NSString` 이다.
         let token = unsafe {
-            center.addObserverForName_object_queue_usingBlock(
-                Some(&name),
-                None,
-                None,
-                &block,
-            )
+            center.addObserverForName_object_queue_usingBlock(Some(&name), None, None, &block)
         };
         ShowSettingsObserver {
             center,
@@ -98,8 +91,11 @@ mod macos_impl {
             // SAFETY: `self.token` 은 등록 시 받아 소유해 온 유효한 옵저버
             // 토큰이고, `_name` 은 등록 때 쓴 것과 같은 문자열이다.
             unsafe {
-                self.center
-                    .removeObserver_name_object(self.token.as_ref(), Some(&self._name), None);
+                self.center.removeObserver_name_object(
+                    self.token.as_ref(),
+                    Some(&self._name),
+                    None,
+                );
             }
         }
     }
@@ -107,8 +103,7 @@ mod macos_impl {
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::{
-    notify_existing_instance_to_show_settings, observe_show_settings_requests,
-    ShowSettingsObserver,
+    notify_existing_instance_to_show_settings, observe_show_settings_requests, ShowSettingsObserver,
 };
 
 #[cfg(not(target_os = "macos"))]
@@ -126,6 +121,5 @@ mod stub_impl {
 
 #[cfg(not(target_os = "macos"))]
 pub use stub_impl::{
-    notify_existing_instance_to_show_settings, observe_show_settings_requests,
-    ShowSettingsObserver,
+    notify_existing_instance_to_show_settings, observe_show_settings_requests, ShowSettingsObserver,
 };

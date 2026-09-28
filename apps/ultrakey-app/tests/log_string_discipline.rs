@@ -295,7 +295,12 @@ fn logs_are_english_only() {
         for call in find_log_calls(&file, &src) {
             if contains_hangul(&call.body) {
                 let snippet: String = call.body.chars().take(120).collect();
-                offenders.push(format!("{}:{}  {}", relative(&call.file), call.line, snippet));
+                offenders.push(format!(
+                    "{}:{}  {}",
+                    relative(&call.file),
+                    call.line,
+                    snippet
+                ));
             }
         }
     }
@@ -394,7 +399,11 @@ fn a() {
 }
 "#;
     let calls = find_log_calls(Path::new("test.rs"), src);
-    assert_eq!(calls.len(), 3, "세 개의 로그 호출을 찾아야 한다: {calls:#?}");
+    assert_eq!(
+        calls.len(),
+        3,
+        "세 개의 로그 호출을 찾아야 한다: {calls:#?}"
+    );
 
     assert!(!contains_hangul(&calls[0].body), "첫 번째는 영어뿐이다");
     assert!(

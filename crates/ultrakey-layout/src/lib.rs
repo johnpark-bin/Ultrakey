@@ -286,9 +286,7 @@ impl LayoutResolver {
         match ultrakey_platform::text_input_source::current_layout() {
             Some(snapshot) => self.rebuild_with(&snapshot, &PlatformTranslator),
             None => {
-                tracing::debug!(
-                    "layout snapshot query failed; keeping the existing LayoutTable"
-                );
+                tracing::debug!("layout snapshot query failed; keeping the existing LayoutTable");
                 false
             }
         }
@@ -412,9 +410,18 @@ mod tests {
     #[test]
     fn forward_lookup_matches_translator() {
         let table = LayoutTable::build(&fake_snapshot("qwerty", false), &FakeQwerty);
-        assert_eq!(table.char_for(KeyCode::ANSI_A, ModifierCombo::None), Some("a"));
-        assert_eq!(table.char_for(KeyCode::ANSI_A, ModifierCombo::Shift), Some("A"));
-        assert_eq!(table.char_for(KeyCode::ANSI_W, ModifierCombo::None), Some("w"));
+        assert_eq!(
+            table.char_for(KeyCode::ANSI_A, ModifierCombo::None),
+            Some("a")
+        );
+        assert_eq!(
+            table.char_for(KeyCode::ANSI_A, ModifierCombo::Shift),
+            Some("A")
+        );
+        assert_eq!(
+            table.char_for(KeyCode::ANSI_W, ModifierCombo::None),
+            Some("w")
+        );
         assert_eq!(
             table.char_for(KeyCode::ANSI_SEMICOLON, ModifierCombo::Shift),
             Some(":")
@@ -444,12 +451,20 @@ mod tests {
         let qwerty = LayoutTable::build(&fake_snapshot("qwerty", false), &FakeQwerty);
         let azerty = LayoutTable::build(&fake_snapshot("azerty", false), &FakeAzerty);
 
-        let qwerty_open = qwerty.keycode_for_char('(').expect("qwerty 는 ( 를 낼 수 있어야 한다");
-        let azerty_open = azerty.keycode_for_char('(').expect("azerty 는 ( 를 낼 수 있어야 한다");
+        let qwerty_open = qwerty
+            .keycode_for_char('(')
+            .expect("qwerty 는 ( 를 낼 수 있어야 한다");
+        let azerty_open = azerty
+            .keycode_for_char('(')
+            .expect("azerty 는 ( 를 낼 수 있어야 한다");
         assert_ne!(qwerty_open, azerty_open);
 
-        let qwerty_close = qwerty.keycode_for_char(')').expect("qwerty 는 ) 를 낼 수 있어야 한다");
-        let azerty_close = azerty.keycode_for_char(')').expect("azerty 는 ) 를 낼 수 있어야 한다");
+        let qwerty_close = qwerty
+            .keycode_for_char(')')
+            .expect("qwerty 는 ) 를 낼 수 있어야 한다");
+        let azerty_close = azerty
+            .keycode_for_char(')')
+            .expect("azerty 는 ) 를 낼 수 있어야 한다");
         assert_ne!(qwerty_close, azerty_close);
     }
 
@@ -513,10 +528,7 @@ mod tests {
     #[test]
     fn dead_key_is_excluded_from_table() {
         let table = LayoutTable::build(&fake_snapshot("qwerty", false), &FakeQwerty);
-        assert_eq!(
-            table.char_for(KeyCode(0x21), ModifierCombo::Option),
-            None
-        );
+        assert_eq!(table.char_for(KeyCode(0x21), ModifierCombo::Option), None);
     }
 
     // 7. FakeEmpty → is_empty(), 모든 조회가 None.
@@ -597,7 +609,10 @@ mod tests {
         assert_eq!(new.source_id(), "qwerty");
 
         // publish() 로도 직접 교체할 수 있다.
-        resolver.publish(LayoutTable::build(&fake_snapshot("azerty", false), &FakeAzerty));
+        resolver.publish(LayoutTable::build(
+            &fake_snapshot("azerty", false),
+            &FakeAzerty,
+        ));
         let latest = resolver.current();
         assert_eq!(latest.source_id(), "azerty");
         // 이전 Arc(`new`)는 여전히 qwerty 를 가리킨다.

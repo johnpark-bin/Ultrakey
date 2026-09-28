@@ -43,7 +43,10 @@ impl<T: Copy, const N: usize> SpscRing<T, N> {
     /// `placeholder` 는 아직 쓰이지 않은 슬롯을 채우는 값일 뿐 절대 `pop` 으로
     /// 관측되지 않는다(`tail == head` 인 슬롯은 `pop` 이 읽지 않는다).
     pub fn new(placeholder: T) -> Self {
-        debug_assert!(N.is_power_of_two(), "SpscRing 용량은 2의 거듭제곱이어야 한다");
+        debug_assert!(
+            N.is_power_of_two(),
+            "SpscRing 용량은 2의 거듭제곱이어야 한다"
+        );
         SpscRing {
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
