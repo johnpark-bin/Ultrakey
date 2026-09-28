@@ -57,7 +57,9 @@ use ultrakey_core::perdevice::destinations::{self, DestinationCategory};
 use ultrakey_core::perdevice::{
     inherit, DeviceId, FKey, KeyRemapRow, ManagedLedger, PerDeviceSettings,
 };
-use ultrakey_core::settings::{keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore};
+use ultrakey_core::settings::{
+    keys, transfer, EngineConfig, LoadOutcome, MouseApply, SettingsStore,
+};
 use ultrakey_engine::path_b::LedgerStore;
 use ultrakey_engine::{Engine, EngineEvent, SharedState, TapState};
 use ultrakey_hyperkey::{HyperkeySettings, SettingsWarning, SlotSettings, TrackpadArea};
@@ -608,8 +610,7 @@ fn chinese_view(c: &ChineseSettings, store: &SettingsStore) -> ChineseView {
 fn korean_view(k: &KoreanSettings, store: &SettingsStore) -> KoreanView {
     // K5 — 저장된 오버라이드 목록(부재 = None). 정규화는 `resolve_excluded_bundle_ids`
     // 쪽에서 하므로 여기서는 원본을 그대로 실어 보낸다.
-    let excluded: Option<Vec<String>> = store
-        .get(keys::KOREAN_EXCLUDED_BUNDLE_IDS);
+    let excluded: Option<Vec<String>> = store.get(keys::KOREAN_EXCLUDED_BUNDLE_IDS);
     KoreanView {
         shift_space_switches_input_source: k.shift_space_switches_input_source,
         han_eng_switches_input_source: k.han_eng_switches_input_source,
@@ -685,7 +686,9 @@ fn general_view(store: &SettingsStore, auto_update: bool) -> GeneralView {
         hide_menu_bar_icon: store
             .get(settings_keys::GENERAL_HIDE_MENU_BAR_ICON)
             .unwrap_or(false),
-        hide_dock_icon: store.get(settings_keys::GENERAL_HIDE_DOCK_ICON).unwrap_or(true),
+        hide_dock_icon: store
+            .get(settings_keys::GENERAL_HIDE_DOCK_ICON)
+            .unwrap_or(true),
         language: resolve_stored_language(store).map(|locale| locale.code().to_string()),
         auto_update,
     }
@@ -870,7 +873,9 @@ fn build_per_device_view(store: &SettingsStore) -> PerDeviceView {
 /// (엔진이 부른다)만의 채널이다.
 fn validate_per_device_key(key: &str) -> Result<(), String> {
     if key == keys::PER_DEVICE_MANAGED {
-        return Err(format!("{key} is a ledger key; it cannot be changed through this command"));
+        return Err(format!(
+            "{key} is a ledger key; it cannot be changed through this command"
+        ));
     }
     let rest = key
         .strip_prefix("perDevice.")
@@ -1109,26 +1114,19 @@ fn disable_label_key_for_setting(store_key: &str) -> &'static str {
         k if k == keys::HYPERKEY_BLEH_ENABLED => "settings.hyperkey.bleh.label",
         // ⭐ F-19 — 언어 규칙 충돌(`languageKeycodeShared`)의 배타/해소 대상.
         // F-19.1~F-19.7 저장 키 → 탭 전용 카탈로그 라벨.
-        k if k == keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE => {
-            "settings.korean.caps_switch"
-        }
-        k if k == keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE => {
-            "settings.korean.right_cmd"
-        }
-        k if k == keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA => {
-            "settings.japanese.caps_eisu_kana"
-        }
-        k if k == keys::JAPANESE_COMMAND_TOGGLES_EISU_KANA => {
-            "settings.japanese.cmd_eisu_kana"
-        }
+        k if k == keys::KOREAN_CAPS_LOCK_SWITCHES_INPUT_SOURCE => "settings.korean.caps_switch",
+        k if k == keys::KOREAN_RIGHT_COMMAND_SWITCHES_INPUT_SOURCE => "settings.korean.right_cmd",
+        k if k == keys::JAPANESE_CAPS_LOCK_TOGGLES_EISU_KANA => "settings.japanese.caps_eisu_kana",
+        k if k == keys::JAPANESE_COMMAND_TOGGLES_EISU_KANA => "settings.japanese.cmd_eisu_kana",
         k if k == keys::JAPANESE_SWAP_YEN_BACKSLASH => "settings.japanese.yen_backslash",
         k if k == keys::JAPANESE_JIS_AS_US_SYMBOLS => "settings.japanese.jis_us",
-        k if k == keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE => {
-            "settings.chinese.caps_switch"
-        }
+        k if k == keys::CHINESE_CAPS_LOCK_SWITCHES_INPUT_SOURCE => "settings.chinese.caps_switch",
         other => {
             // 방어적 — conflicts.rs 가 이 네 개 밖의 키를 내놓는 일은 없어야 한다.
-            tracing::error!(key = other, "unknown settings key in conflict resolution list");
+            tracing::error!(
+                key = other,
+                "unknown settings key in conflict resolution list"
+            );
             "settings.presets.heading"
         }
     }
@@ -1519,7 +1517,8 @@ struct AppMeta {
 /// HOME 환경변수가 없으면 `None` — 호출자가 각자의 방식으로 반응한다(빈 문자열
 /// 표시 · 로그 개방 포기 · 조용히 무시).
 fn log_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("Library/Logs/Ultrakey"))
+    std::env::var_os("HOME")
+        .map(|home| std::path::PathBuf::from(home).join("Library/Logs/Ultrakey"))
 }
 
 /// `log_dir()` 의 경로에 `ultrakey.log` 를 이어 붙인 표시 문자열 — About 패널에
@@ -2061,20 +2060,19 @@ fn settings_bootstrap(state: State<'_, Arc<AppState>>, app: tauri::AppHandle) ->
     let chinese = *state.chinese.lock().unwrap();
     let seek = state.seek.lock().unwrap().clone();
     let store = state.store.lock().unwrap();
-    let settings_state =
-        build_settings_state(
-            &hyperkey,
-            &presets,
-            &korean,
-            &japanese,
-            &chinese,
-            &seek,
-            &store,
-            state.auto_update_checks_enabled(),
-            None,
-            None,
-            caps_lock_kernel_map_missing(&state),
-        );
+    let settings_state = build_settings_state(
+        &hyperkey,
+        &presets,
+        &korean,
+        &japanese,
+        &chinese,
+        &seek,
+        &store,
+        state.auto_update_checks_enabled(),
+        None,
+        None,
+        caps_lock_kernel_map_missing(&state),
+    );
     let meta = build_app_meta(&app, &store);
     drop(store);
     let notice = state.load_notice.lock().unwrap().clone();
@@ -2373,7 +2371,10 @@ fn settings_set_general_language(
         Catalog::resolve(&bundle::preferred_languages())
     } else {
         let code = value.as_str().ok_or_else(|| {
-            format!("{} must be a language code string or null", settings_keys::GENERAL_LANGUAGE)
+            format!(
+                "{} must be a language code string or null",
+                settings_keys::GENERAL_LANGUAGE
+            )
         })?;
         let locale = Locale::all()
             .iter()
@@ -2463,7 +2464,10 @@ fn refresh_auto_update_check(
             .map_err(|e| e.to_string())?;
         if want == Some(reached) || want.is_none() {
             state.auto_update_checks.store(Arc::new(reached));
-            tracing::info!(enabled = reached, "automatic update checks state synchronized");
+            tracing::info!(
+                enabled = reached,
+                "automatic update checks state synchronized"
+            );
         } else {
             tracing::error!(
                 requested = want,
@@ -2916,7 +2920,11 @@ async fn settings_import(
 
     let state = state.inner().clone();
 
-    let picked = app.dialog().file().add_filter("JSON", &["json"]).blocking_pick_file();
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file();
     let Some(file_path) = picked else {
         return Ok(None);
     };
@@ -2929,7 +2937,11 @@ async fn settings_import(
     // 2) 지금 연결된 디바이스 — F-17 의 기존 열거 경로를 그대로 쓴다.
     let present_devices: Vec<String> = hid_device::list_attached_keyboards()
         .into_iter()
-        .map(|info| DeviceId::new(info.vendor_id, info.product_id).as_str().to_string())
+        .map(|info| {
+            DeviceId::new(info.vendor_id, info.product_id)
+                .as_str()
+                .to_string()
+        })
         .collect();
 
     // 3) 백업 → 교체.
@@ -2959,11 +2971,25 @@ async fn settings_import(
 /// (`HyperkeySettings::from_store` 등, `reconfigure_engine`, `rebuild_tray_menu`)을
 /// 저장소 교체 뒤 그대로 다시 부를 뿐이다. 부팅 경로는 이미 실기기로 검증된
 /// 경로라 여기서 별도로 검증할 새 코드를 만들지 않는다.
-fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(), String> {
+fn reload_settings_after_replace(
+    app: &tauri::AppHandle,
+    state: &Arc<AppState>,
+) -> Result<(), String> {
     // ⚠️ `seek` 도 함께 되살린다 — F-01(이슈 #39 와 병렬로 머지된 M3-3)이 `AppState`
     // 에 네 번째 메모리 정본을 더했다. 빠뜨리면 import 가 Seek 설정만 조용히
     // 반영하지 않는 "부분 교체"가 되어 §3.4 결정 4(교체)가 깨진다.
-    let (hyperkey, presets, korean, japanese, chinese, seek, disabled_apps, korean_excluded, japanese_excluded, chinese_excluded) = {
+    let (
+        hyperkey,
+        presets,
+        korean,
+        japanese,
+        chinese,
+        seek,
+        disabled_apps,
+        korean_excluded,
+        japanese_excluded,
+        chinese_excluded,
+    ) = {
         let store = state.store.lock().map_err(|e| e.to_string())?;
         let hyperkey = HyperkeySettings::from_store(&store);
         let presets = PresetSettings::from_store(&store);
@@ -2971,8 +2997,9 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
         let japanese = JapaneseSettings::from_store(&store);
         let chinese = ChineseSettings::from_store(&store);
         let seek = SeekSettings::from_store(&store);
-        let disabled_apps: Vec<String> =
-            store.get(settings_keys::GENERAL_DISABLED_APPS).unwrap_or_default();
+        let disabled_apps: Vec<String> = store
+            .get(settings_keys::GENERAL_DISABLED_APPS)
+            .unwrap_or_default();
         // ⭐ K5(D-K17) — 목록 오버라이드도 import 로 바뀔 수 있다. 같은 잠금 안에서
         // 함께 읽는다. F-19(D-7) — japanese/chinese 제외 목록도 같은 규약.
         let korean_excluded = ultrakey_korean::resolve_excluded_bundle_ids(
@@ -3032,7 +3059,9 @@ fn reload_settings_after_replace(app: &tauri::AppHandle, state: &Arc<AppState>) 
 
     // 규칙 테이블이 통째로 바뀔 수 있으므로 항상 force_reset 한다
     // (`settings_set_preset`/`settings_set_korean` 과 같은 이유).
-    reconfigure_engine(state, &hyperkey, &presets, &korean, &japanese, &chinese, &seek, true)?;
+    reconfigure_engine(
+        state, &hyperkey, &presets, &korean, &japanese, &chinese, &seek, true,
+    )?;
 
     // 5) `general.language` 가 import 로 바뀌었으면 카탈로그도 교체한다
     // (A-2 언어 선택 경로, `settings_set_general_language` 와 같은 판정).
@@ -3150,7 +3179,11 @@ fn event_viewer_notice(catalog: &Catalog, state: &Arc<AppState>) -> Option<Strin
     }
     let engine_running = state.engine.lock().map(|g| g.is_some()).unwrap_or(false);
     if !engine_running {
-        return Some(catalog.get("eventviewer.notice.engine_not_running").to_string());
+        return Some(
+            catalog
+                .get("eventviewer.notice.engine_not_running")
+                .to_string(),
+        );
     }
     // ⭐ 이슈 #110 — D-1 이 필요한데 커널 매핑이 되읽기로 확인되지 않았다.
     if caps_lock_kernel_map_missing(state) {
@@ -3475,7 +3508,9 @@ fn license_activate(
         }
         ultrakey_license::ActivationOutcome::InvalidKey => Err("invalid_key".to_string()),
         ultrakey_license::ActivationOutcome::Refunded => Err("refunded".to_string()),
-        ultrakey_license::ActivationOutcome::LimitReached { .. } => Err("limit_reached".to_string()),
+        ultrakey_license::ActivationOutcome::LimitReached { .. } => {
+            Err("limit_reached".to_string())
+        }
         ultrakey_license::ActivationOutcome::NetworkError => Err("network_error".to_string()),
     }
 }
@@ -3490,15 +3525,10 @@ fn license_deactivate(state: State<'_, Arc<AppState>>) -> Result<LicenseView, St
             tracing::info!("license deactivated; evaluating state");
             Ok(license_view(&res))
         }
-        ultrakey_license::DeactivationOutcome::NotFound => {
-            Err("not_found".to_string())
-        }
-        ultrakey_license::DeactivationOutcome::NetworkError => {
-            Err("network_error".to_string())
-        }
+        ultrakey_license::DeactivationOutcome::NotFound => Err("not_found".to_string()),
+        ultrakey_license::DeactivationOutcome::NetworkError => Err("network_error".to_string()),
     }
 }
-
 
 /// `settings_set` 의 `hyperkey.*` 경로. [`settings_resolve_conflict`] 도 이 함수를
 /// 재사용한다(배타 대상이 hyper 슬롯일 수 있으므로).
@@ -4610,27 +4640,48 @@ fn init_logging() {
 
 /// `~/Library/Logs/Ultrakey/ultrakey.log` 를 append 모드로 연다.
 ///
-/// ⭐ 무한정 커지지 않게: 열기 전에 크기를 확인해 2 MiB 를 넘으면 `ultrakey.log.1` 로
-/// rename 하고 새로 시작한다(단순 1세대 롤오버). 홈 디렉터리를 못 찾거나, 디렉터리를
-/// 못 만들거나, 파일을 못 열면 `None` — 호출자는 stderr 만으로 계속한다.
+/// ⭐ 무한정 커지지 않게: 열기 전에 크기를 확인해 2 MiB 를 넘으면 3세대 순환으로
+/// 굴린다 — `ultrakey.log.1` → `ultrakey.log.2` 로 먼저 밀고(기존 `.2` 는
+/// 덮어쓰기로 소멸), 그 뒤 `ultrakey.log` → `ultrakey.log.1` 로 rename 하고 새로
+/// 시작한다. 직전 세대 유실을 막아 다음 발증의 원인 확정을 남기는 것이 목표다
+/// (이슈 #149 D4). 홈 디렉터리를 못 찾거나, 디렉터리를 못 만들거나, 파일을 못
+/// 열면 `None` — 호출자는 stderr 만으로 계속한다.
 fn open_log_file() -> Option<std::fs::File> {
-    const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
-
     let dir = log_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
+    rotate_log_generations(&dir, MAX_LOG_BYTES);
 
     let path = dir.join("ultrakey.log");
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > MAX_LOG_BYTES {
-            let _ = std::fs::rename(&path, dir.join("ultrakey.log.1"));
-        }
-    }
-
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .ok()
+}
+
+/// ⭐ 이슈 #149 D4 — 로그 순환 상한(2 MiB).
+const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
+/// ⭐ 이슈 #149 D4 — 3세대 순환 본체. `open_log_file` 에서 분리해 `#[cfg(test)]` 로
+/// 임시 디렉터리 단위 테스트가 가능하게 한다.
+fn rotate_log_generations(dir: &std::path::Path, max_bytes: u64) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let path = dir.join("ultrakey.log");
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return;
+    };
+    if meta.len() <= max_bytes {
+        return;
+    }
+    // `.1` → `.2` 를 먼저 밀고(기존 `.2` 는 덮어쓰기/삭제로 소멸), 그 다음
+    // `.log` → `.1` 로 rename 한다.
+    let gen1 = dir.join("ultrakey.log.1");
+    let gen2 = dir.join("ultrakey.log.2");
+    if std::fs::metadata(&gen1).is_ok() {
+        let _ = std::fs::rename(&gen1, &gen2);
+    }
+    let _ = std::fs::rename(&path, &gen1);
 }
 
 // ============================================================================
@@ -4688,7 +4739,9 @@ fn run_login_item_probe() {
     if mode == "unregister" {
         match login_item::set_enabled(false) {
             Ok(()) => tracing::info!(step = "unregister-only", result = "ok", "login item probe"),
-            Err(e) => tracing::error!(step = "unregister-only", result = "error", error = %e, "login item probe"),
+            Err(e) => {
+                tracing::error!(step = "unregister-only", result = "error", error = %e, "login item probe")
+            }
         }
         tracing::info!(
             step = "after-unregister-only",
@@ -4700,7 +4753,9 @@ fn run_login_item_probe() {
 
     match login_item::set_enabled(true) {
         Ok(()) => tracing::info!(step = "register", result = "ok", "login item probe"),
-        Err(e) => tracing::error!(step = "register", result = "error", error = %e, "login item probe"),
+        Err(e) => {
+            tracing::error!(step = "register", result = "error", error = %e, "login item probe")
+        }
     }
     let after_register = login_item::status();
     tracing::info!(
@@ -4716,7 +4771,9 @@ fn run_login_item_probe() {
 
     match login_item::set_enabled(false) {
         Ok(()) => tracing::info!(step = "unregister", result = "ok", "login item probe"),
-        Err(e) => tracing::error!(step = "unregister", result = "error", error = %e, "login item probe"),
+        Err(e) => {
+            tracing::error!(step = "unregister", result = "error", error = %e, "login item probe")
+        }
     }
     let after_unregister = login_item::status();
     tracing::info!(
@@ -4759,7 +4816,10 @@ fn run_seek_detect_probe() {
         && !ultrakey_platform::screen_recording::has_screen_recording_access()
     {
         let granted = ultrakey_platform::screen_recording::request_screen_recording_access();
-        tracing::info!(granted, "CGRequestScreenCaptureAccess called; system prompt path");
+        tracing::info!(
+            granted,
+            "CGRequestScreenCaptureAccess called; system prompt path"
+        );
     }
 
     tracing::info!(
@@ -5534,16 +5594,15 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
             // `ocr_languages` 와 같은 클로저 경계로 주입한다 — 부재 = true 는
             // `SeekSettings::from_store` 가 이미 반영한다(D12 설계 결정).
             let state_for_window_titles = state.clone();
-            let include_window_titles: Arc<dyn Fn() -> bool + Send + Sync> =
-                Arc::new(move || {
-                    let seek = state_for_window_titles
-                        .store
-                        .lock()
-                        .ok()
-                        .map(|store| SeekSettings::from_store(&store));
-                    // 락 실패는 드물고 우발적 — 출고(☑) 기본값으로 내려간다.
-                    seek.is_none_or(|s| s.include_window_titles)
-                });
+            let include_window_titles: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                let seek = state_for_window_titles
+                    .store
+                    .lock()
+                    .ok()
+                    .map(|store| SeekSettings::from_store(&store));
+                // 락 실패는 드물고 우발적 — 출고(☑) 기본값으로 내려간다.
+                seek.is_none_or(|s| s.include_window_titles)
+            });
             let tx = seek::spawn(
                 handle.clone(),
                 shared.clone(),
@@ -5567,8 +5626,7 @@ fn start_engine_if_needed(handle: &tauri::AppHandle, state: &Arc<AppState>) {
                     enabled: true,
                     area: hyperkey_started.trackpad.area,
                 };
-                *state.trackpad.lock().unwrap() =
-                    Some(trackpad::spawn(&shared, runtime));
+                *state.trackpad.lock().unwrap() = Some(trackpad::spawn(&shared, runtime));
             }
             // ⭐ 이슈 #110 — 기동 재조정의 되읽기 결과가 이제야 확정됐으므로 트레이
             // 상태 항목("caps lock 커널 매핑 미적용")을 반영한다.
@@ -5586,7 +5644,9 @@ fn caps_lock_kernel_map_missing(state: &AppState) -> bool {
     match state.engine_shared.load_full() {
         Some(shared) => {
             shared.config.load().caps_lock_alias.is_some()
-                && !shared.d1_confirmed.load(std::sync::atomic::Ordering::Acquire)
+                && !shared
+                    .d1_confirmed
+                    .load(std::sync::atomic::Ordering::Acquire)
         }
         None => false,
     }
@@ -5635,6 +5695,14 @@ fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: Engi
             // 권한이 없어 탭을 못 연 것은 정상 경로다 — F-11 온보딩이 처리한다.
             tracing::info!("no permission; handing off to onboarding modal");
             show_modal(handle);
+            // ⭐ 이슈 #149 C6 — 최초 설치 분기가 실패해도 권한 모델에 알린다.
+            // `engine.rs` 최초 설치 분기는 `NotTrusted` 를 올리면서 모델에 알리지
+            // 않았으므로, D1 재시도가 이 경로를 밟으면 모델은 `Granted` 인데 엔진
+            // 슬롯은 실패한 엔진으로 `Some` 인 채 이후 전이가 없어 시도가 소음 없이
+            // 유실됐다. `report_tap_create_failed()` 로 `OutOfSync` 에 복귀시켜
+            // 다음 백오프 재시도가 새 `Engine` 을 탈 수 있게 한다(`OutOfSync` 에선
+            // 엔진 슬롯이 비어 재창착 `Granted` 가 새 `Engine` 을 만든다).
+            report_tap_lost(state);
         }
         EngineEvent::FatalTapCreateFailed => {
             // ⛔ `key-remapping-engine.md` §3-a·§5#16: 재시도가 아니라 종료다.
@@ -6261,8 +6329,13 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
         .unwrap_or(false);
     drop(store);
 
-    let (normal_menu, ignore_item) =
-        build_normal_menu(handle, catalog, None, false, caps_lock_kernel_map_missing(state))?;
+    let (normal_menu, ignore_item) = build_normal_menu(
+        handle,
+        catalog,
+        None,
+        false,
+        caps_lock_kernel_map_missing(state),
+    )?;
     let unauthorized_menu = build_unauthorized_menu(handle, catalog)?;
 
     let state_for_events = state.clone();
@@ -6281,11 +6354,7 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
         // ⭐ 이슈 #78 계측 — Bartender 가 숨김·복원할 때 우리 코드가 개입하는지
         // 시간적 상관으로 배제하기 위한 호출 기록이다. 빈도가 낮아 `info` 로
         // 남긴다(계획 §2 D2 — 원인 확정 후에도 존치).
-        tracing::info!(
-            visible = false,
-            source = "boot",
-            "tray set_visible called"
-        );
+        tracing::info!(visible = false, source = "boot", "tray set_visible called");
         if let Err(e) = tray.set_visible(false) {
             tracing::warn!(error = %e, "failed to apply tray icon hidden state");
         }
@@ -6384,11 +6453,7 @@ fn apply_tray_menu_for_permission(
             state_for_closure.unauthorized_menu.lock().unwrap().clone()
         };
         if let Some(menu) = menu {
-            tracing::info!(
-                reason,
-                granted,
-                "tray set_menu replaced"
-            );
+            tracing::info!(reason, granted, "tray set_menu replaced");
             if let Err(e) = tray.set_menu(Some(menu)) {
                 tracing::warn!(error = %e, "failed to replace tray menu");
             }
@@ -6412,14 +6477,19 @@ fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     // ⛔ 최전면 앱 이름은 여기서 다시 조회하지 않는다 — `refresh_ignore_menu_item`
     // 이 그 일을 전담한다. 새 `ignore_item` 을 조립한 뒤 곧바로 그 함수를 한 번
     // 더 불러 실제 최전면 앱 라벨로 채운다.
-    let (normal_menu, ignore_item) =
-        match build_normal_menu(handle, catalog, None, false, caps_lock_kernel_map_missing(state)) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to rebuild tray normal menu after a language change");
-                return;
-            }
-        };
+    let (normal_menu, ignore_item) = match build_normal_menu(
+        handle,
+        catalog,
+        None,
+        false,
+        caps_lock_kernel_map_missing(state),
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to rebuild tray normal menu after a language change");
+            return;
+        }
+    };
     let unauthorized_menu = match build_unauthorized_menu(handle, catalog) {
         Ok(v) => v,
         Err(e) => {
@@ -6594,11 +6664,10 @@ fn setup_front_app_tracking(handle: &tauri::AppHandle, state: &Arc<AppState>) {
 /// 살려 둔다(드롭되면 구독이 해지된다 — `setup_front_app_tracking` 과 같은 규약).
 fn setup_show_settings_observer(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     let handle_for_signal = handle.clone();
-    let observer =
-        single_instance::observe_show_settings_requests(Box::new(move || {
-            tracing::info!("show-settings request from a second instance received");
-            show_settings_window(&handle_for_signal);
-        }));
+    let observer = single_instance::observe_show_settings_requests(Box::new(move || {
+        tracing::info!("show-settings request from a second instance received");
+        show_settings_window(&handle_for_signal);
+    }));
     *state.show_settings_observer.lock().unwrap() = Some(observer);
 }
 
@@ -6781,11 +6850,7 @@ fn set_hide_menu_bar_icon_internal(state: &Arc<AppState>, on: bool) -> Result<()
         // ⭐ 이슈 #78 계측 — 트리거 출처는 "toggle"(General 탭 `Hide menu bar icon`
         // 체크박스)이다. Bartender 의 숨김·복원과 우리 `set_visible` 의 시각이
         // 겹치는지 상관을 보기 위한 기록(계획 §2 D2 — 원인 확정 후에도 존치).
-        tracing::info!(
-            visible = !on,
-            source = "toggle",
-            "tray set_visible called"
-        );
+        tracing::info!(visible = !on, source = "toggle", "tray set_visible called");
         tray.set_visible(!on).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -6819,7 +6884,8 @@ fn set_hide_dock_icon_internal(
         } else {
             tauri::ActivationPolicy::Regular
         };
-        app.set_activation_policy(policy).map_err(|e| e.to_string())?;
+        app.set_activation_policy(policy)
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -6877,9 +6943,7 @@ mod tests {
     #[test]
     fn resolve_stored_language_returns_the_stored_locale() {
         let mut store = SettingsStore::in_memory();
-        store
-            .set(settings_keys::GENERAL_LANGUAGE, &"ko")
-            .unwrap();
+        store.set(settings_keys::GENERAL_LANGUAGE, &"ko").unwrap();
         assert_eq!(resolve_stored_language(&store), Some(Locale::Ko));
     }
 
@@ -7586,7 +7650,10 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        assert_eq!(compute_caps_lock_alias(&synthesize, true, false, false), None);
+        assert_eq!(
+            compute_caps_lock_alias(&synthesize, true, false, false),
+            None
+        );
     }
 
     /// ⭐ F-01 — `seek_remap_is_caps_lock` 하나만으로도 다른 이유 없이 F18 alias 가
@@ -7631,7 +7698,10 @@ mod tests {
             synthesize_caps_lock_remap: true,
             ..PresetSettings::default()
         };
-        assert_eq!(compute_caps_lock_alias(&synthesize, false, false, true), None);
+        assert_eq!(
+            compute_caps_lock_alias(&synthesize, false, false, true),
+            None
+        );
     }
 
     // preset_options_view() — 팝업 7종 개수(50/48/2/2/3/4/4)와 labelKey 배정.
@@ -7991,14 +8061,12 @@ mod tests {
         assert!(seek.change_click_modes_with_modifiers);
 
         // 타입이 안 맞으면 거부 — 다른 Seek 키와 같은 계약.
-        assert!(
-            apply_seek_setting(
-                &mut seek,
-                keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
-                &serde_json::json!("yes"),
-            )
-            .is_err()
-        );
+        assert!(apply_seek_setting(
+            &mut seek,
+            keys::SEEK_FOCUS_WINDOW_BEFORE_CLICKING,
+            &serde_json::json!("yes"),
+        )
+        .is_err());
     }
 
     // ⭐(이슈 #133, D12) — 창 제목 검색 키. ⚠️ 이 매치가 빠지면 폴스루로 조용히
@@ -8026,14 +8094,12 @@ mod tests {
         assert!(seek.include_window_titles);
 
         // 타입이 안 맞으면 거부 — 다른 Seek 키와 같은 계약.
-        assert!(
-            apply_seek_setting(
-                &mut seek,
-                keys::SEEK_INCLUDE_WINDOW_TITLES,
-                &serde_json::json!("yes"),
-            )
-            .is_err()
-        );
+        assert!(apply_seek_setting(
+            &mut seek,
+            keys::SEEK_INCLUDE_WINDOW_TITLES,
+            &serde_json::json!("yes"),
+        )
+        .is_err());
     }
 
     // ⭐(이슈 #93) — `seek.searchLanguage` 채택/거부. 인풋 박스 모드를 좌우하는
@@ -8059,11 +8125,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(seek.search_language.as_deref(), Some("en"));
-        assert!(!seek.to_config(false).input_box_mode, "en = 영어 강제(인풋 아님)");
+        assert!(
+            !seek.to_config(false).input_box_mode,
+            "en = 영어 강제(인풋 아님)"
+        );
 
         // null → 부재(영어 기본)로 되돌린다.
-        apply_seek_setting(&mut seek, keys::SEEK_SEARCH_LANGUAGE, &serde_json::Value::Null)
-            .unwrap();
+        apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEARCH_LANGUAGE,
+            &serde_json::Value::Null,
+        )
+        .unwrap();
         assert_eq!(seek.search_language, None);
 
         // 빈 문자열도 부재와 같은 취급.
@@ -8076,14 +8149,12 @@ mod tests {
         assert_eq!(seek.search_language, None);
 
         // 허용 코드가 아니면 거부(조용히 무시하지 않는다).
-        assert!(
-            apply_seek_setting(
-                &mut seek,
-                keys::SEEK_SEARCH_LANGUAGE,
-                &serde_json::json!("fr"),
-            )
-            .is_err()
-        );
+        assert!(apply_seek_setting(
+            &mut seek,
+            keys::SEEK_SEARCH_LANGUAGE,
+            &serde_json::json!("fr"),
+        )
+        .is_err());
     }
 
     // ⭐ F-04 — `click_settings_from_seek` 가 저장 표현을 경계 타입으로
@@ -8256,7 +8327,10 @@ mod tests {
         assert!(preset_options_json.contains_key("capsRemapTargets"));
         assert!(preset_options_json.contains_key("doubleTapShiftSides"));
         assert_eq!(
-            preset_options_json["doubleTapShiftSides"].as_array().unwrap().len(),
+            preset_options_json["doubleTapShiftSides"]
+                .as_array()
+                .unwrap()
+                .len(),
             3
         );
 
@@ -8420,7 +8494,9 @@ mod tests {
         let store = SettingsStore::in_memory();
         assert!(general_view(&store, false).hide_dock_icon);
         let mut store = SettingsStore::in_memory();
-        store.set(settings_keys::GENERAL_HIDE_DOCK_ICON, &false).unwrap();
+        store
+            .set(settings_keys::GENERAL_HIDE_DOCK_ICON, &false)
+            .unwrap();
         assert!(!general_view(&store, false).hide_dock_icon);
     }
 
@@ -8458,9 +8534,15 @@ mod tests {
         // 1970-01-01T00:00:00Z (day 0).
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         // 1700000000 초 = 2023-11-14T22:13:20Z.
-        assert_eq!(civil_from_days((1_700_000_000u64 / 86_400) as i64), (2023, 11, 14));
+        assert_eq!(
+            civil_from_days((1_700_000_000u64 / 86_400) as i64),
+            (2023, 11, 14)
+        );
         // 1893456000 초 = 2030-01-01T00:00:00Z.
-        assert_eq!(civil_from_days((1_893_456_000u64 / 86_400) as i64), (2030, 1, 1));
+        assert_eq!(
+            civil_from_days((1_893_456_000u64 / 86_400) as i64),
+            (2030, 1, 1)
+        );
     }
 
     #[test]
@@ -8563,5 +8645,85 @@ mod tests {
         assert_eq!(rule_label(&catalog, "preset:255"), None);
         assert_eq!(rule_label(&catalog, "korean:1"), None);
         assert_eq!(rule_label(&catalog, "bogus"), None);
+    }
+
+    /// ⭐ 이슈 #149 D4 — 3세대 순환: `.log` 초과 시 `.1`→`.2` 로 밀고 `.log`→`.1`.
+    #[test]
+    fn rotate_log_generations_shifts_both_generations() {
+        let dir = std::env::temp_dir().join(format!(
+            "ultrakey-log-rotate-{}-{}",
+            std::process::id(),
+            "shift"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ultrakey.log"), vec![b'x'; 16]).unwrap();
+        std::fs::write(dir.join("ultrakey.log.1"), "old-gen1").unwrap();
+        std::fs::write(dir.join("ultrakey.log.2"), "old-gen2").unwrap();
+
+        rotate_log_generations(&dir, 8);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ultrakey.log.2")).unwrap(),
+            "old-gen1"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ultrakey.log.1"))
+                .unwrap()
+                .len(),
+            16
+        );
+        assert!(std::fs::metadata(dir.join("ultrakey.log")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ 이슈 #149 D4 — `.1` 이 없으면 `.2` 는 건드리지 않고 `.log`→`.1` 만.
+    #[test]
+    fn rotate_log_generations_without_gen1_keeps_gen2() {
+        let dir = std::env::temp_dir().join(format!(
+            "ultrakey-log-rotate-{}-{}",
+            std::process::id(),
+            "nogen1"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ultrakey.log"), vec![b'y'; 16]).unwrap();
+        std::fs::write(dir.join("ultrakey.log.2"), "keep-me").unwrap();
+
+        rotate_log_generations(&dir, 8);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ultrakey.log.2")).unwrap(),
+            "keep-me"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ultrakey.log.1"))
+                .unwrap()
+                .len(),
+            16
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ 이슈 #149 D4 — 상한 이하면 아무 것도 움직이지 않는다.
+    #[test]
+    fn rotate_log_generations_keeps_small_log_in_place() {
+        let dir = std::env::temp_dir().join(format!(
+            "ultrakey-log-rotate-{}-{}",
+            std::process::id(),
+            "small"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ultrakey.log"), "tiny").unwrap();
+
+        rotate_log_generations(&dir, 1024);
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ultrakey.log")).unwrap(),
+            "tiny"
+        );
+        assert!(std::fs::metadata(dir.join("ultrakey.log.1")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

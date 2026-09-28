@@ -7,6 +7,7 @@
 //! 로깅·`on_event` 호출 같은 무거운 일은 `commands.send(...)` 로 커맨드 큐에 위임하고
 //! 콜백 자신은 즉시 리턴한다.
 
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -36,7 +37,7 @@ use ultrakey_platform::hid_mapping::HidutilBackend;
 use ultrakey_platform::runloop::{CommandSource, RepeatingTimer, RunLoopConfined, RunLoopHandle};
 use ultrakey_platform::secure_input::{DirectSecureInputProbe, SecureInputProbe};
 
-use crate::command::{self, CommandChannel, EngineCommand};
+use crate::command::{self, CommandChannel, EngineCommand, TapDisableReason};
 use crate::lifecycle::{
     self, quick_press_tick_delay_hint, tap_state_after_create_attempt,
     tap_state_after_create_attempt_for, tap_state_after_reenable, AtomicTapState,
@@ -200,7 +201,11 @@ impl Engine {
             let attached = ultrakey_platform::hid_device::list_attached_keyboards();
             let migration: Option<Box<dyn GlobalD1Migration>> =
                 Some(Box::new(HidutilGlobalMigration));
-            let path_b = Arc::new(PathBManager::new(Box::new(HidutilBackend), migration, ledger));
+            let path_b = Arc::new(PathBManager::new(
+                Box::new(HidutilBackend),
+                migration,
+                ledger,
+            ));
             // ⭐ 이슈 #144 — 기동 재조정도 `SharedState::path_b_write_cfg` 단일 게이트를
             // 거친다. 기동 직후 `d1_suspended` 는 항상 거짓이라 이 자리에서는 항등
             // 변환이지만, 경로 B 쓰기가 게이트를 우회하는 지점이 하나도 없게 전
@@ -388,17 +393,57 @@ struct TapThreadState {
     /// `Reconfigure` 분기가 마스크 변경으로 탭을 재생성할 때 `handle_recreate_tap`
     /// 을 다시 부르려면 이 채널이 필요하다(`docs/plan/issue-140-event-mask.md`
     /// §2 D2) — perform 클로저 안에 `RunLoopConfined<Option<CommandChannel>>` 를
-    /// 새로 두는 대신, 이미 있는 상태 셀 하나에 넣어 접근 지점을 하나로 유지한다.
     commands: Option<CommandChannel>,
+    /// ⭐ 이슈 #149 D4 — 탭 상태 전이 링 버퍼(최근 32개). 각 항목은
+    /// (mono_ms, 이전 상태, 다음 상태, 트리거 문자열)이다. `set_tap_state` 가 실제
+    /// 전이가 일어날 때만 push 하고, 가득 차면 가장 오래된 항목을 버린다.
+    /// `handle_recover_tap` 의 Teardown 분기가 전량을 WARN 한 줄로 덤프한다
+    /// (재기동 없이 교착 A/B 판별 — 다음 발증의 원인 확정 열쇠).
+    transition_log: VecDeque<(u64, TapState, TapState, &'static str)>,
 }
 
-fn set_tap_state(st: &mut TapThreadState, s: TapState) {
-    if st.tap_state_snapshot != s {
+/// ⭐ 이슈 #149 D4 — 링 버퍼 상한. Teardown 덤프가 WARN 한 줄에 들어가도록 32개로
+/// 묶는다(덤프는 최신 순, `|` 구분).
+const TRANSITION_LOG_CAP: usize = 32;
+
+fn set_tap_state(st: &mut TapThreadState, s: TapState, trigger: &'static str) {
+    let from = st.tap_state_snapshot;
+    if from != s {
         st.tap_state_snapshot = s;
         st.tap_state_atomic.store(s);
+        // 링 버퍼는 고정 용량이라 콜백 경로에서도 할당 없이 push 할 수 있다
+        // (`String`/`format!` 을 쓰지 않는다 — 트리거는 정적 문자열 리터럴만).
+        if st.transition_log.len() >= TRANSITION_LOG_CAP {
+            st.transition_log.pop_front();
+        }
+        st.transition_log
+            .push_back((st.start.elapsed().as_millis() as u64, from, s, trigger));
         tracing::info!(?s, "tap state transition");
         (st.on_event)(EngineEvent::TapStateChanged(s));
     }
+}
+
+/// ⭐ 이슈 #149 D4 — 링 버퍼를 WARN 한 줄에 담는 압축 직렬화. 최신 순으로
+/// `From→To @ms (trigger)` 를 ` | ` 로 잇는다(`TapState` 는 기존 로그와 같은
+/// `{:?}` 방식). Teardown 분기(탭 스레드)에서만 부르므로 힙 할당 허용.
+fn format_transition_log(log: &VecDeque<(u64, TapState, TapState, &'static str)>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for (i, (ms, from, to, trigger)) in log.iter().rev().enumerate() {
+        if i > 0 {
+            out.push_str(" | ");
+        }
+        let _ = write!(
+            out,
+            "e{}: {:?}→{:?} @{}ms ({})",
+            i + 1,
+            from,
+            to,
+            ms,
+            trigger
+        );
+    }
+    out
 }
 
 fn make_synth_event(ev: &SynthEvent) -> Option<SyntheticEvent> {
@@ -447,7 +492,12 @@ fn apply_outcome_outside_tap(outcome: &Outcome) {
 /// `gates.seek_active && gates.seek_input_box` 조건이 ①을 배제하고 ②만 남긴다 —
 /// 세션 밖 F-16.1·F-16.2, 기본 Seek, 다른 모든 계층(Preset·SimpleRemap 등)은 종전과
 /// 똑같이 `apply_outcome_in_tap` 을 탄다(한 바이트도 안 바뀐다).
-fn emit_outcome(outcome: &Outcome, gates: GateSnapshot, proxy: TapProxy, commands: &CommandChannel) {
+fn emit_outcome(
+    outcome: &Outcome,
+    gates: GateSnapshot,
+    proxy: TapProxy,
+    commands: &CommandChannel,
+) {
     if should_defer_synth_to_command_queue(gates, outcome.layer()) {
         for ev in outcome.emitted() {
             commands.send(EngineCommand::PostSynthEvent(*ev));
@@ -519,15 +569,19 @@ fn toggle_caps_lock_via_path_c() -> (u8, u8, u8) {
 /// `(추정 — 실기기로 확인하지 못했다)`. 그래서 `flags` 는 **항상
 /// `combo.event_flags()` 로 명시적으로 덮어써야** 한다 — 아래 두 호출 모두 그렇게
 /// 한다(`SyntheticEvent::keyboard` 가 매 호출마다 `CGEventSetFlags` 를 부른다).
-fn type_char_events(table: &LayoutTable, c: char) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
+fn type_char_events(
+    table: &LayoutTable,
+    c: char,
+) -> (Option<SyntheticEvent>, Option<SyntheticEvent>) {
     match plan_text_output(table, c) {
         TextOutputPlan::KeyStroke { keycode, flags } => (
             SyntheticEvent::keyboard(keycode, true, flags),
             SyntheticEvent::keyboard(keycode, false, flags),
         ),
-        TextOutputPlan::UnicodeString(c) => {
-            (SyntheticEvent::unicode(c, true), SyntheticEvent::unicode(c, false))
-        }
+        TextOutputPlan::UnicodeString(c) => (
+            SyntheticEvent::unicode(c, true),
+            SyntheticEvent::unicode(c, false),
+        ),
     }
 }
 
@@ -661,11 +715,19 @@ fn on_tap_event(
     // `on_event` 호출은 힙 할당·동기 I/O 를 수반할 수 있어 이 콜백 안에서 직접 하지
     // 않는다. 대신 명령 큐에 넣고 즉시 리턴한다 — perform 콜백(같은 스레드, 콜백이
     // 아닌 자리)이 실제 처리를 한다.
-    if matches!(
-        kind,
-        EventKind::TapDisabledByTimeout | EventKind::TapDisabledByUserInput
-    ) {
-        commands.send(EngineCommand::RecoverTap);
+    // ⭐ 이슈 #149 D2 — 통지 종류를 `reason` 에 실어 보낸다. 트램폴린이 통지
+    // 예산 안에서 이미 `CGEventTapEnable` 을 시도했으므로(C1), 이 경로는 silent
+    // 예산을 건드리지 않는다.
+    if kind == EventKind::TapDisabledByTimeout {
+        commands.send(EngineCommand::RecoverTap {
+            reason: TapDisableReason::NotificationTimeout,
+        });
+        return TapAction::Pass;
+    }
+    if kind == EventKind::TapDisabledByUserInput {
+        commands.send(EngineCommand::RecoverTap {
+            reason: TapDisableReason::NotificationUserInput,
+        });
         return TapAction::Pass;
     }
 
@@ -774,22 +836,33 @@ fn on_tap_event(
             disposition_flags: trace::disposition_flags_of(outcome.disposition()),
             // ⭐ 이슈 #108 원인 (b) 진단 — 이 이벤트 처리 직후 정본 눌림 테이블의
             // 좌/우 shift·caps lock 스냅샷. 같은 스레드 메모리 읽기 3회뿐이다.
-            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8 * trace::PRESSED_MOD_LEFT_SHIFT)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8 * trace::PRESSED_MOD_RIGHT_SHIFT)
+            pressed_mods: (st.arbiter.is_pressed(KeyCode::LEFT_SHIFT) as u8
+                * trace::PRESSED_MOD_LEFT_SHIFT)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_SHIFT) as u8
+                    * trace::PRESSED_MOD_RIGHT_SHIFT)
                 | (st.arbiter.is_pressed(KeyCode::CAPS_LOCK) as u8 * trace::PRESSED_MOD_CAPS_LOCK),
             // ⭐ 이슈 #121 — ⌃⌥⌘ 여섯 키 스냅샷(F-16.1 ShiftOnly 의 "다른 modifier
             // 미눌림" 판정) + 합성 hyper 활성 스냅샷(발화 조건 3). `is_pressed` 와
             // `active_synth_flags` 는 같은 스레드 메모리 읽기일 뿐이다(#108 관례).
-            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8 * trace::PRESSED_MOD_LEFT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8 * trace::PRESSED_MOD_RIGHT_CONTROL)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8 * trace::PRESSED_MOD_LEFT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8 * trace::PRESSED_MOD_RIGHT_OPTION)
-                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8 * trace::PRESSED_MOD_LEFT_COMMAND)
-                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8 * trace::PRESSED_MOD_RIGHT_COMMAND),
+            pressed_mods_other: (st.arbiter.is_pressed(KeyCode::LEFT_CONTROL) as u8
+                * trace::PRESSED_MOD_LEFT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_CONTROL) as u8
+                    * trace::PRESSED_MOD_RIGHT_CONTROL)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_OPTION) as u8
+                    * trace::PRESSED_MOD_LEFT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_OPTION) as u8
+                    * trace::PRESSED_MOD_RIGHT_OPTION)
+                | (st.arbiter.is_pressed(KeyCode::LEFT_COMMAND) as u8
+                    * trace::PRESSED_MOD_LEFT_COMMAND)
+                | (st.arbiter.is_pressed(KeyCode::RIGHT_COMMAND) as u8
+                    * trace::PRESSED_MOD_RIGHT_COMMAND),
             synth_flags_active: (!st.arbiter.active_synth_flags().is_empty()) as u8,
             // ⭐ 이슈 #125 — 같은 스레드 메모리 읽기 한 번 더(#108/#121 관례 그대로,
             // 비용 없음). D2 가 실제로 쓰는 pressed-필터 값의 스냅샷.
-            synth_flags_active_pressed: (!st.arbiter.active_synth_flags_of_pressed_slots().is_empty()) as u8,
+            synth_flags_active_pressed: (!st
+                .arbiter
+                .active_synth_flags_of_pressed_slots()
+                .is_empty()) as u8,
             ..Default::default()
         };
 
@@ -850,54 +923,112 @@ fn on_timer_tick(cell: &RunLoopConfined<TapThreadState>) {
 
 /// `EngineCommand::RecoverTap` — 트램폴린의 즉시 재활성화 통지를 받아 상태를 반영한다.
 ///
-/// ⭐ **이슈 #65 Phase 1 리뷰 교정 2.** 이 함수는 더 이상 스스로 `tap.enable(true)`
-/// 를 부르지 않는다. 예전에는 여기서 직접 `enable(true)` 를 부른 뒤 **같은 프레임에서
-/// 곧바로** `tap.is_enabled()` 를 읽었다 — `CGEventTapIsEnabled` 는 마지막으로 설정된
-/// 플래그를 읽을 뿐 macOS 가 곧이어(비동기로) 다시 끌지 여부를 반영하지 않으므로 이
-/// 체크는 사실상 항상 `true` 였고, 실패 카운터가 매번 리셋되어 에스컬레이션에 영원히
-/// 도달하지 못했다(commit 7031351 이 트램폴린 쪽에서만 고치고 이 경로는 그대로 남겨
-/// 뒀던 바로 그 결함 — 이슈 #65 Phase 1 진단 "가설 (a)"). 재활성화 시도 자체는 이제
-/// 트램폴린(`ultrakey_platform::event_tap::ReenableBudget`) 하나가 전담한다 — 이
+/// ⭐ **이슈 #65 Phase 1 리뷰 교정 2.** 통지 경로(`NotificationTimeout`/`UserInput`)에서는
+/// 이 함수는 스스로 `tap.enable(true)` 를 부르지 않는다 — 재활성화 시도 자체는
+/// 트램폴린(`ultrakey_platform::event_tap::ReenableBudget`) 하나가 전담하고, 이
 /// 함수는 그 결과를 **관찰**만 하고, 예산이 소진됐거나 권한이 없으면 탭을 해체한다.
+/// 예전에 여기서 직접 `enable(true)` 를 부른 뒤 **같은 프레임에서 곧바로**
+/// `tap.is_enabled()` 를 읽던 결함(commit 7031351 이 트램폴린 쪽에서만 고치고 이
+/// 경로는 그대로 남겨 뒀던 바로 그 결함 — 이슈 #65 Phase 1 진단 "가설 (a)")은
+/// 통지 경로에서 그대로 교훈으로 남는다.
+///
+/// ⭐ **이슈 #149 D2 — `WatchdogSilent` reason 에서만 이 함수가 `enable()` 을 시도한다.**
+/// 통지 없이 꺼진 탭은 트램폴린이 손댈 기회 자체가 없으므로(C3), 워치독 폴링(기본
+/// 1초) 속도로 silent 예산(3회) 안에서 시도한다. #65 교정 2 의 stale-true 문제는
+/// 여기서 성립하지 않는다 — 1초 간격 폴링이라 stale true 는 다음 폴링에서 식별되고,
+/// 설령 반복돼도 상한 3회에서 `Teardown` 으로 확정된다. 시도 뒤 `is_enabled()` 을
+/// **같은 프레임에서 다시 읽지 않는다** — 예산은 시도 자체에서 소비되므로 실패는
+/// 다음 폴링의 다음 `RecoverTap` 이 식별한다.
 ///
 /// ⛔ **재생성을 시도하지 않는다.** stale `AXIsProcessTrusted()` 상황에서 "예산 소진 →
 /// 즉시 재생성"은 재생성마다 새 탭 = 새 예산(5회)이 다시 채워지는 **더 느린 폭주**가
 /// 된다(리뷰가 초안의 이 부분을 기각한 근거). 복구는 오직 권한 모니터가 `Granted` 를
 /// 재확인해 앱이 완전히 새 `Engine` 을 만드는 것으로만 일어난다.
-fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>) {
+fn handle_recover_tap(cell: &RunLoopConfined<TapThreadState>, reason: TapDisableReason) {
     let trusted = ultrakey_platform::accessibility::is_process_trusted();
 
     let mut st = cell.borrow_mut();
     if st.fatal {
         return;
     }
-    let Some((exhausted, enabled)) = st
-        .tap
-        .as_ref()
-        .map(|tap| (tap.reenable_budget_exhausted(), tap.is_enabled()))
-    else {
+    let Some((exhausted, silent_exhausted, enabled)) = st.tap.as_ref().map(|tap| {
+        (
+            tap.reenable_budget_exhausted(),
+            tap.silent_reenable_exhausted(),
+            tap.is_enabled(),
+        )
+    }) else {
         // 탭이 이미 없다 — 이 명령이 도착하기 전에 이미 해체됐거나 아직 설치되지
         // 않은 상태다. 할 일이 없다(재생성은 시도하지 않는다, 위 문서 참고).
         return;
     };
 
-    match lifecycle::recover_tap_decision(trusted, exhausted) {
+    match lifecycle::recover_tap_decision(trusted, exhausted, silent_exhausted) {
         lifecycle::RecoverTapDecision::Teardown => {
             tracing::warn!(
                 trusted,
                 exhausted,
+                silent_exhausted,
+                ?reason,
                 "giving up on this tap — dismantling it instead of re-enabling or \
                  recreating it (prevents a re-enable storm); recovery is now the \
                  permission monitor's job"
             );
             st.tap = None;
             st.health_probe_slot.store(None);
-            set_tap_state(&mut st, TapState::NotInstalled);
+            // ⭐ 이슈 #149 D4 — 해체 전이를 버퍼에 남긴 뒤 전량을 WARN 한 줄로
+            // 덤프한다. 트리거에 통지/워치독 구분자를 남겨 재기동 없이 교착 A/B 를
+            // 판별한다("watchdog: tap detected disabled" 반복이면 B, 이 덤프가
+            // 보이면 A — 계획 문서 §3 D4).
+            let teardown_trigger = match reason {
+                TapDisableReason::WatchdogSilent => "watchdog-silent-teardown",
+                TapDisableReason::NotificationTimeout => "notification-timeout-teardown",
+                TapDisableReason::NotificationUserInput => "notification-user-input-teardown",
+            };
+            set_tap_state(&mut st, TapState::NotInstalled, teardown_trigger);
+            let history = format_transition_log(&st.transition_log);
+            tracing::warn!(transitions = %history, "tap transition history (newest first)");
             (st.on_event)(EngineEvent::TapLost);
         }
         lifecycle::RecoverTapDecision::KeepAlive => {
+            // ⭐ 이슈 #149 D2 — 통지 없이 꺼진 탭(`!enabled` + `WatchdogSilent`)에서만
+            // silent 예산으로 재활성화를 시도한다. 그 외 KeepAlive 는 기존 관찰 전용
+            // 유지(#65 교정 2).
+            if !enabled && reason == TapDisableReason::WatchdogSilent {
+                // ⭐ 빌림 범위 주의 — `tap` 빌림을 먼저 끝내고(소유값만 꺼낸다) 그
+                // 뒤에야 `set_tap_state(&mut st, ..)` 로 가야 빌림 충돌이 없다.
+                let (reattempted, attempts) = match st.tap.as_ref() {
+                    Some(tap) => {
+                        let ok = tap.try_watchdog_reenable();
+                        (ok, tap.silent_reenable_attempts())
+                    }
+                    None => return,
+                };
+                if reattempted {
+                    // ⭐ 이슈 #149 D2 — 시도 횟수를 `N/3` 형태로 남긴다(다음 발증의
+                    // 원인 확정 열쇠 — 계획 문서 §3 D4).
+                    tracing::warn!("watchdog-initiated re-enable attempt {}/3", attempts);
+                }
+                // 시도 뒤 `is_enabled()` 을 같은 프레임에서 다시 읽지 않는다 — 위
+                // 문서 참고. 상태 전이는 다음 폴링의 관찰에 맡긴다.
+                set_tap_state(
+                    &mut st,
+                    tap_state_after_reenable(false),
+                    "watchdog-silent-keepalive",
+                );
+                return;
+            }
             tracing::info!(enabled, "tap health checked after a disable notification");
-            set_tap_state(&mut st, tap_state_after_reenable(enabled));
+            let keepalive_trigger = match reason {
+                TapDisableReason::WatchdogSilent => "watchdog-silent-keepalive",
+                TapDisableReason::NotificationTimeout => "notification-timeout-keepalive",
+                TapDisableReason::NotificationUserInput => "notification-user-input-keepalive",
+            };
+            set_tap_state(
+                &mut st,
+                tap_state_after_reenable(enabled),
+                keepalive_trigger,
+            );
         }
     }
 }
@@ -933,7 +1064,13 @@ fn handle_recreate_tap(
         // 창의 이벤트" 참고 — 그 사이 이벤트는 탭 없이 통과한다).
         st.tap = None;
         st.health_probe_slot.store(None);
-        set_tap_state(&mut st, TapState::Installing);
+        // ⭐ 이슈 #149 D4 — `handle_recreate_tap` 진입(해체→`Installing`)도 전이
+        // 버퍼에 남긴다. 최초 설치와 마스크 재생성을 구분한다.
+        let install_trigger = match trigger {
+            TapCreateTrigger::InitialInstall => "initial-install",
+            TapCreateTrigger::MaskChanged => "mask-changed-recreate",
+        };
+        set_tap_state(&mut st, TapState::Installing, install_trigger);
         // ⭐ 이슈 #140(U2) — 마스크는 이 시점의 `EngineConfig` 로부터 도출한다.
         // `Installing` 으로 전이한 같은 borrow 안에서 읽어 재생성 창 동안
         // 설정이 다시 바뀌어도 이 시도가 쓰는 마스크가 뒤섞이지 않는다.
@@ -965,20 +1102,30 @@ fn handle_recreate_tap(
                 );
                 CreateAttemptResult::Success
             } else {
-                // ⚠️ 이론상의 엣지 케이스 — `CGEventTapCreate` 는 보통 이미 활성인
-                // 탭을 반환한다. 만들어졌지만 즉시 비활성인 경우, 여기서는 더 이상
-                // 스스로 `enable()` 을 부르지 않는다(교정 2) — macOS 가 실제로
-                // 이 탭을 다시 비활성화 통지 없이 영구히 죽은 채로 둔다면(전이가
-                // 한 번도 없었으므로), 워치독이 매초 `RecoverTap` 을 보내도
-                // `reenable_budget_exhausted()` 가 계속 `false`(통지가 없었으니
-                // 예산 소비도 없다)라 `KeepAlive` 로만 관찰된다. 실기기에서 관찰된
-                // 적은 없다 — 관찰되면 트램폴린 쪽에 별도 신호가 필요하다.
+                // ⭐ 이슈 #149 D2·D3 — `CGEventTapCreate` 는 보통 이미 활성인 탭을
+                // 반환한다. 만들어졌지만 즉시 비활성인 경우, 워치독 silent 경로(D2)가
+                // 이제 이 케이스의 재활성화 주체다 — 통지 없이 꺼진 탭(`!enabled`)을
+                // 워치독 폴링이 `RecoverTap { WatchdogSilent }` 로 보고하면 silent
+                // 예산(3회) 안에서 `enable()` 을 시도하고, 그래도 안 살아나면
+                // `Teardown` 으로 D1 경로에 합류한다. 예전 주석("실기기에서 관찰된
+                // 적은 없다 — 별도 신호가 필요하다")은 이 구현으로 해소되므로 정정한다.
                 tracing::warn!(
-                    "tap created but is not enabled yet; the watchdog will keep observing it"
+                    "tap created but is not enabled yet; the watchdog silent path will attempt re-enable"
                 );
                 CreateAttemptResult::CreatedButDisabled
             };
-            set_tap_state(&mut st, tap_state_after_create_attempt(attempt_result));
+            // ⭐ 이슈 #149 D4 — `CreatedButDisabled` 도 전이 버퍼에 남긴다
+            // (`set_tap_state` 경유 — `Disabled` 로의 전이 자체가 기록된다).
+            let create_trigger = match attempt_result {
+                CreateAttemptResult::Success => "tap-create-success",
+                CreateAttemptResult::CreatedButDisabled => "tap-created-but-disabled",
+                _ => "tap-create-attempt",
+            };
+            set_tap_state(
+                &mut st,
+                tap_state_after_create_attempt(attempt_result),
+                create_trigger,
+            );
         }
         // ⭐ 이슈 #140(P3 심사 지적 2·3) — 재생성(`MaskChanged`) 실패는 사유와
         // 무관하게 "살아 있던 탭이 사라졌다" 이므로 `TapLost` 로 권한 모델에
@@ -994,6 +1141,7 @@ fn handle_recreate_tap(
             set_tap_state(
                 &mut st,
                 tap_state_after_create_attempt_for(trigger, CreateAttemptResult::NotTrusted),
+                "mask-changed-recreate-not-trusted",
             );
             (st.on_event)(EngineEvent::TapLost);
         }
@@ -1007,6 +1155,7 @@ fn handle_recreate_tap(
             set_tap_state(
                 &mut st,
                 tap_state_after_create_attempt_for(trigger, CreateAttemptResult::Fatal),
+                "mask-changed-recreate-fatal",
             );
             (st.on_event)(EngineEvent::TapLost);
         }
@@ -1016,6 +1165,7 @@ fn handle_recreate_tap(
             set_tap_state(
                 &mut st,
                 tap_state_after_create_attempt(CreateAttemptResult::NotTrusted),
+                "initial-install-not-trusted",
             );
             (st.on_event)(EngineEvent::NotTrusted);
         }
@@ -1026,6 +1176,7 @@ fn handle_recreate_tap(
             set_tap_state(
                 &mut st,
                 tap_state_after_create_attempt(CreateAttemptResult::Fatal),
+                "initial-install-fatal",
             );
             (st.on_event)(EngineEvent::FatalTapCreateFailed);
         }
@@ -1069,7 +1220,7 @@ fn drain_commands(
                     "handled sleep/lock/Secure Input; forced a state reset (prevents stuck modifiers)"
                 );
             }
-            EngineCommand::RecoverTap => handle_recover_tap(cell),
+            EngineCommand::RecoverTap { reason } => handle_recover_tap(cell, reason),
             EngineCommand::Reconfigure => {
                 let (decision, commands, old_mask, new_mask) = {
                     let mut st = cell.borrow_mut();
@@ -1206,6 +1357,7 @@ fn tap_thread_main(
         trace: trace_ring,
         trace_seq: 0,
         commands: None,
+        transition_log: VecDeque::with_capacity(TRANSITION_LOG_CAP),
     });
 
     let (cmd_tx, cmd_rx) = command::channel();
@@ -1282,7 +1434,10 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 세션 밖(계층 3) 의 같은 `Layer::KoreanInput` 산출 — F-16.1 세션 밖 발화는
@@ -1290,7 +1445,10 @@ mod tests {
     #[test]
     fn does_not_defer_out_of_session_korean_input_layer() {
         let gates = GateSnapshot::default(); // seek_active == false
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 세션은 열려 있지만 인풋 박스 모드가 아니면(영어 단일 세션) 계층 1 이 D2 자체를
@@ -1302,7 +1460,10 @@ mod tests {
             seek_input_box: false,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::KoreanInput));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::KoreanInput
+        ));
     }
 
     /// 인풋 박스 세션 중이라도 D2 가 아닌 다른 계층(예: 계층 1 자체의 `SeekSession`)
@@ -1314,7 +1475,79 @@ mod tests {
             seek_input_box: true,
             ..GateSnapshot::default()
         };
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::SeekSession));
-        assert!(!should_defer_synth_to_command_queue(gates, Layer::PresetCombo));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::SeekSession
+        ));
+        assert!(!should_defer_synth_to_command_queue(
+            gates,
+            Layer::PresetCombo
+        ));
+    }
+
+    /// ⭐ 이슈 #149 D4 — 전이 링 버퍼: 실제 전이만 기록되고 용량 32에서 오래된
+    /// 항목부터 버려진다.
+    #[test]
+    fn transition_log_keeps_only_the_latest_32_transitions() {
+        use super::{
+            format_transition_log, set_tap_state, EngineEvent, TapThreadState, TRANSITION_LOG_CAP,
+        };
+        use crate::lifecycle::{AtomicTapState, TapState};
+        use crate::state::SharedState;
+        use crate::trace::TraceRing;
+        use std::collections::VecDeque;
+        use std::sync::Arc;
+        use std::time::Instant;
+        use ultrakey_core::arbitration::Arbiter;
+        use ultrakey_core::gate::AtomicAppGate;
+        use ultrakey_core::settings::EngineConfig;
+        use ultrakey_platform::secure_input::DirectSecureInputProbe;
+
+        let cfg = EngineConfig::default();
+        let shared = SharedState::new(cfg.clone(), Arc::new(AtomicAppGate::new()));
+        let mut st = TapThreadState {
+            shared,
+            on_event: Arc::new(|_: EngineEvent| {}),
+            arbiter: Arbiter::new(&cfg),
+            tap: None,
+            secure_input: DirectSecureInputProbe,
+            tap_state_snapshot: TapState::NotInstalled,
+            tap_state_atomic: Arc::new(AtomicTapState::new(TapState::NotInstalled)),
+            health_probe_slot: Arc::new(arc_swap::ArcSwapOption::empty()),
+            fatal: false,
+            timer: None,
+            start: Instant::now(),
+            trace: Arc::new(TraceRing::new()),
+            trace_seq: 0,
+            commands: None,
+            transition_log: VecDeque::with_capacity(TRANSITION_LOG_CAP),
+        };
+
+        // 같은 상태로의 전이는 기록되지 않는다.
+        set_tap_state(&mut st, TapState::NotInstalled, "no-op");
+        assert!(st.transition_log.is_empty());
+
+        // 40회 전이를 강제한다 — `TapState` 6종을 번갈아 순환시켜 매번 실제
+        // 전이가 일어나게 한다.
+        let cycle = [
+            TapState::Installing,
+            TapState::Active,
+            TapState::Disabled,
+            TapState::SuspendedBySleepOrLock,
+            TapState::Terminated,
+            TapState::NotInstalled,
+        ];
+        for i in 0..40 {
+            set_tap_state(&mut st, cycle[i % cycle.len()], "cycle");
+        }
+        assert_eq!(st.transition_log.len(), TRANSITION_LOG_CAP);
+        // 최신 32개만 남는다 — 첫 8개가 버려지고 9번째 전이부터 보관된다.
+        assert_eq!(st.transition_log.front().unwrap().2, cycle[8 % cycle.len()]);
+        assert_eq!(st.transition_log.back().unwrap().2, cycle[39 % cycle.len()]);
+        // 덤프는 최신 순, 한 줄, `|` 구분이다.
+        let history = format_transition_log(&st.transition_log);
+        assert_eq!(history.matches(" | ").count(), TRANSITION_LOG_CAP - 1);
+        assert!(history.starts_with("e1: "));
+        assert!(history.contains("(cycle)"));
     }
 }

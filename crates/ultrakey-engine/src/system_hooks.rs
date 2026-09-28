@@ -21,11 +21,13 @@ use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
 use ultrakey_core::korean::{classify_input_source_languages, classify_input_source_languages_for};
 use ultrakey_core::perdevice::DeviceId;
-use ultrakey_platform::hotplug::{watch_keyboards, HotplugEvent, HotplugEventKind, KeyboardHotplugWatcher};
+use ultrakey_platform::hotplug::{
+    watch_keyboards, HotplugEvent, HotplugEventKind, KeyboardHotplugWatcher,
+};
 use ultrakey_platform::text_input_source::{observe_input_source_changes, InputSourceObserver};
 use ultrakey_platform::workspace::{observe_system_events, SystemEvent, SystemEventObserver};
 
-use crate::command::{CommandChannel, EngineCommand};
+use crate::command::{CommandChannel, EngineCommand, TapDisableReason};
 use crate::lifecycle::should_skip_restart;
 use crate::path_b::PathBManager;
 use crate::state::SharedState;
@@ -200,11 +202,7 @@ fn reapply_all_path_b(shared: &Arc<SharedState>, path_b: &Arc<PathBManager>) {
         .store(path_b.d1_confirmed(), Ordering::Release);
     let elapsed_ms = started.elapsed().as_millis() as u64;
     match result {
-        Ok(()) => tracing::info!(
-            elapsed_ms,
-            devices,
-            "Path B (F-17) reapply completed"
-        ),
+        Ok(()) => tracing::info!(elapsed_ms, devices, "Path B (F-17) reapply completed"),
         Err(e) => tracing::warn!(
             error = %e,
             elapsed_ms,
@@ -240,7 +238,11 @@ fn fire_job(
                 return;
             }
             *last_recover_fired_ms = Some(now_ms);
-            commands.send(EngineCommand::RecoverTap);
+            // ⭐ 이슈 #149 D2 — 절전 복귀 지연 재확인도 통지 없이 꺼진 탭을 볼 수
+            // 있으므로 silent 경로로 보낸다.
+            commands.send(EngineCommand::RecoverTap {
+                reason: TapDisableReason::WatchdogSilent,
+            });
         }
         DelayedJob::ReapplyHidMapping(device) => {
             // ⭐ 이슈 #139 — 재적용은 이 스케줄러 스레드가 직접 실행한다. `EngineCommand`
@@ -301,8 +303,7 @@ fn fire_job(
             // Capslock 상태가 고착한다. 그래서 잠금 시 D-1 을 걷어낸다.
             let cfg_full = shared.config.load_full();
             let suspended = shared.d1_suspended.load(Ordering::Relaxed);
-            if !crate::lifecycle::d1_suspend_needed(cfg_full.caps_lock_alias.is_some(), suspended)
-            {
+            if !crate::lifecycle::d1_suspend_needed(cfg_full.caps_lock_alias.is_some(), suspended) {
                 if cfg_full.caps_lock_alias.is_none() {
                     tracing::info!(
                         "D-1 suspend requested but no caps_lock_alias is configured; nothing to remove (issue #144)"
@@ -503,7 +504,9 @@ fn handle_system_event(ev: SystemEvent, sched: &DelaySchedulerHandle) {
             sched.schedule(0, DelayedJob::SuspendD1);
         }
         SystemEvent::SessionDidResignActive => {
-            tracing::info!("session deactivation notification received; forcing immediate state reset");
+            tracing::info!(
+                "session deactivation notification received; forcing immediate state reset"
+            );
             sched.commands().send(EngineCommand::ForceResetState);
         }
         // ⭐ 즉시 재확인하지 않는다 — 지연 뒤 RecoverTap(§3-a).

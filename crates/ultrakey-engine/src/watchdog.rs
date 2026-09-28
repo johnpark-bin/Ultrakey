@@ -20,7 +20,7 @@ use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 
 use ultrakey_platform::event_tap::TapHealthProbe;
 
-use crate::command::{CommandChannel, EngineCommand};
+use crate::command::{CommandChannel, EngineCommand, TapDisableReason};
 use crate::state::SharedState;
 
 pub struct Watchdog {
@@ -72,8 +72,12 @@ fn watchdog_loop(
 
         if let Some(p) = probe.load_full() {
             if !p.is_enabled() {
+                // ⭐ 이슈 #149 D2 — 통지 없이 꺼진 탭. silent 예산으로 재활성화를
+                // 시도하는 유일한 경로다.
                 tracing::warn!("watchdog: tap detected disabled; requesting re-enable");
-                commands.send(EngineCommand::RecoverTap);
+                commands.send(EngineCommand::RecoverTap {
+                    reason: TapDisableReason::WatchdogSilent,
+                });
             }
         }
 
