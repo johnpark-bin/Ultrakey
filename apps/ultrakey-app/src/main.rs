@@ -1626,16 +1626,7 @@ fn key_affects_modifier_rules(key: &str) -> bool {
 /// 때문이다(단일 크기 고정 + 사용자 조절 크기 영속, 아래 `SETTINGS_WINDOW_DEFAULT`
 /// 참고). 그래도 "프런트가 아는 탭을 Rust 도 아는가"라는 검증 자체는 여전히
 /// 필요해 이 화이트리스트로 남긴다.
-const KNOWN_TABS: &[&str] = &[
-    "seek",
-    "hyperkey",
-    "presets",
-    "korean",
-    "japanese",
-    "chinese",
-    "keyboards",
-    "general",
-];
+const KNOWN_TABS: &[&str] = &["seek", "hyperkey", "presets", "korean", "japanese", "chinese", "keyboards", "general"];
 
 fn is_known_tab(tab: &str) -> bool {
     KNOWN_TABS.contains(&tab)
