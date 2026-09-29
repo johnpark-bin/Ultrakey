@@ -106,6 +106,13 @@ pub enum EngineEvent {
     /// F-04 §5 #10 이 요구하는 값이며, F-01 이 `ConfirmedMatch::modifiers` 로
     /// 그대로 옮긴다.
     SeekTriggerUp(ultrakey_core::flags::EventFlags),
+    /// ⭐ 이슈 #152 관측성 — Secure Input ON/OFF 전이. 워치독이 기존 폴링
+    /// 주기에서 `SecureInputProbe::is_enabled` 를 읽어 전이에서만
+    /// `EngineCommand::SecureInputChanged` 를 보내면, 드레인 루프가 WARN 로그와
+    /// 함께 이 사건을 게시한다. 탭 스레드에서 불리므로 "블록하지 마라" 계약이
+    /// 적용된다 — 소비자는 큐잉만 하고 즉시 반환해야 한다. Secure Input 활성
+    /// 구간은 경로 A 리매핑이 설계상 일시중단되는 것이며 탭 고장이 아니다.
+    SecureInputChanged(bool),
     /// ⭐ F-01 계층 1 — 세션이 열려 있는 동안 Seek 으로 라우팅되는 키.
     /// `kind` 는 이미 정규화(FlagsChanged → down/up)돼 있다.
     SeekKey(ultrakey_core::event::InputEvent),
@@ -259,6 +266,7 @@ impl Engine {
                 Arc::clone(&shared),
                 Arc::clone(&health_probe_slot),
                 handshake.commands.clone(),
+                ultrakey_platform::secure_input::DirectSecureInputProbe,
             );
             let system_hooks = SystemHooks::start(
                 Arc::clone(&shared),
@@ -1221,6 +1229,20 @@ fn drain_commands(
                 );
             }
             EngineCommand::RecoverTap { reason } => handle_recover_tap(cell, reason),
+            EngineCommand::SecureInputChanged(active) => {
+                // ⭐ 이슈 #152 관측성 — 다른 `RecoverTap` 핸들러 규약과 동일하게
+                // `fatal` 일 때는 발송하지 않고 조용히 버린다.
+                let st = cell.borrow_mut();
+                if st.fatal {
+                    return;
+                }
+                if active {
+                    tracing::warn!("secure input is active — path A remapping is suspended by design (issue #152); this is not a tap fault");
+                } else {
+                    tracing::warn!("secure input released — path A remapping resumes");
+                }
+                (st.on_event)(EngineEvent::SecureInputChanged(active));
+            }
             EngineCommand::Reconfigure => {
                 let (decision, commands, old_mask, new_mask) = {
                     let mut st = cell.borrow_mut();

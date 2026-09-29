@@ -42,6 +42,7 @@
   "menu.launch_on_login.requires_approval": "macOS requires approval for this login item. Turn it on in System Settings > General > Login Items.",
   "menu.unauthorized.title": "Ultrakey Needs Accessibility Access",
   "menu.status.caps_kernel_map_missing": "Caps Lock kernel remap not confirmed — presets may misfire",
+  "menu.status.secure_input_suspended": "⚠️ Secure Input is active — remapping paused",
   "menu.unauthorized.authorize": "Grant Access…",
   "settings.window.title": "Ultrakey Settings",
   "settings.tab.seek": "Seek",

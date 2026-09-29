@@ -19,6 +19,7 @@ use arc_swap::ArcSwapOption;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 
 use ultrakey_platform::event_tap::TapHealthProbe;
+use ultrakey_platform::secure_input::{DirectSecureInputProbe, SecureInputProbe};
 
 use crate::command::{CommandChannel, EngineCommand, TapDisableReason};
 use crate::state::SharedState;
@@ -31,15 +32,19 @@ pub struct Watchdog {
 impl Watchdog {
     /// `probe` 는 탭 스레드가 탭을 만들거나 없앨 때마다 갱신하는 슬롯이다
     /// (`ultrakey_platform::event_tap::EventTap::health_probe`).
+    /// `secure_input` 은 `DirectSecureInputProbe` 단위형이라 복제 자유 — 호출자
+    /// (`Engine::start`)가 값으로 넘긴다. 새 스레드 없이 기존 폴링 주기 안에서
+    /// 읽고, ⭐ 이슈 #152 관측성: 전이에서만 `SecureInputChanged` 를 발송한다.
     pub fn spawn(
         shared: Arc<SharedState>,
         probe: Arc<ArcSwapOption<TapHealthProbe>>,
         commands: CommandChannel,
+        secure_input: DirectSecureInputProbe,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = bounded::<()>(0);
         let thread = thread::Builder::new()
             .name("ultrakey-watchdog".to_string())
-            .spawn(move || watchdog_loop(shared, probe, commands, shutdown_rx))
+            .spawn(move || watchdog_loop(shared, probe, commands, secure_input, shutdown_rx))
             .expect("워치독 스레드 생성 실패");
         Watchdog {
             thread: Some(thread),
@@ -61,8 +66,15 @@ fn watchdog_loop(
     shared: Arc<SharedState>,
     probe: Arc<ArcSwapOption<TapHealthProbe>>,
     commands: CommandChannel,
+    secure_input: DirectSecureInputProbe,
     shutdown_rx: Receiver<()>,
 ) {
+    // ⭐ 이슈 #152 관측성 — 마지막으로 **게시한** 상태. 초기값은 굳힌 `false` 다:
+    // 앱(트레이)의 기본 표식이 "중단 아님"이므로, 기동 때부터 Secure Input 이
+    // 켜져 있으면 첫 폴링이 ON→전이로 게시해야 무표식 정지가 남지 않는다.
+    // (기동 시 1회 `is_enabled()` 로 초기화하면 이미 켜진 상태가 전이로 안 잡혀
+    // 이 관측성의 핵심 케이스가 사라진다.)
+    let mut last_secure_input = false;
     loop {
         let poll_ms = shared.config.load().timings.watchdog_poll_ms;
         match shutdown_rx.recv_timeout(Duration::from_millis(poll_ms)) {
@@ -79,6 +91,16 @@ fn watchdog_loop(
                     reason: TapDisableReason::WatchdogSilent,
                 });
             }
+        }
+
+        // ⭐ 이슈 #152 관측성 — Secure Input 전이 감지. 기존 폴링 주기에 얹는다
+        // (새 스레드 없음). 0-d 게이트 안에 있어 이벤트가 탭에 닿지 않는 구간을
+        // 전이에서만 `SecureInputChanged` 로 게시한다 — 같은 값 반복은 발송하지
+        // 않는다. caps-lock 안전망(#108/#144)은 아래 그대로 둔다.
+        let now_secure = secure_input.is_enabled();
+        if let Some(changed) = secure_input_transition(last_secure_input, now_secure) {
+            last_secure_input = now_secure;
+            commands.send(EngineCommand::SecureInputChanged(changed));
         }
 
         // ⭐ 이슈 #108 자동 복구 안전망. `alias_active` 검사를 가장 먼저 두어, D-1 이
@@ -107,4 +129,41 @@ fn watchdog_loop(
         }
     }
     tracing::debug!("watchdog thread exiting");
+}
+
+/// ⭐ 이슈 #152 관측성 — Secure Input 전이 판정 순수 함수. 같으면 `None`(발송
+/// 없음), 다르면 새 값 `Some(bool)`(발송). 워치독 루프의 발송 횟수 회귀 테스트가
+/// 이 함수로 ON→OFF→ON 3회 전이를 고정한다.
+fn secure_input_transition(previous: bool, current: bool) -> Option<bool> {
+    if previous == current {
+        None
+    } else {
+        Some(current)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::secure_input_transition;
+
+    /// ⭐ 이슈 #152 — ON→OFF→ON 에서 3회만 발송(같은 값 반복은 발송 없음).
+    #[test]
+    fn secure_input_transition_fires_only_on_change() {
+        assert_eq!(secure_input_transition(false, false), None);
+        assert_eq!(secure_input_transition(true, true), None);
+        assert_eq!(secure_input_transition(false, true), Some(true));
+        assert_eq!(secure_input_transition(true, false), Some(false));
+
+        // ON→OFF→ON 시퀀스: 매 폴링이 전이에서만 발송하면 정확히 3회다.
+        let sequence = [true, true, false, false, true, true];
+        let mut previous = false;
+        let mut sends = 0;
+        for current in sequence {
+            if secure_input_transition(previous, current).is_some() {
+                sends += 1;
+                previous = current;
+            }
+        }
+        assert_eq!(sends, 3);
+    }
 }

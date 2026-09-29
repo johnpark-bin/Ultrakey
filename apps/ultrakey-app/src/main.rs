@@ -1935,6 +1935,15 @@ struct AppState {
     /// ⭐ 이슈 #110 — 트레이 메뉴가 마지막으로 조립될 때 반영된 "caps lock 커널
     /// 매핑 미적용" 값. `refresh_tray_caps_status` 가 변경 감지에 쓴다.
     tray_caps_missing: std::sync::atomic::AtomicBool,
+    /// ⭐ 이슈 #152 관측성 — Secure Input 활성으로 경로 A 리매핑이 일시중단된
+    /// 상태인지 게이지. `EngineEvent::SecureInputChanged` 가 값을 세팅하고
+    /// `rebuild_tray_menu` 가 메뉴 재조립 시 읽는다(중복 이벤트 안전 — 같은 값이면
+    /// 메뉴를 다시 만들지 않는다).
+    secure_input_suspended: std::sync::atomic::AtomicBool,
+    /// ⭐ 이슈 #152 — 메뉴가 마지막으로 조립될 때 반영된 suspended 값.
+    /// `apply_secure_input_tray_state` 가 중복 이벤트를 걸러내는 데 쓴다
+    /// (`refresh_tray_caps_status` 의 `tray_caps_missing` 패턴과 동일).
+    secure_input_menu_shown: std::sync::atomic::AtomicBool,
     /// `Ignore <앱>` 항목 — 최전면 앱이 바뀔 때마다 라벨·체크 상태를 갱신해야 해서
     /// 따로 손잡이를 쥔다(`Menu` 는 항목별 개별 갱신 API 가 없다).
     ignore_item: Mutex<Option<CheckMenuItem<Wry>>>,
@@ -4990,6 +4999,8 @@ fn main() {
         load_notice: Mutex::new(None),
         tray: Mutex::new(None),
         tray_caps_missing: std::sync::atomic::AtomicBool::new(false),
+        secure_input_suspended: std::sync::atomic::AtomicBool::new(false),
+        secure_input_menu_shown: std::sync::atomic::AtomicBool::new(false),
         ignore_item: Mutex::new(None),
         normal_menu: Mutex::new(None),
         unauthorized_menu: Mutex::new(None),
@@ -5719,6 +5730,23 @@ fn on_engine_event(handle: &tauri::AppHandle, state: &Arc<AppState>, event: Engi
             tracing::warn!("tap was dismantled after repeated immediate re-disable or permission loss; handing off to the permission monitor");
             report_tap_lost(state);
         }
+        EngineEvent::SecureInputChanged(active) => {
+            // ⭐ 이슈 #152 관측성 — 탭 스레드에서 오므로 `tracing` 도, 메뉴 재조립도
+            // 여기서 직접 하지 않는다(`EngineEvent` "블록하지 마라" 계약).
+            // 게이지만 세팅하고 메인 스레드에 큐잉한다 — 중복 이벤트는
+            // `apply_secure_input_tray_state` 가 걸러낸다.
+            state
+                .secure_input_suspended
+                .store(active, std::sync::atomic::Ordering::Release);
+            let handle_for_closure = handle.clone();
+            let state_for_closure = state.clone();
+            let dispatched = handle.run_on_main_thread(move || {
+                apply_secure_input_tray_state(&handle_for_closure, &state_for_closure);
+            });
+            if let Err(e) = dispatched {
+                tracing::error!(error = %e, "failed to queue secure input tray update on the main thread");
+            }
+        }
         EngineEvent::SeekOpenRequested => send_seek_signal(state, seek::SeekSignal::OpenRequested),
         EngineEvent::SeekTriggerDown => send_seek_signal(state, seek::SeekSignal::TriggerDown),
         // ⭐ 실린 flags 가 **트리거 키를 떼는 그 순간의 modifier 스냅샷**이다 —
@@ -6162,6 +6190,29 @@ fn ignore_menu_text(catalog: &Catalog, front_app: Option<&AppIdentity>) -> Strin
     }
 }
 
+/// ⭐ 이슈 #152 관측성 — 트레이 메뉴 최상단 경고 항목 조립을 고정하는 순수 함수.
+/// Tauri `Menu` 를 만들지 않고 항목 스펙만 낸다 — `main.rs` tests 모듈의 회귀
+/// 테스트가 suspended=true 일 때 경고 항목이 최상단, false 일 때 없음을 고정한다.
+/// `ItemSpec::Warning` 의 문자열은 카탈로그 키(`menu.status.secure_input_suspended`)
+/// 다 — 하드코딩 한국어 문자열 금지.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecureInputMenuSpec {
+    /// 비활성 경고 항목(카탈로그 키로 조회한 라벨).
+    Warning,
+    /// 기존 항목 자리(경고 없음) — 호출자가 기존 조립 순서를 그대로 둔다.
+    Existing,
+}
+
+/// ⭐ 이슈 #152 — suspended=true 면 `[Warning, Existing]`(경고가 최상단),
+/// false 면 `[Existing]`(없음).
+fn tray_menu_items_for_secure_input(suspended: bool) -> Vec<SecureInputMenuSpec> {
+    if suspended {
+        vec![SecureInputMenuSpec::Warning, SecureInputMenuSpec::Existing]
+    } else {
+        vec![SecureInputMenuSpec::Existing]
+    }
+}
+
 /// 정상 메뉴(§3.3, `docs/dev/architecture.md` §6.7 이 확정한 구성) 조립.
 /// `Purchase`(F-12) 는 범위 밖이라 넣지 않는다.
 fn build_normal_menu(
@@ -6170,6 +6221,7 @@ fn build_normal_menu(
     front_app: Option<&AppIdentity>,
     front_app_disabled: bool,
     caps_kernel_map_missing: bool,
+    secure_input_suspended: bool,
 ) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
     // ⭐ 이슈 #110 — D-1 미확인 상태 안내. `menu.unauthorized.title` 과 같은
     // 결의 **비활성** 항목이고, 조건이 참일 때만 메뉴 맨 위에 붙인다.
@@ -6177,6 +6229,19 @@ fn build_normal_menu(
         Some(MenuItem::new(
             handle,
             catalog.get("menu.status.caps_kernel_map_missing"),
+            false,
+            None::<&str>,
+        )?)
+    } else {
+        None
+    };
+    // ⭐ 이슈 #152 관측성 — Secure Input 활성 경고. 같은 결의 비활성 항목으로,
+    // 참일 때 메뉴 최상단에 얹는다(무표식 정지 방지). 카탈로그 키
+    // `menu.status.secure_input_suspended` 로 조회한다(하드코딩 금지).
+    let secure_input_item = if secure_input_suspended {
+        Some(MenuItem::new(
+            handle,
+            catalog.get("menu.status.secure_input_suspended"),
             false,
             None::<&str>,
         )?)
@@ -6257,8 +6322,19 @@ fn build_normal_menu(
         None::<&str>,
     )?;
 
-    let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::with_capacity(10);
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::with_capacity(11);
     let caps_status_sep = PredefinedMenuItem::separator(handle)?;
+    // ⭐ 이슈 #152 — 경고 항목이 최상단(둘 다 켜져 있으면 Secure Input 경고를
+    // 가장 먼저). 조립 순서는 순수 함수 `tray_menu_items_for_secure_input` 가
+    // 고정한다 — 여기서 분기를 새로 만들지 않는다.
+    let secure_input_sep = PredefinedMenuItem::separator(handle)?;
+    let spec = tray_menu_items_for_secure_input(secure_input_suspended);
+    if spec.contains(&SecureInputMenuSpec::Warning) {
+        if let Some(item) = secure_input_item.as_ref() {
+            items.push(item);
+            items.push(&secure_input_sep);
+        }
+    }
     if let Some(item) = caps_status_item.as_ref() {
         items.push(item);
         items.push(&caps_status_sep);
@@ -6335,6 +6411,9 @@ fn setup_tray(handle: &tauri::AppHandle, state: &Arc<AppState>) -> tauri::Result
         None,
         false,
         caps_lock_kernel_map_missing(state),
+        state
+            .secure_input_suspended
+            .load(std::sync::atomic::Ordering::Relaxed),
     )?;
     let unauthorized_menu = build_unauthorized_menu(handle, catalog)?;
 
@@ -6464,6 +6543,30 @@ fn apply_tray_menu_for_permission(
     }
 }
 
+/// ⭐ 이슈 #152 관측성 — Secure Input 전이에 맞춰 트레이 메뉴를 갈아 끼운다.
+/// 메인 스레드에서만 부른다(호출자 `on_engine_event` 가 `run_on_main_thread` 로
+/// 큐잉한다 — `apply_tray_menu_for_permission` 과 같은 락 규약). ON 이면 정상
+/// 메뉴 최상단에 비활성 경고 항목을 얹어 교체하고(reason="secure-input"), OFF
+/// 이면 기존 `normal_menu` 로 원복한다. 메뉴 조립 자체는 `build_normal_menu` 가
+/// 맡고, 이 함수는 게이지를 읽어 중복 이벤트를 걸러내는 최소 헬퍼다.
+fn apply_secure_input_tray_state(handle: &tauri::AppHandle, state: &Arc<AppState>) {
+    let suspended = state
+        .secure_input_suspended
+        .load(std::sync::atomic::Ordering::Acquire);
+    // 메뉴가 마지막으로 조립될 때의 값과 같으면 중복 이벤트 — 다시 만들지 않는다.
+    let last_built = state
+        .secure_input_menu_shown
+        .load(std::sync::atomic::Ordering::Acquire);
+    if last_built == suspended {
+        return;
+    }
+    state
+        .secure_input_menu_shown
+        .store(suspended, std::sync::atomic::Ordering::Release);
+    rebuild_tray_menu(handle, state);
+    tracing::info!(suspended, reason = "secure-input", "tray set_menu replaced");
+}
+
 /// ⭐ A-3 3단계(D6, 이슈 #39, §3.1.2-a) — `general.language` 가 바뀐 뒤 트레이
 /// 메뉴를 새 카탈로그로 다시 만든다. `setup_tray()` 가 부팅 시 쓰는 것과 같은
 /// 조립 함수(`build_normal_menu`/`build_unauthorized_menu`)와, 권한 전이 때
@@ -6483,6 +6586,9 @@ fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
         None,
         false,
         caps_lock_kernel_map_missing(state),
+        state
+            .secure_input_suspended
+            .load(std::sync::atomic::Ordering::Relaxed),
     ) {
         Ok(v) => v,
         Err(e) => {
@@ -6501,6 +6607,14 @@ fn rebuild_tray_menu(handle: &tauri::AppHandle, state: &Arc<AppState>) {
     *state.normal_menu.lock().unwrap() = Some(normal_menu);
     *state.unauthorized_menu.lock().unwrap() = Some(unauthorized_menu);
     *state.ignore_item.lock().unwrap() = Some(ignore_item);
+    // ⭐ 이슈 #152 — 재조립했으므로 표시 게이지를 현재 값에 맞춘다(언어 변경·
+    // caps 상태 경로로 메뉴가 다시 만들어져도 중복 판정이 어긋나지 않는다).
+    let suspended_now = state
+        .secure_input_suspended
+        .load(std::sync::atomic::Ordering::Acquire);
+    state
+        .secure_input_menu_shown
+        .store(suspended_now, std::sync::atomic::Ordering::Release);
 
     // 지금 보여야 하는 것이 정상 메뉴인지 unauthorized 메뉴인지는 권한
     // 모니터의 현재 상태로 판정한다 — `apply_tray_menu_for_permission` 이
@@ -6914,6 +7028,23 @@ mod tests {
         assert!(should_stop_engine_for(PermissionState::Denied));
         assert!(should_stop_engine_for(PermissionState::OutOfSync));
         assert!(should_stop_engine_for(PermissionState::Unknown));
+    }
+
+    /// ⭐ 이슈 #152 관측성 — 메뉴 항목 조립 함수가 suspended=true 일 때 경고
+    /// 항목을 최상단에 두고, false 일 때 두지 않는다.
+    #[test]
+    fn secure_input_menu_spec_warns_only_when_suspended() {
+        assert_eq!(
+            tray_menu_items_for_secure_input(true),
+            vec![
+                SecureInputMenuSpec::Warning,
+                SecureInputMenuSpec::Existing,
+            ]
+        );
+        assert_eq!(
+            tray_menu_items_for_secure_input(false),
+            vec![SecureInputMenuSpec::Existing]
+        );
     }
 
     /// `is_known_tab` 이 6개 탭을 전부 알고, 모르는 이름은 거부한다.

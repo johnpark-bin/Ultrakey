@@ -42,6 +42,7 @@
   "menu.launch_on_login.requires_approval": "macOS 가 이 로그인 항목에 승인을 요구한다. 시스템 설정 ▸ 일반 ▸ 로그인 항목에서 직접 켜야 한다.",
   "menu.unauthorized.title": "Ultrakey 에 손쉬운 사용 권한이 필요합니다",
   "menu.status.caps_kernel_map_missing": "Caps Lock 커널 매핑 미확인 — 프리셋이 오동작할 수 있음",
+  "menu.status.secure_input_suspended": "⚠️ 보안 입력(Secure Input) 활성 — 리매핑 일시 중단",
   "menu.unauthorized.authorize": "권한 부여하기…",
   "settings.window.title": "Ultrakey 환경설정",
   "settings.tab.seek": "Seek",

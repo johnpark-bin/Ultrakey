@@ -42,6 +42,7 @@
   "menu.launch_on_login.requires_approval": "macOS requiere aprobación para este elemento de inicio de sesión. Actívalo en Ajustes del Sistema ▸ General ▸ Elementos de inicio de sesión.",
   "menu.unauthorized.title": "Ultrakey necesita acceso de accesibilidad",
   "menu.status.caps_kernel_map_missing": "Reasignación de Caps Lock en el kernel sin confirmar — los presets pueden fallar",
+  "menu.status.secure_input_suspended": "⚠️ La entrada segura está activa — reasignación en pausa",
   "menu.unauthorized.authorize": "Conceder acceso…",
   "settings.window.title": "Ajustes de Ultrakey",
   "settings.tab.seek": "Seek",
